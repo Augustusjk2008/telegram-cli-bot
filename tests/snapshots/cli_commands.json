@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "description": "CLI 命令构建行为快照",
+  "cases": [
+    {
+      "name": "basic_kimi",
+      "cli_type": "kimi",
+      "cli_path": "kimi",
+      "working_dir": "/tmp",
+      "message": "hello world",
+      "expected": ["kimi", "-t", "hello world"]
+    },
+    {
+      "name": "basic_claude",
+      "cli_type": "claude",
+      "cli_path": "claude",
+      "working_dir": "/tmp",
+      "message": "test message",
+      "expected": ["claude", "-p", "test message"]
+    },
+    {
+      "name": "basic_codex",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "/tmp",
+      "message": "codex test",
+      "expected": ["codex", "-q", "codex test"]
+    },
+    {
+      "name": "kimi_with_quotes",
+      "cli_type": "kimi",
+      "cli_path": "kimi",
+      "working_dir": "/home/user/project",
+      "message": "say \"hello world\"",
+      "expected": ["kimi", "-t", "say \"hello world\""]
+    },
+    {
+      "name": "claude_multiline",
+      "cli_type": "claude",
+      "cli_path": "/usr/local/bin/claude",
+      "working_dir": "/workspace",
+      "message": "line 1\nline 2\nline 3",
+      "expected": ["/usr/local/bin/claude", "-p", "line 1\nline 2\nline 3"]
+    },
+    {
+      "name": "codex_with_special_chars",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "/tmp",
+      "message": "test $VAR and `command`",
+      "expected": ["codex", "-q", "test $VAR and `command`"]
+    },
+    {
+      "name": "kimi_empty_message",
+      "cli_type": "kimi",
+      "cli_path": "kimi",
+      "working_dir": "/tmp",
+      "message": "",
+      "expected": ["kimi", "-t", ""]
+    },
+    {
+      "name": "claude_unicode",
+      "cli_type": "claude",
+      "cli_path": "claude",
+      "working_dir": "/tmp",
+      "message": "测试中文和 🎉 emoji",
+      "expected": ["claude", "-p", "测试中文和 🎉 emoji"]
+    }
+  ]
+}

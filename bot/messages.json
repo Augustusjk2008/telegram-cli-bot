@@ -1,0 +1,162 @@
+{
+  "greeting": {
+    "header": "👋 CLI Bridge Bot ({alias})",
+    "current_config": "📌 当前配置:",
+    "cli_label": "   CLI: {cli_type}",
+    "cli_path_label": "   CLI路径: {cli_path}",
+    "workdir_label": "   工作目录: {working_dir}",
+    "msg_count_label": "   消息数: {message_count}",
+    "session_id_labels": {
+      "codex": "   Codex会话ID: {session_id}",
+      "kimi": "   Kimi会话ID: {session_id}",
+      "claude": "   Claude会话ID: {session_id} ({status})"
+    },
+    "session_id_not_created": "(未创建，收到首条消息后自动生成)",
+    "claude_initialized": "已初始化",
+    "claude_pending": "待初始化",
+    "usage": "📝 基本用法:",
+    "usage_direct": "   直接发送消息 - 与 AI 对话",
+    "usage_slash": "   //xxx - 转发为 /xxx 给 CLI",
+    "usage_file": "   发送文件 - 供 AI 分析",
+    "commands": "🔧 命令列表:",
+    "cmd_start": "   /start - 显示此帮助",
+    "cmd_reset": "   /reset - 重置当前会话",
+    "cmd_cd": "   /cd <路径> - 切换工作目录",
+    "cmd_pwd": "   /pwd - 显示当前目录",
+    "cmd_ls": "   /ls - 列出目录内容",
+    "cmd_exec": "   /exec <cmd> - 执行 Shell 命令",
+    "cmd_history": "   /history - 查看会话历史",
+    "cmd_upload": "   /upload - 上传文件",
+    "cmd_download": "   /download <文件> - 下载文件",
+    "cmd_kill_note": "   (注: /kill 命令请从主Bot使用 /bot_kill <alias>)",
+    "admin_commands_header": "🛠 主Bot管理命令:",
+    "admin_cmd_help": "   /bot_help - 显示多Bot管理帮助",
+    "admin_cmd_list": "   /bot_list - 列出所有Bot状态",
+    "admin_cmd_restart": "   /restart - 重启整个程序（重载代码）",
+    "admin_cmd_system": "   /system [脚本名] - 系统脚本管理",
+    "admin_cmd_add": "   /bot_add <alias> <token> [cli_type] [cli_path] [workdir]",
+    "admin_cmd_remove": "   /bot_remove <alias>",
+    "admin_cmd_start_stop": "   /bot_start <alias> / /bot_stop <alias>",
+    "admin_cmd_set_cli": "   /bot_set_cli <alias> <cli_type> <cli_path>",
+    "admin_cmd_set_workdir": "   /bot_set_workdir <alias> <workdir>",
+    "admin_cmd_kill": "   /bot_kill <alias> [user_id] - 强制终止任务"
+  },
+  "auth": {
+    "unauthorized": "⛔ 未授权的用户"
+  },
+  "reset": {
+    "success": "🔄 会话已完全重置",
+    "no_session": "ℹ️ 当前没有可重置的会话"
+  },
+  "kill": {
+    "no_task": "ℹ️ 当前没有正在运行的任务",
+    "killed": "✅ 已强制终止当前任务",
+    "already_done": "ℹ️ 任务已经完成",
+    "error": "❌ 终止进程时出错: {error}"
+  },
+  "cd": {
+    "usage": "用法: /cd <路径>",
+    "success": "📁 目录已切换:\n<code>{path}</code>",
+    "not_exist": "❌ 目录不存在:\n<code>{path}</code>"
+  },
+  "pwd": {
+    "current_dir": "📂 当前目录:\n<code>{path}</code>"
+  },
+  "ls": {
+    "dir_header": "📂 <code>{path}</code>",
+    "empty": "(空目录)",
+    "error": "❌ 错误: {error}"
+  },
+  "history": {
+    "empty": "📭 暂无历史记录",
+    "header": "📜 最近历史:\n\n"
+  },
+  "upload": {
+    "help": "📤 <b>文件上传帮助</b>\n\n直接发送文件即可上传。\n<b>注意:</b> 文件将保存在当前工作目录。",
+    "no_file": "⚠️ 请附加文件",
+    "unsafe_filename": "⛔ 文件名包含非法字符",
+    "file_too_large": "❌ 文件太大，请发送小于 20MB 的文件",
+    "success": "✅ 文件已保存: <code>{filename}</code>",
+    "failed": "❌ 保存文件失败: {error}"
+  },
+  "download": {
+    "usage": "用法: /download <文件路径>",
+    "not_found": "❌ 文件不存在",
+    "unsafe_path": "⛔ 无效的文件路径",
+    "unsafe_filename": "⛔ 文件名包含非法字符",
+    "file_too_large": "❌ 文件太大 (>50MB)，无法通过 Telegram 发送",
+    "error": "❌ 发送文件失败: {error}"
+  },
+  "shell": {
+    "usage": "用法: /exec <命令>",
+    "dangerous": "⛔ 该命令被禁止执行（安全风险）",
+    "no_output": "(无输出)",
+    "result": "🖥 <code>{command}</code>\n\n<pre>{output}</pre>",
+    "error": "❌ 命令执行失败: {error}"
+  },
+  "chat": {
+    "busy": "⏳ 当前会话正在处理上一条消息，请稍后再试。",
+    "processing": "⏳ 处理中...",
+    "processing_with_time": "⏳ 处理中，已等待 {elapsed} 秒...",
+    "no_cli": "❌ 未找到CLI可执行文件: {cli_path}\n请用 /bot_set_cli 配置正确路径（Windows 常见为 claude.cmd）",
+    "cli_failed": "❌ CLI 进程启动失败",
+    "error": "❌ 错误: {error}",
+    "timeout": "⏱️ <b>任务已超时终止</b>\n执行时间超过 {timeout} 秒，进程已被强制结束。",
+    "no_output": "(无输出)",
+    "timeout_no_output": "(进程已超时终止，无输出)"
+  },
+  "admin": {
+    "unauthorized": "⛔ 需要管理员权限",
+    "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [cli_type] [cli_path] [workdir]\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc codex codex C:/work/project\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)",
+    "restart": "🔄 正在重启整个程序并重载代码...",
+    "bot_add_usage": "用法: /bot_add <alias> <token> [cli_type] [cli_path] [workdir]",
+    "bot_add_success": "✅ 子Bot已启动\nalias: <code>{alias}</code>\nusername: @{username}\ncli: <code>{cli_type}</code> / <code>{cli_path}</code>\nworkdir: <code>{workdir}</code>",
+    "bot_add_failed": "❌ 添加失败: {error}",
+    "bot_remove_usage": "用法: /bot_remove <alias>",
+    "bot_remove_success": "✅ 已删除子Bot: <code>{alias}</code>",
+    "bot_remove_failed": "❌ 删除失败: {error}",
+    "bot_start_usage": "用法: /bot_start <alias>",
+    "bot_start_success": "✅ 已启动子Bot: <code>{alias}</code>",
+    "bot_start_failed": "❌ 启动失败: {error}",
+    "bot_stop_usage": "用法: /bot_stop <alias>",
+    "bot_stop_success": "✅ 已停止子Bot: <code>{alias}</code>",
+    "bot_stop_failed": "❌ 停止失败: {error}",
+    "bot_set_cli_usage": "用法: /bot_set_cli <alias> <cli_type> <cli_path>",
+    "bot_set_cli_success": "✅ 已更新CLI配置: <code>{alias}</code> -> <code>{cli_type}</code> / <code>{cli_path}</code>",
+    "bot_set_cli_failed": "❌ 更新失败: {error}",
+    "bot_set_workdir_usage": "用法: /bot_set_workdir <alias> <workdir>",
+    "bot_set_workdir_success": "✅ 已更新工作目录: <code>{alias}</code> -> <code>{workdir}</code>",
+    "bot_set_workdir_failed": "❌ 更新失败: {error}",
+    "bot_kill_usage": "用法: /bot_kill <alias> [user_id]\n  alias: Bot 别名（main 表示主Bot）\n  user_id: 可选，指定终止哪个用户的任务，不填则终止所有用户",
+    "bot_kill_invalid_user_id": "❌ user_id 必须是数字",
+    "bot_kill_not_running": "❌ Bot <code>{alias}</code> 未运行或不存在",
+    "bot_kill_success": "✅ 已强制终止 <code>{alias}</code> 的任务:",
+    "bot_kill_user_line": "  • 用户 <code>{user_id}</code>",
+    "bot_kill_no_task_user": "ℹ️ <code>{alias}</code> 的用户 <code>{user_id}</code> 没有正在运行的任务",
+    "bot_kill_no_task": "ℹ️ <code>{alias}</code> 当前没有正在运行的任务",
+    "system_no_scripts_dir": "❌ scripts 目录不存在: {path}",
+    "system_no_scripts": "📂 scripts 目录暂无可用脚本\n\n支持的格式: {extensions}\n路径: <code>{path}</code>",
+    "system_menu_title": "📂 <b>系统脚本菜单</b>\n\n点击按钮直接执行脚本，或使用命令:\n<code>/system &lt;脚本名&gt;</code>",
+    "system_script_not_found": "❌ 未找到脚本: <code>{script_name}</code>\n\n可用脚本: <code>{available}</code>",
+    "system_executing": "🖥️ 正在执行脚本: <code>{script_name}</code>...",
+    "system_exec_success": "✅ <code>{script_name}</code> 执行成功:\n\n<pre>{output}</pre>",
+    "system_exec_failed": "❌ <code>{script_name}</code> 执行失败:\n\n<pre>{output}</pre>"
+  },
+  "startup": {
+    "banner": "═══════════════════════════════════════════════════",
+    "title": "  🤖 Telegram CLI Bridge Bot",
+    "version": "  版本: 1.0.0",
+    "loading_config": "📋 正在加载配置...",
+    "loaded": "✅ 配置加载完成",
+    "starting": "🚀 正在启动 Bot...",
+    "started": "✅ Bot 启动完成",
+    "main_bot_started": "✅ 主Bot (@{username}) 启动成功",
+    "managed_bots_loaded": "📦 已加载 {count} 个托管Bot配置",
+    "starting_managed": "🚀 正在启动托管Bot...",
+    "all_started": "✅ 所有 Bot 启动完成，共 {count} 个",
+    "polling_started": "▶️ 开始消息轮询...",
+    "restart": "🔄 正在重启整个程序并重载代码...",
+    "shutdown": "🛑 正在关闭...",
+    "shutdown_complete": "✅ 已安全关闭"
+  }
+}

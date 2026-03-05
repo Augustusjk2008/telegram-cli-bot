@@ -1,0 +1,56 @@
+{
+  "version": "1.0",
+  "description": "Codex JSON 输出解析行为快照",
+  "cases": [
+    {
+      "name": "simple_output",
+      "input": "{\"output\": \"Hello World\"}",
+      "expected": "Hello World"
+    },
+    {
+      "name": "output_with_newlines",
+      "input": "{\"output\": \"Line 1\\nLine 2\\nLine 3\"}",
+      "expected": "Line 1\nLine 2\nLine 3"
+    },
+    {
+      "name": "empty_output",
+      "input": "{\"output\": \"\"}",
+      "expected": ""
+    },
+    {
+      "name": "output_with_quotes",
+      "input": "{\"output\": \"say \\\"hello\\\"\"}",
+      "expected": "say \"hello\""
+    },
+    {
+      "name": "output_with_code",
+      "input": "{\"output\": \"```python\\nprint('hello')\\n```\"}",
+      "expected": "```python\nprint('hello')\n```"
+    },
+    {
+      "name": "unicode_output",
+      "input": "{\"output\": \"测试中文和 🎉 emoji\"}",
+      "expected": "测试中文和 🎉 emoji"
+    },
+    {
+      "name": "large_output",
+      "input": "{\"output\": \"start ... end\"}",
+      "expected": "start ... end"
+    },
+    {
+      "name": "invalid_json",
+      "input": "not valid json",
+      "expected": null
+    },
+    {
+      "name": "missing_output_field",
+      "input": "{\"result\": \"something\"}",
+      "expected": null
+    },
+    {
+      "name": "null_output",
+      "input": "{\"output\": null}",
+      "expected": null
+    }
+  ]
+}

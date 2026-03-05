@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "description": "文本分割行为快照",
+  "cases": [
+    {
+      "name": "short_text_no_split",
+      "text": "Short text that fits in one message",
+      "max_length": 4000,
+      "expected_count": 1,
+      "expected_parts": ["Short text that fits in one message"]
+    },
+    {
+      "name": "exact_boundary",
+      "text": "A",
+      "max_length": 1,
+      "expected_count": 1,
+      "expected_parts": ["A"]
+    },
+    {
+      "name": "simple_split",
+      "text": "AAAAABBBBB",
+      "max_length": 5,
+      "expected_count": 2,
+      "expected_parts": ["AAAAA", "BBBBB"]
+    },
+    {
+      "name": "long_text_multiple_splits",
+      "text": "A",
+      "text_repeat": 10000,
+      "max_length": 2000,
+      "expected_count": 5,
+      "expected_first_part_length": 2000
+    },
+    {
+      "name": "preserve_code_blocks",
+      "text": "```python\nprint('hello')\n```\n\nSome text\n\n```bash\necho hello\n```",
+      "max_length": 100,
+      "expected_count": 3,
+      "check_code_blocks_intact": true
+    },
+    {
+      "name": "split_at_newline",
+      "text": "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+      "max_length": 15,
+      "expected_count": 2,
+      "expected_parts": ["Line 1\nLine 2\nLine 3", "Line 4\nLine 5"]
+    },
+    {
+      "name": "empty_text",
+      "text": "",
+      "max_length": 4000,
+      "expected_count": 1,
+      "expected_parts": [""]
+    },
+    {
+      "name": "single_char",
+      "text": "X",
+      "max_length": 4000,
+      "expected_count": 1,
+      "expected_parts": ["X"]
+    },
+    {
+      "name": "with_markdown_headers",
+      "text": "# Header 1\nContent 1\n\n# Header 2\nContent 2",
+      "max_length": 50,
+      "expected_count": 2,
+      "check_headers_preserved": true
+    }
+  ]
+}

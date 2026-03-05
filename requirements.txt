@@ -1,0 +1,9 @@
+python-telegram-bot>=20.0
+python-dotenv>=1.0.0
+
+# Process management (optional, for better /exec timeout handling)
+psutil>=5.9.0
+
+# Test dependencies (optional)
+pytest>=7.0
+pytest-asyncio>=0.21.0

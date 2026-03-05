@@ -1,0 +1,15 @@
+# Test dependencies for telegram-cli-bridge
+
+# Testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
+# Mocking
+pytest-mock>=3.10.0
+
+# Type checking (optional but recommended)
+pytest-mypy-plugins>=1.10.0
+
+# For Telegram Bot testing
+# python-telegram-bot[ext] is already in main requirements
