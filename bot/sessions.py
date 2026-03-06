@@ -68,3 +68,17 @@ def cleanup_expired_sessions():
             session = sessions.pop(key)
             session.terminate_process()
             logger.info(f"已清理过期会话: bot={key[0]}, user={key[1]}")
+
+
+def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
+    """更新指定 bot 的所有会话的工作目录
+    
+    返回更新的会话数量
+    """
+    updated_count = 0
+    with sessions_lock:
+        for session in sessions.values():
+            if session.bot_alias == bot_alias:
+                session.working_dir = working_dir
+                updated_count += 1
+    return updated_count

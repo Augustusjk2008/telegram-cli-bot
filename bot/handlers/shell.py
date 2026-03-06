@@ -3,6 +3,7 @@
 import asyncio
 import html
 import logging
+import re
 import subprocess
 
 from telegram import Update
@@ -11,6 +12,12 @@ from telegram.ext import ContextTypes
 from bot.context_helpers import get_current_session
 from bot.messages import msg
 from bot.utils import check_auth, is_dangerous_command, safe_edit_text, truncate_for_markdown
+
+
+def strip_ansi_escape(text: str) -> str:
+    """去除 ANSI 转义序列（颜色代码等）"""
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+    return ansi_escape.sub('', text)
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +53,10 @@ async def execute_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, run_shell_sync)
 
-        output = result.stdout or ""
-        if result.stderr:
-            output += f"\n\n[stderr]\n{result.stderr}"
+        output = strip_ansi_escape(result.stdout or "")
+        stderr = strip_ansi_escape(result.stderr or "")
+        if stderr:
+            output += f"\n\n[stderr]\n{stderr}"
         if not output:
             output = msg("shell", "no_output")
 

@@ -306,7 +306,7 @@ async def stream_codex_json_output(
         return "", None, -1, False
 
 
-async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text_override: str = None):
     user_id = update.effective_user.id
     if not check_auth(user_id):
         return
@@ -314,7 +314,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     profile = get_current_profile(context)
     session = get_current_session(update, context)
 
-    user_text = update.message.text
+    user_text = text_override if text_override is not None else update.message.text
     if user_text.startswith("//"):
         user_text = "/" + user_text[2:]
 

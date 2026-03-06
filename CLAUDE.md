@@ -70,7 +70,21 @@ Key functions: `build_cli_command()` constructs args per CLI type, `resolve_cli_
 - `chat.py` — text message handler; spawns CLI subprocess, reads output non-streaming via `process.communicate()` in executor, sends chunked responses to Telegram
 - `shell.py` — `/exec` for direct shell commands (with dangerous command blocklist)
 - `file.py` — file upload/download via Telegram
+- `voice.py` — voice/audio message handler; uses Whisper for speech-to-text, then forwards to `chat.py` (optional, requires `openai-whisper` + `pydub` + FFmpeg)
 - `admin.py` — `/bot_add`, `/bot_remove`, `/bot_start`, `/bot_stop`, `/bot_list`, `/bot_set_cli`, `/bot_set_workdir`, `/restart` (main bot only)
+
+### Voice Recognition (Optional Feature)
+
+`bot/whisper_service.py` provides speech-to-text via OpenAI Whisper (local model). Enabled via `WHISPER_ENABLED=true` in `.env`. Requires:
+- Python packages: `openai-whisper`, `pydub`
+- System dependency: FFmpeg
+
+Key features:
+- Supports Telegram voice messages and audio files
+- Converts .oga → .wav → text
+- Configurable model size (tiny/base/small/medium/large)
+- Graceful degradation: if dependencies missing, voice handler is skipped without affecting other features
+- See `docs/VOICE_QUICKSTART.md` for setup instructions
 
 ### Context Helpers
 

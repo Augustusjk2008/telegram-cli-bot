@@ -42,6 +42,8 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "cmd_history": "   /history - 查看会话历史",
         "cmd_upload": "   /upload - 上传文件",
         "cmd_download": "   /download <文件> - 下载文件",
+        "cmd_cat": "   /cat <文件> - 查看文件内容",
+        "cmd_head": "   /head <文件> [行数] - 查看文件前N行",
         "cmd_kill_note": "   (注: /kill 命令请从主Bot使用 /bot_kill <alias>)",
         "admin_commands_header": "🛠 主Bot管理命令:",
         "admin_cmd_help": "   /bot_help - 显示多Bot管理帮助",
@@ -155,6 +157,17 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "system_executing": "🖥️ 正在执行脚本: <code>{script_name}</code>...",
         "system_exec_success": "✅ <code>{script_name}</code> 执行成功:\n\n<pre>{output}</pre>",
         "system_exec_failed": "❌ <code>{script_name}</code> 执行失败:\n\n<pre>{output}</pre>"
+    },
+    "voice": {
+        "disabled": "❌ 语音识别功能未启用\n\n请在 .env 中设置:\nWHISPER_ENABLED=true\n\n并安装依赖:\npip install openai-whisper pydub",
+        "too_long": "❌ 语音时长超过限制（最大 {max_duration} 秒）",
+        "downloading": "🎤 正在接收语音消息（{duration}秒）...",
+        "converting": "🔄 正在转换音频格式...",
+        "convert_failed": "❌ 音频格式转换失败\n\n请确保已安装 FFmpeg:\nWindows: choco install ffmpeg\nLinux: sudo apt install ffmpeg",
+        "recognizing": "🧠 正在识别语音内容...",
+        "recognized": "✅ <b>识别结果:</b>\n<pre>{text}</pre>\n\n正在发送给 AI 处理...",
+        "recognize_failed": "❌ 语音识别失败: {error}",
+        "error": "❌ 处理语音消息时出错: {error}"
     },
     "startup": {
         "banner": "═══════════════════════════════════════════════════",

@@ -31,7 +31,7 @@ from bot.config import (
 )
 from bot.handlers import register_handlers
 from bot.models import BotProfile
-from bot.sessions import clear_bot_sessions, is_bot_processing
+from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +204,7 @@ class MultiBotManager:
                     os.path.expanduser(str(item.get("working_dir", WORKING_DIR)).strip() or WORKING_DIR)
                 ),
                 enabled=bool(item.get("enabled", True)),
+                bot_mode=str(item.get("bot_mode", "cli")).strip().lower(),
             )
 
     def _save_profiles(self):
@@ -301,6 +302,7 @@ class MultiBotManager:
         app.bot_data["manager"] = self
         app.bot_data["bot_alias"] = profile.alias
         app.bot_data["is_main"] = is_main
+        app.bot_data["bot_mode"] = profile.bot_mode
 
         register_handlers(app, include_admin=is_main)
 
@@ -417,6 +419,7 @@ class MultiBotManager:
         cli_type: Optional[str] = None,
         cli_path: Optional[str] = None,
         working_dir: Optional[str] = None,
+        bot_mode: Optional[str] = None,
     ) -> BotProfile:
         alias = alias.strip().lower()
         token = token.strip()
@@ -428,15 +431,21 @@ class MultiBotManager:
         cli_type = validate_cli_type(cli_type or CLI_TYPE)
         cli_path = (cli_path or CLI_PATH).strip()
         working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
+        bot_mode = (bot_mode or "cli").strip().lower()
+
+        if bot_mode not in ("cli", "assistant"):
+            raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {bot_mode}")
 
         if not os.path.isdir(working_dir):
             raise ValueError(f"工作目录不存在: {working_dir}")
 
-        if resolve_cli_executable(cli_path, working_dir) is None:
-            raise ValueError(
-                f"未找到CLI可执行文件: {cli_path} "
-                f"(请使用可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
-            )
+        # 只有 CLI 模式需要验证 CLI 可执行文件
+        if bot_mode == "cli":
+            if resolve_cli_executable(cli_path, working_dir) is None:
+                raise ValueError(
+                    f"未找到CLI可执行文件: {cli_path} "
+                    f"(请使用可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
+                )
 
         async with self._lock:
             if alias in self.managed_profiles:
@@ -451,6 +460,7 @@ class MultiBotManager:
                 cli_path=cli_path,
                 working_dir=working_dir,
                 enabled=True,
+                bot_mode=bot_mode,
             )
 
             await self._start_profile(profile, is_main=False)
@@ -519,6 +529,8 @@ class MultiBotManager:
             profile = self.managed_profiles[alias]
             profile.working_dir = working_dir
             self._save_profiles()
+            # 同时更新所有已存在的会话的工作目录
+            update_bot_working_dir(alias, working_dir)
 
     def get_status_lines(self) -> List[str]:
         """生成美观的 Bot 状态列表，使用 HTML 格式"""

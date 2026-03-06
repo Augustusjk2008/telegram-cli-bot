@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR, request_restart
 from bot.context_helpers import ensure_admin, get_manager
+from bot.handlers.shell import strip_ansi_escape
 from bot.messages import msg
 from bot.sessions import sessions, sessions_lock
 from bot.utils import safe_edit_text
@@ -203,11 +204,11 @@ def execute_script(script_path: Path) -> tuple[bool, str]:
             )
         
         if result.returncode == 0:
-            stdout = result.stdout or ""
+            stdout = strip_ansi_escape(result.stdout or "")
             output = stdout.strip() if stdout.strip() else "执行成功（无输出）"
             return True, output
         else:
-            stderr = result.stderr or ""
+            stderr = strip_ansi_escape(result.stderr or "")
             error_msg = stderr.strip() if stderr.strip() else f"退出码: {result.returncode}"
             return False, f"执行失败: {error_msg}"
             

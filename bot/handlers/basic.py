@@ -5,7 +5,7 @@ import html
 import logging
 import os
 
-from telegram import Update
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.cli import normalize_cli_type
@@ -21,6 +21,29 @@ from bot.sessions import reset_session
 from bot.utils import check_auth, truncate_for_markdown
 
 logger = logging.getLogger(__name__)
+
+
+# 常驻快捷键盘布局（图标+命令，手机端友好）
+# 只包含不需要参数的常用命令
+COMMON_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["/ls 📂", "/pwd 📍"],
+        ["/reset 🔄", "/kill ⏹️", "/history 📜"],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False,
+)
+
+# 主Bot专属键盘（额外包含管理命令）
+MAIN_BOT_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["/ls 📂", "/pwd 📍"],
+        ["/reset 🔄", "/kill ⏹️", "/history 📜"],
+        ["/bot_list 📋", "/restart 🔄"],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False,
+)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -62,6 +85,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = msg("greeting", "claude_initialized") if session.claude_session_initialized else msg("greeting", "claude_pending")
         native_session_block = msg("greeting", "session_id_labels.claude", session_id=session_id, status=status) + "\n"
 
+    # 根据是否是主Bot选择对应的键盘
+    keyboard = MAIN_BOT_KEYBOARD if is_main_application(context) else COMMON_KEYBOARD
+    
     await update.message.reply_text(
         f"{msg('greeting', 'header', alias=alias)}\n\n"
         f"{msg('greeting', 'current_config')}\n"
@@ -85,7 +111,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{msg('greeting', 'cmd_upload')}\n"
         f"{msg('greeting', 'cmd_download')}\n"
         f"{msg('greeting', 'cmd_kill_note')}"
-        f"{admin_block}"
+        f"{admin_block}",
+        reply_markup=keyboard
     )
 
 

@@ -7,12 +7,10 @@ echo.
 echo Testing network latency...
 echo.
 
-echo Testing baidu.com...
-ping -n 1 -w 2000 baidu.com | findstr "time=" >nul && echo [OK] baidu.com reachable || echo [Timeout] baidu.com unreachable
-
+echo Testing www.baidu.com...
 echo.
-echo Testing 8.8.8.8...
-ping -n 1 -w 2000 8.8.8.8 | findstr "time=" >nul && echo [OK] 8.8.8.8 reachable || echo [Timeout] 8.8.8.8 unreachable
+
+ping -n 2 -w 2000 www.baidu.com | findstr /V "^$" | findstr /V /C:"正在 Ping" | findstr /V /C:"Ping "
 
 echo.
 echo ===== Done =====

@@ -21,6 +21,7 @@ class BotProfile:
     cli_path: str = CLI_PATH
     working_dir: str = WORKING_DIR
     enabled: bool = True
+    bot_mode: str = "cli"  # "cli" | "assistant"
 
     def to_dict(self) -> dict:
         return {
@@ -30,6 +31,7 @@ class BotProfile:
             "cli_path": self.cli_path,
             "working_dir": self.working_dir,
             "enabled": self.enabled,
+            "bot_mode": self.bot_mode,
         }
 
 

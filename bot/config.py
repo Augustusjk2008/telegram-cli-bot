@@ -39,6 +39,21 @@ MANAGED_BOTS_FILE = os.environ.get("MANAGED_BOTS_FILE", "managed_bots.json")
 # 如果设置了 HTTPS_PROXY 或 HTTP_PROXY 环境变量，也会自动使用
 PROXY_URL = os.environ.get("PROXY_URL", os.environ.get("HTTPS_PROXY", os.environ.get("HTTP_PROXY", ""))).strip()
 
+# Whisper 语音识别配置
+WHISPER_ENABLED = os.environ.get("WHISPER_ENABLED", "true").lower() == "true"
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")  # tiny/base/small/medium/large
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "zh")  # zh/en/auto
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # cpu/cuda
+WHISPER_TEMP_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("WHISPER_TEMP_DIR", os.path.join(os.getcwd(), ".whisper_temp"))
+))
+WHISPER_MAX_DURATION = int(os.environ.get("WHISPER_MAX_DURATION", "300"))  # 最大5分钟
+WHISPER_TIMEOUT = int(os.environ.get("WHISPER_TIMEOUT", "120"))  # 转换超时（秒）
+
+# 确保临时目录存在
+if WHISPER_ENABLED:
+    os.makedirs(WHISPER_TEMP_DIR, exist_ok=True)
+
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}
 
