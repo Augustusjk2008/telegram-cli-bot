@@ -47,9 +47,15 @@ async def handle_tui_websocket(request):
 
         # 根据 shell 类型构建命令
         if shell_type == "powershell":
-            # 启动 PowerShell
+            # 启动 PowerShell，设置 UTF-8 编码以支持中文
             if sys.platform == "win32":
-                command = ["powershell.exe", "-NoLogo", "-NoExit"]
+                command = [
+                    "powershell.exe",
+                    "-NoLogo",
+                    "-NoExit",
+                    "-Command",
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null"
+                ]
             else:
                 # Unix 系统尝试使用 pwsh 或 powershell
                 command = ["pwsh", "-NoLogo", "-NoExit"]
@@ -70,14 +76,23 @@ async def handle_tui_websocket(request):
         # Windows 不支持 PTY，使用 subprocess.PIPE
         if sys.platform == "win32":
             # Windows: 使用 ConPTY (需要 Python 3.8+)
+            # 设置环境变量确保 UTF-8 编码
+            env = {
+                **os.environ,
+                "FORCE_COLOR": "1",
+                "TERM": "xterm-256color",
+                "PYTHONIOENCODING": "utf-8",
+                "CHCP": "65001"
+            }
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=cwd,
-                env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+                bufsize=0  # 无缓冲模式，实时输出
             )
         else:
             # Unix: 使用 PTY
@@ -101,22 +116,34 @@ async def handle_tui_websocket(request):
             """从 CLI 进程读取输出并转发到 WebSocket"""
             try:
                 if sys.platform == "win32":
-                    # Windows: 从 stdout 读取
+                    # Windows: 从 stdout 读取 - 使用小缓冲区并立即发送
+                    import msvcrt
+                    # 设置 stdout 为非阻塞模式
+                    import sys
+                    
                     while process.poll() is None:
-                        # 非阻塞读取
+                        # 使用 read1 进行更高效的流式读取，小缓冲区确保低延迟
                         data = await asyncio.get_event_loop().run_in_executor(
-                            None, process.stdout.read, 1024
+                            None, lambda: process.stdout.read1(256) if hasattr(process.stdout, 'read1') else process.stdout.read(256)
                         )
                         if data:
                             await ws.send_bytes(data)
+                            # 立即刷新，确保实时性
+                            await asyncio.sleep(0.001)
+                        else:
+                            # 无数据时短暂休眠，避免 CPU 占用过高
+                            await asyncio.sleep(0.01)
                 else:
                     # Unix: 从 PTY master 读取
                     while process.poll() is None:
                         data = await asyncio.get_event_loop().run_in_executor(
-                            None, os.read, master_fd, 1024
+                            None, os.read, master_fd, 256
                         )
                         if data:
                             await ws.send_bytes(data)
+                            await asyncio.sleep(0.001)
+                        else:
+                            await asyncio.sleep(0.01)
             except Exception as e:
                 logger.error(f"转发输出时出错: {e}")
 

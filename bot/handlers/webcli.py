@@ -80,11 +80,13 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
 
     if tui_mode:
         # TUI 模式：使用 xterm.js，自动连接 PowerShell
+        # 注意：实际使用的是 tui_server.py 中的 HTML，这个只是备用
         html_content = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PowerShell Web Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
