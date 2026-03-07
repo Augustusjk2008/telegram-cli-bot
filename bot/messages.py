@@ -123,10 +123,10 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
     },
     "admin": {
         "unauthorized": "⛔ 需要管理员权限",
-        "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [cli_type] [cli_path] [workdir]\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc codex codex C:/work/project\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)",
+        "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant / webcli\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc cli codex codex C:/work/project\n   例: /bot_add webcli 456:def webcli claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)",
         "restart": "🔄 正在重启整个程序并重载代码...",
-        "bot_add_usage": "用法: /bot_add <alias> <token> [cli_type] [cli_path] [workdir]",
-        "bot_add_success": "✅ 子Bot已启动\nalias: <code>{alias}</code>\nusername: @{username}\ncli: <code>{cli_type}</code> / <code>{cli_path}</code>\nworkdir: <code>{workdir}</code>",
+        "bot_add_usage": "用法: /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\nbot_mode: cli(默认) | assistant | webcli",
+        "bot_add_success": "✅ 子Bot已启动\nalias: <code>{alias}</code>\nusername: @{username}\nmode: <code>{bot_mode}</code>\ncli: <code>{cli_type}</code> / <code>{cli_path}</code>\nworkdir: <code>{workdir}</code>",
         "bot_add_failed": "❌ 添加失败: {error}",
         "bot_remove_usage": "用法: /bot_remove <alias>",
         "bot_remove_success": "✅ 已删除子Bot: <code>{alias}</code>",

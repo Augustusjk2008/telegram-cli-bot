@@ -13,7 +13,7 @@ sessions: Dict[Tuple[int, int], UserSession] = {}
 sessions_lock = threading.Lock()
 
 
-def get_session(bot_id: int, bot_alias: str, user_id: int, default_working_dir: str) -> UserSession:
+def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_working_dir: str = None) -> UserSession:
     key = (bot_id, user_id)
     with sessions_lock:
         if key in sessions and sessions[key].is_expired():
@@ -28,6 +28,10 @@ def get_session(bot_id: int, bot_alias: str, user_id: int, default_working_dir: 
                 working_dir=default_working_dir,
             )
         return sessions[key]
+
+
+# 保持向后兼容的别名
+get_session = get_or_create_session
 
 
 def reset_session(bot_id: int, user_id: int) -> bool:

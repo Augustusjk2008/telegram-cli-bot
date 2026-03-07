@@ -4,7 +4,7 @@ import logging
 
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-from .basic import start, reset, change_directory, print_working_directory, list_directory, show_history
+from .basic import start, reset, change_directory, print_working_directory, list_directory, show_history, handle_keyboard_command
 from .shell import execute_shell
 from .file import upload_help, handle_document, download_file, cat_file, head_file
 from .chat import handle_text_message
@@ -21,6 +21,7 @@ from .admin import (
     bot_kill,
     system_command,
     system_button_callback,
+    bot_goto_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,22 @@ except ImportError as e:
 
 # 尝试导入助手处理器（如果依赖未安装则跳过）
 try:
-    from .assistant import handle_assistant_message
+    from .assistant import (
+        handle_assistant_message,
+        cmd_memory,
+        cmd_memory_add,
+        cmd_memory_search,
+        cmd_memory_delete,
+        cmd_memory_clear,
+        cmd_tool_stats
+    )
     ASSISTANT_HANDLER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"助手处理器不可用（缺少依赖）: {e}")
     ASSISTANT_HANDLER_AVAILABLE = False
+
+# 导入 Web CLI 处理器
+from .webcli import handle_webcli_start, handle_webcli_stop, handle_webcli_status
 
 
 def _register_cli_handlers(application: Application, include_admin: bool):
@@ -69,6 +81,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_kill", bot_kill))
         application.add_handler(CommandHandler("system", system_command))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
+        application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
 
     # 语音和音频处理（优先级高于文档和文字）
     if VOICE_HANDLER_AVAILABLE:
@@ -77,6 +90,8 @@ def _register_cli_handlers(application: Application, include_admin: bool):
         logger.info("语音处理器已注册")
 
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    # 键盘命令处理（匹配"/命令 中文"格式）
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统信息|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
 
@@ -85,6 +100,15 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("history", show_history))
+
+    # 记忆管理命令
+    if ASSISTANT_HANDLER_AVAILABLE:
+        application.add_handler(CommandHandler("memory", cmd_memory))
+        application.add_handler(CommandHandler("memory_add", cmd_memory_add))
+        application.add_handler(CommandHandler("memory_search", cmd_memory_search))
+        application.add_handler(CommandHandler("memory_delete", cmd_memory_delete))
+        application.add_handler(CommandHandler("memory_clear", cmd_memory_clear))
+        application.add_handler(CommandHandler("tool_stats", cmd_tool_stats))
 
     if include_admin:
         application.add_handler(CommandHandler("restart", restart_main))
@@ -99,6 +123,7 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_kill", bot_kill))
         application.add_handler(CommandHandler("system", system_command))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
+        application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
 
     # 语音和音频处理（优先级高于文字）
     if VOICE_HANDLER_AVAILABLE:
@@ -108,17 +133,44 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
 
     # 助手模式的文本消息处理
     if ASSISTANT_HANDLER_AVAILABLE:
+        # 助手模式也支持键盘命令
+        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统信息|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_assistant_message))
         logger.info("助手处理器已注册")
     else:
         logger.warning("助手处理器不可用，文本消息将无法处理")
 
 
+def _register_webcli_handlers(application: Application, include_admin: bool):
+    """注册 Web CLI 模式的 handlers"""
+    application.add_handler(CommandHandler("start", handle_webcli_start))
+    application.add_handler(CommandHandler("stop", handle_webcli_stop))
+    application.add_handler(CommandHandler("status", handle_webcli_status))
+
+    if include_admin:
+        application.add_handler(CommandHandler("restart", restart_main))
+        application.add_handler(CommandHandler("bot_help", bot_help))
+        application.add_handler(CommandHandler("bot_list", bot_list))
+        application.add_handler(CommandHandler("bot_add", bot_add))
+        application.add_handler(CommandHandler("bot_remove", bot_remove))
+        application.add_handler(CommandHandler("bot_start", bot_start))
+        application.add_handler(CommandHandler("bot_stop", bot_stop))
+        application.add_handler(CommandHandler("bot_set_cli", bot_set_cli))
+        application.add_handler(CommandHandler("bot_set_workdir", bot_set_workdir))
+        application.add_handler(CommandHandler("bot_kill", bot_kill))
+        application.add_handler(CommandHandler("system", system_command))
+        application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
+        application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
+
+
 def register_handlers(application: Application, include_admin: bool = False):
     """根据 bot_mode 注册对应的 handlers"""
     bot_mode = application.bot_data.get("bot_mode", "cli")
 
-    if bot_mode == "assistant":
+    if bot_mode == "webcli":
+        logger.info("注册 Web CLI 模式 handlers")
+        _register_webcli_handlers(application, include_admin)
+    elif bot_mode == "assistant":
         logger.info("注册助手模式 handlers")
         _register_assistant_handlers(application, include_admin)
     else:

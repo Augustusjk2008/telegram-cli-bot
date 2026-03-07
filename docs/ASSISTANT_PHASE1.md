@@ -30,7 +30,16 @@ ANTHROPIC_API_KEY=your_api_key_here
 
 # 可选：指定 Claude 模型
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+
+# 可选：使用代理商 API（如果不是走 Anthropic 官方）
+# 例如：ANTHROPIC_BASE_URL=https://api.your-proxy.com/v1
+ANTHROPIC_BASE_URL=
 ```
+
+**代理商配置说明**：
+- 如果使用国内或第三方代理商的 API，需要设置 `ANTHROPIC_BASE_URL`
+- 留空则使用 Anthropic 官方 API（默认）
+- 代理商通常提供兼容 Anthropic API 格式的接口地址
 
 ### 3. 配置助手 Bot
 
@@ -173,6 +182,14 @@ pip install anthropic
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+### 问题：使用代理商 API 时连接失败
+
+**检查**：
+1. 确认 `ANTHROPIC_BASE_URL` 格式正确（例如：`https://api.example.com/v1`）
+2. 确认代理商 API 兼容 Anthropic 的接口格式
+3. 检查 API Key 是否对应该代理商
+4. 查看日志中是否有 "使用自定义 API 地址" 的提示
 
 ### 问题：Bot 无法启动
 

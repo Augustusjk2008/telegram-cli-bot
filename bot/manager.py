@@ -433,8 +433,8 @@ class MultiBotManager:
         working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
         bot_mode = (bot_mode or "cli").strip().lower()
 
-        if bot_mode not in ("cli", "assistant"):
-            raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {bot_mode}")
+        if bot_mode not in ("cli", "assistant", "webcli"):
+            raise ValueError(f"bot_mode 必须是 'cli'、'assistant' 或 'webcli'，当前值: {bot_mode}")
 
         if not os.path.isdir(working_dir):
             raise ValueError(f"工作目录不存在: {working_dir}")

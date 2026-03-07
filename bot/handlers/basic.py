@@ -23,12 +23,12 @@ from bot.utils import check_auth, truncate_for_markdown
 logger = logging.getLogger(__name__)
 
 
-# 常驻快捷键盘布局（图标+命令，手机端友好）
+# 常驻快捷键盘布局（中文显示，手机端友好）
 # 只包含不需要参数的常用命令
 COMMON_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["/ls 📂", "/pwd 📍"],
-        ["/reset 🔄", "/kill ⏹️", "/history 📜"],
+        ["查看目录", "当前路径"],
+        ["重置会话", "系统信息", "历史记录"],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -37,13 +37,24 @@ COMMON_KEYBOARD = ReplyKeyboardMarkup(
 # 主Bot专属键盘（额外包含管理命令）
 MAIN_BOT_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["/ls 📂", "/pwd 📍"],
-        ["/reset 🔄", "/kill ⏹️", "/history 📜"],
-        ["/bot_list 📋", "/restart 🔄"],
+        ["查看目录", "当前路径"],
+        ["重置会话", "系统信息", "历史记录"],
+        ["机器人列表", "重启系统"],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
+
+# 键盘中文到命令的映射
+KEYBOARD_TEXT_MAP = {
+    "查看目录": "/ls",
+    "当前路径": "/pwd",
+    "重置会话": "/reset",
+    "历史记录": "/history",
+    "系统信息": "/system",
+    "机器人列表": "/bot_list",
+    "重启系统": "/restart",
+}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -253,3 +264,70 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{icon} {content}")
 
     await update.message.reply_text(msg("history", "header") + "\n".join(lines))
+
+
+# 键盘命令映射（用于处理"/命令 中文描述"格式）
+KEYBOARD_COMMAND_MAP = {
+    "/ls": list_directory,
+    "/pwd": print_working_directory,
+    "/reset": reset,
+    "/history": show_history,
+}
+
+# 主Bot专属的键盘命令
+MAIN_BOT_KEYBOARD_COMMANDS = {
+    "/bot_list": None,  # 在admin.py中定义，延迟导入
+    "/restart": None,   # 在admin.py中定义，延迟导入
+    "/system": None,    # 在admin.py中定义，延迟导入
+}
+
+
+async def handle_keyboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理键盘按钮点击（中文标签映射到对应命令）"""
+    if not update.message or not update.message.text:
+        return
+    
+    text = update.message.text.strip()
+    
+    # 首先检查是否是中文键盘按钮
+    command = KEYBOARD_TEXT_MAP.get(text)
+    if command:
+        # 检查是否是键盘命令
+        handler = KEYBOARD_COMMAND_MAP.get(command)
+        if handler:
+            await handler(update, context)
+            return
+        
+        # 检查主Bot专属命令
+        if command in MAIN_BOT_KEYBOARD_COMMANDS:
+            # 延迟导入避免循环依赖
+            from .admin import bot_list, restart_main, system_command
+            if command == "/bot_list":
+                await bot_list(update, context)
+            elif command == "/restart":
+                await restart_main(update, context)
+            elif command == "/system":
+                await system_command(update, context)
+            return
+    
+    # 检查传统的 "/命令 中文" 格式（向后兼容）
+    parts = text.split(maxsplit=1)
+    if parts:
+        command = parts[0].lower()
+        handler = KEYBOARD_COMMAND_MAP.get(command)
+        if handler:
+            await handler(update, context)
+            return
+        
+        if command in MAIN_BOT_KEYBOARD_COMMANDS:
+            from .admin import bot_list, restart_main, system_command
+            if command == "/bot_list":
+                await bot_list(update, context)
+            elif command == "/restart":
+                await restart_main(update, context)
+            elif command == "/system":
+                await system_command(update, context)
+            return
+    
+    # 不是键盘命令，让其他处理器处理
+    return

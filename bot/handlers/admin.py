@@ -231,7 +231,40 @@ async def bot_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     manager = get_manager(context)
     lines = manager.get_status_lines()
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    
+    # 构建 inline keyboard，为每个子 bot 添加 goto 按钮
+    keyboard = []
+    row = []
+    
+    # 为主 bot 添加 goto 按钮（使用主 bot 的工作目录）
+    row.append(InlineKeyboardButton(
+        text="👑 切换到主 Bot",
+        callback_data=f"goto:{manager.main_profile.alias}"
+    ))
+    
+    # 为每个托管 bot 添加 goto 按钮
+    for alias in sorted(manager.managed_profiles.keys()):
+        profile = manager.managed_profiles[alias]
+        # 按钮显示：别名 + 工作目录（截断）
+        display_text = f"🤖 {alias}"
+        row.append(InlineKeyboardButton(
+            text=display_text,
+            callback_data=f"goto:{alias}"
+        ))
+        if len(row) == 2:  # 每行2个按钮
+            keyboard.append(row)
+            row = []
+    
+    if row:  # 添加剩余按钮
+        keyboard.append(row)
+    
+    reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    
+    await update.message.reply_text(
+        "\n".join(lines), 
+        parse_mode="HTML",
+        reply_markup=reply_markup
+    )
 
 
 async def restart_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -253,15 +286,16 @@ async def bot_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     alias = context.args[0].strip().lower()
     token = context.args[1].strip()
-    cli_type = context.args[2].strip() if len(context.args) >= 3 else CLI_TYPE
-    cli_path = context.args[3].strip() if len(context.args) >= 4 else CLI_PATH
-    workdir = " ".join(context.args[4:]).strip() if len(context.args) >= 5 else WORKING_DIR
+    bot_mode = context.args[2].strip().lower() if len(context.args) >= 3 else "cli"
+    cli_type = context.args[3].strip() if len(context.args) >= 4 else CLI_TYPE
+    cli_path = context.args[4].strip() if len(context.args) >= 5 else CLI_PATH
+    workdir = " ".join(context.args[5:]).strip() if len(context.args) >= 6 else WORKING_DIR
 
     manager = get_manager(context)
     status_msg = await update.message.reply_text(f"⏳ 正在添加子Bot <code>{html.escape(alias)}</code> ...", parse_mode="HTML")
 
     try:
-        profile = await manager.add_bot(alias, token, cli_type, cli_path, workdir)
+        profile = await manager.add_bot(alias, token, cli_type, cli_path, workdir, bot_mode)
         app = manager.applications.get(profile.alias)
         username = app.bot_data.get("bot_username", "") if app else ""
         await safe_edit_text(
@@ -269,6 +303,7 @@ async def bot_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg("admin", "bot_add_success",
                 alias=html.escape(profile.alias),
                 username=html.escape(username or 'unknown'),
+                bot_mode=html.escape(profile.bot_mode),
                 cli_type=html.escape(profile.cli_type),
                 cli_path=html.escape(profile.cli_path),
                 workdir=html.escape(profile.working_dir)),
@@ -527,6 +562,83 @@ async def system_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     # 执行脚本
     await _execute_and_reply(query, target_script)
+
+
+async def bot_goto_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 goto 按钮点击，临时切换到指定 bot 的工作目录"""
+    query = update.callback_query
+    await query.answer()
+    
+    # 检查权限
+    if not await ensure_admin(update, context):
+        return
+    
+    # 解析回调数据
+    data = query.data
+    if not data.startswith("goto:"):
+        return
+    
+    alias = data[5:]  # 去掉 "goto:" 前缀
+    manager = get_manager(context)
+    
+    # 获取目标工作目录
+    if alias == manager.main_profile.alias:
+        target_workdir = manager.main_profile.working_dir
+        display_name = "主 Bot"
+    else:
+        profile = manager.managed_profiles.get(alias)
+        if not profile:
+            await query.edit_message_text(
+                f"❌ 未找到别名 <code>{html.escape(alias)}</code> 的 Bot",
+                parse_mode="HTML"
+            )
+            return
+        target_workdir = profile.working_dir
+        display_name = f"Bot <code>{html.escape(alias)}</code>"
+    
+    # 检查目录是否存在
+    if not os.path.isdir(target_workdir):
+        await query.edit_message_text(
+            f"❌ {display_name} 的工作目录不存在:\n<code>{html.escape(target_workdir)}</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    # 获取当前用户的主 bot session（在主 bot 的上下文中切换目录）
+    from bot.sessions import get_or_create_session
+    from bot.context_helpers import get_bot_id
+    
+    main_app = manager.applications.get(manager.main_profile.alias)
+    if not main_app:
+        await query.edit_message_text(
+            "❌ 主 Bot 未运行，无法切换工作目录",
+            parse_mode="HTML"
+        )
+        return
+    
+    main_bot_id = main_app.bot_data.get("bot_id")
+    if not isinstance(main_bot_id, int):
+        await query.edit_message_text(
+            "❌ 无法获取主 Bot ID",
+            parse_mode="HTML"
+        )
+        return
+    
+    user_id = update.effective_user.id
+    session = get_or_create_session(main_bot_id, user_id, manager.main_profile.alias)
+    
+    # 临时切换工作目录（不修改配置文件）
+    # 如果 session 没有设置过工作目录，使用主 bot 的默认工作目录
+    old_workdir = session.working_dir or manager.main_profile.working_dir
+    session.working_dir = target_workdir
+    
+    await query.edit_message_text(
+        f"✅ 已临时切换到 {display_name} 的工作目录\n\n"
+        f"📁 新目录: <code>{html.escape(target_workdir)}</code>\n"
+        f"📁 原目录: <code>{html.escape(old_workdir)}</code>\n\n"
+        f"<i>提示：这是临时切换，使用 /reset 或重启后会恢复默认目录</i>",
+        parse_mode="HTML"
+    )
 
 
 async def bot_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):

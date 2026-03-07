@@ -1,10 +1,16 @@
 """程序入口：启动/重启循环"""
 
 import asyncio
+import ctypes
 import logging
 import os
 import sys
 import time
+
+# Windows 电源管理常量
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+ES_CONTINUOUS = 0x80000000
 
 # 确保 refactoring/ 在 sys.path 中，以便 `python bot/main.py` 也能正确导入 bot 包
 _this_dir = os.path.dirname(os.path.abspath(__file__))          # refactoring/bot/
@@ -31,6 +37,28 @@ from bot.models import BotProfile
 logger = logging.getLogger(__name__)
 
 
+def prevent_system_sleep():
+    """阻止系统进入睡眠状态"""
+    if sys.platform == "win32":
+        # ES_CONTINUOUS | ES_SYSTEM_REQUIRED: 持续阻止系统睡眠
+        result = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        if result:
+            logger.info("已阻止系统进入睡眠状态")
+        else:
+            logger.warning("阻止系统睡眠失败")
+
+
+def restore_system_sleep():
+    """恢复系统睡眠功能"""
+    if sys.platform == "win32":
+        # ES_CONTINUOUS: 清除之前的设置，恢复默认行为
+        result = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+        if result:
+            logger.info("已恢复系统睡眠功能")
+        else:
+            logger.warning("恢复系统睡眠失败")
+
+
 async def run_all_bots():
     config.RESTART_EVENT = asyncio.Event()
     main_profile = BotProfile(
@@ -54,6 +82,7 @@ async def run_all_bots():
     finally:
         await manager.shutdown_all()
         config.RESTART_EVENT = None
+        restore_system_sleep()
 
 
 def main():
@@ -81,6 +110,9 @@ def main():
     print(f"   托管配置: {MANAGED_BOTS_FILE}")
     print(msgs.get("startup", "loaded"))
 
+    # 阻止系统进入睡眠状态
+    prevent_system_sleep()
+
     while True:
         config.RESTART_REQUESTED = False
         try:
@@ -96,6 +128,8 @@ def main():
 
         if config.RESTART_REQUESTED:
             print(msgs.get("startup", "restart"))
+            # 恢复系统睡眠（重启前）
+            restore_system_sleep()
             # 短暂等待让启动问候消息的发送任务完成
             time.sleep(0.5)
             try:
@@ -104,6 +138,9 @@ def main():
                 print(f"进程级重启失败: {e}")
                 break
         break
+
+    # 程序退出前恢复系统睡眠
+    restore_system_sleep()
 
 
 if __name__ == "__main__":
