@@ -16,6 +16,7 @@ except ImportError:
 
 # ============ 环境变量读取 ============
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "your_bot_token_here")
+TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "true").lower() == "true"
 
 ALLOWED_USER_IDS: List[int] = []
 _allowed_raw = os.environ.get("ALLOWED_USER_IDS", "")
@@ -63,6 +64,20 @@ if NGROK_DIR:
     NGROK_DIR = os.path.abspath(os.path.expanduser(NGROK_DIR))
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "").strip()  # 代理商 API 地址
+WEB_ENABLED = os.environ.get("WEB_ENABLED", "false").lower() == "true"
+WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+WEB_PORT = int(os.environ.get("WEB_PORT", "8765"))
+WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
+_web_allowed_origins_raw = os.environ.get("WEB_ALLOWED_ORIGINS", "*")
+WEB_ALLOWED_ORIGINS = [item.strip() for item in _web_allowed_origins_raw.split(",") if item.strip()]
+_web_default_user_id_raw = os.environ.get(
+    "WEB_DEFAULT_USER_ID",
+    str(ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1),
+).strip()
+try:
+    WEB_DEFAULT_USER_ID = int(_web_default_user_id_raw)
+except ValueError:
+    WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}

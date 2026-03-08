@@ -26,15 +26,39 @@ from bot.config import (
     MAIN_LOOP_RETRY_DELAY,
     MANAGED_BOTS_FILE,
     SESSION_TIMEOUT,
+    TELEGRAM_ENABLED,
     TELEGRAM_BOT_TOKEN,
+    WEB_ENABLED,
+    WEB_HOST,
+    WEB_PORT,
     WORKING_DIR,
     reexec_current_process,
 )
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
+from bot.web import WebApiServer
 
 logger = logging.getLogger(__name__)
+
+
+def disable_console_quick_edit():
+    """禁用 Windows 控制台快速编辑模式，避免点击控制台导致程序暂停"""
+    if sys.platform == "win32":
+        try:
+            kernel32 = ctypes.windll.kernel32
+            # 获取标准输入句柄
+            stdin_handle = kernel32.GetStdHandle(-10)
+            # 获取当前控制台模式
+            mode = ctypes.c_uint32()
+            kernel32.GetConsoleMode(stdin_handle, ctypes.byref(mode))
+            # 禁用快速编辑模式 (ENABLE_QUICK_EDIT_MODE = 0x0040)
+            # 禁用插入模式 (ENABLE_INSERT_MODE = 0x0020)
+            new_mode = mode.value & ~0x0040 & ~0x0020
+            kernel32.SetConsoleMode(stdin_handle, new_mode)
+            logger.info("已禁用控制台快速编辑模式")
+        except Exception as e:
+            logger.warning(f"禁用快速编辑模式失败: {e}")
 
 
 def prevent_system_sleep():
@@ -71,16 +95,28 @@ async def run_all_bots():
     )
 
     manager = MultiBotManager(main_profile=main_profile, storage_file=MANAGED_BOTS_FILE)
-    await manager.start_all()
-    await manager.start_watchdog()
+    web_server = WebApiServer(manager) if WEB_ENABLED else None
 
-    logger.info("主Bot与已启用子Bot已启动")
-    logger.info("托管配置文件: %s", MANAGED_BOTS_FILE)
+    if TELEGRAM_ENABLED:
+        await manager.start_all()
+        await manager.start_watchdog()
+        logger.info("主Bot与已启用子Bot已启动")
+        logger.info("托管配置文件: %s", MANAGED_BOTS_FILE)
+
+    if web_server:
+        await web_server.start()
+        logger.info("Web API 已启用: http://%s:%s", WEB_HOST, WEB_PORT)
+
+    if not TELEGRAM_ENABLED and not web_server:
+        raise RuntimeError("TELEGRAM_ENABLED 与 WEB_ENABLED 不能同时为 false")
 
     try:
         await config.RESTART_EVENT.wait()
     finally:
-        await manager.shutdown_all()
+        if web_server:
+            await web_server.stop()
+        if TELEGRAM_ENABLED:
+            await manager.shutdown_all()
         config.RESTART_EVENT = None
         restore_system_sleep()
 
@@ -88,7 +124,7 @@ async def run_all_bots():
 def main():
     msgs = get_messages()
     
-    if TELEGRAM_BOT_TOKEN == "your_bot_token_here":
+    if TELEGRAM_ENABLED and TELEGRAM_BOT_TOKEN == "your_bot_token_here":
         print("错误: 请设置 TELEGRAM_BOT_TOKEN 环境变量")
         sys.exit(1)
 
@@ -108,7 +144,14 @@ def main():
     print(f"   工作目录: {WORKING_DIR}")
     print(f"   会话超时: {SESSION_TIMEOUT}秒")
     print(f"   托管配置: {MANAGED_BOTS_FILE}")
+    print(f"   Telegram: {'开启' if TELEGRAM_ENABLED else '关闭'}")
+    print(f"   Web API: {'开启' if WEB_ENABLED else '关闭'}")
+    if WEB_ENABLED:
+        print(f"   Web地址: http://{WEB_HOST}:{WEB_PORT}")
     print(msgs.get("startup", "loaded"))
+
+    # 禁用控制台快速编辑模式，避免点击控制台导致程序暂停
+    disable_console_quick_edit()
 
     # 阻止系统进入睡眠状态
     prevent_system_sleep()

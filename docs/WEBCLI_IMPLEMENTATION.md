@@ -1,38 +1,44 @@
-# Web CLI Bot 实现总结
+# Kimi Web Bot 实现总结
 
 ## 实现内容
 
 ### 1. 新增文件
 
-- `bot/handlers/webcli.py` - Web CLI 模式处理器
+- `bot/handlers/kimi_web.py` - Kimi Web 模式处理器
 - `docs/WEBCLI_QUICKSTART.md` - 快速开始指南
 - `docs/WEBCLI_USAGE.md` - 详细使用说明
-- `test_webcli.py` - 配置辅助脚本
 
 ### 2. 修改文件
 
-- `bot/handlers/__init__.py` - 添加 webcli 模式的 handler 注册
+- `bot/handlers/__init__.py` - 添加 Kimi Web 模式的 handler 注册
 - `bot/manager.py` - 支持 "webcli" bot_mode
 - `bot/models.py` - BotProfile 已支持 bot_mode 字段（无需修改）
+
+### 3. 废弃文件
+
+- `bot/handlers/webcli.py` - 旧的 PowerShell 转发实现（已被 kimi_web.py 替代）
+- `bot/handlers/tui_server.py` - TUI WebSocket 服务器（不再需要）
+- `bot/handlers/combined_server.py` - 组合服务器（不再需要）
 
 ## 功能特性
 
 ### 核心功能
 
-1. **启动 Web 服务器**
-   - 使用 Python 内置的 `http.server`
-   - 默认端口 8080
-   - 提供简单的 HTML 终端界面
+1. **启动 Kimi Web UI**
+   - 执行 `kimi web` 命令
+   - 自动解析 Kimi 输出中的本地 URL（如 `http://127.0.0.1:5494`）
+   - 等待 Kimi Web UI 完全启动
 
 2. **ngrok 隧道**
    - 自动启动 ngrok
+   - 转发 Kimi 本地 URL 到公网
    - 通过 ngrok API 获取公网 URL
    - 支持状态查询
 
 3. **Telegram 集成**
-   - `/start` - 启动服务并返回 URL
-   - `/status` - 查看服务状态
-   - `/stop` - 停止服务
+   - `/start` - 启动 Kimi Web 服务并返回公网 URL
+   - `/status` - 查看服务状态（Kimi Web + ngrok）
+   - `/stop` - 停止所有服务
 
 ### 技术实现
 
@@ -40,13 +46,15 @@
 # 架构流程
 Telegram Bot (webcli mode)
     ↓
-Python HTTP Server (port 8080)
+启动 kimi web 命令
+    ↓
+Kimi Web UI (http://127.0.0.1:5494)
     ↓
 ngrok tunnel
     ↓
 Public URL (https://xxx.ngrok-free.app)
     ↓
-Mobile Browser
+Mobile Browser / Desktop Browser
 ```
 
 ### 关键代码

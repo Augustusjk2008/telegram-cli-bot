@@ -50,8 +50,8 @@ except ImportError as e:
     logger.warning(f"助手处理器不可用（缺少依赖）: {e}")
     ASSISTANT_HANDLER_AVAILABLE = False
 
-# 导入 Web CLI 处理器
-from .webcli import handle_webcli_start, handle_webcli_stop, handle_webcli_status
+# 导入 Kimi Web 处理器
+from .kimi_web import handle_kimi_web_start, handle_kimi_web_stop, handle_kimi_web_status, handle_webcli_text
 
 
 def _register_cli_handlers(application: Application, include_admin: bool):
@@ -142,10 +142,13 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
 
 
 def _register_webcli_handlers(application: Application, include_admin: bool):
-    """注册 Web CLI 模式的 handlers"""
-    application.add_handler(CommandHandler("start", handle_webcli_start))
-    application.add_handler(CommandHandler("stop", handle_webcli_stop))
-    application.add_handler(CommandHandler("status", handle_webcli_status))
+    """注册 Kimi Web 模式的 handlers"""
+    application.add_handler(CommandHandler("start", handle_kimi_web_start))
+    application.add_handler(CommandHandler("stop", handle_kimi_web_stop))
+    application.add_handler(CommandHandler("status", handle_kimi_web_status))
+
+    # 处理文本输入（端口号和 token）
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_webcli_text))
 
     if include_admin:
         application.add_handler(CommandHandler("restart", restart_main))
@@ -168,7 +171,7 @@ def register_handlers(application: Application, include_admin: bool = False):
     bot_mode = application.bot_data.get("bot_mode", "cli")
 
     if bot_mode == "webcli":
-        logger.info("注册 Web CLI 模式 handlers")
+        logger.info("注册 Kimi Web 模式 handlers")
         _register_webcli_handlers(application, include_admin)
     elif bot_mode == "assistant":
         logger.info("注册助手模式 handlers")

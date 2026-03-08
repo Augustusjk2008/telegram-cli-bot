@@ -13,40 +13,6 @@ Write-Host ""
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
-# 检查虚拟环境
-$VenvPython = Join-Path $ScriptDir "venv\Scripts\python.exe"
-$VenvActivate = Join-Path $ScriptDir "venv\Scripts\Activate.ps1"
-
-if (-not (Test-Path $VenvPython)) {
-    Write-Host "[警告] 未找到虚拟环境，正在创建..." -ForegroundColor Yellow
-    try {
-        python -m venv venv
-        Write-Host "[成功] 虚拟环境创建完成" -ForegroundColor Green
-    } catch {
-        Write-Host "[错误] 创建虚拟环境失败！请确保已安装 Python 3.8+" -ForegroundColor Red
-        Read-Host "按 Enter 键退出"
-        exit 1
-    }
-}
-
-# 激活虚拟环境
-& $VenvActivate
-
-# 检查依赖是否需要安装
-$DepsFlag = Join-Path $ScriptDir "venv\.dependencies_installed"
-if (-not (Test-Path $DepsFlag)) {
-    Write-Host "[信息] 正在安装依赖..." -ForegroundColor Cyan
-    try {
-        pip install -r requirements.txt
-        New-Item -ItemType File -Path $DepsFlag -Force | Out-Null
-        Write-Host "[成功] 依赖安装完成" -ForegroundColor Green
-    } catch {
-        Write-Host "[错误] 安装依赖失败！" -ForegroundColor Red
-        Read-Host "按 Enter 键退出"
-        exit 1
-    }
-}
-
 # 检查 .env 文件
 if (-not (Test-Path ".env")) {
     Write-Host "[警告] 未找到 .env 文件，请配置环境变量！" -ForegroundColor Yellow

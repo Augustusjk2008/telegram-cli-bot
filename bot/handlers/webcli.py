@@ -31,21 +31,23 @@ def _kill_port_processes(port: int = 8080) -> tuple[bool, str]:
     """关闭所有监听指定端口的进程"""
     try:
         # 使用 PowerShell 查找并杀死占用端口的进程
+        # 注意：使用 -ErrorAction SilentlyContinue 和 try-catch 来处理进程已退出的情况
         ps_script = f'''
-        $connections = Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue
+        $ErrorActionPreference = 'SilentlyContinue'
+        $connections = Get-NetTCPConnection -LocalPort {port}
         if (-not $connections) {{
             Write-Output "NO_PROCESS"
             exit 0
         }}
         $killed = @()
         foreach ($conn in $connections) {{
-            try {{
-                $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-                if ($proc) {{
-                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+            $proc = Get-Process -Id $conn.OwningProcess
+            if ($proc -and -not $proc.HasExited) {{
+                try {{
+                    $proc.Kill()
                     $killed += "$($conn.OwningProcess):$($proc.ProcessName)"
-                }}
-            }} catch {{}}
+                }} catch {{}}
+            }}
         }}
         if ($killed.Count -eq 0) {{
             Write-Output "NO_PROCESS"
@@ -54,7 +56,7 @@ def _kill_port_processes(port: int = 8080) -> tuple[bool, str]:
         }}
         '''
         result = subprocess.run(
-            ["powershell", "-Command", ps_script],
+            ["powershell", "-NoProfile", "-Command", ps_script],
             capture_output=True,
             text=True,
             timeout=30
@@ -87,28 +89,35 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>PowerShell Web Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <style>
-        body {{
+        * {{ box-sizing: border-box; }}
+        html, body {{
             margin: 0;
             padding: 0;
             background: #0c0c0c;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            touch-action: manipulation;
+        }}
+        body {{
             display: flex;
             flex-direction: column;
-            height: 100vh;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }}
         .header {{
             background: #1e1e1e;
             color: #cccccc;
-            padding: 10px 20px;
+            padding: 10px 15px;
             border-bottom: 1px solid #333;
             display: flex;
             align-items: center;
             gap: 10px;
             font-size: 14px;
+            flex-shrink: 0;
         }}
         .header h1 {{
             margin: 0;
@@ -128,11 +137,55 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
         #terminal-container {{
             flex: 1;
             overflow: hidden;
+            position: relative;
         }}
         #terminal {{
             width: 100%;
             height: 100%;
             padding: 5px;
+        }}
+        #mobile-input-layer {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: text;
+            z-index: 10;
+        }}
+        #hidden-input {{
+            position: absolute;
+            top: -1000px;
+            left: -1000px;
+            opacity: 0;
+            font-size: 16px;
+        }}
+        .mobile-toolbar {{
+            display: none;
+            background: #1e1e1e;
+            border-top: 1px solid #333;
+            padding: 5px;
+            flex-shrink: 0;
+            overflow-x: auto;
+            white-space: nowrap;
+            -webkit-overflow-scrolling: touch;
+        }}
+        .mobile-toolbar button {{
+            background: #333;
+            color: #ccc;
+            border: none;
+            padding: 8px 12px;
+            margin: 2px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            min-width: 44px;
+            min-height: 36px;
+        }}
+        .mobile-toolbar button:active {{ background: #555; }}
+        @media (pointer: coarse) {{
+            .mobile-toolbar {{ display: block; }}
         }}
     </style>
 </head>
@@ -143,15 +196,32 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
     </div>
     <div id="terminal-container">
         <div id="terminal"></div>
+        <div id="mobile-input-layer"></div>
+        <input type="text" id="hidden-input" autocomplete="off" autocorrect="off" 
+               autocapitalize="off" spellcheck="false" />
+    </div>
+    <div class="mobile-toolbar" id="mobile-toolbar">
+        <button onclick="sendKey('Ctrl+C')">Ctrl+C</button>
+        <button onclick="sendKey('Ctrl+D')">Ctrl+D</button>
+        <button onclick="sendKey('Tab')">Tab</button>
+        <button onclick="sendKey('ArrowUp')">↑</button>
+        <button onclick="sendKey('ArrowDown')">↓</button>
+        <button onclick="sendKey('ArrowLeft')">←</button>
+        <button onclick="sendKey('ArrowRight')">→</button>
+        <button onclick="toggleKeyboard()">⌨️</button>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script>
+        // 检测是否为移动设备
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || 
+                         (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        
         // 初始化 xterm.js
         const term = new Terminal({{
             cursorBlink: true,
-            fontSize: 14,
+            fontSize: isMobile ? 12 : 14,
             fontFamily: '"Cascadia Code", "Courier New", "Consolas", monospace',
             theme: {{
                 background: '#0c0c0c',
@@ -181,27 +251,63 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
         term.open(document.getElementById('terminal'));
         fitAddon.fit();
 
-        // 响应窗口大小变化
-        window.addEventListener('resize', () => {{
-            fitAddon.fit();
-        }});
+        window.addEventListener('resize', () => fitAddon.fit());
 
         let ws = null;
         const statusEl = document.getElementById('status');
+        const hiddenInput = document.getElementById('hidden-input');
+        const mobileInputLayer = document.getElementById('mobile-input-layer');
 
-        // 自动连接到 WebSocket 服务器
+        function sendKey(keyCombo) {{
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const keyMap = {{
+                'Ctrl+C': '\\x03', 'Ctrl+D': '\\x04', 'Tab': '\\t',
+                'ArrowUp': '\\x1B[A', 'ArrowDown': '\\x1B[B',
+                'ArrowLeft': '\\x1B[D', 'ArrowRight': '\\x1B[C'
+            }};
+            if (keyMap[keyCombo]) ws.send(keyMap[keyCombo]);
+        }}
+
+        function toggleKeyboard() {{ hiddenInput.focus(); }}
+
+        // 移动端输入处理
+        if (isMobile) {{
+            mobileInputLayer.addEventListener('touchstart', (e) => {{ e.preventDefault(); hiddenInput.focus(); }});
+            mobileInputLayer.addEventListener('click', () => hiddenInput.focus());
+
+            let isComposing = false;
+            hiddenInput.addEventListener('compositionstart', () => {{ isComposing = true; }});
+            hiddenInput.addEventListener('compositionend', (e) => {{
+                isComposing = false;
+                if (ws && e.data) ws.send(e.data);
+                hiddenInput.value = '';
+            }});
+            hiddenInput.addEventListener('input', (e) => {{
+                if (isComposing) return;
+                if (ws && e.target.value) {{
+                    for (let c of e.target.value) ws.send(c);
+                }}
+                e.target.value = '';
+            }});
+            hiddenInput.addEventListener('keydown', (e) => {{
+                if (isComposing) return;
+                const keyMap = {{'Enter':'\\r','Backspace':'\\x7F','Escape':'\\x1B'}};
+                if (e.ctrlKey && e.key === 'c') {{ e.preventDefault(); if(ws) ws.send('\\x03'); }}
+                else if (keyMap[e.key]) {{ e.preventDefault(); if(ws) ws.send(keyMap[e.key]); }}
+            }});
+        }}
+
+        if (!isMobile) term.focus();
+
+        // 自动连接到 WebSocket
         function connect() {{
             statusEl.textContent = '连接中...';
             statusEl.className = 'status connecting';
 
-            // 动态构建 WebSocket URL
-            // 如果通过 ngrok 访问，使用相对路径；否则使用本地端口
             let wsUrl;
             if (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost') {{
-                // 本地访问：直接连接到 WebSocket 端口
                 wsUrl = 'ws://127.0.0.1:{ws_port}';
             }} else {{
-                // 通过 ngrok 访问：使用 ngrok 的 WebSocket 支持
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 wsUrl = `${{protocol}}//${{window.location.host}}`;
             }}
@@ -211,30 +317,23 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
             ws.onopen = () => {{
                 statusEl.textContent = '已连接';
                 statusEl.className = 'status connected';
-                // 发送初始化消息，使用默认 shell
                 ws.send(JSON.stringify({{ type: 'init', shell: 'powershell' }}));
+                if (isMobile) setTimeout(() => hiddenInput.focus(), 100);
             }};
 
             ws.onmessage = (event) => {{
                 if (event.data instanceof Blob) {{
-                    event.data.arrayBuffer().then(buffer => {{
-                        const bytes = new Uint8Array(buffer);
-                        term.write(bytes);
-                    }});
+                    event.data.arrayBuffer().then(buffer => term.write(new Uint8Array(buffer)));
                 }} else if (typeof event.data === 'string') {{
                     try {{
                         const msg = JSON.parse(event.data);
-                        if (msg.error) {{
-                            term.writeln(`\\x1b[31m错误: ${{msg.error}}\\x1b[0m`);
-                        }}
-                    }} catch {{
-                        term.write(event.data);
-                    }}
+                        if (msg.error) term.writeln(`\\x1b[31m错误: ${{msg.error}}\\x1b[0m`);
+                    }} catch {{ term.write(event.data); }}
                 }}
             }};
 
-            ws.onerror = (error) => {{
-                term.writeln(`\\x1b[31m连接错误，请刷新页面重试\\x1b[0m`);
+            ws.onerror = () => {{
+                term.writeln('\\x1b[31m连接错误，请刷新页面重试\\x1b[0m');
                 statusEl.textContent = '连接失败';
                 statusEl.className = 'status disconnected';
             }};
@@ -246,17 +345,8 @@ def _start_web_server(port: int = 8080, tui_mode: bool = False, ws_port: int = 8
             }};
         }}
 
-        // 监听终端输入并发送到 WebSocket
-        term.onData(data => {{
-            if (ws && ws.readyState === WebSocket.OPEN) {{
-                ws.send(data);
-            }}
-        }});
-
-        // 页面加载后自动连接
-        window.addEventListener('load', () => {{
-            setTimeout(connect, 500);
-        }});
+        term.onData(data => {{ if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); }});
+        window.addEventListener('load', () => setTimeout(connect, 500));
     </script>
 </body>
 </html>
@@ -552,11 +642,11 @@ async def handle_webcli_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     await status_msg.edit_text("🔄 步骤 3/3: 正在启动 ngrok 隧道...")
     http_url, ws_url = _start_ngrok(port=8080, ws_port=8081)
 
-    if ws_url:
+    if http_url:
         await status_msg.edit_text(
             f"🌐 <b>Web CLI 已启动！</b>\n\n"
             f"📱 点击下方链接访问 PowerShell 终端:\n"
-            f"<a href='{ws_url}'>{ws_url}</a>\n\n"
+            f"<a href='{http_url}'>{http_url}</a>\n\n"
             f"💡 <b>使用说明:</b>\n"
             f"• 网页打开后自动连接到 PowerShell\n"
             f"• 你可以在终端中运行任何命令\n"

@@ -43,6 +43,7 @@ There is no linter, type checker, or build step configured. No `pyproject.toml` 
 - Zero or more **managed sub-bots** (from `managed_bots.json`) without admin commands
 - Each bot is a separate `telegram.ext.Application` instance with its own polling loop
 - A watchdog task auto-restarts dead polling loops
+- Supports three bot modes: `cli` (default), `assistant`, and `webcli` (Kimi Web)
 
 The main bot vs sub-bot distinction is controlled by `bot_data["is_main"]` on each Application, which determines whether admin handler commands are registered (`register_handlers(app, include_admin=is_main)`).
 
@@ -65,13 +66,24 @@ Key functions: `build_cli_command()` constructs args per CLI type, `resolve_cli_
 
 ### Handler Structure
 
-`bot/handlers/__init__.py:register_handlers()` wires all command and message handlers:
+`bot/handlers/__init__.py:register_handlers()` wires all command and message handlers based on `bot_mode`:
+
+**CLI Mode (default):**
 - `basic.py` — `/start`, `/reset`, `/kill`, `/cd`, `/pwd`, `/ls`, `/history`
 - `chat.py` — text message handler; spawns CLI subprocess, reads output non-streaming via `process.communicate()` in executor, sends chunked responses to Telegram
 - `shell.py` — `/exec` for direct shell commands (with dangerous command blocklist)
 - `file.py` — file upload/download via Telegram
 - `voice.py` — voice/audio message handler; uses Whisper for speech-to-text, then forwards to `chat.py` (optional, requires `openai-whisper` + `pydub` + FFmpeg)
 - `admin.py` — `/bot_add`, `/bot_remove`, `/bot_start`, `/bot_stop`, `/bot_list`, `/bot_set_cli`, `/bot_set_workdir`, `/restart` (main bot only)
+
+**Assistant Mode:**
+- `assistant.py` — AI assistant with direct API calls, memory management, tool usage
+- Commands: `/memory`, `/memory_add`, `/memory_search`, `/memory_delete`, `/memory_clear`, `/tool_stats`
+
+**Kimi Web Mode (webcli):**
+- `kimi_web.py` — launches `kimi web` and exposes it via ngrok tunnel
+- Commands: `/start` (启动 Kimi Web + ngrok), `/stop` (停止服务), `/status` (查看状态)
+- Automatically parses Kimi's local URL from startup output and forwards it to public internet
 
 ### Voice Recognition (Optional Feature)
 

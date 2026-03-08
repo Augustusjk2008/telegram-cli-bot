@@ -4,12 +4,19 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.assistant.llm import call_claude_with_memory_tools_stream, ANTHROPIC_AVAILABLE, get_tool_usage_summary
+from bot.assistant.llm import (
+    ANTHROPIC_AVAILABLE,
+    call_claude_with_memory_tools,
+    call_claude_with_memory_tools_stream,
+    get_tool_usage_summary,
+)
 from bot.assistant.memory import get_memory_store
 from bot.context_helpers import get_current_session
 from bot.config import ANTHROPIC_MODEL
 
 logger = logging.getLogger(__name__)
+call_claude_api = call_claude_with_memory_tools
+_DEFAULT_CALL_CLAUDE_API = call_claude_api
 
 
 async def handle_assistant_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -58,28 +65,37 @@ async def handle_assistant_message(update: Update, context: ContextTypes.DEFAULT
         # 构建系统提示，注入长期记忆
         system_prompt = _build_system_prompt_with_memory(user_id, is_first_message)
 
-        # 流式调用 Claude API
         response_text = ""
         usage_info = {}
 
-        async for event in call_claude_with_memory_tools_stream(
-            messages=messages,
-            system_prompt=system_prompt,
-            user_id=user_id
-        ):
-            if event["type"] == "text":
-                response_text += event["text"]
+        # 兼容旧测试和旧扩展点：如果调用方显式 patch 了 call_claude_api，就走非流式入口。
+        if call_claude_api is not _DEFAULT_CALL_CLAUDE_API:
+            response = await call_claude_api(
+                messages=messages,
+                system_prompt=system_prompt,
+                user_id=user_id
+            )
+            response_text = response if isinstance(response, str) else str(response)
+        else:
+            # 默认仍走流式 + 记忆工具链
+            async for event in call_claude_with_memory_tools_stream(
+                messages=messages,
+                system_prompt=system_prompt,
+                user_id=user_id
+            ):
+                if event["type"] == "text":
+                    response_text += event["text"]
 
-                # 每收到一定长度的文本就更新消息（避免过于频繁）
-                if len(response_text) % 100 < len(event["text"]):
-                    try:
-                        await status_msg.edit_text(response_text)
-                    except Exception:
-                        # 消息内容未变化或其他错误，忽略
-                        pass
+                    # 每收到一定长度的文本就更新消息（避免过于频繁）
+                    if len(response_text) % 100 < len(event["text"]):
+                        try:
+                            await status_msg.edit_text(response_text)
+                        except Exception:
+                            # 消息内容未变化或其他错误，忽略
+                            pass
 
-            elif event["type"] == "usage":
-                usage_info = event
+                elif event["type"] == "usage":
+                    usage_info = event
 
         # 最终更新：完整文本 + token 使用信息
         final_text = response_text
