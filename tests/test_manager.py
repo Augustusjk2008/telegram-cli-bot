@@ -13,6 +13,7 @@ import pytest
 from bot.config import BOT_ALIAS_RE, RESERVED_ALIASES
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.sessions import get_or_create_session
 
 
 class TestManagerLoadSave:
@@ -86,6 +87,35 @@ class TestManagerLoadSave:
         profile = BotProfile(alias="main", token="main_tok")
         m = MultiBotManager(main_profile=profile, storage_file=str(storage))
         assert len(m.managed_profiles) == 0
+
+    @pytest.mark.asyncio
+    async def test_set_bot_workdir_persists_to_storage_and_sessions(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        profile = BotProfile(alias="main", token="main_tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
+
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        m.managed_profiles["sub1"] = BotProfile(
+            alias="sub1",
+            token="tok1",
+            cli_type="claude",
+            cli_path="claude",
+            working_dir=str(old_dir),
+        )
+        session = get_or_create_session(123, "sub1", 456, default_working_dir=str(old_dir))
+
+        await m.set_bot_workdir("sub1", str(new_dir))
+
+        assert m.managed_profiles["sub1"].working_dir == str(new_dir)
+        assert session.working_dir == str(new_dir)
+
+        data = json.loads(storage.read_text(encoding="utf-8"))
+        assert data["bots"][0]["alias"] == "sub1"
+        assert data["bots"][0]["working_dir"] == str(new_dir)
 
 
 class TestManagerValidation:

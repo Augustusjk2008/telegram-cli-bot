@@ -134,16 +134,28 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
     return "configured" if profile.enabled else "stopped"
 
 
-def build_bot_summary(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[int] = None) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     app = manager.applications.get(alias)
+    
+    # 优先使用当前用户 session 的工作目录（如果用户已登录）
+    working_dir = profile.working_dir
+    if user_id is not None:
+        try:
+            session = get_session_for_alias(manager, alias, user_id)
+            if session and session.working_dir:
+                working_dir = session.working_dir
+        except Exception:
+            # 如果获取 session 失败，使用 profile 的工作目录
+            pass
+    
     return {
         "alias": profile.alias,
         "enabled": profile.enabled,
         "bot_mode": profile.bot_mode,
         "cli_type": profile.cli_type,
         "cli_path": profile.cli_path,
-        "working_dir": profile.working_dir,
+        "working_dir": working_dir,
         "is_main": alias == manager.main_profile.alias,
         "status": _build_run_status(manager, alias, profile),
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
@@ -151,9 +163,9 @@ def build_bot_summary(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     }
 
 
-def list_bots(manager: MultiBotManager) -> list[dict[str, Any]]:
+def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[dict[str, Any]]:
     aliases = [manager.main_profile.alias, *sorted(manager.managed_profiles.keys())]
-    return [build_bot_summary(manager, alias) for alias in aliases]
+    return [build_bot_summary(manager, alias, user_id) for alias in aliases]
 
 
 def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

@@ -17,8 +17,17 @@ def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_wor
     key = (bot_id, user_id)
     with sessions_lock:
         if key in sessions and sessions[key].is_expired():
-            sessions[key].terminate_process()
+            # 在锁内只标记，实际终止在锁外执行
+            expired_session = sessions[key]
             del sessions[key]
+        else:
+            expired_session = None
+
+        if expired_session is not None:
+            try:
+                expired_session.terminate_process()
+            except Exception:
+                pass
 
         if key not in sessions:
             sessions[key] = UserSession(
@@ -54,11 +63,17 @@ def clear_bot_sessions(bot_id: int):
 
 def is_bot_processing(bot_id: int) -> bool:
     """检查指定 bot 是否有正在处理消息的会话"""
-    with sessions_lock:
+    # 使用非阻塞方式快速检查，避免长时间持有锁
+    if not sessions_lock.acquire(timeout=1.0):
+        # 如果获取锁超时，假设正在处理（保守策略）
+        return True
+    try:
         for key, session in sessions.items():
             if key[0] == bot_id and session.is_processing:
                 return True
-    return False
+        return False
+    finally:
+        sessions_lock.release()
 
 
 def cleanup_expired_sessions():

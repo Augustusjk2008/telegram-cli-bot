@@ -58,26 +58,18 @@ if WHISPER_ENABLED:
 # Claude API 配置（用于助手模式）
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
-# Web CLI / ngrok 配置
-NGROK_DIR = os.environ.get("NGROK_DIR", "").strip()
-if NGROK_DIR:
-    NGROK_DIR = os.path.abspath(os.path.expanduser(NGROK_DIR))
+# Web CLI / ngrok 配置（已禁用）
+# 注意：Web 后端功能已被禁用，以下配置仅保留用于兼容性，不会生效
+NGROK_DIR = ""
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "").strip()  # 代理商 API 地址
-WEB_ENABLED = os.environ.get("WEB_ENABLED", "false").lower() == "true"
-WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
-WEB_PORT = int(os.environ.get("WEB_PORT", "8765"))
-WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
-_web_allowed_origins_raw = os.environ.get("WEB_ALLOWED_ORIGINS", "*")
-WEB_ALLOWED_ORIGINS = [item.strip() for item in _web_allowed_origins_raw.split(",") if item.strip()]
-_web_default_user_id_raw = os.environ.get(
-    "WEB_DEFAULT_USER_ID",
-    str(ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1),
-).strip()
-try:
-    WEB_DEFAULT_USER_ID = int(_web_default_user_id_raw)
-except ValueError:
-    WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
+WEB_ENABLED = False  # Web 功能已禁用
+WEB_HOST = "127.0.0.1"
+WEB_PORT = 8765
+WEB_PUBLIC_URL = ""
+WEB_API_TOKEN = ""
+WEB_ALLOWED_ORIGINS = []
+WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}
@@ -109,6 +101,10 @@ NETWORK_ERROR_MAX_RETRIES = 10  # 最大重试次数（指数退避）
 NETWORK_ERROR_BASE_DELAY = 1.0  # 基础延迟（秒）
 NETWORK_ERROR_MAX_DELAY = 60.0  # 最大延迟（秒）
 
+# 网络错误日志抑制配置（适用于网络不稳定环境）
+# 在指定时间窗口内，相同类型的网络错误只记录一次 WARNING，其余用 DEBUG
+NETWORK_ERROR_LOG_SUPPRESS_WINDOW = int(os.environ.get("NETWORK_ERROR_LOG_SUPPRESS_WINDOW", "60"))  # 秒，设为0禁用抑制
+
 # CLI 超时检测间隔（秒）
 CLI_TIMEOUT_CHECK_INTERVAL = 10
 
@@ -138,6 +134,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
 # ============ 全局可变状态 ============
 RESTART_REQUESTED = False

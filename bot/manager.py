@@ -10,7 +10,15 @@ from typing import Dict, List, Optional
 
 from telegram import Update
 from telegram.error import NetworkError, TimedOut
+
+# 捕获底层 httpx 连接错误
+try:
+    from httpx import ConnectError, ConnectTimeout
+except ImportError:
+    ConnectError = None
+    ConnectTimeout = None
 from telegram.ext import Application
+from telegram.request import HTTPXRequest
 
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.config import (
@@ -23,6 +31,7 @@ from bot.config import (
     NETWORK_ERROR_BASE_DELAY,
     NETWORK_ERROR_MAX_DELAY,
     NETWORK_ERROR_MAX_RETRIES,
+    NETWORK_ERROR_LOG_SUPPRESS_WINDOW,
     POLLING_BOOTSTRAP_RETRIES,
     POLLING_TIMEOUT,
     POLLING_WATCHDOG_INTERVAL,
@@ -47,15 +56,56 @@ class MultiBotManager:
         self._watchdog_task: Optional[asyncio.Task] = None
         self._watchdog_stop_event: Optional[asyncio.Event] = None
         self._lock = asyncio.Lock()
+        # 网络错误日志抑制状态: {alias: (error_type, last_log_time, count)}
+        self._network_error_log_state: Dict[str, tuple] = {}
         self._load_profiles()
 
     def _make_polling_error_callback(self, alias: str):
-        """轮询错误回调，记录不同类型的错误"""
+        """轮询错误回调，带智能日志抑制（适合网络不稳定环境）"""
         def _on_polling_error(error: Exception) -> None:
-            if isinstance(error, (NetworkError, TimedOut)):
-                logger.warning("网络错误 alias=%s: %s", alias, error)
-            else:
+            # 判断是否为网络错误
+            is_network_error = isinstance(error, (NetworkError, TimedOut)) or (
+                ConnectError is not None and isinstance(error, (ConnectError, ConnectTimeout))
+            )
+            
+            if not is_network_error:
+                # 非网络错误直接记录
                 logger.warning("轮询异常 alias=%s: %s", alias, error)
+                return
+            
+            # 网络错误：使用智能抑制
+            if NETWORK_ERROR_LOG_SUPPRESS_WINDOW <= 0:
+                # 禁用抑制，直接记录
+                logger.warning("网络错误 alias=%s: %s", alias, error)
+                return
+            
+            now = asyncio.get_event_loop().time()
+            error_type = type(error).__name__
+            state = self._network_error_log_state.get(alias)
+            
+            if state is None:
+                # 首次错误，记录 WARNING 并初始化状态
+                logger.warning("网络错误 alias=%s: %s", alias, error)
+                self._network_error_log_state[alias] = (error_type, now, 1)
+            else:
+                last_type, last_time, count = state
+                elapsed = now - last_time
+                
+                if elapsed >= NETWORK_ERROR_LOG_SUPPRESS_WINDOW:
+                    # 超过抑制窗口，重置计数并记录 WARNING
+                    logger.warning(
+                        "网络错误 alias=%s (过去%d秒发生%d次): %s", 
+                        alias, int(elapsed), count + 1, error
+                    )
+                    self._network_error_log_state[alias] = (error_type, now, 1)
+                else:
+                    # 在抑制窗口内，使用 DEBUG 级别避免刷屏
+                    logger.debug(
+                        "网络错误(抑制) alias=%s [%d/%ds]: %s", 
+                        alias, int(elapsed), NETWORK_ERROR_LOG_SUPPRESS_WINDOW, error
+                    )
+                    # 更新计数但不更新时间（保持窗口起点）
+                    self._network_error_log_state[alias] = (last_type, last_time, count + 1)
 
         return _on_polling_error
 
@@ -70,6 +120,8 @@ class MultiBotManager:
                 await self._start_updater_polling(app, alias)
                 if retry_count > 0:
                     logger.info("轮询恢复成功 alias=%s (重试%d次)", alias, retry_count)
+                    # 清除日志抑制状态，让下次错误能正常记录
+                    self._network_error_log_state.pop(alias, None)
                 return
             except (NetworkError, TimedOut) as e:
                 retry_count += 1
@@ -84,7 +136,21 @@ class MultiBotManager:
                     delay, alias, retry_count, NETWORK_ERROR_MAX_RETRIES, e
                 )
                 await asyncio.sleep(delay)
-            except Exception:
+            except Exception as e:
+                # 检查是否是 httpx 连接错误的包装
+                if ConnectError is not None and isinstance(e, (ConnectError, ConnectTimeout)):
+                    retry_count += 1
+                    if retry_count >= NETWORK_ERROR_MAX_RETRIES:
+                        logger.error("HTTPX连接错误重试耗尽 alias=%s: %s", alias, e)
+                        raise
+
+                    delay = min(base_delay * (2 ** (retry_count - 1)), max_delay)
+                    logger.warning(
+                        "HTTPX连接错误，将在%.1f秒后重试 alias=%s (第%d/%d次): %s",
+                        delay, alias, retry_count, NETWORK_ERROR_MAX_RETRIES, e
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 # 其他错误不重试，直接抛出
                 raise
 
@@ -129,6 +195,8 @@ class MultiBotManager:
                 logger.warning("检测到轮询已停止，正在自动重启 alias=%s", alias)
                 await self._start_updater_polling_with_retry(app, alias)
                 logger.info("轮询自动恢复成功 alias=%s", alias)
+                # 清除日志抑制状态
+                self._network_error_log_state.pop(alias, None)
             except Exception as e:
                 logger.error("轮询自动恢复失败 alias=%s: %s", alias, e)
 
@@ -224,6 +292,14 @@ class MultiBotManager:
             return self.main_profile
         return self.managed_profiles.get(alias, self.main_profile)
 
+    def _get_profile_for_update(self, alias: str) -> BotProfile:
+        """获取可更新的 profile（支持主 Bot 和托管 Bot）"""
+        if alias == self.main_profile.alias:
+            return self.main_profile
+        if alias not in self.managed_profiles:
+            raise ValueError(f"不存在 alias `{alias}`")
+        return self.managed_profiles[alias]
+
     def _validate_alias(self, alias: str):
         if not BOT_ALIAS_RE.fullmatch(alias):
             raise ValueError("alias 仅允许字母/数字/_/-，长度 2-32")
@@ -290,13 +366,26 @@ class MultiBotManager:
         proxy_kwargs = get_proxy_kwargs()
         if proxy_kwargs:
             builder = builder.proxy_url(proxy_kwargs["proxy_url"])
-        # 增加超时时间以适应网络不稳定情况
+        # 增加连接池大小和超时时间以适应多bot并发请求
+        request = HTTPXRequest(
+            connection_pool_size=32,
+            read_timeout=60,
+            write_timeout=60,
+            connect_timeout=30,
+            pool_timeout=30,
+            **({"proxy": proxy_kwargs["proxy_url"]} if proxy_kwargs else {}),
+        )
         app = (
             builder
-            .read_timeout(60)
-            .write_timeout(60)
-            .connect_timeout(30)
-            .pool_timeout(30)
+            .request(request)
+            .get_updates_request(HTTPXRequest(
+                connection_pool_size=8,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=30,
+                pool_timeout=30,
+                **({"proxy": proxy_kwargs["proxy_url"]} if proxy_kwargs else {}),
+            ))
             .build()
         )
         app.bot_data["manager"] = self
@@ -331,8 +420,9 @@ class MultiBotManager:
                 app.bot_data.get("bot_username") or "unknown",
             )
 
-            # 发送启动问候消息（使用 shield 保护，防止被取消）
-            await asyncio.shield(asyncio.create_task(self._send_startup_greeting(app, profile)))
+            # 发送启动问候消息（仅主 bot，使用 shield 保护，防止被取消）
+            if is_main:
+                await asyncio.shield(asyncio.create_task(self._send_startup_greeting(app, profile)))
 
             return app
         except Exception:
@@ -361,12 +451,6 @@ class MultiBotManager:
         app.bot_data["stopping"] = True
         bot_id = app.bot_data.get("bot_id")
         profile = self.get_profile(alias)
-
-        # 发送关闭告别消息（使用 shield 保护，防止被取消）
-        try:
-            await asyncio.shield(asyncio.create_task(self._send_shutdown_goodbye(app, profile)))
-        except Exception as e:
-            logger.debug(f"发送告别消息时发生异常 alias={alias}: {e}")
 
         try:
             if app.updater and app.updater.running:
@@ -470,6 +554,8 @@ class MultiBotManager:
 
     async def remove_bot(self, alias: str):
         alias = alias.strip().lower()
+        if alias == self.main_profile.alias:
+            raise ValueError(f"无法移除主 Bot `{alias}`")
         async with self._lock:
             if alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{alias}`")
@@ -479,6 +565,8 @@ class MultiBotManager:
 
     async def start_bot(self, alias: str):
         alias = alias.strip().lower()
+        if alias == self.main_profile.alias:
+            raise ValueError(f"主 Bot `{alias}` 已在运行，无需启动")
         async with self._lock:
             if alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{alias}`")
@@ -489,6 +577,8 @@ class MultiBotManager:
 
     async def stop_bot(self, alias: str):
         alias = alias.strip().lower()
+        if alias == self.main_profile.alias:
+            raise ValueError(f"主 Bot `{alias}` 无法通过此接口停止，请使用系统级管理")
         async with self._lock:
             if alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{alias}`")
@@ -505,9 +595,7 @@ class MultiBotManager:
             raise ValueError("cli_path 不能为空")
 
         async with self._lock:
-            if alias not in self.managed_profiles:
-                raise ValueError(f"不存在 alias `{alias}`")
-            profile = self.managed_profiles[alias]
+            profile = self._get_profile_for_update(alias)
             if resolve_cli_executable(cli_path, profile.working_dir) is None:
                 raise ValueError(
                     f"未找到CLI可执行文件: {cli_path} "
@@ -524,9 +612,7 @@ class MultiBotManager:
             raise ValueError(f"工作目录不存在: {working_dir}")
 
         async with self._lock:
-            if alias not in self.managed_profiles:
-                raise ValueError(f"不存在 alias `{alias}`")
-            profile = self.managed_profiles[alias]
+            profile = self._get_profile_for_update(alias)
             profile.working_dir = working_dir
             self._save_profiles()
             # 同时更新所有已存在的会话的工作目录

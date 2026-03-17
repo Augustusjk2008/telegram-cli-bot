@@ -50,6 +50,7 @@ class UserSession:
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
     is_processing: bool = False
+    stop_requested: bool = False
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -87,4 +88,5 @@ class UserSession:
                     except subprocess.TimeoutExpired:
                         pass
                 self.process = None
+            self.stop_requested = False
             self.is_processing = False

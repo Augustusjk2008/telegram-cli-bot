@@ -99,13 +99,15 @@ def split_text_into_chunks(text: str, max_len: int = 3800) -> List[str]:
     return chunks
 
 
-async def safe_edit_text(message, text: str, parse_mode: Optional[str] = None):
+async def safe_edit_text(message, text: str, parse_mode: Optional[str] = None, reply_markup=None):
     """安全编辑消息：Markdown 失败时自动降级为纯文本"""
     try:
+        kwargs = {}
         if parse_mode:
-            await message.edit_text(text, parse_mode=parse_mode)
-        else:
-            await message.edit_text(text)
+            kwargs["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        await message.edit_text(text, **kwargs)
         return
     except Exception as e:
         err = str(e).lower()
@@ -118,7 +120,10 @@ async def safe_edit_text(message, text: str, parse_mode: Optional[str] = None):
             or "entity" in err
         ):
             try:
-                await message.edit_text(text)
+                kwargs = {}
+                if reply_markup is not None:
+                    kwargs["reply_markup"] = reply_markup
+                await message.edit_text(text, **kwargs)
             except Exception:
                 pass
             return

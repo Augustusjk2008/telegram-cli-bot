@@ -28,16 +28,12 @@ from bot.config import (
     SESSION_TIMEOUT,
     TELEGRAM_ENABLED,
     TELEGRAM_BOT_TOKEN,
-    WEB_ENABLED,
-    WEB_HOST,
-    WEB_PORT,
     WORKING_DIR,
     reexec_current_process,
 )
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
-from bot.web import WebApiServer
 
 logger = logging.getLogger(__name__)
 
@@ -95,30 +91,25 @@ async def run_all_bots():
     )
 
     manager = MultiBotManager(main_profile=main_profile, storage_file=MANAGED_BOTS_FILE)
-    web_server = WebApiServer(manager) if WEB_ENABLED else None
 
     if TELEGRAM_ENABLED:
         await manager.start_all()
         await manager.start_watchdog()
         logger.info("主Bot与已启用子Bot已启动")
         logger.info("托管配置文件: %s", MANAGED_BOTS_FILE)
-
-    if web_server:
-        await web_server.start()
-        logger.info("Web API 已启用: http://%s:%s", WEB_HOST, WEB_PORT)
-
-    if not TELEGRAM_ENABLED and not web_server:
-        raise RuntimeError("TELEGRAM_ENABLED 与 WEB_ENABLED 不能同时为 false")
+    else:
+        raise RuntimeError("TELEGRAM_ENABLED 必须设置为 true")
 
     try:
         await config.RESTART_EVENT.wait()
     finally:
-        if web_server:
-            await web_server.stop()
         if TELEGRAM_ENABLED:
             await manager.shutdown_all()
         config.RESTART_EVENT = None
-        restore_system_sleep()
+        # 只有在非重启退出时才恢复睡眠
+        # 重启时由主循环控制，避免屏幕盖着时系统进入睡眠
+        if not config.RESTART_REQUESTED:
+            restore_system_sleep()
 
 
 def main():
@@ -145,9 +136,7 @@ def main():
     print(f"   会话超时: {SESSION_TIMEOUT}秒")
     print(f"   托管配置: {MANAGED_BOTS_FILE}")
     print(f"   Telegram: {'开启' if TELEGRAM_ENABLED else '关闭'}")
-    print(f"   Web API: {'开启' if WEB_ENABLED else '关闭'}")
-    if WEB_ENABLED:
-        print(f"   Web地址: http://{WEB_HOST}:{WEB_PORT}")
+    print(f"   Web API: 已禁用")
     print(msgs.get("startup", "loaded"))
 
     # 禁用控制台快速编辑模式，避免点击控制台导致程序暂停
@@ -171,8 +160,8 @@ def main():
 
         if config.RESTART_REQUESTED:
             print(msgs.get("startup", "restart"))
-            # 恢复系统睡眠（重启前）
-            restore_system_sleep()
+            # 注意：重启前不恢复睡眠，避免屏幕盖着时系统进入睡眠
+            # 新进程启动时会立即调用 prevent_system_sleep()
             # 短暂等待让启动问候消息的发送任务完成
             time.sleep(0.5)
             try:

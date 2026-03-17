@@ -57,6 +57,7 @@
   "cd": {
     "usage": "用法: /cd <路径>",
     "success": "📁 目录已切换:\n<code>{path}</code>",
+    "persist_failed": "❌ 子Bot工作目录保存失败:\n<code>{error}</code>",
     "not_exist": "❌ 目录不存在:\n<code>{path}</code>"
   },
   "pwd": {

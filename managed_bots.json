@@ -1,20 +1,11 @@
 {
   "bots": [
     {
-      "alias": "assistant1",
-      "token": "8424588419:AAEEXCLS8LtQ4pC4E3nXm2axj6GGgP5K93c",
-      "cli_type": "kimi",
-      "cli_path": "kimi",
-      "working_dir": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring",
-      "enabled": true,
-      "bot_mode": "assistant"
-    },
-    {
       "alias": "team1",
       "token": "8637959849:AAGMNtSZoDAxCyEac7k2h9EDs63d5Q757Ko",
       "cli_type": "kimi",
       "cli_path": "kimi",
-      "working_dir": "H:\\WorkSpace\\KimiAgent\\game_agents",
+      "working_dir": "h:\\workspace\\kimiagent\\game_agents",
       "enabled": true,
       "bot_mode": "cli"
     },
@@ -23,7 +14,7 @@
       "token": "8291157555:AAE_jkTJH5dulRmeEOwK_p_R73X42HC_ZvI",
       "cli_type": "claude",
       "cli_path": "claude",
-      "working_dir": "h:\\resources\\rtlinux\\demos\\mb_ddf",
+      "working_dir": "H:\\Resources\\RTLinux\\Demos\\MB_DDF",
       "enabled": true,
       "bot_mode": "cli"
     },
@@ -32,18 +23,9 @@
       "token": "8477054156:AAEf6cecw_bhKLfSDKy_hVUNZD_vw44WCN4",
       "cli_type": "codex",
       "cli_path": "codex",
-      "working_dir": "H:\\WorkSpace\\KimiAgent\\game_agents",
-      "enabled": true,
-      "bot_mode": "cli"
-    },
-    {
-      "alias": "webcli",
-      "token": "8717902551:AAHGylWaXOefX4uiEOlULO_EcykwogrOA2k",
-      "cli_type": "kimi",
-      "cli_path": "kimi",
       "working_dir": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring",
       "enabled": true,
-      "bot_mode": "webcli"
+      "bot_mode": "cli"
     }
   ]
 }

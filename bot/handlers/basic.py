@@ -12,6 +12,7 @@ from bot.cli import normalize_cli_type
 from bot.context_helpers import (
     get_bot_alias,
     get_bot_id,
+    get_manager,
     get_current_profile,
     get_current_session,
     is_main_application,
@@ -192,6 +193,19 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_path = os.path.abspath(os.path.expanduser(new_path))
 
     if os.path.isdir(new_path):
+        # 子 Bot 的 /cd 必须写回托管配置，否则重置/重启后仍会回到旧目录。
+        if not is_main_application(context):
+            alias = get_bot_alias(context)
+            try:
+                await get_manager(context).set_bot_workdir(alias, new_path)
+            except Exception as e:
+                logger.warning("保存子Bot工作目录失败 alias=%s path=%s error=%s", alias, new_path, e)
+                await update.message.reply_text(
+                    msg("cd", "persist_failed", error=html.escape(str(e))),
+                    parse_mode="HTML",
+                )
+                return
+
         session.working_dir = new_path
         await update.message.reply_text(msg("cd", "success", path=html.escape(new_path)), parse_mode="HTML")
     else:

@@ -85,3 +85,41 @@ class TestCollectCliOutput:
             # collect_cli_output 的详细行为需要完整的 event loop
             # 这里只验证函数存在且可导入
             assert callable(collect_cli_output)
+
+    @pytest.mark.asyncio
+    async def test_normal_exit_keeps_success_state(self, mock_update):
+        import subprocess
+        import sys
+        import threading
+
+        from bot.handlers import chat
+
+        progress_message = MagicMock()
+        progress_message.delete = AsyncMock()
+        progress_message.edit_text = AsyncMock()
+        final_message = MagicMock()
+        mock_update.message.reply_text = AsyncMock(side_effect=[progress_message, final_message])
+
+        session_mock = MagicMock()
+        session_mock.stop_requested = False
+        session_mock._lock = threading.Lock()
+
+        process = subprocess.Popen(
+            [sys.executable, "-c", "print('hello from cli')"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        with patch.object(chat, "CLI_TIMEOUT_CHECK_INTERVAL", 0.01), \
+             patch.object(chat, "CLI_PROGRESS_UPDATE_INTERVAL", 60), \
+             patch.object(chat, "CLI_EXEC_TIMEOUT", 5):
+            output, returncode, timed_out = await chat.collect_cli_output(process, mock_update, session_mock)
+
+        assert timed_out is False
+        assert returncode == 0
+        assert "hello from cli" in output
+        assert mock_update.message.reply_text.await_args_list[1].args[0].startswith("✅")

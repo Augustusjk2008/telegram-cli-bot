@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -85,10 +87,22 @@ async def error_middleware(request: web.Request, handler):
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
+    # 处理 OPTIONS 预检请求
     if request.method == "OPTIONS":
         response = web.Response(status=204)
-    else:
-        response = await handler(request)
+        origin = request.headers.get("Origin", "")
+        normalized = {_normalize_origin(item) for item in WEB_ALLOWED_ORIGINS}
+        if "*" in normalized:
+            response.headers["Access-Control-Allow-Origin"] = origin or "*"
+        elif origin and _normalize_origin(origin) in normalized:
+            response.headers["Access-Control-Allow-Origin"] = origin
+        
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+    
+    response = await handler(request)
 
     origin = request.headers.get("Origin", "")
     normalized = {_normalize_origin(item) for item in WEB_ALLOWED_ORIGINS}
@@ -183,8 +197,8 @@ class WebApiServer:
         )
 
     async def get_bots(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
-        return _json({"ok": True, "data": {"items": list_bots(self.manager)}})
+        auth = await self._with_auth(request)
+        return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
 
     async def get_bot_overview(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -305,6 +319,10 @@ class WebApiServer:
         await self._with_auth(request)
         return _json({"ok": True, "data": get_memory_tool_stats()})
 
+    async def admin_bots(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
+    
     async def admin_scripts(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         return _json({"ok": True, "data": list_system_scripts()})
@@ -318,7 +336,7 @@ class WebApiServer:
     async def admin_processing(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": {"items": get_processing_sessions(alias)}})
+        return _json({"ok": True, "data": get_processing_sessions(alias)})
 
     async def admin_add_bot(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
@@ -379,7 +397,7 @@ class WebApiServer:
         return _json({"ok": True, "data": {"bot": build_bot_summary(self.manager, alias)}})
 
     def _build_app(self) -> web.Application:
-        app = web.Application(middlewares=[error_middleware, cors_middleware], client_max_size=25 * 1024 * 1024)
+        app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/auth/me", self.auth_me)
         app.router.add_get("/api/bots", self.get_bots)
@@ -401,6 +419,7 @@ class WebApiServer:
         app.router.add_delete("/api/memory/{memory_id}", self.delete_memory_view)
         app.router.add_delete("/api/memory", self.clear_memory_view)
         app.router.add_get("/api/tool-stats", self.tool_stats)
+        app.router.add_get("/api/admin/bots", self.admin_bots)
         app.router.add_get("/api/admin/scripts", self.admin_scripts)
         app.router.add_post("/api/admin/scripts/run", self.admin_run_script)
         app.router.add_get("/api/admin/bots/{alias}/processing", self.admin_processing)
@@ -412,8 +431,26 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
         app.router.add_post("/api/admin/restart", self.admin_restart)
-        app.router.add_route("OPTIONS", "/{tail:.*}", self.health)
+        
+        # Add static file serving for frontend
+        app.router.add_static("/assets", path=self._get_static_dir("assets"), name="assets")
+        app.router.add_get("/{tail:.*}", self.serve_index, name="index")
         return app
+    
+    def _get_static_dir(self, subdir=None):
+        """Get static directory path."""
+        script_dir = Path(__file__).parent.parent.parent.parent
+        static_dir = script_dir / "front" / "dist"
+        if subdir:
+            static_dir = static_dir / subdir
+        return str(static_dir)
+    
+    async def serve_index(self, request):
+        """Serve index.html for SPA routes."""
+        index_path = Path(self._get_static_dir()) / "index.html"
+        if index_path.exists():
+            return web.FileResponse(str(index_path))
+        return web.Response(text="Not found", status=404)
 
     async def start(self):
         if self._runner is not None:

@@ -11,8 +11,8 @@ import threading
 import uuid
 from typing import List, Optional, Tuple
 
-from telegram import Update
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ContextTypes, CallbackQueryHandler
 
 from bot.cli import (
     build_cli_command,
@@ -31,116 +31,82 @@ from bot.utils import check_auth, safe_edit_text, split_text_into_chunks
 logger = logging.getLogger(__name__)
 
 
+def get_stop_keyboard() -> InlineKeyboardMarkup:
+    """获取带停止按钮的键盘"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛑 停止任务", callback_data="stop_task")]
+    ])
+
+
+def _is_stop_requested(session) -> bool:
+    if session is None:
+        return False
+
+    lock = getattr(session, "_lock", None)
+    if lock is None:
+        return bool(getattr(session, "stop_requested", False))
+
+    with lock:
+        return bool(getattr(session, "stop_requested", False))
+
+
+async def _terminate_process_tree(process: subprocess.Popen):
+    """终止进程及其子进程（Windows兼容）"""
+    try:
+        if process.poll() is not None:
+            return
+        
+        # 先尝试优雅终止
+        process.terminate()
+        
+        # 等待一小段时间让进程退出
+        try:
+            process.wait(timeout=3)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        
+        # Windows: 尝试使用 taskkill 终止进程树
+        if sys.platform == "win32" and process.pid:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True,
+                    timeout=5
+                )
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=2)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+        
+        # 强制终止
+        process.kill()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+    except Exception as e:
+        logger.warning(f"终止进程时出错: {e}")
+
+
 async def collect_cli_output(
     process: subprocess.Popen, update: Update, session=None
 ) -> Tuple[str, int, bool]:
     """运行CLI进程，显示等待提示，最后一次性返回所有输出。
     
+    使用后台线程读取输出，主循环定期检查状态，支持响应停止信号。
+    
     Returns:
         Tuple[str, int, bool]: (输出文本, 返回码, 是否因超时而终止)
     """
     loop = asyncio.get_running_loop()
-    message = await update.message.reply_text(msg("chat", "processing"))
-    start_time = loop.time()
-    timed_out = False
-
-    # 在 executor 中运行进程通信，避免阻塞事件循环
-    def run_process():
-        try:
-            stdout, stderr = process.communicate(timeout=CLI_EXEC_TIMEOUT)
-            return stdout or "", process.returncode
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            stdout, _ = process.communicate()
-            return stdout or "", process.returncode, True
-        except Exception as e:
-            logger.error(f"进程通信错误: {e}")
-            return "", -1, False
-
-    # 定期更新等待提示的任务
-    stop_updating = asyncio.Event()
-    last_update_time = [0]
-
-    async def update_progress():
-        while not stop_updating.is_set():
-            try:
-                await asyncio.wait_for(stop_updating.wait(), timeout=CLI_PROGRESS_UPDATE_INTERVAL)
-            except asyncio.TimeoutError:
-                pass
-            if stop_updating.is_set():
-                break
-            elapsed = int(loop.time() - start_time)
-            try:
-                await safe_edit_text(message, msg("chat", "processing_with_time", elapsed=elapsed))
-                last_update_time[0] = elapsed
-            except Exception:
-                pass
-
-    # 启动进度更新任务
-    progress_task = asyncio.create_task(update_progress())
-
-    try:
-        # 在 executor 中运行进程
-        result = await loop.run_in_executor(None, run_process)
-        if len(result) == 3:
-            raw_output, returncode, timed_out = result
-        else:
-            raw_output, returncode = result
-            timed_out = False
-    finally:
-        stop_updating.set()
-        try:
-            progress_task.cancel()
-            await progress_task
-        except asyncio.CancelledError:
-            pass
-
-    final_text = raw_output if raw_output.strip() else msg("chat", "no_output")
-    
-    if timed_out:
-        final_text = raw_output if raw_output.strip() else msg("chat", "timeout_no_output")
-
-    chunks = split_text_into_chunks(final_text, max_len=3800)
-    icon = "⏱️" if timed_out else ("✅" if returncode == 0 else "⚠️")
-
-    # 删除进度消息，发送最终结果
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    sent_messages = []
-    for i, chunk in enumerate(chunks):
-        prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
-        formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>"
-        new_msg = await update.message.reply_text(formatted, parse_mode="HTML")
-        sent_messages.append(new_msg)
-        await asyncio.sleep(0.3)
-
-    if timed_out:
-        await update.message.reply_text(
-            msg("chat", "timeout", timeout=CLI_EXEC_TIMEOUT),
-            parse_mode="HTML"
-        )
-
-    return final_text, returncode, timed_out
-
-
-async def stream_codex_json_output(
-    process: subprocess.Popen, update: Update, session=None
-) -> Tuple[str, Optional[str], int, bool]:
-    """流式读取 codex --json 输出，定期刷新等待提示和已输出内容。
-    
-    Returns:
-        Tuple[str, Optional[str], int, bool]: (输出文本, thread_id, 返回码, 是否因超时而终止)
-    """
-    loop = asyncio.get_running_loop()
-    message = await update.message.reply_text(msg("chat", "processing").replace("处理中", "Codex处理中"))
+    message = await update.message.reply_text(
+        msg("chat", "processing"),
+        reply_markup=get_stop_keyboard()
+    )
     start_time = loop.time()
     timed_out = False
 
@@ -155,14 +121,199 @@ async def stream_codex_json_output(
         try:
             if process.stdout is None:
                 return
-            for line in iter(process.stdout.readline, ''):
-                if stop_reading.is_set():
+            # 使用非阻塞读取避免无限阻塞
+            import select
+            import os
+            
+            stdout = process.stdout
+            fileno = stdout.fileno()
+            
+            # Windows 不支持 select，使用超时读取
+            if sys.platform == "win32":
+                for line in iter(stdout.readline, ''):
+                    if stop_reading.is_set():
+                        break
+                    if line:
+                        output_queue.put(line)
+            else:
+                # Unix: 使用 select 实现超时
+                while not stop_reading.is_set():
+                    readable, _, _ = select.select([fileno], [], [], 1.0)
+                    if fileno in readable:
+                        line = stdout.readline()
+                        if not line:
+                            break
+                        output_queue.put(line)
+                    # 检查进程是否已结束
+                    if process.poll() is not None:
+                        # 读取剩余输出
+                        remaining = stdout.read()
+                        if remaining:
+                            for line in remaining.split('\n'):
+                                if line:
+                                    output_queue.put(line + '\n')
+                        break
+            
+            # 获取返回码
+            returncode_container[0] = process.poll()
+        except Exception as e:
+            logger.warning(f"读取stdout时出错: {e}")
+
+    # 启动后台读取线程
+    reader_thread = threading.Thread(target=read_stdout, daemon=True)
+    reader_thread.start()
+
+    # 状态跟踪
+    last_update_time = 0
+
+    try:
+        while reader_thread.is_alive() or not output_queue.empty():
+            await asyncio.sleep(CLI_TIMEOUT_CHECK_INTERVAL)
+            elapsed = int(loop.time() - start_time)
+
+            # 检查是否超时
+            if elapsed >= CLI_EXEC_TIMEOUT:
+                timed_out = True
+                stop_reading.set()
+                await _terminate_process_tree(process)
+                break
+
+            # 从队列收集新输出
+            while not output_queue.empty():
+                try:
+                    line = output_queue.get_nowait()
+                    output_lines.append(line)
+                except queue.Empty:
                     break
-                if line:
-                    output_queue.put(line)
-            # 读取完毕后等待进程结束获取返回码
-            process.wait()
-            returncode_container[0] = process.returncode
+
+            current_time = loop.time()
+            time_since_last_update = current_time - last_update_time
+
+            # 定期更新等待提示
+            if time_since_last_update >= CLI_PROGRESS_UPDATE_INTERVAL:
+                last_update_time = current_time
+                try:
+                    await safe_edit_text(
+                        message,
+                        msg("chat", "processing_with_time", elapsed=elapsed),
+                        reply_markup=get_stop_keyboard()
+                    )
+                except Exception:
+                    pass
+
+        # 等待读取线程结束
+        stop_reading.set()
+        if reader_thread.is_alive():
+            reader_thread.join(timeout=5)
+
+        # 收集剩余输出
+        while not output_queue.empty():
+            try:
+                line = output_queue.get_nowait()
+                output_lines.append(line)
+            except queue.Empty:
+                break
+
+        raw_output = ''.join(output_lines)
+        returncode = returncode_container[0]
+        if returncode is None:
+            returncode = process.poll()
+        if returncode is None:
+            returncode = -1
+        was_stopped = _is_stop_requested(session)
+
+        final_text = raw_output if raw_output.strip() else msg("chat", "no_output")
+        
+        if timed_out:
+            final_text = raw_output if raw_output.strip() else msg("chat", "timeout_no_output")
+        elif was_stopped:
+            final_text = raw_output if raw_output.strip() else msg("chat", "no_output")
+
+        chunks = split_text_into_chunks(final_text, max_len=3800)
+        if timed_out:
+            icon = "⏱️"
+        elif was_stopped:
+            icon = "🛑"
+        else:
+            icon = "✅" if returncode == 0 else "⚠️"
+
+        # 删除进度消息，发送最终结果
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        sent_messages = []
+        for i, chunk in enumerate(chunks):
+            prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
+            formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>"
+            new_msg = await update.message.reply_text(formatted, parse_mode="HTML")
+            sent_messages.append(new_msg)
+            await asyncio.sleep(0.3)
+
+        if timed_out:
+            await update.message.reply_text(
+                msg("chat", "timeout", timeout=CLI_EXEC_TIMEOUT),
+                parse_mode="HTML"
+            )
+
+        return final_text, returncode, timed_out
+
+    except Exception as e:
+        logger.error(f"CLI输出收集错误: {e}")
+        stop_reading.set()
+        try:
+            await safe_edit_text(message, msg("chat", "error", error=str(e)))
+        except Exception:
+            pass
+        return "", -1, False
+
+
+async def stream_codex_json_output(
+    process: subprocess.Popen, update: Update, session=None
+) -> Tuple[str, Optional[str], int, bool]:
+    """流式读取 codex --json 输出，定期刷新等待提示和已输出内容。
+    
+    Returns:
+        Tuple[str, Optional[str], int, bool]: (输出文本, thread_id, 返回码, 是否因超时而终止)
+    """
+    loop = asyncio.get_running_loop()
+    message = await update.message.reply_text(
+        msg("chat", "processing").replace("处理中", "Codex处理中"),
+        reply_markup=get_stop_keyboard()
+    )
+    start_time = loop.time()
+    timed_out = False
+
+    # 用于收集输出的队列和列表
+    output_queue: queue.Queue[str] = queue.Queue()
+    output_lines: List[str] = []
+    returncode_container: List[Optional[int]] = [None]
+    stop_reading = threading.Event()
+
+    def read_stdout():
+        """后台线程：持续读取stdout到队列"""
+        try:
+            if process.stdout is None:
+                return
+            # 使用更可靠的方式读取，避免无限阻塞
+            import os
+            
+            stdout = process.stdout
+            
+            while not stop_reading.is_set():
+                line = stdout.readline()
+                if not line:
+                    # 检查进程是否已结束
+                    if process.poll() is not None:
+                        break
+                    # 短暂休眠避免忙等
+                    threading.Event().wait(0.1)
+                    continue
+                output_queue.put(line)
+            
+            # 获取返回码
+            returncode_container[0] = process.poll()
         except Exception as e:
             logger.warning(f"读取stdout时出错: {e}")
 
@@ -184,13 +335,7 @@ async def stream_codex_json_output(
             if elapsed >= CLI_EXEC_TIMEOUT:
                 timed_out = True
                 stop_reading.set()
-                try:
-                    process.terminate()
-                    await asyncio.sleep(2)
-                    if process.poll() is None:
-                        process.kill()
-                except Exception as e:
-                    logger.warning(f"终止超时进程时出错: {e}")
+                await _terminate_process_tree(process)
                 break
 
             # 从队列收集新输出
@@ -228,7 +373,7 @@ async def stream_codex_json_output(
                     escaped = html.escape(preview)
                     status_text += f"<pre>{escaped}</pre>"
                 
-                await safe_edit_text(progress_message, status_text)
+                await safe_edit_text(progress_message, status_text, reply_markup=get_stop_keyboard())
                 displayed_output_len = len(full_output)
 
         # 等待读取线程结束
@@ -245,7 +390,12 @@ async def stream_codex_json_output(
                 break
 
         raw_output = ''.join(output_lines)
-        returncode = returncode_container[0] if returncode_container[0] is not None else -1
+        returncode = returncode_container[0]
+        if returncode is None:
+            returncode = process.poll()
+        if returncode is None:
+            returncode = -1
+        was_stopped = _is_stop_requested(session)
 
         final_text, thread_id = parse_codex_json_output(raw_output)
 
@@ -282,7 +432,7 @@ async def stream_codex_json_output(
                 final_text = msg("chat", "no_output")
 
             chunks = split_text_into_chunks(final_text, max_len=3800)
-            icon = "✅" if returncode == 0 else "⚠️"
+            icon = "🛑" if was_stopped else ("✅" if returncode == 0 else "⚠️")
 
             # 删除进度消息，发送最终结果
             try:
@@ -343,6 +493,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             is_busy = True
         else:
             session.is_processing = True
+            session.stop_requested = False
             codex_session_id: Optional[str] = None
             cli_session_id: Optional[str] = None
             resume_session = False
@@ -450,4 +601,37 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     finally:
         with session._lock:
             session.process = None
+            session.stop_requested = False
             session.is_processing = False
+
+
+async def handle_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理停止任务按钮的点击"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    if not check_auth(user_id):
+        await query.edit_message_text("⛔ 未授权的用户")
+        return
+    
+    session = get_current_session(update, context)
+    
+    with session._lock:
+        if not session.is_processing or session.process is None:
+            await query.edit_message_text("ℹ️ 任务已经完成或不存在")
+            return
+        
+        session.stop_requested = True
+        process = session.process
+    
+    # 在锁外终止进程（使用改进的终止逻辑）
+    try:
+        if process.poll() is None:
+            await _terminate_process_tree(process)
+            await query.edit_message_text("✅ 已强制终止当前任务")
+        else:
+            await query.edit_message_text("ℹ️ 任务已经完成")
+    except Exception as e:
+        logger.error(f"终止进程时出错: {e}")
+        await query.edit_message_text(f"❌ 终止进程时出错: {e}")

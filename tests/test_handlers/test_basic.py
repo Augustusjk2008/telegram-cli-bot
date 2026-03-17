@@ -78,6 +78,44 @@ class TestChangeDirectory:
             await change_directory(mock_update, mock_context)
         mock_update.message.reply_text.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_cd_sub_bot_persists_workdir(self, mock_update, mock_context, temp_dir):
+        mock_context.args = [str(temp_dir)]
+        mock_context.application.bot_data["is_main"] = False
+        mock_context.application.bot_data["bot_alias"] = "sub1"
+        mock_context.application.bot_data["manager"].set_bot_workdir = AsyncMock()
+
+        session_mock = MagicMock()
+        session_mock.working_dir = "C:/old"
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_session", return_value=session_mock):
+            await change_directory(mock_update, mock_context)
+
+        mock_context.application.bot_data["manager"].set_bot_workdir.assert_awaited_once_with("sub1", str(temp_dir))
+        assert session_mock.working_dir == str(temp_dir)
+        mock_update.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cd_sub_bot_persist_failure_returns_error(self, mock_update, mock_context, temp_dir):
+        mock_context.args = [str(temp_dir)]
+        mock_context.application.bot_data["is_main"] = False
+        mock_context.application.bot_data["bot_alias"] = "sub1"
+        mock_context.application.bot_data["manager"].set_bot_workdir = AsyncMock(
+            side_effect=ValueError("写入 managed_bots.json 失败")
+        )
+
+        session_mock = MagicMock()
+        session_mock.working_dir = "C:/old"
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_session", return_value=session_mock):
+            await change_directory(mock_update, mock_context)
+
+        assert session_mock.working_dir == "C:/old"
+        reply_text = mock_update.message.reply_text.call_args[0][0]
+        assert "子Bot工作目录保存失败" in reply_text
+
 
 class TestPrintWorkingDirectory:
     """测试 /pwd"""
