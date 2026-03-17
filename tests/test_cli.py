@@ -188,7 +188,30 @@ class TestShouldMarkClaudeSessionInitialized:
     def test_success(self):
         result = should_mark_claude_session_initialized("output", 0)
         assert isinstance(result, bool)
+        assert result is True
 
     def test_error(self):
         result = should_mark_claude_session_initialized("", 1)
         assert isinstance(result, bool)
+        assert result is False
+
+    def test_already_in_use_error_marks_initialized(self):
+        result = should_mark_claude_session_initialized(
+            "Error: Session ID 6440e126-bab3-4bcc-a0b1-7f5349cae34f is already in use",
+            1,
+        )
+        assert result is True
+
+    def test_nonfatal_nonzero_output_marks_initialized(self):
+        result = should_mark_claude_session_initialized(
+            "这是 Claude 的回复内容\nwarning: stream closed after response",
+            1,
+        )
+        assert result is True
+
+    def test_auth_failure_does_not_mark_initialized(self):
+        result = should_mark_claude_session_initialized(
+            "Error: Login required",
+            1,
+        )
+        assert result is False

@@ -356,8 +356,43 @@ def should_reset_claude_session(response: str, returncode: int) -> bool:
 
 
 def should_mark_claude_session_initialized(response: str, returncode: int) -> bool:
-    """识别会话已存在但本次调用模式不对（session-id already in use）场景。"""
+    """判断 Claude 会话是否已经成功建立，后续应改用 -r 恢复。
+
+    Claude 偶尔会在已经输出有效回复后仍以非 0 退出，这时如果仅依赖 returncode，
+    下一次会错误地继续使用 --session-id，触发 "Session ID ... is already in use"。
+    因此这里对“明显是网络/鉴权类失败”的响应保持保守，其余非空输出都视为会话已建立。
+    """
     if returncode == 0:
         return True
+
     lower = (response or "").lower()
-    return "session id" in lower and "already in use" in lower
+    if not lower.strip():
+        return False
+
+    if "session id" in lower and "already in use" in lower:
+        return True
+
+    if should_reset_claude_session(response, returncode):
+        return False
+
+    non_initialized_markers = (
+        "not authenticated",
+        "login required",
+        "authentication failed",
+        "invalid api key",
+        "rate limit",
+        "quota exceeded",
+        "overloaded",
+        "network error",
+        "connection error",
+        "unable to connect",
+        "fetch failed",
+        "timed out",
+        "timeout",
+        "certificate",
+        "permission denied",
+    )
+    if any(marker in lower for marker in non_initialized_markers):
+        return False
+
+    return True
