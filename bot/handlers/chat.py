@@ -14,6 +14,12 @@ from typing import List, Optional, Tuple
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 
+try:
+    from httpx import ConnectError, ConnectTimeout, RemoteProtocolError
+    HTTPX_ERRORS = (ConnectError, ConnectTimeout, RemoteProtocolError)
+except ImportError:
+    HTTPX_ERRORS = ()
+
 from bot.cli import (
     build_cli_command,
     normalize_cli_type,
@@ -172,11 +178,28 @@ async def collect_cli_output(
             elapsed = int(loop.time() - start_time)
 
             # 检查是否超时
-            if elapsed >= CLI_EXEC_TIMEOUT:
+            if elapsed >= CLI_EXEC_TIMEOUT and not timed_out:
                 timed_out = True
+                # 先发送通知告知用户任务已超时，正在收集剩余输出
+                try:
+                    await safe_edit_text(
+                        message,
+                        msg("chat", "timeout_collecting", elapsed=elapsed),
+                        reply_markup=get_stop_keyboard()
+                    )
+                except Exception:
+                    pass
+                # 请求停止读取，但给一些时间收集剩余输出
                 stop_reading.set()
-                await _terminate_process_tree(process)
-                break
+                # 先尝试优雅终止，给3秒时间收集输出
+                process.terminate()
+                # 等待读取线程结束，最多5秒
+                reader_thread.join(timeout=5)
+                # 如果还在运行，强制终止
+                if reader_thread.is_alive() or process.poll() is None:
+                    await _terminate_process_tree(process)
+                # 继续循环收集队列中的剩余输出
+                continue
 
             # 从队列收集新输出
             while not output_queue.empty():
@@ -189,22 +212,29 @@ async def collect_cli_output(
             current_time = loop.time()
             time_since_last_update = current_time - last_update_time
 
-            # 定期更新等待提示
-            if time_since_last_update >= CLI_PROGRESS_UPDATE_INTERVAL:
+            # 定期更新等待提示（超时后更频繁地更新以显示收集进度）
+            update_interval = 1 if timed_out else CLI_PROGRESS_UPDATE_INTERVAL
+            if time_since_last_update >= update_interval:
                 last_update_time = current_time
                 try:
-                    await safe_edit_text(
-                        message,
-                        msg("chat", "processing_with_time", elapsed=elapsed),
-                        reply_markup=get_stop_keyboard()
-                    )
+                    if timed_out:
+                        # 超时后显示已收集的输出长度
+                        collected_len = len(''.join(output_lines))
+                        status_text = f"⏱️ 已超时（{elapsed}秒），正在收集剩余输出...\n已收集 {collected_len} 字符"
+                        await safe_edit_text(message, status_text, reply_markup=get_stop_keyboard())
+                    else:
+                        await safe_edit_text(
+                            message,
+                            msg("chat", "processing_with_time", elapsed=elapsed),
+                            reply_markup=get_stop_keyboard()
+                        )
                 except Exception:
                     pass
 
         # 等待读取线程结束
         stop_reading.set()
         if reader_thread.is_alive():
-            reader_thread.join(timeout=5)
+            reader_thread.join(timeout=3)
 
         # 收集剩余输出
         while not output_queue.empty():
@@ -229,7 +259,7 @@ async def collect_cli_output(
         elif was_stopped:
             final_text = raw_output if raw_output.strip() else msg("chat", "no_output")
 
-        chunks = split_text_into_chunks(final_text, max_len=3800)
+        chunks = split_text_into_chunks(final_text, max_len=900)
         if timed_out:
             icon = "⏱️"
         elif was_stopped:
@@ -254,6 +284,11 @@ async def collect_cli_output(
         if timed_out:
             await update.message.reply_text(
                 msg("chat", "timeout", timeout=CLI_EXEC_TIMEOUT),
+                parse_mode="HTML"
+            )
+            # 发送额外提示，告知用户会话已保留
+            await update.message.reply_text(
+                msg("chat", "timeout_warning"),
                 parse_mode="HTML"
             )
 
@@ -332,11 +367,28 @@ async def stream_codex_json_output(
             elapsed = int(loop.time() - start_time)
 
             # 检查是否超时
-            if elapsed >= CLI_EXEC_TIMEOUT:
+            if elapsed >= CLI_EXEC_TIMEOUT and not timed_out:
                 timed_out = True
+                # 先发送通知告知用户任务已超时，正在收集剩余输出
+                try:
+                    await safe_edit_text(
+                        progress_message,
+                        f"⏱️ Codex已超时（{elapsed}秒），正在收集剩余输出...",
+                        reply_markup=get_stop_keyboard()
+                    )
+                except Exception:
+                    pass
+                # 请求停止读取，但给一些时间收集剩余输出
                 stop_reading.set()
-                await _terminate_process_tree(process)
-                break
+                # 先尝试优雅终止，给3秒时间收集输出
+                process.terminate()
+                # 等待读取线程结束，最多5秒
+                reader_thread.join(timeout=5)
+                # 如果还在运行，强制终止
+                if reader_thread.is_alive() or process.poll() is None:
+                    await _terminate_process_tree(process)
+                # 继续循环收集队列中的剩余输出
+                continue
 
             # 从队列收集新输出
             new_lines = []
@@ -352,7 +404,9 @@ async def stream_codex_json_output(
             time_since_last_update = current_time - last_update_time
 
             # 定期更新：每 PROGRESS_UPDATE_INTERVAL 秒更新一次提示和输出
-            if time_since_last_update >= CLI_PROGRESS_UPDATE_INTERVAL:
+            # 超时后更频繁地更新以显示收集进度
+            update_interval = 1 if timed_out else CLI_PROGRESS_UPDATE_INTERVAL
+            if time_since_last_update >= update_interval:
                 last_update_time = current_time
                 
                 # 构建显示文本
@@ -363,12 +417,17 @@ async def stream_codex_json_output(
                 if preview_text == msg("chat", "no_output"):
                     preview_text = full_output
                 
+                # 超时后显示收集进度
+                if timed_out:
+                    status_text = f"⏱️ 已超时（{elapsed}秒），正在收集剩余输出...\n已收集 {len(full_output)} 字符\n\n"
+                else:
+                    status_text = msg("chat", "processing_with_time", elapsed=elapsed).replace("处理中", "Codex处理中") + "\n\n"
+                
                 # 只显示最后一部分（避免消息太长）
                 preview = preview_text[-800:] if len(preview_text) > 800 else preview_text
                 preview = preview.strip()
                 
-                status_text = msg("chat", "processing_with_time", elapsed=elapsed).replace("处理中", "Codex处理中") + "\n\n"
-                if preview:
+                if preview and not timed_out:
                     # 转义HTML并截断显示
                     escaped = html.escape(preview)
                     status_text += f"<pre>{escaped}</pre>"
@@ -379,7 +438,7 @@ async def stream_codex_json_output(
         # 等待读取线程结束
         stop_reading.set()
         if reader_thread.is_alive():
-            reader_thread.join(timeout=5)
+            reader_thread.join(timeout=3)
 
         # 收集剩余输出
         while not output_queue.empty():
@@ -403,7 +462,7 @@ async def stream_codex_json_output(
             if not final_text or final_text == msg("chat", "no_output"):
                 final_text = msg("chat", "timeout_no_output")
             
-            chunks = split_text_into_chunks(final_text, max_len=3800)
+            chunks = split_text_into_chunks(final_text, max_len=900)
             icon = "⏱️"
             
             # 删除进度消息，发送最终结果
@@ -425,13 +484,18 @@ async def stream_codex_json_output(
                 msg("chat", "timeout", timeout=CLI_EXEC_TIMEOUT),
                 parse_mode="HTML"
             )
+            # 发送额外提示，告知用户会话已保留
+            await update.message.reply_text(
+                msg("chat", "timeout_warning"),
+                parse_mode="HTML"
+            )
             
             return final_text, thread_id, returncode, True
         else:
             if not final_text:
                 final_text = msg("chat", "no_output")
 
-            chunks = split_text_into_chunks(final_text, max_len=3800)
+            chunks = split_text_into_chunks(final_text, max_len=900)
             icon = "🛑" if was_stopped else ("✅" if returncode == 0 else "⚠️")
 
             # 删除进度消息，发送最终结果
@@ -450,10 +514,68 @@ async def stream_codex_json_output(
 
             return final_text, thread_id, returncode, False
     except Exception as e:
-        logger.error(f"Codex JSON 流式处理错误: {e}")
-        await safe_edit_text(progress_message, msg("chat", "error", error=str(e)))
+        # 区分网络错误和真正的流式处理错误
+        if HTTPX_ERRORS and isinstance(e, HTTPX_ERRORS):
+            logger.error(f"Telegram 网络连接错误: {e}")
+        else:
+            logger.error(f"Codex JSON 流式处理错误: {e}")
+
+        # 无论什么错误，先停止读取线程
         stop_reading.set()
-        return "", None, -1, False
+        if reader_thread.is_alive():
+            reader_thread.join(timeout=3)
+
+        # 收集队列中的剩余输出
+        while not output_queue.empty():
+            try:
+                output_lines.append(output_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        # 尝试解析已收集的输出，而不是丢弃
+        raw_output = ''.join(output_lines)
+        returncode = returncode_container[0]
+        if returncode is None:
+            returncode = process.poll()
+        if returncode is None:
+            returncode = -1
+
+        if raw_output.strip():
+            final_text, thread_id = parse_codex_json_output(raw_output)
+            logger.info(f"流式处理出错但已恢复 {len(raw_output)} 字符的输出")
+
+            # 删除进度消息，发送已收集的结果
+            try:
+                await progress_message.delete()
+            except Exception:
+                pass
+
+            # 先发送错误提示，告知用户出了什么问题
+            error_type = "网络连接错误" if (HTTPX_ERRORS and isinstance(e, HTTPX_ERRORS)) else "流式处理错误"
+            error_notice = f"⚠️ Codex {error_type}: <code>{html.escape(str(e))}</code>\n已恢复已收集的输出："
+            try:
+                await update.message.reply_text(error_notice, parse_mode="HTML")
+            except Exception:
+                pass
+
+            chunks = split_text_into_chunks(final_text, max_len=900)
+            for i, chunk in enumerate(chunks):
+                prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
+                formatted = f"⚠️ {prefix}<pre>{html.escape(chunk)}</pre>"
+                try:
+                    await update.message.reply_text(formatted, parse_mode="HTML")
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)
+
+            return final_text, thread_id, returncode, False
+        else:
+            # 真的没有输出，才报错
+            try:
+                await safe_edit_text(progress_message, msg("chat", "error", error=str(e)))
+            except Exception:
+                pass
+            return "", None, returncode, False
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text_override: str = None):
@@ -570,9 +692,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             if cli_type == "codex":
                 response, thread_id, returncode, timed_out = await stream_codex_json_output(process, update, session)
                 if timed_out:
-                    # 超时后重置会话，下次将创建新会话
-                    with session._lock:
-                        session.codex_session_id = None
+                    # 超时后保留会话，让用户决定是否继续
+                    # 发送提示消息告知用户任务已超时但会话保留
+                    pass
                 elif thread_id:
                     with session._lock:
                         session.codex_session_id = thread_id
@@ -584,9 +706,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if cli_type == "claude":
                     with session._lock:
                         if timed_out:
-                            # 超时后重置会话
-                            session.claude_session_id = None
-                            session.claude_session_initialized = False
+                            # 超时后保留会话，让用户决定是否继续
+                            pass
                         elif should_mark_claude_session_initialized(response, returncode):
                             session.claude_session_initialized = True
                         elif should_reset_claude_session(response, returncode):

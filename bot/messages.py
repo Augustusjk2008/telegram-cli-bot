@@ -119,6 +119,8 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "cli_failed": "❌ CLI 进程启动失败",
         "error": "❌ 错误: {error}",
         "timeout": "⏱️ <b>任务已超时终止</b>\n执行时间超过 {timeout} 秒，进程已被强制结束。",
+        "timeout_collecting": "⏱️ 已超时（{elapsed}秒），正在收集剩余输出...",
+        "timeout_warning": "⚠️ 任务已超时，但已收集到部分输出。如需继续对话，可继续发送消息。",
         "no_output": "(无输出)",
         "timeout_no_output": "(进程已超时终止，无输出)"
     },

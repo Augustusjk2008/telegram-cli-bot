@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 COMMON_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["查看目录", "当前路径"],
-        ["重置会话", "系统信息", "历史记录"],
+        ["重置会话", "系统脚本", "历史记录"],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -39,7 +39,7 @@ COMMON_KEYBOARD = ReplyKeyboardMarkup(
 MAIN_BOT_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["查看目录", "当前路径"],
-        ["重置会话", "系统信息", "历史记录"],
+        ["重置会话", "系统脚本", "历史记录"],
         ["机器人列表", "重启系统"],
     ],
     resize_keyboard=True,
@@ -52,7 +52,7 @@ KEYBOARD_TEXT_MAP = {
     "当前路径": "/pwd",
     "重置会话": "/reset",
     "历史记录": "/history",
-    "系统信息": "/system",
+    "系统脚本": "/system",
     "机器人列表": "/bot_list",
     "重启系统": "/restart",
 }

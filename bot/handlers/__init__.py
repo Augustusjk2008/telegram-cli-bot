@@ -5,7 +5,7 @@ import logging
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 from .basic import start, reset, change_directory, print_working_directory, list_directory, show_history, handle_keyboard_command
-from .shell import execute_shell
+from .shell import execute_shell, remove_file
 from .file import upload_help, handle_document, download_file, cat_file, head_file
 from .chat import handle_text_message, handle_stop_callback
 from .admin import (
@@ -58,6 +58,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
     application.add_handler(CommandHandler("pwd", print_working_directory))
     application.add_handler(CommandHandler("ls", list_directory))
     application.add_handler(CommandHandler("exec", execute_shell))
+    application.add_handler(CommandHandler("rm", remove_file))
     application.add_handler(CommandHandler("history", show_history))
     application.add_handler(CommandHandler("upload", upload_help))
     application.add_handler(CommandHandler("download", download_file))
@@ -90,7 +91,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
     # 停止任务回调（必须在文本消息处理器之前）
     application.add_handler(CallbackQueryHandler(handle_stop_callback, pattern="^stop_task$"))
     
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统信息|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
 
@@ -133,7 +134,7 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
     # 助手模式的文本消息处理
     if ASSISTANT_HANDLER_AVAILABLE:
         # 助手模式也支持键盘命令
-        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统信息|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
+        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_assistant_message))
         logger.info("助手处理器已注册")
     else:

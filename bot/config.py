@@ -75,7 +75,6 @@ WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
 SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}
 
 DANGEROUS_COMMANDS: Set[str] = {
-    "rm",
     "dd",
     "mkfs",
     "format",

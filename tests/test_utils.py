@@ -38,7 +38,8 @@ class TestIsDangerousCommand:
     """测试 is_dangerous_command"""
 
     def test_dangerous_first_word(self):
-        assert is_dangerous_command("rm -rf /") is True
+        # rm 已被允许，不再是危险命令
+        assert is_dangerous_command("rm -rf /") is False
         assert is_dangerous_command("kill -9 1234") is True
         assert is_dangerous_command("shutdown now") is True
         assert is_dangerous_command("reboot") is True
@@ -51,12 +52,12 @@ class TestIsDangerousCommand:
         assert is_dangerous_command("cat file.txt") is False
 
     def test_injection_patterns(self):
-        # 原始实现只检测特定 "xrm " 模式（如 ";rm ", "|rm " 等），不检测一般性注入
-        assert is_dangerous_command("echo hello;rm -rf /") is True
-        assert is_dangerous_command("echo hello|rm file") is True
-        assert is_dangerous_command("echo `rm file`") is True
-        assert is_dangerous_command("echo $(rm file)") is True
-        assert is_dangerous_command("echo hello&&rm file") is True
+        # rm 注入模式检查已移除，现在允许 rm 命令
+        assert is_dangerous_command("echo hello;rm -rf /") is False
+        assert is_dangerous_command("echo hello|rm file") is False
+        assert is_dangerous_command("echo `rm file`") is False
+        assert is_dangerous_command("echo $(rm file)") is False
+        assert is_dangerous_command("echo hello&&rm file") is False
 
 
 class TestIsSafeFilename:

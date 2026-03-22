@@ -19,7 +19,7 @@ def is_dangerous_command(command: str) -> bool:
     if first_word in DANGEROUS_COMMANDS:
         return True
 
-    dangerous_patterns = [";rm ", "|rm ", "`rm ", "$(rm ", "&rm ", "&&rm "]
+    dangerous_patterns = []
     return any(pattern in command_lower for pattern in dangerous_patterns)
 
 

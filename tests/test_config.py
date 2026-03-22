@@ -32,12 +32,13 @@ class TestConfigConstants:
 
     def test_dangerous_commands_is_set(self):
         assert isinstance(DANGEROUS_COMMANDS, set)
-        assert "rm" in DANGEROUS_COMMANDS
+        # rm 已被移除，允许通过 /exec 和 /rm 命令执行
+        assert "rm" not in DANGEROUS_COMMANDS
         assert "dd" in DANGEROUS_COMMANDS
         assert "mkfs" in DANGEROUS_COMMANDS
         assert "kill" in DANGEROUS_COMMANDS
         assert "shutdown" in DANGEROUS_COMMANDS
-        assert len(DANGEROUS_COMMANDS) >= 16
+        assert len(DANGEROUS_COMMANDS) >= 15
 
     def test_reserved_aliases(self):
         assert RESERVED_ALIASES == {"main"}

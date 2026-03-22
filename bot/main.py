@@ -106,10 +106,10 @@ async def run_all_bots():
         if TELEGRAM_ENABLED:
             await manager.shutdown_all()
         config.RESTART_EVENT = None
-        # 只有在非重启退出时才恢复睡眠
-        # 重启时由主循环控制，避免屏幕盖着时系统进入睡眠
-        if not config.RESTART_REQUESTED:
-            restore_system_sleep()
+        # 注意：主bot关闭时不恢复睡眠，保持系统阻止睡眠状态
+        # 如需恢复睡眠，请手动重启系统或执行 powercfg 命令
+        # if not config.RESTART_REQUESTED:
+        #     restore_system_sleep()
 
 
 def main():
@@ -171,8 +171,9 @@ def main():
                 break
         break
 
-    # 程序退出前恢复系统睡眠
-    restore_system_sleep()
+    # 注意：程序退出时不恢复系统睡眠，保持系统阻止睡眠状态
+    # 如需恢复睡眠，请手动重启系统或执行 powercfg 命令
+    # restore_system_sleep()
 
 
 if __name__ == "__main__":

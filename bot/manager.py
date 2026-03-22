@@ -13,10 +13,11 @@ from telegram.error import NetworkError, TimedOut
 
 # 捕获底层 httpx 连接错误
 try:
-    from httpx import ConnectError, ConnectTimeout
+    from httpx import ConnectError, ConnectTimeout, RemoteProtocolError
 except ImportError:
     ConnectError = None
     ConnectTimeout = None
+    RemoteProtocolError = None
 from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
@@ -66,6 +67,8 @@ class MultiBotManager:
             # 判断是否为网络错误
             is_network_error = isinstance(error, (NetworkError, TimedOut)) or (
                 ConnectError is not None and isinstance(error, (ConnectError, ConnectTimeout))
+            ) or (
+                RemoteProtocolError is not None and isinstance(error, RemoteProtocolError)
             )
             
             if not is_network_error:
@@ -138,7 +141,7 @@ class MultiBotManager:
                 await asyncio.sleep(delay)
             except Exception as e:
                 # 检查是否是 httpx 连接错误的包装
-                if ConnectError is not None and isinstance(e, (ConnectError, ConnectTimeout)):
+                if ConnectError is not None and isinstance(e, (ConnectError, ConnectTimeout, RemoteProtocolError)):
                     retry_count += 1
                     if retry_count >= NETWORK_ERROR_MAX_RETRIES:
                         logger.error("HTTPX连接错误重试耗尽 alias=%s: %s", alias, e)

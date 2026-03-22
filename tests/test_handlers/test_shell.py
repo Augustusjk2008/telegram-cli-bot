@@ -32,7 +32,8 @@ class TestExecuteShell:
 
     @pytest.mark.asyncio
     async def test_dangerous_command(self, mock_update, mock_context):
-        mock_context.args = ["rm", "-rf", "/"]
+        # rm 已被允许，改用其他危险命令测试
+        mock_context.args = ["dd", "if=/dev/zero", "of=/dev/sda"]
         with patch("bot.handlers.shell.check_auth", return_value=True):
             await execute_shell(mock_update, mock_context)
         call_text = mock_update.message.reply_text.call_args[0][0]
