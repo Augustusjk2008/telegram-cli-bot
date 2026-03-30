@@ -11,7 +11,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR, request_restart
-from bot.context_helpers import ensure_admin, get_manager
+from bot.context_helpers import ensure_admin, get_manager, reply_text
 from bot.handlers.shell import strip_ansi_escape
 from bot.messages import msg
 from bot.sessions import sessions, sessions_lock
@@ -721,3 +721,181 @@ async def bot_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+
+# ============ CLI 参数配置命令 ============
+
+async def bot_params(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看 Bot 的 CLI 参数配置
+
+    用法:
+        /bot_params <alias> [cli_type]
+    示例:
+        /bot_params main           # 查看 main bot 所有 CLI 参数
+        /bot_params team1 claude   # 查看 team1 的 claude 参数
+    """
+    if not await ensure_admin(update, context):
+        return
+
+    if not context.args:
+        await reply_text(update, msg("admin", "bot_params_usage"))
+        return
+
+    alias = context.args[0].strip().lower()
+    cli_type = context.args[1].strip().lower() if len(context.args) >= 2 else None
+
+    manager = get_manager(context)
+
+    # 检查 alias 是否存在
+    if alias != manager.main_profile.alias and alias not in manager.managed_profiles:
+        await reply_text(update, msg("admin", "bot_params_not_found", alias=html.escape(alias)), parse_mode="HTML")
+        return
+
+    try:
+        params = await manager.get_bot_cli_params(alias, cli_type)
+
+        from bot.cli_params import format_params_display
+
+        if cli_type:
+            # 显示特定 CLI 类型的参数
+            text = format_params_display(cli_type, params)
+        else:
+            # 显示所有 CLI 类型的参数
+            lines = [f"<b>🤖 Bot <code>{html.escape(alias)}</code> 的 CLI 参数配置:</b>\n"]
+            for ct, p in params.items():
+                lines.append(format_params_display(ct, p))
+                lines.append("")
+            text = "\n".join(lines)
+
+        await reply_text(update, text, parse_mode="HTML")
+    except Exception as e:
+        await reply_text(update, msg("admin", "bot_params_failed", error=str(e)))
+
+
+async def bot_params_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """设置 Bot 的 CLI 参数
+    
+    用法:
+        /bot_params_set <alias> <cli_type> <key> <value>
+    示例:
+        /bot_params_set team1 claude effort high
+        /bot_params_set team1 kimi thinking false
+        /bot_params_set team1 codex model o4-mini
+    """
+    if not await ensure_admin(update, context):
+        return
+
+    if len(context.args) < 4:
+        await update.message.reply_text(msg("admin", "bot_params_set_usage"))
+        return
+
+    alias = context.args[0].strip().lower()
+    cli_type = context.args[1].strip().lower()
+    key = context.args[2].strip()
+    value = " ".join(context.args[3:]).strip()
+
+    manager = get_manager(context)
+    
+    # 检查 alias 是否存在
+    if alias != manager.main_profile.alias and alias not in manager.managed_profiles:
+        await update.message.reply_text(msg("admin", "bot_params_not_found", alias=html.escape(alias)), parse_mode="HTML")
+        return
+
+    try:
+        await manager.set_bot_cli_param(alias, cli_type, key, value)
+        await update.message.reply_text(
+            msg("admin", "bot_params_set_success",
+                alias=html.escape(alias),
+                cli_type=html.escape(cli_type),
+                param_key=html.escape(key),
+                value=html.escape(value)),
+            parse_mode="HTML"
+        )
+    except ValueError as e:
+        await update.message.reply_text(msg("admin", "bot_params_set_failed", error=str(e)))
+    except Exception as e:
+        await update.message.reply_text(msg("admin", "bot_params_set_failed", error=str(e)))
+
+
+async def bot_params_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """重置 Bot 的 CLI 参数为默认值
+    
+    用法:
+        /bot_params_reset <alias> [cli_type]
+    示例:
+        /bot_params_reset team1         # 重置 team1 所有 CLI 参数
+        /bot_params_reset team1 claude  # 只重置 team1 的 claude 参数
+    """
+    if not await ensure_admin(update, context):
+        return
+
+    if not context.args:
+        await update.message.reply_text(msg("admin", "bot_params_reset_usage"))
+        return
+
+    alias = context.args[0].strip().lower()
+    cli_type = context.args[1].strip().lower() if len(context.args) >= 2 else None
+
+    manager = get_manager(context)
+    
+    # 检查 alias 是否存在
+    if alias != manager.main_profile.alias and alias not in manager.managed_profiles:
+        await update.message.reply_text(msg("admin", "bot_params_not_found", alias=html.escape(alias)), parse_mode="HTML")
+        return
+
+    try:
+        await manager.reset_bot_cli_params(alias, cli_type)
+        if cli_type:
+            await update.message.reply_text(
+                msg("admin", "bot_params_reset_partial_success",
+                    alias=html.escape(alias),
+                    cli_type=html.escape(cli_type)),
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                msg("admin", "bot_params_reset_success", alias=html.escape(alias)),
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        await update.message.reply_text(msg("admin", "bot_params_reset_failed", error=str(e)))
+
+
+async def bot_params_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """显示 CLI 参数配置帮助
+    
+    用法:
+        /bot_params_help [cli_type]
+    示例:
+        /bot_params_help       # 显示所有 CLI 类型的参数说明
+        /bot_params_help kim   # 显示 Kimi 的参数说明
+    """
+    if not await ensure_admin(update, context):
+        return
+
+    from bot.cli_params import get_params_help, SUPPORTED_CLI_TYPES
+
+    if context.args:
+        cli_type = context.args[0].strip().lower()
+        if cli_type not in SUPPORTED_CLI_TYPES:
+            await update.message.reply_text(
+                f"❌ 未知的 CLI 类型: <code>{html.escape(cli_type)}</code>\n"
+                f"支持的类型: <code>{', '.join(sorted(SUPPORTED_CLI_TYPES))}</code>",
+                parse_mode="HTML"
+            )
+            return
+        text = get_params_help(cli_type)
+    else:
+        lines = ["<b>📖 CLI 参数配置帮助</b>\n"]
+        lines.append("使用 <code>/bot_params_help &lt;cli_type&gt;</code> 查看详细说明\n")
+        lines.append("<b>支持的 CLI 类型:</b>")
+        for ct in sorted(SUPPORTED_CLI_TYPES):
+            lines.append(f"  • <code>{ct}</code>")
+        lines.append("")
+        lines.append("<b>常用命令:</b>")
+        lines.append("  • <code>/bot_params &lt;alias&gt;</code> - 查看参数")
+        lines.append("  • <code>/bot_params_set &lt;alias&gt; &lt;type&gt; &lt;key&gt; &lt;value&gt;</code> - 设置参数")
+        lines.append("  • <code>/bot_params_reset &lt;alias&gt;</code> - 重置参数")
+        text = "\n".join(lines)
+
+    await update.message.reply_text(text, parse_mode="HTML")

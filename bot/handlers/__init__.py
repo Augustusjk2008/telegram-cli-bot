@@ -22,6 +22,10 @@ from .admin import (
     system_command,
     system_button_callback,
     bot_goto_callback,
+    bot_params,
+    bot_params_set,
+    bot_params_reset,
+    bot_params_help,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +81,11 @@ def _register_cli_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_set_workdir", bot_set_workdir))
         application.add_handler(CommandHandler("bot_kill", bot_kill))
         application.add_handler(CommandHandler("system", system_command))
+        # CLI 参数配置命令
+        application.add_handler(CommandHandler("bot_params", bot_params))
+        application.add_handler(CommandHandler("bot_params_set", bot_params_set))
+        application.add_handler(CommandHandler("bot_params_reset", bot_params_reset))
+        application.add_handler(CommandHandler("bot_params_help", bot_params_help))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
         application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
 
@@ -122,6 +131,11 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_set_workdir", bot_set_workdir))
         application.add_handler(CommandHandler("bot_kill", bot_kill))
         application.add_handler(CommandHandler("system", system_command))
+        # CLI 参数配置命令
+        application.add_handler(CommandHandler("bot_params", bot_params))
+        application.add_handler(CommandHandler("bot_params_set", bot_params_set))
+        application.add_handler(CommandHandler("bot_params_reset", bot_params_reset))
+        application.add_handler(CommandHandler("bot_params_help", bot_params_help))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
         application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
 

@@ -5,9 +5,11 @@ import html
 import logging
 import os
 import queue
+import select
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from typing import List, Optional, Tuple
 
@@ -28,6 +30,7 @@ from bot.cli import (
     should_mark_claude_session_initialized,
     should_reset_claude_session,
     should_reset_codex_session,
+    should_reset_kimi_session,
 )
 from bot.config import CLI_EXEC_TIMEOUT, CLI_PROGRESS_UPDATE_INTERVAL, CLI_TIMEOUT_CHECK_INTERVAL
 from bot.context_helpers import get_current_profile, get_current_session
@@ -56,23 +59,19 @@ def _is_stop_requested(session) -> bool:
         return bool(getattr(session, "stop_requested", False))
 
 
-async def _terminate_process_tree(process: subprocess.Popen):
-    """终止进程及其子进程（Windows兼容）"""
+def _terminate_process_tree_sync(process: subprocess.Popen):
+    """同步终止进程及其子进程（Windows兼容），在 executor 线程中运行"""
     try:
         if process.poll() is not None:
             return
-        
-        # 先尝试优雅终止
+
         process.terminate()
-        
-        # 等待一小段时间让进程退出
         try:
             process.wait(timeout=3)
             return
         except subprocess.TimeoutExpired:
             pass
-        
-        # Windows: 尝试使用 taskkill 终止进程树
+
         if sys.platform == "win32" and process.pid:
             try:
                 subprocess.run(
@@ -87,8 +86,7 @@ async def _terminate_process_tree(process: subprocess.Popen):
                 return
             except subprocess.TimeoutExpired:
                 pass
-        
-        # 强制终止
+
         process.kill()
         try:
             process.wait(timeout=2)
@@ -96,6 +94,12 @@ async def _terminate_process_tree(process: subprocess.Popen):
             pass
     except Exception as e:
         logger.warning(f"终止进程时出错: {e}")
+
+
+async def _terminate_process_tree(process: subprocess.Popen):
+    """异步终止进程树；阻塞操作在 executor 线程中执行，不阻塞事件循环"""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _terminate_process_tree_sync, process)
 
 
 async def collect_cli_output(
@@ -127,13 +131,10 @@ async def collect_cli_output(
         try:
             if process.stdout is None:
                 return
-            # 使用非阻塞读取避免无限阻塞
-            import select
-            import os
-            
+
             stdout = process.stdout
             fileno = stdout.fileno()
-            
+
             # Windows 不支持 select，使用超时读取
             if sys.platform == "win32":
                 for line in iter(stdout.readline, ''):
@@ -223,11 +224,21 @@ async def collect_cli_output(
                         status_text = f"⏱️ 已超时（{elapsed}秒），正在收集剩余输出...\n已收集 {collected_len} 字符"
                         await safe_edit_text(message, status_text, reply_markup=get_stop_keyboard())
                     else:
-                        await safe_edit_text(
-                            message,
-                            msg("chat", "processing_with_time", elapsed=elapsed),
-                            reply_markup=get_stop_keyboard()
-                        )
+                        collected = ''.join(output_lines)
+                        preview = collected[-200:].strip() if collected.strip() else ""
+                        if preview:
+                            escaped_preview = html.escape(preview)
+                            status_text = (
+                                f"{msg('chat', 'processing_with_time', elapsed=elapsed)}"
+                                f"\n<pre>{escaped_preview}</pre>"
+                            )
+                            await safe_edit_text(message, status_text, parse_mode="HTML", reply_markup=get_stop_keyboard())
+                        else:
+                            await safe_edit_text(
+                                message,
+                                msg("chat", "processing_with_time", elapsed=elapsed),
+                                reply_markup=get_stop_keyboard()
+                            )
                 except Exception:
                     pass
 
@@ -276,21 +287,15 @@ async def collect_cli_output(
         sent_messages = []
         for i, chunk in enumerate(chunks):
             prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
-            formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>"
+            is_last = (i == len(chunks) - 1)
+            footer = (
+                f"\n\n{msg('chat', 'timeout', timeout=CLI_EXEC_TIMEOUT)}"
+                f"\n{msg('chat', 'timeout_warning')}"
+            ) if (timed_out and is_last) else ""
+            formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>{footer}"
             new_msg = await update.message.reply_text(formatted, parse_mode="HTML")
             sent_messages.append(new_msg)
             await asyncio.sleep(0.3)
-
-        if timed_out:
-            await update.message.reply_text(
-                msg("chat", "timeout", timeout=CLI_EXEC_TIMEOUT),
-                parse_mode="HTML"
-            )
-            # 发送额外提示，告知用户会话已保留
-            await update.message.reply_text(
-                msg("chat", "timeout_warning"),
-                parse_mode="HTML"
-            )
 
         return final_text, returncode, timed_out
 
@@ -343,7 +348,7 @@ async def stream_codex_json_output(
                     if process.poll() is not None:
                         break
                     # 短暂休眠避免忙等
-                    threading.Event().wait(0.1)
+                    time.sleep(0.1)
                     continue
                 output_queue.put(line)
             
@@ -474,22 +479,16 @@ async def stream_codex_json_output(
             sent_messages = []
             for i, chunk in enumerate(chunks):
                 prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
-                formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>"
+                is_last = (i == len(chunks) - 1)
+                footer = (
+                    f"\n\n{msg('chat', 'timeout', timeout=CLI_EXEC_TIMEOUT)}"
+                    f"\n{msg('chat', 'timeout_warning')}"
+                ) if is_last else ""
+                formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>{footer}"
                 new_msg = await update.message.reply_text(formatted, parse_mode="HTML")
                 sent_messages.append(new_msg)
                 await asyncio.sleep(0.3)
-            
-            # 发送超时提示
-            await update.message.reply_text(
-                msg("chat", "timeout", timeout=CLI_EXEC_TIMEOUT),
-                parse_mode="HTML"
-            )
-            # 发送额外提示，告知用户会话已保留
-            await update.message.reply_text(
-                msg("chat", "timeout_warning"),
-                parse_mode="HTML"
-            )
-            
+
             return final_text, thread_id, returncode, True
         else:
             if not final_text:
@@ -636,7 +635,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 resume_session = session.claude_session_initialized
 
     if is_busy:
-        await update.message.reply_text(msg("chat", "busy"))
+        await update.message.reply_text(msg("chat", "busy"), reply_markup=get_stop_keyboard())
         return
 
     try:
@@ -653,6 +652,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 session_id=cli_session_id,
                 resume_session=resume_session,
                 json_output=(cli_type == "codex"),
+                params_config=profile.cli_params,
             )
         except ValueError as e:
             await update.message.reply_text(msg("chat", "error", error=str(e)))
@@ -689,6 +689,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             with session._lock:
                 session.process = process
 
+            session_id_changed = False
             if cli_type == "codex":
                 response, thread_id, returncode, timed_out = await stream_codex_json_output(process, update, session)
                 if timed_out:
@@ -697,10 +698,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     pass
                 elif thread_id:
                     with session._lock:
-                        session.codex_session_id = thread_id
+                        if session.codex_session_id != thread_id:
+                            session.codex_session_id = thread_id
+                            session_id_changed = True
                 elif should_reset_codex_session(codex_session_id, response, returncode):
                     with session._lock:
-                        session.codex_session_id = None
+                        if session.codex_session_id is not None:
+                            session.codex_session_id = None
+                            session_id_changed = True
             else:
                 response, returncode, timed_out = await collect_cli_output(process, update, session)
                 if cli_type == "claude":
@@ -709,10 +714,23 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                             # 超时后保留会话，让用户决定是否继续
                             pass
                         elif should_mark_claude_session_initialized(response, returncode):
-                            session.claude_session_initialized = True
+                            if not session.claude_session_initialized:
+                                session.claude_session_initialized = True
+                                session_id_changed = True
                         elif should_reset_claude_session(response, returncode):
-                            session.claude_session_id = None
-                            session.claude_session_initialized = False
+                            if session.claude_session_id is not None:
+                                session.claude_session_id = None
+                                session.claude_session_initialized = False
+                                session_id_changed = True
+                elif cli_type == "kimi":
+                    with session._lock:
+                        if not timed_out and should_reset_kimi_session(response, returncode):
+                            if session.kimi_session_id is not None:
+                                session.kimi_session_id = None
+                                session_id_changed = True
+            # 持久化 session_id 变化
+            if session_id_changed:
+                session.persist()
             session.add_to_history("assistant", response)
         except FileNotFoundError:
             await update.message.reply_text(msg("chat", "no_cli", cli_path=cli_path))

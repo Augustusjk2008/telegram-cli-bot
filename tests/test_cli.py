@@ -21,6 +21,7 @@ from bot.cli import (
     should_reset_codex_session,
     validate_cli_type,
 )
+from bot.cli_params import CliParamsConfig
 
 
 class TestValidateCliType:
@@ -91,6 +92,7 @@ class TestBuildCliCommand:
             resolved_cli="kimi",
             user_text="hello",
             env=env,
+            params_config=CliParamsConfig(),
         )
         assert isinstance(cmd, list)
         assert isinstance(use_stdin, bool)
@@ -103,6 +105,7 @@ class TestBuildCliCommand:
             resolved_cli="claude",
             user_text="hello",
             env=env,
+            params_config=CliParamsConfig(),
         )
         assert "claude" in cmd
 
@@ -115,6 +118,7 @@ class TestBuildCliCommand:
             env=env,
             session_id="sess-123",
             resume_session=True,
+            params_config=CliParamsConfig(),
         )
         assert any("sess-123" in str(a) for a in cmd)
 
@@ -126,6 +130,7 @@ class TestBuildCliCommand:
             user_text="hello",
             env=env,
             json_output=True,
+            params_config=CliParamsConfig(),
         )
         assert "codex" in cmd
 

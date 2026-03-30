@@ -99,3 +99,109 @@ class TestIsBotProcessing:
 
     def test_nonexistent_bot(self):
         assert is_bot_processing(999) is False
+
+
+class TestSessionPersistence:
+    """测试会话持久化功能"""
+
+    def test_session_restored_from_store(self, temp_dir: Path):
+        """测试从持久化存储恢复会话（不检查工作目录）"""
+        from unittest.mock import patch
+        from bot.session_store import save_session
+        
+        # 先保存会话到持久化存储
+        with patch("bot.session_store.STORE_FILE", temp_dir / ".session_store.json"):
+            save_session(
+                bot_id=1,
+                user_id=100,
+                codex_session_id="thread_restored_123",
+                kimi_session_id="kimi_restored_456",
+                claude_session_id="claude_restored_789",
+            )
+            
+            # 清除内存中的会话
+            with sessions_lock:
+                sessions.clear()
+            
+            # 重新获取会话，应该恢复 session_id（不管工作目录是什么）
+            other_dir = temp_dir / "other"
+            other_dir.mkdir()
+            s = get_session(1, "main", 100, str(other_dir))
+            
+            assert s.codex_session_id == "thread_restored_123"
+            assert s.kimi_session_id == "kimi_restored_456"
+            assert s.claude_session_id == "claude_restored_789"
+            assert s.claude_session_initialized is True
+
+    def test_reset_session_clears_persistent_store(self, temp_dir: Path):
+        """测试重置会话时清除持久化存储"""
+        from unittest.mock import patch
+        from bot.session_store import save_session, load_session
+        
+        with patch("bot.session_store.STORE_FILE", temp_dir / ".session_store.json"):
+            save_session(
+                bot_id=1,
+                user_id=100,
+                codex_session_id="thread_to_clear",
+            )
+            
+            # 先创建会话
+            get_session(1, "main", 100, str(temp_dir))
+            
+            # 重置会话
+            reset_session(1, 100)
+            
+            # 持久化存储应该被清除
+            assert load_session(1, 100) is None
+
+    def test_save_all_sessions(self, temp_dir: Path):
+        """测试保存所有会话"""
+        from unittest.mock import patch
+        from bot.session_store import load_session
+        from bot.sessions import save_all_sessions
+        
+        with patch("bot.session_store.STORE_FILE", temp_dir / ".session_store.json"):
+            # 创建带有 session_id 的会话
+            s1 = get_session(1, "main", 100, str(temp_dir))
+            s1.codex_session_id = "thread_s1"
+            s1.kimi_session_id = "kimi_s1"
+            
+            s2 = get_session(1, "main", 200, str(temp_dir))
+            s2.claude_session_id = "claude_s2"
+            
+            # 保存所有会话
+            save_all_sessions()
+            
+            # 验证持久化存储
+            data1 = load_session(1, 100)
+            assert data1["codex_session_id"] == "thread_s1"
+            assert data1["kimi_session_id"] == "kimi_s1"
+            
+            data2 = load_session(1, 200)
+            assert data2["claude_session_id"] == "claude_s2"
+
+    def test_session_restored_after_restart(self, temp_dir: Path):
+        """测试重启后恢复会话"""
+        from unittest.mock import patch
+        from bot.session_store import save_session, load_session
+        
+        with patch("bot.session_store.STORE_FILE", temp_dir / ".session_store.json"):
+            # 模拟之前保存的会话
+            save_session(
+                bot_id=1,
+                user_id=100,
+                kimi_session_id="kimi_prev_session",
+            )
+            
+            # 验证存储存在
+            assert load_session(1, 100) is not None
+            
+            # 清除内存会话，模拟重启
+            with sessions_lock:
+                sessions.clear()
+            
+            # 重新获取会话（模拟重启后）
+            s = get_session(1, "main", 100, str(temp_dir))
+            
+            # 应该恢复之前的 session_id
+            assert s.kimi_session_id == "kimi_prev_session"

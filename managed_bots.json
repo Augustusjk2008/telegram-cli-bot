@@ -16,7 +16,34 @@
       "cli_path": "claude",
       "working_dir": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring",
       "enabled": true,
-      "bot_mode": "cli"
+      "bot_mode": "cli",
+      "cli_params": {
+        "kimi": {
+          "quiet": true,
+          "yolo": true,
+          "thinking": true,
+          "model": null,
+          "temperature": null,
+          "max_tokens": null,
+          "extra_args": []
+        },
+        "claude": {
+          "yolo": true,
+          "effort": "high",
+          "disable_prompts": true,
+          "session_id": null,
+          "model": "gpt-5.4",
+          "extra_args": []
+        },
+        "codex": {
+          "yolo": true,
+          "skip_git_check": true,
+          "reasoning_effort": "xhigh",
+          "json_output": true,
+          "model": null,
+          "extra_args": []
+        }
+      }
     },
     {
       "alias": "team3",

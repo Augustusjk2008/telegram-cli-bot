@@ -117,6 +117,23 @@ class TestChangeDirectory:
         assert "子Bot工作目录保存失败" in reply_text
 
 
+    @pytest.mark.asyncio
+    async def test_cd_clears_session_ids(self, mock_update, mock_context, temp_dir):
+        """测试切换目录时清除会话ID"""
+        mock_context.args = [str(temp_dir)]
+        
+        # 创建一个有 session_id 的会话 mock
+        session_mock = MagicMock()
+        session_mock.working_dir = str(temp_dir.parent)
+        
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_session", return_value=session_mock):
+            await change_directory(mock_update, mock_context)
+        
+        # 验证 clear_session_ids 被调用
+        session_mock.clear_session_ids.assert_called_once()
+
+
 class TestPrintWorkingDirectory:
     """测试 /pwd"""
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -82,7 +83,7 @@ class MultiBotManager:
                 logger.warning("网络错误 alias=%s: %s", alias, error)
                 return
             
-            now = asyncio.get_event_loop().time()
+            now = time.monotonic()
             error_type = type(error).__name__
             state = self._network_error_log_state.get(alias)
             
@@ -266,17 +267,22 @@ class MultiBotManager:
             except ValueError:
                 logger.warning("子Bot `%s` 的 cli_type 无效(%s)，回退为 %s", alias, raw_cli_type, CLI_TYPE)
                 cli_type = CLI_TYPE
-            self.managed_profiles[alias] = BotProfile(
-                alias=alias,
-                token=token,
-                cli_type=cli_type,
-                cli_path=str(item.get("cli_path", CLI_PATH)).strip() or CLI_PATH,
-                working_dir=os.path.abspath(
+            # 使用 from_dict 以支持 cli_params 字段
+            profile_data = {
+                "alias": alias,
+                "token": token,
+                "cli_type": cli_type,
+                "cli_path": str(item.get("cli_path", CLI_PATH)).strip() or CLI_PATH,
+                "working_dir": os.path.abspath(
                     os.path.expanduser(str(item.get("working_dir", WORKING_DIR)).strip() or WORKING_DIR)
                 ),
-                enabled=bool(item.get("enabled", True)),
-                bot_mode=str(item.get("bot_mode", "cli")).strip().lower(),
-            )
+                "enabled": bool(item.get("enabled", True)),
+                "bot_mode": str(item.get("bot_mode", "cli")).strip().lower(),
+            }
+            # 如果有 cli_params 配置，一并传递
+            if "cli_params" in item:
+                profile_data["cli_params"] = item["cli_params"]
+            self.managed_profiles[alias] = BotProfile.from_dict(profile_data)
 
     def _save_profiles(self):
         payload = {
@@ -293,7 +299,9 @@ class MultiBotManager:
     def get_profile(self, alias: str) -> BotProfile:
         if alias == self.main_profile.alias:
             return self.main_profile
-        return self.managed_profiles.get(alias, self.main_profile)
+        if alias not in self.managed_profiles:
+            raise KeyError(f"未知的 bot alias: `{alias}`")
+        return self.managed_profiles[alias]
 
     def _get_profile_for_update(self, alias: str) -> BotProfile:
         """获取可更新的 profile（支持主 Bot 和托管 Bot）"""
@@ -620,6 +628,56 @@ class MultiBotManager:
             self._save_profiles()
             # 同时更新所有已存在的会话的工作目录
             update_bot_working_dir(alias, working_dir)
+
+    async def get_bot_cli_params(self, alias: str, cli_type: Optional[str] = None) -> dict:
+        """获取 Bot 的 CLI 参数配置"""
+        alias = alias.strip().lower()
+        async with self._lock:
+            profile = self._get_profile_for_update(alias)
+            if cli_type:
+                return profile.cli_params.get_params(cli_type)
+            return profile.cli_params.to_dict()
+
+    async def set_bot_cli_param(self, alias: str, cli_type: str, key: str, value):
+        """设置 Bot 的 CLI 参数"""
+        alias = alias.strip().lower()
+        cli_type = cli_type.lower().strip()
+        
+        async with self._lock:
+            profile = self._get_profile_for_update(alias)
+            # 处理值类型转换
+            params = profile.cli_params.get_params(cli_type)
+            current_value = params.get(key)
+            
+            # 根据当前值的类型进行转换
+            if isinstance(current_value, bool):
+                # 布尔值转换
+                if isinstance(value, str):
+                    value = value.lower() in ("true", "1", "yes", "on")
+                else:
+                    value = bool(value)
+            elif isinstance(current_value, int):
+                value = int(value)
+            elif isinstance(current_value, float):
+                value = float(value)
+            elif isinstance(current_value, list):
+                # 列表类型，支持逗号分隔或 JSON 格式
+                if isinstance(value, str):
+                    value = [v.strip() for v in value.split(",") if v.strip()]
+                else:
+                    value = list(value)
+            
+            profile.cli_params.set_param(cli_type, key, value)
+            self._save_profiles()
+
+    async def reset_bot_cli_params(self, alias: str, cli_type: Optional[str] = None):
+        """重置 Bot 的 CLI 参数为默认值"""
+        alias = alias.strip().lower()
+        
+        async with self._lock:
+            profile = self._get_profile_for_update(alias)
+            profile.cli_params.reset_to_default(cli_type)
+            self._save_profiles()
 
     def get_status_lines(self) -> List[str]:
         """生成美观的 Bot 状态列表，使用 HTML 格式"""

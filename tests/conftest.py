@@ -42,6 +42,7 @@ def mock_update() -> MagicMock:
     update.message.document = None
     update.message.photo = None
     update.message.caption = None
+    update.effective_message = update.message
     return update
 
 

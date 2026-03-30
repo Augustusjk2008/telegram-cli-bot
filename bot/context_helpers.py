@@ -3,7 +3,7 @@
 import logging
 from typing import TYPE_CHECKING
 
-from telegram import Update
+from telegram import Message, Update
 from telegram.ext import ContextTypes
 
 from bot.models import BotProfile, UserSession
@@ -52,14 +52,26 @@ def get_current_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> U
     )
 
 
+def get_reply_target(update: Update) -> Message | None:
+    return update.effective_message
+
+
+async def reply_text(update: Update, text: str, **kwargs) -> Message | None:
+    message = get_reply_target(update)
+    if message is None:
+        logger.warning("无法回复消息: update.effective_message is None")
+        return None
+    return await message.reply_text(text, **kwargs)
+
+
 async def ensure_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not is_main_application(context):
-        await update.message.reply_text("⛔ 该命令仅主Bot可用")
+        await reply_text(update, "⛔ 该命令仅主Bot可用")
         return False
 
     user_id = update.effective_user.id
     if not check_auth(user_id):
-        await update.message.reply_text("⛔ 未授权的用户")
+        await reply_text(update, "⛔ 未授权的用户")
         return False
 
     return True

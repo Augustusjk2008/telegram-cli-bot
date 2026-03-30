@@ -12,6 +12,7 @@ from bot.handlers.admin import (
     bot_add,
     bot_help,
     bot_list,
+    bot_params,
     bot_remove,
     bot_set_cli,
     bot_set_workdir,
@@ -146,3 +147,40 @@ class TestBotSetWorkdir:
         with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True):
             await bot_set_workdir(mock_update, mock_context)
         assert "用法" in mock_update.message.reply_text.call_args[0][0]
+
+
+class TestBotParams:
+    """测试 bot_params"""
+
+    @pytest.mark.asyncio
+    async def test_reply_with_effective_message(self, mock_update, mock_context):
+        mock_context.args = ["main"]
+        manager_mock = MagicMock()
+        manager_mock.main_profile.alias = "main"
+        manager_mock.managed_profiles = {}
+        manager_mock.get_bot_cli_params = AsyncMock(return_value={"claude": {"effort": "high"}})
+
+        with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
+             patch("bot.cli_params.format_params_display", return_value="<b>claude</b>"):
+            await bot_params(mock_update, mock_context)
+
+        mock_update.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_effective_message_does_not_crash(self, mock_update, mock_context):
+        mock_context.args = ["main"]
+        mock_update.effective_message = None
+        mock_update.message = None
+
+        manager_mock = MagicMock()
+        manager_mock.main_profile.alias = "main"
+        manager_mock.managed_profiles = {}
+        manager_mock.get_bot_cli_params = AsyncMock(return_value={"claude": {"effort": "high"}})
+
+        with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
+             patch("bot.cli_params.format_params_display", return_value="<b>claude</b>"):
+            await bot_params(mock_update, mock_context)
+
+

@@ -55,6 +55,22 @@ Sessions are keyed by `(bot_id, user_id)` tuple in `bot/sessions.py`. Each `User
 - A `subprocess.Popen` reference for the active CLI process
 - Thread-safe via `threading.Lock` (subprocess runs in executor threads)
 
+### Session Persistence
+
+Session IDs are automatically persisted to `.session_store.json` (in the same directory as `managed_bots.json`) to survive program restarts:
+
+- **Storage key**: `(bot_id, user_id)` — each bot-user pair has its own session IDs
+- **Automatic persistence**: Session IDs are saved when they change (after each AI response) and on graceful shutdown
+- **Automatic restoration**: Session IDs are automatically restored when a session is created (regardless of working directory)
+- **Clear on directory change**: `/cd` command clears all session IDs (calls `session.clear_session_ids()`), as CLI tools typically bind sessions to a specific working directory
+- **Clear on reset**: `/reset` command clears both the in-memory session and the persisted session data
+
+Key files:
+- `bot/session_store.py` — persistence layer (JSON file operations), storage key is `(bot_id, user_id)`
+- `bot/sessions.py` — `save_all_sessions()`, `_save_session_to_store()` integration
+- `bot/models.py` — `UserSession.persist()`, `UserSession.clear_session_ids()` methods
+- `bot/handlers/chat.py` — calls `session.persist()` after session ID changes
+
 ### CLI Abstraction Layer
 
 `bot/cli.py` handles three CLI backends with a unified interface:

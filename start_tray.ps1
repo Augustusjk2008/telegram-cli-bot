@@ -23,30 +23,24 @@ $notifyIcon.Visible = $true
 # Create context menu
 $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 
-# Show Window menu item
-$showWindowMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Console Window"
-$showWindowMenuItem.Add_Click({
-    if ($global:mainHwnd) {
-        $global:winAPI::ShowWindow($global:mainHwnd, 1)
-    }
+# Open project folder menu item
+$openFolderMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Open Project Folder"
+$openFolderMenuItem.Add_Click({
+    Start-Process explorer.exe $scriptDir
 })
-[void]$contextMenu.Items.Add($showWindowMenuItem)
-
-# Hide Window menu item
-$hideWindowMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Hide Console Window"
-$hideWindowMenuItem.Add_Click({
-    if ($global:mainHwnd) {
-        $global:winAPI::ShowWindow($global:mainHwnd, 0)
-    }
-})
-[void]$contextMenu.Items.Add($hideWindowMenuItem)
+[void]$contextMenu.Items.Add($openFolderMenuItem)
 
 [void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
 # Status menu item
 $statusMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Status"
 $statusMenuItem.Add_Click({
-    [System.Windows.Forms.MessageBox]::Show("Bot is running...`nWorking Directory: $scriptDir", "Telegram CLI Bridge", "OK", "Information")
+    $statusText = if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
+        "Bot is running in tray.`nPID: $($global:pythonProcess.Id)`nWorking Directory: $scriptDir"
+    } else {
+        "Bot process is not running.`nWorking Directory: $scriptDir"
+    }
+    [System.Windows.Forms.MessageBox]::Show($statusText, "Telegram CLI Bridge", "OK", "Information")
 })
 [void]$contextMenu.Items.Add($statusMenuItem)
 
@@ -58,7 +52,7 @@ $restartMenuItem.Add_Click({
         $global:pythonProcess.WaitForExit(5000)
     }
     Start-Sleep -Seconds 1
-    $global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru -NoNewWindow
+    $global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru -WindowStyle Hidden
     $notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
     $notifyIcon.BalloonTipText = "Service restarted"
     $notifyIcon.ShowBalloonTip(2000)
@@ -81,27 +75,14 @@ $exitMenuItem.Add_Click({
 
 $notifyIcon.ContextMenuStrip = $contextMenu
 
-# Double click to show window
+# Double click to show status window
 $notifyIcon.Add_DoubleClick({
-    if ($global:mainHwnd) {
-        $global:winAPI::ShowWindow($global:mainHwnd, 1)
-    }
+    [System.Windows.Forms.MessageBox]::Show("Bot is running in tray.`nWorking Directory: $scriptDir", "Telegram CLI Bridge", "OK", "Information")
 })
 
-# Hide PowerShell window
-$code = @"
-[DllImport("user32.dll")]
-public static extern IntPtr GetForegroundWindow();
-
-[DllImport("user32.dll")]
-public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-"@
-$global:winAPI = Add-Type -MemberDefinition $code -Name WinAPI -PassThru
-$global:mainHwnd = $global:winAPI::GetForegroundWindow()
-[void]$global:winAPI::ShowWindow($global:mainHwnd, 0)
-
-# Start Python Bot
-$global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru -NoNewWindow
+# Start Python Bot hidden
+$global:mainHwnd = $null
+$global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru -WindowStyle Hidden
 
 # Show startup notification
 $notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"

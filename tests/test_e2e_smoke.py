@@ -126,6 +126,7 @@ class TestCliIntegration:
 
     def test_validate_and_build(self):
         from bot.cli import validate_cli_type, build_cli_command
+        from bot.cli_params import CliParamsConfig
 
         cli_type = validate_cli_type("kimi")
         assert cli_type == "kimi"
@@ -135,6 +136,7 @@ class TestCliIntegration:
             resolved_cli="kimi",
             user_text="hello",
             env={},
+            params_config=CliParamsConfig(),
         )
         assert isinstance(cmd, list)
         assert len(cmd) > 0

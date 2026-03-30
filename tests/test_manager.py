@@ -163,11 +163,11 @@ class TestManagerGetProfile:
         m.managed_profiles["sub1"] = sub
         assert m.get_profile("sub1") is sub
 
-    def test_get_nonexistent_falls_back_to_main(self, temp_dir: Path):
+    def test_get_nonexistent_raises(self, temp_dir: Path):
         main_profile = BotProfile(alias="main", token="main_tok")
         m = MultiBotManager(main_profile=main_profile, storage_file=str(temp_dir / "b.json"))
-        result = m.get_profile("nonexistent")
-        assert result is main_profile
+        with pytest.raises(KeyError):
+            m.get_profile("nonexistent")
 
 
 class TestManagerGetStatusLines:

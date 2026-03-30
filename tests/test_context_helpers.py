@@ -16,6 +16,7 @@ from bot.context_helpers import (
     get_current_session,
     get_manager,
     is_main_application,
+    reply_text,
 )
 
 
@@ -111,3 +112,20 @@ class TestEnsureAdmin:
         with patch("bot.context_helpers.check_auth", return_value=False):
             result = await ensure_admin(mock_update, mock_context)
         assert result is False
+
+
+class TestReplyText:
+    """测试 reply_text"""
+
+    @pytest.mark.asyncio
+    async def test_reply_with_effective_message(self, mock_update):
+        result = await reply_text(mock_update, "hello", parse_mode="HTML")
+        assert result == mock_update.message.reply_text.return_value
+        mock_update.message.reply_text.assert_awaited_once_with("hello", parse_mode="HTML")
+
+    @pytest.mark.asyncio
+    async def test_reply_without_effective_message(self, mock_update):
+        mock_update.effective_message = None
+        mock_update.message = None
+        result = await reply_text(mock_update, "hello")
+        assert result is None

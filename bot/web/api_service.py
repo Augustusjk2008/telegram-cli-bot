@@ -360,6 +360,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 session_id=cli_session_id,
                 resume_session=resume_session,
                 json_output=(cli_type == "codex"),
+                params_config=profile.cli_params,
             )
         except ValueError as exc:
             _raise(400, "invalid_cli_command", str(exc))

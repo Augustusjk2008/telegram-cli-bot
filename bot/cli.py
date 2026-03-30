@@ -7,6 +7,7 @@ import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
+from bot.cli_params import build_cli_args_from_config, CliParamsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -93,78 +94,38 @@ def build_cli_command(
     resolved_cli: str,
     user_text: str,
     env: Dict[str, str],
+    params_config: CliParamsConfig,
     session_id: Optional[str] = None,
     resume_session: bool = False,
     json_output: bool = False,
 ) -> Tuple[List[str], bool]:
-    """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。"""
+    """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。
+
+    Args:
+        cli_type: CLI 类型 (kimi/claude/codex)
+        resolved_cli: 解析后的 CLI 可执行文件路径
+        user_text: 用户输入文本
+        env: 环境变量字典（会被修改以设置 CLI 特定的环境变量）
+        params_config: CLI 参数配置
+        session_id: 会话 ID
+        resume_session: 是否恢复会话
+        json_output: 是否使用 JSON 输出（Codex）
+        params_config: CLI 参数配置
+    """
     kind = validate_cli_type(cli_type)
-
-    # 检测 CLI 原生子命令（以 / 开头且为单个词）
-    is_cli_subcommand = user_text.startswith("/") and len(user_text.split()) == 1
-
-    if kind == "kimi":
-        if is_cli_subcommand:
-            subcmd = user_text[1:]
-            if subcmd in ("help", "usage"):
-                return [resolved_cli, "--help"], False
-            return [resolved_cli, subcmd], False
-        cmd = [resolved_cli, "--quiet", "-y", "--thinking"]
-        if session_id:
-            cmd.extend(["-S", session_id])
-        cmd.extend(["-p", user_text])  # 通过 -p 参数传递提示
-        return cmd, False
-
+    cmd, use_stdin = build_cli_args_from_config(
+        cli_type=kind,
+        resolved_cli=resolved_cli,
+        params_config=params_config,
+        user_text=user_text,
+        session_id=session_id,
+        resume_session=resume_session,
+    )
     if kind == "claude":
-        env["CLAUDE_CODE_DISABLE_PROMPTS"] = "1"
-        cmd = [
-            resolved_cli,
-            "-p",
-            "--dangerously-skip-permissions",
-            "--effort",
-            "high",
-        ]
-        if session_id:
-            if resume_session:
-                cmd.extend(["-r", session_id])
-            else:
-                cmd.extend(["--session-id", session_id])
-        cmd.append("-")  # 从 stdin 读取提示
-        return cmd, True
-
-    # Codex
-    codex_exec_options = [
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--skip-git-repo-check",
-        "-c",
-        'model_reasoning_effort="xhigh"',
-    ]
-    if json_output:
-        codex_exec_options.append("--json")
-
-    if is_cli_subcommand:
-        subcmd = user_text[1:]
-        if subcmd in ("help", "usage"):
-            return [resolved_cli, "--help"], False
-        return [resolved_cli, subcmd], False
-
-    # Codex: 使用 `-` 从 stdin 读取提示，支持多行输入
-    if session_id:
-        return [
-            resolved_cli,
-            "exec",
-            "resume",
-            *codex_exec_options,
-            session_id,
-            "-",
-        ], True
-
-    return [
-        resolved_cli,
-        "exec",
-        *codex_exec_options,
-        "-",
-    ], True
+        params = params_config.get_params("claude")
+        if params.get("disable_prompts"):
+            env["CLAUDE_CODE_DISABLE_PROMPTS"] = "1"
+    return cmd, use_stdin
 
 
 # ============ Codex JSON 解析相关函数 ============
@@ -396,3 +357,23 @@ def should_mark_claude_session_initialized(response: str, returncode: int) -> bo
         return False
 
     return True
+
+
+def should_reset_kimi_session(response: str, returncode: int) -> bool:
+    """Kimi 会话失效时重置 session_id。"""
+    if returncode == 0:
+        return False
+    lower = (response or "").lower()
+    if not lower:
+        return False
+    reset_markers = (
+        "session not found",
+        "invalid session",
+        "conversation not found",
+        "session expired",
+        "session id not found",
+        "unauthorized",
+        "authentication failed",
+        "invalid token",
+    )
+    return any(marker in lower for marker in reset_markers)

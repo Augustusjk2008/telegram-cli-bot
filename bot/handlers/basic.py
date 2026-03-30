@@ -206,6 +206,9 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+        # 切换目录时清除会话ID
+        session.clear_session_ids()
+
         session.working_dir = new_path
         await update.message.reply_text(msg("cd", "success", path=html.escape(new_path)), parse_mode="HTML")
     else:

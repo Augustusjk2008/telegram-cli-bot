@@ -105,6 +105,9 @@ async def run_all_bots():
     finally:
         if TELEGRAM_ENABLED:
             await manager.shutdown_all()
+        # 保存所有会话到持久化存储
+        from bot.sessions import save_all_sessions
+        save_all_sessions()
         config.RESTART_EVENT = None
         # 注意：主bot关闭时不恢复睡眠，保持系统阻止睡眠状态
         # 如需恢复睡眠，请手动重启系统或执行 powercfg 命令
@@ -151,6 +154,9 @@ def main():
             asyncio.run(run_all_bots())
         except KeyboardInterrupt:
             print(f"\n{msgs.get('startup', 'shutdown')}")
+            # 保存所有会话到持久化存储
+            from bot.sessions import save_all_sessions
+            save_all_sessions()
             break
         except Exception as e:
             logger.exception("运行异常，%s秒后自动重试: %s", MAIN_LOOP_RETRY_DELAY, e)
@@ -169,6 +175,10 @@ def main():
             except Exception as e:
                 print(f"进程级重启失败: {e}")
                 break
+            break
+        # 正常退出前保存会话
+        from bot.sessions import save_all_sessions
+        save_all_sessions()
         break
 
     # 注意：程序退出时不恢复系统睡眠，保持系统阻止睡眠状态

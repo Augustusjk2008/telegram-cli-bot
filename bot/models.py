@@ -5,9 +5,14 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bot.config import CLI_TYPE, CLI_PATH, SESSION_TIMEOUT, WORKING_DIR
+from bot.cli_params import CliParamsConfig
+
+if TYPE_CHECKING:
+    # 避免循环导入
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +27,10 @@ class BotProfile:
     working_dir: str = WORKING_DIR
     enabled: bool = True
     bot_mode: str = "cli"  # "cli" | "assistant"
+    cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "alias": self.alias,
             "token": self.token,
             "cli_type": self.cli_type,
@@ -33,6 +39,37 @@ class BotProfile:
             "enabled": self.enabled,
             "bot_mode": self.bot_mode,
         }
+        # 添加 CLI 参数配置（如果有非默认配置）
+        params_dict = self.cli_params.to_dict()
+        # 检查是否有自定义配置
+        has_custom = False
+        from bot.cli_params import DEFAULT_PARAMS_MAP
+        for cli_type, params in params_dict.items():
+            default = DEFAULT_PARAMS_MAP.get(cli_type, {})
+            if params != default:
+                has_custom = True
+                break
+        if has_custom:
+            result["cli_params"] = params_dict
+        return result
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "BotProfile":
+        """从字典创建 BotProfile，支持 cli_params 字段"""
+        # 提取 cli_params
+        cli_params_data = data.get("cli_params")
+        cli_params = CliParamsConfig.from_dict(cli_params_data) if cli_params_data else CliParamsConfig()
+        
+        return cls(
+            alias=data["alias"],
+            token=data["token"],
+            cli_type=data.get("cli_type", CLI_TYPE),
+            cli_path=data.get("cli_path", CLI_PATH),
+            working_dir=data.get("working_dir", WORKING_DIR),
+            enabled=data.get("enabled", True),
+            bot_mode=data.get("bot_mode", "cli"),
+            cli_params=cli_params,
+        )
 
 
 @dataclass
@@ -90,3 +127,25 @@ class UserSession:
                 self.process = None
             self.stop_requested = False
             self.is_processing = False
+
+    def persist(self):
+        """持久化当前会话状态（session_ids）
+        
+        在 session_id 变化时调用，确保重启后能恢复会话。
+        """
+        # 延迟导入避免循环依赖
+        try:
+            from bot.sessions import _save_session_to_store
+            _save_session_to_store(self)
+        except ImportError:
+            logger.warning("无法导入 session_store，会话将不会被持久化")
+
+    def clear_session_ids(self):
+        """清除所有 session_id 并持久化"""
+        with self._lock:
+            self.codex_session_id = None
+            self.kimi_session_id = None
+            self.claude_session_id = None
+            self.claude_session_initialized = False
+        self.persist()
+        logger.info(f"已清除会话ID: bot={self.bot_id}, user={self.user_id}")
