@@ -4,3 +4,4 @@ __pycache__/
 .session_store.json
 .env
 *.log
+docs/superpowers/
