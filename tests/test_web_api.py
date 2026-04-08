@@ -12,6 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_service import (
+    _build_stream_status_event,
     WebApiError,
     change_working_directory,
     get_directory_listing,
@@ -191,3 +192,16 @@ async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBot
     assert data["returncode"] == 0
     assert session.claude_session_initialized is True
     session.persist.assert_called()
+
+
+def test_codex_status_event_skips_json_meta_preview():
+    event = _build_stream_status_event(
+        cli_type="codex",
+        elapsed_seconds=3,
+        raw_output='{"type":"thread.started","thread_id":"abc"}\n{"type":"turn.started"}\n',
+    )
+
+    assert event == {
+        "type": "status",
+        "elapsed_seconds": 3,
+    }

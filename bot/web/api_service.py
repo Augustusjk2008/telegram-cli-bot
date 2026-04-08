@@ -362,15 +362,39 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
     return False
 
 
+def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
+    preview_parts: list[str] = []
+    fallback_parts: list[str] = []
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_codex_json_line(stripped)
+        if parsed["delta_text"]:
+            preview_parts.append(parsed["delta_text"])
+            continue
+        if parsed["error_text"]:
+            fallback_parts.append(parsed["error_text"])
+            continue
+        if not stripped.startswith("{"):
+            fallback_parts.append(stripped)
+
+    preview_text = "".join(preview_parts).strip()
+    if preview_text:
+        return preview_text
+
+    fallback_text = "\n".join(part for part in fallback_parts if part).strip()
+    return fallback_text or None
+
+
 def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: str) -> dict[str, Any]:
     event: dict[str, Any] = {
         "type": "status",
         "elapsed_seconds": elapsed_seconds,
     }
     if cli_type == "codex":
-        preview_text, _ = parse_codex_json_output(raw_output)
-        preview_text = (preview_text or "").strip()
-        if preview_text and preview_text not in {"(无输出)", msg("chat", "no_output")}:
+        preview_text = _extract_codex_stream_preview(raw_output)
+        if preview_text:
             event["preview_text"] = preview_text[-800:]
     return event
 
