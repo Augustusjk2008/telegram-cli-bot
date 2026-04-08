@@ -3,6 +3,7 @@ import type {
   BotStatus,
   BotSummary,
   ChatMessage,
+  ChatStatusUpdate,
   DirectoryListing,
   FileEntry,
   SessionState,
@@ -51,6 +52,7 @@ type RawSystemScript = {
 type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
+  | { type: "status"; elapsed_seconds?: number; preview_text?: string }
   | { type: "done"; output?: string }
   | { type: "error"; message?: string; code?: string };
 
@@ -205,7 +207,12 @@ export class RealWebBotClient implements WebBotClient {
     }));
   }
 
-  async sendMessage(botAlias: string, text: string, onChunk: (chunk: string) => void): Promise<ChatMessage> {
+  async sendMessage(
+    botAlias: string,
+    text: string,
+    onChunk: (chunk: string) => void,
+    onStatus?: (status: ChatStatusUpdate) => void,
+  ): Promise<ChatMessage> {
     const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`, {
       method: "POST",
       headers: this.headers({
@@ -252,6 +259,11 @@ export class RealWebBotClient implements WebBotClient {
         if (event.type === "delta" && event.text) {
           streamedText += event.text;
           onChunk(event.text);
+        } else if (event.type === "status") {
+          onStatus?.({
+            elapsedSeconds: event.elapsed_seconds,
+            previewText: event.preview_text,
+          });
         } else if (event.type === "done") {
           finalText = event.output || streamedText;
         } else if (event.type === "error") {

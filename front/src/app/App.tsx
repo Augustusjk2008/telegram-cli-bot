@@ -29,6 +29,7 @@ export function App() {
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -53,6 +54,7 @@ export function App() {
         setClient(nextClient);
         setIsLoggedIn(true);
         setCurrentBot(session.currentBotAlias || null);
+        setMountedChatBots(session.currentBotAlias ? [session.currentBotAlias] : []);
         setLoginError("");
       })
       .catch(() => {
@@ -76,6 +78,7 @@ export function App() {
       setClient(nextClient);
       setIsLoggedIn(true);
       setCurrentBot(session.currentBotAlias || null);
+      setMountedChatBots(session.currentBotAlias ? [session.currentBotAlias] : []);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "登录失败");
     } finally {
@@ -90,8 +93,16 @@ export function App() {
     setCurrentBot(null);
     setCurrentTab("chat");
     setBots([]);
+    setMountedChatBots([]);
     setLoginError("");
   }
+
+  useEffect(() => {
+    if (!currentBot) {
+      return;
+    }
+    setMountedChatBots((prev) => (prev.includes(currentBot) ? prev : [...prev, currentBot]));
+  }, [currentBot]);
 
   if (!isLoggedIn) {
     return <LoginScreen onLogin={handleLogin} isLoading={loginLoading} error={loginError} />;
@@ -114,9 +125,19 @@ export function App() {
       </header>
 
       <div className="flex-1 overflow-hidden relative">
-        {currentTab === "chat" ? <ChatScreen key={`chat-${currentBot}`} botAlias={currentBot} client={client} /> : null}
-        {currentTab === "files" ? <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} /> : null}
-        {currentTab === "settings" ? <SettingsScreen key={`settings-${currentBot}`} botAlias={currentBot} client={client} onLogout={handleLogout} /> : null}
+        <div className={clsx("absolute inset-0", currentTab === "chat" ? "block" : "hidden")}>
+          {mountedChatBots.map((alias) => (
+            <div key={`chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
+              <ChatScreen botAlias={alias} client={client} />
+            </div>
+          ))}
+        </div>
+        <div className={clsx("absolute inset-0", currentTab === "files" ? "block" : "hidden")}>
+          <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} />
+        </div>
+        <div className={clsx("absolute inset-0", currentTab === "settings" ? "block" : "hidden")}>
+          <SettingsScreen key={`settings-${currentBot}`} botAlias={currentBot} client={client} onLogout={handleLogout} />
+        </div>
       </div>
 
       <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">

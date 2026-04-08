@@ -2,6 +2,7 @@ import type {
   BotOverview,
   BotSummary,
   ChatMessage,
+  ChatStatusUpdate,
   DirectoryListing,
   SessionState,
   SystemScript,
@@ -13,7 +14,12 @@ export interface WebBotClient {
   listBots(): Promise<BotSummary[]>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
-  sendMessage(botAlias: string, text: string, onChunk: (chunk: string) => void): Promise<ChatMessage>;
+  sendMessage(
+    botAlias: string,
+    text: string,
+    onChunk: (chunk: string) => void,
+    onStatus?: (status: ChatStatusUpdate) => void,
+  ): Promise<ChatMessage>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string): Promise<DirectoryListing>;
   changeDirectory(botAlias: string, path: string): Promise<string>;

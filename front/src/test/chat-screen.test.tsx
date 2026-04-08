@@ -173,3 +173,22 @@ test("shows reset kill and system-script actions for main bot", async () => {
   expect(screen.getByRole("button", { name: "重置会话" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
 });
+
+test("shows compact system script titles without verbose metadata", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listSystemScripts: async () => [{
+      scriptName: "network_traffic",
+      displayName: "网络流量。查看当前网络流量与连接状态。",
+      description: "查看网络状态并输出详细路径",
+      path: "C:\\scripts\\network_traffic.ps1",
+    }],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.click(await screen.findByRole("button", { name: "系统脚本" }));
+
+  expect(await screen.findByRole("button", { name: "网络流量" })).toBeInTheDocument();
+  expect(screen.queryByText("查看网络状态并输出详细路径")).not.toBeInTheDocument();
+  expect(screen.queryByText("C:\\scripts\\network_traffic.ps1")).not.toBeInTheDocument();
+});

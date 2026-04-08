@@ -61,6 +61,16 @@ class AuthContext:
     token_used: bool
 
 
+@dataclass
+class CliAttemptState:
+    """单次 CLI 尝试的会话状态。"""
+
+    cli_session_id: Optional[str]
+    resume_session: bool
+    codex_session_id: Optional[str] = None
+    new_kimi_session_id_created: bool = False
+
+
 def _raise(status: int, code: str, message: str):
     raise WebApiError(status=status, code=code, message=message)
 
@@ -303,6 +313,68 @@ def _chunk_text(text: str, size: int = 160) -> list[str]:
     return [cleaned[index:index + size] for index in range(0, len(cleaned), size)]
 
 
+def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemptState:
+    with session._lock:
+        if cli_type == "codex":
+            return CliAttemptState(
+                cli_session_id=session.codex_session_id,
+                resume_session=bool(session.codex_session_id),
+                codex_session_id=session.codex_session_id,
+            )
+        if cli_type == "kimi":
+            new_session_created = False
+            if not session.kimi_session_id:
+                session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
+                new_session_created = True
+            return CliAttemptState(
+                cli_session_id=session.kimi_session_id,
+                resume_session=False,
+                new_kimi_session_id_created=new_session_created,
+            )
+        if cli_type == "claude":
+            if not session.claude_session_id:
+                session.claude_session_id = str(uuid.uuid4())
+                session.claude_session_initialized = False
+            return CliAttemptState(
+                cli_session_id=session.claude_session_id,
+                resume_session=session.claude_session_initialized,
+            )
+    return CliAttemptState(cli_session_id=None, resume_session=False)
+
+
+def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
+    with session._lock:
+        if cli_type == "codex":
+            if session.codex_session_id is None:
+                return False
+            session.codex_session_id = None
+            return True
+        if cli_type == "kimi":
+            if session.kimi_session_id is None:
+                return False
+            session.kimi_session_id = None
+            return True
+        if cli_type == "claude":
+            changed = session.claude_session_id is not None or session.claude_session_initialized
+            session.claude_session_id = None
+            session.claude_session_initialized = False
+            return changed
+    return False
+
+
+def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: str) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "type": "status",
+        "elapsed_seconds": elapsed_seconds,
+    }
+    if cli_type == "codex":
+        preview_text, _ = parse_codex_json_output(raw_output)
+        preview_text = (preview_text or "").strip()
+        if preview_text and preview_text not in {"(无输出)", msg("chat", "no_output")}:
+            event["preview_text"] = preview_text[-800:]
+    return event
+
+
 def _wait_for_process_exit_sync(process: subprocess.Popen, timeout: float) -> Optional[int]:
     try:
         return process.wait(timeout=timeout)
@@ -380,173 +452,193 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
-        codex_session_id: Optional[str] = None
-        cli_session_id: Optional[str] = None
-        resume_session = False
-        new_kimi_session_id_created = False
-        if cli_type == "codex":
-            codex_session_id = session.codex_session_id
-            cli_session_id = session.codex_session_id
-            resume_session = bool(session.codex_session_id)
-        elif cli_type == "kimi":
-            if not session.kimi_session_id:
-                session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
-                new_kimi_session_id_created = True
-            cli_session_id = session.kimi_session_id
-        elif cli_type == "claude":
-            if not session.claude_session_id:
-                session.claude_session_id = str(uuid.uuid4())
-                session.claude_session_initialized = False
-            cli_session_id = session.claude_session_id
-            resume_session = session.claude_session_initialized
 
-    process: Optional[subprocess.Popen] = None
     try:
         session.touch()
-        try:
-            cmd, use_stdin = build_cli_command(
-                cli_type=cli_type,
-                resolved_cli=resolved_cli,
-                user_text=text,
-                env=env,
-                session_id=cli_session_id,
-                resume_session=resume_session,
-                json_output=(cli_type == "codex"),
-                params_config=profile.cli_params,
-            )
-        except ValueError as exc:
-            _raise(400, "invalid_cli_command", str(exc))
-
-        session.add_to_history("user", text)
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE if use_stdin else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                cwd=session.working_dir,
-                env=env,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except FileNotFoundError:
-            _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-        if use_stdin:
-            try:
-                assert process.stdin is not None
-                process.stdin.write(text + "\n")
-                process.stdin.flush()
-                process.stdin.close()
-            except (BrokenPipeError, OSError) as exc:
-                process.wait()
-                _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
-
-        with session._lock:
-            session.process = process
-
-        yield {
-            "type": "meta",
-            "alias": alias,
-            "cli_type": cli_type,
-            "working_dir": session.working_dir,
-            "resume_session": resume_session,
-        }
-
-        output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = threading.Event()
-        raw_output_parts: list[str] = []
-        thread_id: Optional[str] = None
-        streamed_any = False
-        timed_out = False
-
-        def read_stdout() -> None:
-            try:
-                if process is None or process.stdout is None:
-                    return
-                stdout = process.stdout
-                while True:
-                    line = stdout.readline()
-                    if line:
-                        output_queue.put(line)
-                        continue
-                    if process.poll() is not None:
-                        remaining = stdout.read()
-                        if remaining:
-                            output_queue.put(remaining)
-                        break
-                    time.sleep(0.05)
-            except Exception as exc:  # pragma: no cover - defensive
-                output_queue.put(exc)
-            finally:
-                reader_done.set()
-
-        threading.Thread(target=read_stdout, daemon=True).start()
         loop = asyncio.get_running_loop()
-        start_time = loop.time()
-
-        while not reader_done.is_set() or not output_queue.empty():
-            if not timed_out and (loop.time() - start_time) >= CLI_EXEC_TIMEOUT and process.poll() is None:
-                timed_out = True
-                await loop.run_in_executor(None, _terminate_process_sync, process)
-
-            drained = False
-            while True:
-                try:
-                    item = output_queue.get_nowait()
-                except queue.Empty:
-                    break
-                drained = True
-                if isinstance(item, Exception):
-                    raise item
-
-                text_chunk = str(item)
-                raw_output_parts.append(text_chunk)
-
-                if cli_type == "codex":
-                    for line in text_chunk.splitlines():
-                        stripped = line.strip()
-                        if not stripped:
-                            continue
-                        parsed = parse_codex_json_line(stripped)
-                        if parsed["thread_id"]:
-                            thread_id = parsed["thread_id"]
-                        delta_text = parsed["delta_text"]
-                        if delta_text:
-                            streamed_any = True
-                            yield {"type": "delta", "text": delta_text}
-                else:
-                    if text_chunk:
-                        streamed_any = True
-                        yield {"type": "delta", "text": text_chunk}
-
-            if not drained:
-                await asyncio.sleep(0.1)
-
-        await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
-        returncode = process.poll() if process is not None else -1
-        if returncode is None:
-            returncode = -1
-
-        raw_output = "".join(raw_output_parts)
+        started_at = loop.time()
         session_id_changed = False
-        if cli_type == "codex":
-            response, parsed_thread_id = parse_codex_json_output(raw_output)
-            thread_id = thread_id or parsed_thread_id
+        history_added = False
+        meta_sent = False
+        max_attempts = 2 if cli_type == "claude" else 1
+
+        for attempt_index in range(max_attempts):
+            attempt = _prepare_cli_attempt_state(session, cli_type)
+            try:
+                cmd, use_stdin = build_cli_command(
+                    cli_type=cli_type,
+                    resolved_cli=resolved_cli,
+                    user_text=text,
+                    env=env,
+                    session_id=attempt.cli_session_id,
+                    resume_session=attempt.resume_session,
+                    json_output=(cli_type == "codex"),
+                    params_config=profile.cli_params,
+                )
+            except ValueError as exc:
+                _raise(400, "invalid_cli_command", str(exc))
+
+            if not history_added:
+                session.add_to_history("user", text)
+                history_added = True
+
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE if use_stdin else None,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    cwd=session.working_dir,
+                    env=env,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except FileNotFoundError:
+                _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+            if use_stdin:
+                try:
+                    assert process.stdin is not None
+                    process.stdin.write(text + "\n")
+                    process.stdin.flush()
+                    process.stdin.close()
+                except (BrokenPipeError, OSError) as exc:
+                    process.wait()
+                    _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
+
             with session._lock:
-                if thread_id:
-                    if session.codex_session_id != thread_id:
-                        session.codex_session_id = thread_id
-                        session_id_changed = True
-                elif should_reset_codex_session(codex_session_id, response, returncode):
-                    if session.codex_session_id is not None:
-                        session.codex_session_id = None
-                        session_id_changed = True
-        else:
-            response = raw_output.strip()
-            if cli_type == "claude":
+                session.process = process
+
+            if not meta_sent:
+                yield {
+                    "type": "meta",
+                    "alias": alias,
+                    "cli_type": cli_type,
+                    "working_dir": session.working_dir,
+                    "resume_session": attempt.resume_session,
+                }
+                meta_sent = True
+
+            output_queue: queue.Queue[Any] = queue.Queue()
+            reader_done = threading.Event()
+            raw_output_parts: list[str] = []
+            thread_id: Optional[str] = None
+            timed_out = False
+            last_status_signature: tuple[int, Optional[str]] | None = None
+
+            def read_stdout() -> None:
+                try:
+                    if process.stdout is None:
+                        return
+                    stdout = process.stdout
+                    while True:
+                        line = stdout.readline()
+                        if line:
+                            output_queue.put(line)
+                            continue
+                        if process.poll() is not None:
+                            remaining = stdout.read()
+                            if remaining:
+                                output_queue.put(remaining)
+                            break
+                        time.sleep(0.05)
+                except Exception as exc:  # pragma: no cover - defensive
+                    output_queue.put(exc)
+                finally:
+                    reader_done.set()
+
+            threading.Thread(target=read_stdout, daemon=True).start()
+
+            try:
+                while not reader_done.is_set() or not output_queue.empty():
+                    if not timed_out and (loop.time() - started_at) >= CLI_EXEC_TIMEOUT and process.poll() is None:
+                        timed_out = True
+                        await loop.run_in_executor(None, _terminate_process_sync, process)
+
+                    drained = False
+                    while True:
+                        try:
+                            item = output_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        drained = True
+                        if isinstance(item, Exception):
+                            raise item
+
+                        text_chunk = str(item)
+                        raw_output_parts.append(text_chunk)
+
+                        if cli_type == "codex":
+                            for line in text_chunk.splitlines():
+                                stripped = line.strip()
+                                if not stripped:
+                                    continue
+                                parsed = parse_codex_json_line(stripped)
+                                if parsed["thread_id"]:
+                                    thread_id = parsed["thread_id"]
+
+                    status_event = _build_stream_status_event(
+                        cli_type=cli_type,
+                        elapsed_seconds=int(loop.time() - started_at),
+                        raw_output="".join(raw_output_parts),
+                    )
+                    status_signature = (
+                        int(status_event.get("elapsed_seconds", 0)),
+                        status_event.get("preview_text"),
+                    )
+                    if status_signature != last_status_signature and (
+                        status_signature[0] > 0 or status_signature[1]
+                    ):
+                        yield status_event
+                        last_status_signature = status_signature
+
+                    if not drained:
+                        await asyncio.sleep(0.1)
+
+                await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+                returncode = process.poll() if process is not None else -1
+                if returncode is None:
+                    returncode = -1
+            finally:
+                with session._lock:
+                    session.process = None
+
+            raw_output = "".join(raw_output_parts)
+            if cli_type == "codex":
+                response, parsed_thread_id = parse_codex_json_output(raw_output)
+                thread_id = thread_id or parsed_thread_id
+            else:
+                response = raw_output.strip()
+
+            if timed_out:
+                response = response or msg("chat", "timeout_no_output")
+            else:
+                response = response or msg("chat", "no_output")
+
+            if (
+                cli_type == "claude"
+                and not timed_out
+                and attempt.resume_session
+                and should_reset_claude_session(response, returncode)
+                and attempt_index + 1 < max_attempts
+            ):
+                if _clear_invalid_cli_session(session, cli_type):
+                    session_id_changed = True
+                continue
+
+            if cli_type == "codex":
+                with session._lock:
+                    if thread_id:
+                        if session.codex_session_id != thread_id:
+                            session.codex_session_id = thread_id
+                            session_id_changed = True
+                    elif should_reset_codex_session(attempt.codex_session_id, response, returncode):
+                        if session.codex_session_id is not None:
+                            session.codex_session_id = None
+                            session_id_changed = True
+            elif cli_type == "claude":
                 with session._lock:
                     if timed_out:
                         pass
@@ -555,7 +647,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                             session.claude_session_initialized = True
                             session_id_changed = True
                     elif should_reset_claude_session(response, returncode):
-                        if session.claude_session_id is not None:
+                        if session.claude_session_id is not None or session.claude_session_initialized:
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
@@ -565,28 +657,22 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         if session.kimi_session_id is not None:
                             session.kimi_session_id = None
                             session_id_changed = True
-                    elif not timed_out and new_kimi_session_id_created and session.kimi_session_id is not None:
+                    elif not timed_out and attempt.new_kimi_session_id_created and session.kimi_session_id is not None:
                         session_id_changed = True
 
-        if timed_out:
-            response = response or msg("chat", "timeout_no_output")
-        else:
-            response = response or msg("chat", "no_output")
+            if session_id_changed:
+                session.persist()
+                session_id_changed = False
 
-        if not streamed_any:
-            for chunk in _chunk_text(response):
-                yield {"type": "delta", "text": chunk}
-
-        if session_id_changed:
-            session.persist()
-        session.add_to_history("assistant", response)
-        yield {
-            "type": "done",
-            "output": response,
-            "returncode": returncode,
-            "timed_out": timed_out,
-            "session": build_session_snapshot(profile, session),
-        }
+            session.add_to_history("assistant", response)
+            yield {
+                "type": "done",
+                "output": response,
+                "returncode": returncode,
+                "timed_out": timed_out,
+                "session": build_session_snapshot(profile, session),
+            }
+            return
     finally:
         with session._lock:
             session.process = None
@@ -630,88 +716,94 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
-        codex_session_id: Optional[str] = None
-        cli_session_id: Optional[str] = None
-        resume_session = False
-        new_kimi_session_id_created = False
-        if cli_type == "codex":
-            codex_session_id = session.codex_session_id
-            cli_session_id = session.codex_session_id
-            resume_session = bool(session.codex_session_id)
-        elif cli_type == "kimi":
-            if not session.kimi_session_id:
-                session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
-                new_kimi_session_id_created = True
-            cli_session_id = session.kimi_session_id
-        elif cli_type == "claude":
-            if not session.claude_session_id:
-                session.claude_session_id = str(uuid.uuid4())
-                session.claude_session_initialized = False
-            cli_session_id = session.claude_session_id
-            resume_session = session.claude_session_initialized
 
     try:
         session.touch()
-        try:
-            cmd, use_stdin = build_cli_command(
-                cli_type=cli_type,
-                resolved_cli=resolved_cli,
-                user_text=text,
-                env=env,
-                session_id=cli_session_id,
-                resume_session=resume_session,
-                json_output=(cli_type == "codex"),
-                params_config=profile.cli_params,
-            )
-        except ValueError as exc:
-            _raise(400, "invalid_cli_command", str(exc))
-
-        session.add_to_history("user", text)
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE if use_stdin else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                cwd=session.working_dir,
-                env=env,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except FileNotFoundError:
-            _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-        if use_stdin:
-            try:
-                assert process.stdin is not None
-                process.stdin.write(text + "\n")
-                process.stdin.flush()
-                process.stdin.close()
-            except (BrokenPipeError, OSError) as exc:
-                process.wait()
-                _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
-
-        with session._lock:
-            session.process = process
-
         session_id_changed = False
-        if cli_type == "codex":
-            response, thread_id, returncode, timed_out = await _communicate_codex_process(process)
+        history_added = False
+        max_attempts = 2 if cli_type == "claude" else 1
+
+        for attempt_index in range(max_attempts):
+            attempt = _prepare_cli_attempt_state(session, cli_type)
+            try:
+                cmd, use_stdin = build_cli_command(
+                    cli_type=cli_type,
+                    resolved_cli=resolved_cli,
+                    user_text=text,
+                    env=env,
+                    session_id=attempt.cli_session_id,
+                    resume_session=attempt.resume_session,
+                    json_output=(cli_type == "codex"),
+                    params_config=profile.cli_params,
+                )
+            except ValueError as exc:
+                _raise(400, "invalid_cli_command", str(exc))
+
+            if not history_added:
+                session.add_to_history("user", text)
+                history_added = True
+
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE if use_stdin else None,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    cwd=session.working_dir,
+                    env=env,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except FileNotFoundError:
+                _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+            if use_stdin:
+                try:
+                    assert process.stdin is not None
+                    process.stdin.write(text + "\n")
+                    process.stdin.flush()
+                    process.stdin.close()
+                except (BrokenPipeError, OSError) as exc:
+                    process.wait()
+                    _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
+
             with session._lock:
-                if thread_id:
-                    if session.codex_session_id != thread_id:
-                        session.codex_session_id = thread_id
-                        session_id_changed = True
-                elif should_reset_codex_session(codex_session_id, response, returncode):
-                    if session.codex_session_id is not None:
-                        session.codex_session_id = None
-                        session_id_changed = True
-        else:
-            response, returncode, timed_out = await _communicate_process(process)
-            response = response.strip() or (msg("chat", "timeout_no_output") if timed_out else msg("chat", "no_output"))
-            if cli_type == "claude":
+                session.process = process
+
+            try:
+                if cli_type == "codex":
+                    response, thread_id, returncode, timed_out = await _communicate_codex_process(process)
+                else:
+                    response, returncode, timed_out = await _communicate_process(process)
+                    response = response.strip() or (msg("chat", "timeout_no_output") if timed_out else msg("chat", "no_output"))
+            finally:
+                with session._lock:
+                    session.process = None
+
+            if (
+                cli_type == "claude"
+                and not timed_out
+                and attempt.resume_session
+                and should_reset_claude_session(response, returncode)
+                and attempt_index + 1 < max_attempts
+            ):
+                if _clear_invalid_cli_session(session, cli_type):
+                    session_id_changed = True
+                continue
+
+            if cli_type == "codex":
+                with session._lock:
+                    if thread_id:
+                        if session.codex_session_id != thread_id:
+                            session.codex_session_id = thread_id
+                            session_id_changed = True
+                    elif should_reset_codex_session(attempt.codex_session_id, response, returncode):
+                        if session.codex_session_id is not None:
+                            session.codex_session_id = None
+                            session_id_changed = True
+            elif cli_type == "claude":
                 with session._lock:
                     if timed_out:
                         pass
@@ -720,7 +812,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                             session.claude_session_initialized = True
                             session_id_changed = True
                     elif should_reset_claude_session(response, returncode):
-                        if session.claude_session_id is not None:
+                        if session.claude_session_id is not None or session.claude_session_initialized:
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
@@ -730,18 +822,19 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                         if session.kimi_session_id is not None:
                             session.kimi_session_id = None
                             session_id_changed = True
-                    elif not timed_out and new_kimi_session_id_created and session.kimi_session_id is not None:
+                    elif not timed_out and attempt.new_kimi_session_id_created and session.kimi_session_id is not None:
                         session_id_changed = True
 
-        if session_id_changed:
-            session.persist()
-        session.add_to_history("assistant", response)
-        return {
-            "output": response,
-            "returncode": returncode,
-            "timed_out": timed_out,
-            "session": build_session_snapshot(profile, session),
-        }
+            if session_id_changed:
+                session.persist()
+
+            session.add_to_history("assistant", response)
+            return {
+                "output": response,
+                "returncode": returncode,
+                "timed_out": timed_out,
+                "session": build_session_snapshot(profile, session),
+            }
     finally:
         with session._lock:
             session.process = None

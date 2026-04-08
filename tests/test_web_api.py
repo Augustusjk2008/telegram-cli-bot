@@ -160,3 +160,34 @@ async def test_run_cli_chat_resets_and_persists_kimi_session(web_manager: MultiB
     assert data["returncode"] == 1
     assert session.kimi_session_id is None
     session.persist.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "claude"
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.claude_session_id = "claude-stale"
+    session.claude_session_initialized = True
+    session.persist = MagicMock()
+
+    first_process = MagicMock()
+    second_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=[(["claude", "-r", "claude-stale"], False), (["claude"], False)]) as build_mock, \
+         patch("bot.web.api_service.subprocess.Popen", side_effect=[first_process, second_process]), \
+         patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, side_effect=[
+             ("Error: Session ID not found", 1, False),
+             ("OK", 0, False),
+         ]) as communicate_mock:
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert communicate_mock.await_count == 2
+    assert build_mock.call_count == 2
+    assert build_mock.call_args_list[0].kwargs["resume_session"] is True
+    assert build_mock.call_args_list[1].kwargs["resume_session"] is False
+    assert data["output"] == "OK"
+    assert data["returncode"] == 0
+    assert session.claude_session_initialized is True
+    session.persist.assert_called()

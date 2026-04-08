@@ -2,6 +2,7 @@ import type {
   BotOverview,
   BotSummary,
   ChatMessage,
+  ChatStatusUpdate,
   DirectoryListing,
   SessionState,
   SystemScript,
@@ -52,11 +53,19 @@ export class MockWebBotClient implements WebBotClient {
     return mockChatMessages[botAlias] || [];
   }
 
-  async sendMessage(botAlias: string, text: string, onChunk: (chunk: string) => void): Promise<ChatMessage> {
+  async sendMessage(
+    botAlias: string,
+    text: string,
+    onChunk: (chunk: string) => void,
+    onStatus?: (status: ChatStatusUpdate) => void,
+  ): Promise<ChatMessage> {
     let streamed = "";
     await streamAssistantReply((chunk) => {
       streamed += chunk;
       onChunk(chunk);
+      onStatus?.({
+        elapsedSeconds: streamed.length > 0 ? 1 : 0,
+      });
     });
     return {
       id: Date.now().toString(),

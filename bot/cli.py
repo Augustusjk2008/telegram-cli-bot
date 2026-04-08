@@ -308,11 +308,13 @@ def should_reset_claude_session(response: str, returncode: int) -> bool:
         return False
     reset_markers = (
         "session not found",
+        "session id not found",
         "invalid session",
         "no such session",
         "not a valid session",
         "could not resume",
         "failed to resume",
+        "conversation not found",
     )
     return any(marker in lower for marker in reset_markers)
 

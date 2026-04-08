@@ -173,4 +173,51 @@ describe("RealWebBotClient", () => {
       },
     ]);
   });
+
+  test("sendMessage forwards status events before final output", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: meta\ndata: {\"type\":\"meta\",\"cli_type\":\"codex\"}\n\n"));
+        controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"preview_text\":\"处理中预览\"}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\"}\n\n"));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const statuses: Array<{ elapsedSeconds?: number; previewText?: string }> = [];
+    const message = await client.sendMessage("main", "hello", () => undefined, (status) => {
+      statuses.push(status);
+    });
+
+    expect(statuses).toEqual([
+      {
+        elapsedSeconds: 2,
+        previewText: "处理中预览",
+      },
+    ]);
+    expect(message.text).toBe("最终结果");
+  });
 });

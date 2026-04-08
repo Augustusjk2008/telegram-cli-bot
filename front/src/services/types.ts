@@ -27,6 +27,11 @@ export type ChatMessage = {
   state?: "done" | "streaming" | "error";
 };
 
+export type ChatStatusUpdate = {
+  elapsedSeconds?: number;
+  previewText?: string;
+};
+
 export type SystemScript = {
   scriptName: string;
   displayName: string;

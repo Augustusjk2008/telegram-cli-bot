@@ -193,6 +193,10 @@ class TestShouldResetClaudeSession:
         result = should_reset_claude_session("error output", 1)
         assert isinstance(result, bool)
 
+    def test_session_id_not_found_marker(self):
+        result = should_reset_claude_session("Error: Session ID not found", 1)
+        assert result is True
+
 
 class TestShouldMarkClaudeSessionInitialized:
     """测试 should_mark_claude_session_initialized"""

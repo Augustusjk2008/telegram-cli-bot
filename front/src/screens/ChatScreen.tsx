@@ -10,6 +10,15 @@ type Props = {
   client?: WebBotClient;
 };
 
+function getCompactScriptTitle(script: SystemScript) {
+  const source = (script.displayName || script.description || script.scriptName).trim();
+  if (!source) {
+    return script.scriptName;
+  }
+  const firstSentence = source.split(/[。.!?！？;\n]/)[0]?.trim();
+  return firstSentence || script.scriptName;
+}
+
 export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props) {
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -96,15 +105,38 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
     setIsStreaming(true);
 
     try {
-      const finalMessage = await client.sendMessage(botAlias, text, (chunk) => {
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === assistantId
-              ? { ...item, text: item.text + chunk, state: "streaming" }
-              : item,
-          ),
-        );
-      });
+      let usingPreviewReplace = false;
+      const finalMessage = await client.sendMessage(
+        botAlias,
+        text,
+        (chunk) => {
+          if (usingPreviewReplace) {
+            return;
+          }
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === assistantId
+                ? { ...item, text: item.text + chunk, state: "streaming" }
+                : item,
+            ),
+          );
+        },
+        (status) => {
+          if (typeof status.elapsedSeconds === "number") {
+            setElapsedSeconds((prev) => Math.max(prev, status.elapsedSeconds || 0));
+          }
+          if (status.previewText) {
+            usingPreviewReplace = true;
+            setItems((prev) =>
+              prev.map((item) =>
+                item.id === assistantId
+                  ? { ...item, text: status.previewText || item.text, state: "streaming" }
+                  : item,
+              ),
+            );
+          }
+        },
+      );
 
       setItems((prev) => prev.map((item) => (item.id === assistantId ? finalMessage : item)));
     } catch (err) {
@@ -299,20 +331,22 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
                 当前没有可执行脚本
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="max-h-[60vh] overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-2">
                 {scripts.map((script) => (
                   <button
                     key={script.scriptName}
                     type="button"
                     onClick={() => void handleRunScript(script)}
                     disabled={runningScriptName === script.scriptName}
-                    className="w-full rounded-2xl border border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                    className="min-h-[68px] rounded-2xl border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-strong)] disabled:opacity-60"
                   >
-                    <div className="font-medium">{script.displayName}</div>
-                    <div className="mt-1 text-sm text-[var(--muted)]">{script.description}</div>
-                    <div className="mt-1 text-xs text-[var(--muted)] break-all">{script.path}</div>
+                    <div className="text-sm font-medium leading-5 text-[var(--text)]">
+                      {runningScriptName === script.scriptName ? "执行中..." : getCompactScriptTitle(script)}
+                    </div>
                   </button>
                 ))}
+                </div>
               </div>
             )}
           </div>
