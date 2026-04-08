@@ -625,7 +625,12 @@ async def bot_goto_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     user_id = update.effective_user.id
-    session = get_or_create_session(main_bot_id, user_id, manager.main_profile.alias)
+    session = get_or_create_session(
+        main_bot_id,
+        manager.main_profile.alias,
+        user_id,
+        default_working_dir=manager.main_profile.working_dir,
+    )
     
     # 临时切换工作目录（不修改配置文件）
     # 如果 session 没有设置过工作目录，使用主 bot 的默认工作目录

@@ -4,7 +4,7 @@ import logging
 
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-from .basic import start, reset, change_directory, print_working_directory, list_directory, show_history, handle_keyboard_command
+from .basic import start, reset, kill_process, change_directory, print_working_directory, list_directory, show_history, handle_keyboard_command
 from .shell import execute_shell, remove_file
 from .file import upload_help, handle_document, download_file, cat_file, head_file
 from .file_browser import show_file_browser, handle_file_browser_callback
@@ -59,6 +59,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
     """注册 CLI 模式的 handlers"""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
+    application.add_handler(CommandHandler("kill", kill_process))
     application.add_handler(CommandHandler("cd", change_directory))
     application.add_handler(CommandHandler("pwd", print_working_directory))
     application.add_handler(CommandHandler("files", show_file_browser))

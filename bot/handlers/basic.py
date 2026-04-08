@@ -108,7 +108,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{msg('greeting', 'admin_cmd_start_stop')}\n"
             f"{msg('greeting', 'admin_cmd_set_cli')}\n"
             f"{msg('greeting', 'admin_cmd_set_workdir')}\n"
-            f"{msg('greeting', 'admin_cmd_kill')}"
+            f"{msg('greeting', 'admin_cmd_kill')}\n"
+            f"{msg('greeting', 'admin_cmd_params')}\n"
+            f"{msg('greeting', 'admin_cmd_params_set')}\n"
+            f"{msg('greeting', 'admin_cmd_params_reset')}\n"
+            f"{msg('greeting', 'admin_cmd_params_help')}"
         )
 
     native_session_block = ""
@@ -142,6 +146,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{msg('greeting', 'commands')}\n"
         f"{msg('greeting', 'cmd_start')}\n"
         f"{msg('greeting', 'cmd_reset')}\n"
+        f"{msg('greeting', 'cmd_kill')}\n"
         f"{msg('greeting', 'cmd_cd')}\n"
         f"{msg('greeting', 'cmd_pwd')}\n"
         f"{msg('greeting', 'cmd_files')}\n"

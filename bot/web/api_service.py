@@ -26,6 +26,7 @@ from bot.cli import (
     should_mark_claude_session_initialized,
     should_reset_claude_session,
     should_reset_codex_session,
+    should_reset_kimi_session,
 )
 from bot.config import CLI_EXEC_TIMEOUT
 from bot.handlers.admin import execute_script, list_available_scripts
@@ -34,7 +35,7 @@ from bot.handlers.shell import strip_ansi_escape
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
-from bot.sessions import get_or_create_session, reset_session, sessions, sessions_lock
+from bot.sessions import get_or_create_session, reset_session, sessions, sessions_lock, update_bot_working_dir
 from bot.utils import is_dangerous_command, is_safe_filename
 
 
@@ -225,6 +226,7 @@ def get_working_directory(manager: MultiBotManager, alias: str, user_id: int) ->
 def change_working_directory(manager: MultiBotManager, alias: str, user_id: int, new_path: str) -> dict[str, Any]:
     if not new_path or not new_path.strip():
         _raise(400, "missing_path", "路径不能为空")
+    profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     path = new_path.strip()
     if not os.path.isabs(path):
@@ -232,6 +234,16 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isdir(path):
         _raise(404, "dir_not_found", f"目录不存在: {path}")
+
+    if alias != manager.main_profile.alias:
+        try:
+            profile.working_dir = path
+            manager._save_profiles()
+            update_bot_working_dir(alias, path)
+        except Exception as exc:
+            _raise(500, "save_workdir_failed", str(exc))
+
+    session.clear_session_ids()
     session.working_dir = path
     return {"working_dir": session.working_dir}
 
@@ -334,6 +346,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         codex_session_id: Optional[str] = None
         cli_session_id: Optional[str] = None
         resume_session = False
+        new_kimi_session_id_created = False
         if cli_type == "codex":
             codex_session_id = session.codex_session_id
             cli_session_id = session.codex_session_id
@@ -341,6 +354,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         elif cli_type == "kimi":
             if not session.kimi_session_id:
                 session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
+                new_kimi_session_id_created = True
             cli_session_id = session.kimi_session_id
         elif cli_type == "claude":
             if not session.claude_session_id:
@@ -395,29 +409,45 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         with session._lock:
             session.process = process
 
+        session_id_changed = False
         if cli_type == "codex":
             response, thread_id, returncode, timed_out = await _communicate_codex_process(process)
             with session._lock:
-                if timed_out:
-                    session.codex_session_id = None
-                elif thread_id:
-                    session.codex_session_id = thread_id
+                if thread_id:
+                    if session.codex_session_id != thread_id:
+                        session.codex_session_id = thread_id
+                        session_id_changed = True
                 elif should_reset_codex_session(codex_session_id, response, returncode):
-                    session.codex_session_id = None
+                    if session.codex_session_id is not None:
+                        session.codex_session_id = None
+                        session_id_changed = True
         else:
             response, returncode, timed_out = await _communicate_process(process)
             response = response.strip() or (msg("chat", "timeout_no_output") if timed_out else msg("chat", "no_output"))
             if cli_type == "claude":
                 with session._lock:
                     if timed_out:
-                        session.claude_session_id = None
-                        session.claude_session_initialized = False
+                        pass
                     elif should_mark_claude_session_initialized(response, returncode):
-                        session.claude_session_initialized = True
+                        if not session.claude_session_initialized:
+                            session.claude_session_initialized = True
+                            session_id_changed = True
                     elif should_reset_claude_session(response, returncode):
-                        session.claude_session_id = None
-                        session.claude_session_initialized = False
+                        if session.claude_session_id is not None:
+                            session.claude_session_id = None
+                            session.claude_session_initialized = False
+                            session_id_changed = True
+            elif cli_type == "kimi":
+                with session._lock:
+                    if not timed_out and should_reset_kimi_session(response, returncode):
+                        if session.kimi_session_id is not None:
+                            session.kimi_session_id = None
+                            session_id_changed = True
+                    elif not timed_out and new_kimi_session_id_created and session.kimi_session_id is not None:
+                        session_id_changed = True
 
+        if session_id_changed:
+            session.persist()
         session.add_to_history("assistant", response)
         return {
             "output": response,

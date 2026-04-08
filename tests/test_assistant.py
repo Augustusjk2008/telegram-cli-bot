@@ -84,6 +84,13 @@ class TestRegisterHandlers:
         # 应该注册了多个 handler
         assert app.add_handler.call_count > 0
 
+        command_handlers = [
+            call.args[0]
+            for call in app.add_handler.call_args_list
+            if hasattr(call.args[0], "commands")
+        ]
+        assert any("kill" in handler.commands for handler in command_handlers)
+
     def test_register_assistant_handlers(self):
         """测试注册助手模式的 handlers"""
         from bot.handlers import register_handlers
@@ -165,3 +172,48 @@ class TestMultiBotManagerWithAssistant:
             assert profile.bot_mode == "assistant"
             assert profile.alias == "test_assistant"
             assert "test_assistant" in manager.managed_profiles
+
+    def test_load_legacy_webcli_profile_falls_back_to_cli(self, temp_dir):
+        """测试旧 webcli 配置加载时显式回退到 cli"""
+        import json
+        from bot.manager import MultiBotManager
+
+        config_file = temp_dir / "test_bots.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "bots": [
+                        {
+                            "alias": "legacy_web",
+                            "token": "test_token_456",
+                            "bot_mode": "webcli",
+                            "working_dir": str(temp_dir),
+                            "enabled": True,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_token", working_dir=str(temp_dir)), str(config_file))
+        assert manager.managed_profiles["legacy_web"].bot_mode == "cli"
+
+    @pytest.mark.asyncio
+    async def test_add_webcli_bot_is_rejected(self, temp_dir):
+        """测试新增 webcli bot 被显式拒绝"""
+        from bot.manager import MultiBotManager
+
+        config_file = temp_dir / "test_bots.json"
+        manager = MultiBotManager(
+            BotProfile(alias="main", token="main_token", working_dir=str(temp_dir)),
+            str(config_file),
+        )
+
+        with pytest.raises(ValueError, match="webcli"):
+            await manager.add_bot(
+                alias="legacy_web",
+                token="test_token",
+                working_dir=str(temp_dir),
+                bot_mode="webcli",
+            )

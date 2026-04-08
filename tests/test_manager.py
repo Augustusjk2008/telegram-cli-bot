@@ -7,6 +7,7 @@ Bot 管理器测试
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -146,6 +147,18 @@ class TestManagerValidation:
         m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
         with pytest.raises(ValueError):
             m._validate_alias("-invalid")
+
+    def test_handle_network_error_exhausted_checks_main_bot_id(self, temp_dir: Path):
+        profile = BotProfile(alias="main", token="tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
+        m._main_bot_network_error_count = 9
+        m.applications["main"] = MagicMock(bot_data={"bot_id": 123})
+
+        with patch("bot.manager.is_bot_processing", autospec=True, return_value=False) as mock_processing, \
+             patch("bot.config.RESTART_EVENT", None):
+            m._handle_network_error_exhausted("main")
+
+        mock_processing.assert_called_once_with(123)
 
 
 class TestManagerGetProfile:

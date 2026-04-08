@@ -1,14 +1,20 @@
 # Bot Data Directory
 
-This directory stores persistent data for the assistant bot.
+This directory stores local runtime data used by assistant mode.
 
 ## Files
 
-### memories.json
+### `memories.json`
 
-Long-term memory storage for the assistant bot. Contains user information extracted from conversations.
+Primary long-term memory store for assistant mode.
 
-**Format:**
+- created and updated locally
+- keyed by `user_id`
+- safe to inspect manually
+- should remain valid JSON if edited by hand
+
+Example shape:
+
 ```json
 {
   "version": "1.0",
@@ -26,35 +32,35 @@ Long-term memory storage for the assistant bot. Contains user information extrac
 }
 ```
 
-**Categories:**
-- `personal`: Personal information
-- `preference`: User preferences
-- `work`: Work-related information
-- `fact`: Important facts
-- `other`: Other information
+Supported categories:
 
-**Manual Editing:**
-This file can be manually edited. Changes take effect immediately without restart.
+- `personal`
+- `preference`
+- `work`
+- `fact`
+- `other`
 
-See `memories.example.json` for a complete example.
+### `memories.example.json`
+
+Reference example for the same structure.
 
 ## Privacy
 
-All data in this directory is stored locally and never uploaded to the cloud. Each user's data is isolated by `user_id`.
+Data in this directory stays local to the machine. The assistant code isolates memory records by `user_id`.
 
 ## Backup
 
-It's recommended to backup this directory regularly:
+PowerShell examples:
 
-```bash
+```powershell
 # Backup
-cp -r bot/data bot/data.backup
+Copy-Item bot/data bot/data.backup -Recurse -Force
 
 # Restore
-cp -r bot/data.backup/* bot/data/
+Copy-Item bot/data.backup/* bot/data/ -Recurse -Force
 ```
 
-## Documentation
+## Notes
 
-- Quick Start: `docs/MEMORY_QUICKSTART.md`
-- Technical Details: `docs/ASSISTANT_PHASE2.md`
+- There is no additional generated documentation under `docs/` for this directory right now.
+- If you change the schema in code, update this file and `memories.example.json` together.

@@ -102,6 +102,31 @@ async def _terminate_process_tree(process: subprocess.Popen):
     await loop.run_in_executor(None, _terminate_process_tree_sync, process)
 
 
+def _wait_for_process_exit_sync(process: subprocess.Popen, timeout: float) -> Optional[int]:
+    try:
+        return process.wait(timeout=timeout)
+    except Exception:
+        return None
+
+
+async def _resolve_process_returncode(process: subprocess.Popen, current_returncode: Optional[int], wait_timeout: float = 1.0) -> int:
+    if current_returncode is not None:
+        return current_returncode
+
+    polled = process.poll()
+    if polled is not None:
+        return polled
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _wait_for_process_exit_sync, process, wait_timeout)
+
+    polled = process.poll()
+    if polled is not None:
+        return polled
+
+    return -1
+
+
 async def collect_cli_output(
     process: subprocess.Popen, update: Update, session=None
 ) -> Tuple[str, int, bool]:
@@ -256,11 +281,7 @@ async def collect_cli_output(
                 break
 
         raw_output = ''.join(output_lines)
-        returncode = returncode_container[0]
-        if returncode is None:
-            returncode = process.poll()
-        if returncode is None:
-            returncode = -1
+        returncode = await _resolve_process_returncode(process, returncode_container[0])
         was_stopped = _is_stop_requested(session)
 
         final_text = raw_output if raw_output.strip() else msg("chat", "no_output")
@@ -454,11 +475,7 @@ async def stream_codex_json_output(
                 break
 
         raw_output = ''.join(output_lines)
-        returncode = returncode_container[0]
-        if returncode is None:
-            returncode = process.poll()
-        if returncode is None:
-            returncode = -1
+        returncode = await _resolve_process_returncode(process, returncode_container[0])
         was_stopped = _is_stop_requested(session)
 
         final_text, thread_id = parse_codex_json_output(raw_output)
@@ -533,11 +550,7 @@ async def stream_codex_json_output(
 
         # 尝试解析已收集的输出，而不是丢弃
         raw_output = ''.join(output_lines)
-        returncode = returncode_container[0]
-        if returncode is None:
-            returncode = process.poll()
-        if returncode is None:
-            returncode = -1
+        returncode = await _resolve_process_returncode(process, returncode_container[0])
 
         if raw_output.strip():
             final_text, thread_id = parse_codex_json_output(raw_output)

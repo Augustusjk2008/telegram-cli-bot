@@ -140,8 +140,13 @@ class MultiBotManager:
         )
 
         if self._main_bot_network_error_count >= 10:
+            main_app = self.applications.get(self.main_profile.alias)
+            main_bot_id = main_app.bot_data.get("bot_id") if main_app else None
+            if not isinstance(main_bot_id, int):
+                logger.warning("主bot连续网络错误达到10次，但无法确定 bot_id，暂不触发重启")
+                return
             # 检查是否有活跃的CLI会话
-            if not is_bot_processing():
+            if not is_bot_processing(main_bot_id):
                 logger.critical("主bot连续网络错误达到10次且无活跃会话，触发程序重启")
                 import bot.config as config
                 if config.RESTART_EVENT:
@@ -321,6 +326,9 @@ class MultiBotManager:
                 "enabled": bool(item.get("enabled", True)),
                 "bot_mode": str(item.get("bot_mode", "cli")).strip().lower(),
             }
+            if profile_data["bot_mode"] == "webcli":
+                logger.warning("子Bot `%s` 的 webcli 模式已弃用，自动回退为 cli", alias)
+                profile_data["bot_mode"] = "cli"
             # 如果有 cli_params 配置，一并传递
             if "cli_params" in item:
                 profile_data["cli_params"] = item["cli_params"]
@@ -573,8 +581,11 @@ class MultiBotManager:
         working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
         bot_mode = (bot_mode or "cli").strip().lower()
 
-        if bot_mode not in ("cli", "assistant", "webcli"):
-            raise ValueError(f"bot_mode 必须是 'cli'、'assistant' 或 'webcli'，当前值: {bot_mode}")
+        if bot_mode == "webcli":
+            raise ValueError("webcli 模式已弃用，请使用 'cli' 或 'assistant'")
+
+        if bot_mode not in ("cli", "assistant"):
+            raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {bot_mode}")
 
         if not os.path.isdir(working_dir):
             raise ValueError(f"工作目录不存在: {working_dir}")

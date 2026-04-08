@@ -1,135 +1,124 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working in this repository.
 
-## Project Overview
+## Project Snapshot
 
-Telegram CLI Bridge — a Telegram bot that bridges user messages to AI coding CLI tools (Kimi, Claude Code, Codex). Supports multiple bot instances managed from a single main bot. Written in Python, runs on Windows.
+Telegram CLI Bridge is a Windows-first Python Telegram bot that forwards user messages to local AI coding CLIs:
+
+- `kimi`
+- `claude`
+- `codex`
+
+The repository supports one main bot plus multiple managed sub-bots loaded from `managed_bots.json`.
 
 ## Commands
 
 ```bash
-# Run the bot
+# Start the bot
 python -m bot
 
-# Run all tests
-python -m pytest tests/ -v
+# Run the full test suite
+python -m pytest tests -q
 
-# Run a single test file
-python -m pytest tests/test_cli.py -v
-
-# Run a single test by name
-python -m pytest tests/test_cli.py::test_function_name -v
-
-# Run handler tests
-python -m pytest tests/test_handlers/ -v
-
-# Install dependencies (use the venv)
-pip install -r requirements.txt
+# Run a focused test file
+python -m pytest tests/test_handlers/test_chat.py -q
+python -m pytest tests/test_network_traffic.py -q
 ```
 
-There is no linter, type checker, or build step configured. No `pyproject.toml` or `setup.cfg`.
+Do not assume the committed `venv/` is usable on every machine. Prefer the active Python environment unless you have verified the local virtualenv.
 
-## Architecture
+## Runtime Shape
 
-### Entry Point & Lifecycle
+### Entry Point
 
-`bot/__main__.py` -> `bot/main.py:main()` — runs `asyncio.run(run_all_bots())` in a retry loop. Supports process-level restart via `os.execv` (triggered by `/restart` command). The restart signal flows through `config.RESTART_REQUESTED` / `config.RESTART_EVENT`.
+- `bot/__main__.py` imports `bot/main.py:main()`
+- `main()` runs `asyncio.run(run_all_bots())` inside a restart loop
+- `/restart` uses `config.RESTART_REQUESTED` and `config.RESTART_EVENT`, then re-execs the process
 
-### Multi-Bot System
+### Multi-Bot Manager
 
-`bot/manager.py:MultiBotManager` is the central orchestrator. It manages:
-- One **main bot** (from `.env` config) with admin privileges
-- Zero or more **managed sub-bots** (from `managed_bots.json`) without admin commands
-- Each bot is a separate `telegram.ext.Application` instance with its own polling loop
-- A watchdog task auto-restarts dead polling loops
-- Supports three bot modes: `cli` (default), `assistant`, and `webcli` (Kimi Web)
+`bot/manager.py:MultiBotManager` is the central orchestrator.
 
-The main bot vs sub-bot distinction is controlled by `bot_data["is_main"]` on each Application, which determines whether admin handler commands are registered (`register_handlers(app, include_admin=is_main)`).
+- Main bot comes from `.env`
+- Managed bots come from `managed_bots.json`
+- Each bot has its own `telegram.ext.Application`
+- A watchdog restarts polling when an application's updater stops unexpectedly
 
-### Session Model
+### Active Bot Modes
 
-Sessions are keyed by `(bot_id, user_id)` tuple in `bot/sessions.py`. Each `UserSession` (in `bot/models.py`) tracks:
-- Working directory, conversation history, processing state
-- CLI-specific session IDs (`codex_session_id`, `kimi_session_id`, `claude_session_id`) for conversation continuity
-- A `subprocess.Popen` reference for the active CLI process
-- Thread-safe via `threading.Lock` (subprocess runs in executor threads)
+Two modes are active in the Telegram runtime:
 
-### Session Persistence
+- `cli`: default mode, forwards messages to local CLI tools
+- `assistant`: direct API-backed assistant mode with memory tools
 
-Session IDs are automatically persisted to `.session_store.json` (in the same directory as `managed_bots.json`) to survive program restarts:
+There is still legacy `webcli` / `bot/web/*` code in the tree, but the current Telegram handler registration falls back `webcli` to normal CLI mode. Treat it as legacy, not as a current production path.
 
-- **Storage key**: `(bot_id, user_id)` — each bot-user pair has its own session IDs
-- **Automatic persistence**: Session IDs are saved when they change (after each AI response) and on graceful shutdown
-- **Automatic restoration**: Session IDs are automatically restored when a session is created (regardless of working directory)
-- **Clear on directory change**: `/cd` command clears all session IDs (calls `session.clear_session_ids()`), as CLI tools typically bind sessions to a specific working directory
-- **Clear on reset**: `/reset` command clears both the in-memory session and the persisted session data
+## Core Modules
 
-Key files:
-- `bot/session_store.py` — persistence layer (JSON file operations), storage key is `(bot_id, user_id)`
-- `bot/sessions.py` — `save_all_sessions()`, `_save_session_to_store()` integration
-- `bot/models.py` — `UserSession.persist()`, `UserSession.clear_session_ids()` methods
-- `bot/handlers/chat.py` — calls `session.persist()` after session ID changes
+### Sessions
 
-### CLI Abstraction Layer
+`bot/sessions.py` stores sessions by `(bot_id, user_id)`.
 
-`bot/cli.py` handles three CLI backends with a unified interface:
-- **Kimi**: uses `--quiet -y --thinking -S <session_id> -p <prompt>`
-- **Claude Code**: uses `-p --dangerously-skip-permissions --effort high` with `--session-id` / `-r` for session resume
-- **Codex**: uses `exec` subcommand with `--json` output, `--dangerously-bypass-approvals-and-sandbox`
+Each `UserSession` in `bot/models.py` tracks:
 
-Key functions: `build_cli_command()` constructs args per CLI type, `resolve_cli_executable()` resolves paths (with Windows .cmd/.bat fallback and npm global dir search), `should_reset_*_session()` detects stale sessions from error output.
+- current working directory
+- conversation history
+- processing state and active subprocess
+- per-CLI session ids (`codex`, `kimi`, `claude`)
 
-### Handler Structure
+Only session ids are persisted, in `.session_store.json`. Full chat history is in memory only.
 
-`bot/handlers/__init__.py:register_handlers()` wires all command and message handlers based on `bot_mode`:
+### CLI Chat Flow
 
-**CLI Mode (default):**
-- `basic.py` — `/start`, `/reset`, `/kill`, `/cd`, `/pwd`, `/ls`, `/history`
-- `chat.py` — text message handler; spawns CLI subprocess, reads output non-streaming via `process.communicate()` in executor, sends chunked responses to Telegram
-- `shell.py` — `/exec` for direct shell commands (with dangerous command blocklist)
-- `file.py` — file upload/download via Telegram
-- `voice.py` — voice/audio message handler; uses Whisper for speech-to-text, then forwards to `chat.py` (optional, requires `openai-whisper` + `pydub` + FFmpeg)
-- `admin.py` — `/bot_add`, `/bot_remove`, `/bot_start`, `/bot_stop`, `/bot_list`, `/bot_set_cli`, `/bot_set_workdir`, `/restart` (main bot only)
+- Telegram CLI chat path: `bot/handlers/chat.py`
+- Command construction and response parsing: `bot/cli.py`, `bot/cli_params.py`
+- Supported CLI types: `kimi`, `claude`, `codex`
 
-**Assistant Mode:**
-- `assistant.py` — AI assistant with direct API calls, memory management, tool usage
-- Commands: `/memory`, `/memory_add`, `/memory_search`, `/memory_delete`, `/memory_clear`, `/tool_stats`
+Important behavior:
 
-**Kimi Web Mode (webcli):**
-- `kimi_web.py` — launches `kimi web` and exposes it via ngrok tunnel
-- Commands: `/start` (启动 Kimi Web + ngrok), `/stop` (停止服务), `/status` (查看状态)
-- Automatically parses Kimi's local URL from startup output and forwards it to public internet
+- user text starting with `//` is rewritten to `/...` before sending to the CLI
+- Codex runs with JSON output and is parsed by `parse_codex_json_output()`
+- long Telegram replies are chunked with `split_text_into_chunks()`
 
-### Voice Recognition (Optional Feature)
+### Handlers
 
-`bot/whisper_service.py` provides speech-to-text via OpenAI Whisper (local model). Enabled via `WHISPER_ENABLED=true` in `.env`. Requires:
-- Python packages: `openai-whisper`, `pydub`
-- System dependency: FFmpeg
+`bot/handlers/__init__.py` wires handlers based on `bot_mode`.
 
-Key features:
-- Supports Telegram voice messages and audio files
-- Converts .oga → .wav → text
-- Configurable model size (tiny/base/small/medium/large)
-- Graceful degradation: if dependencies missing, voice handler is skipped without affecting other features
-- See `docs/VOICE_QUICKSTART.md` for setup instructions
+Current CLI-mode command surface includes:
 
-### Context Helpers
+- `/start`, `/reset`, `/cd`, `/pwd`, `/files`, `/ls`, `/history`
+- `/exec`, `/rm`
+- `/upload`, `/download`, `/cat`, `/head`
+- main bot only: `/restart`, `/bot_*`, `/system`, `/bot_params*`
 
-`bot/context_helpers.py` extracts bot/session/profile info from Telegram's `Update`/`Context` objects. The `MultiBotManager` instance is stored at `context.application.bot_data["manager"]`.
+### Voice
 
-## Key Conventions
+`bot/handlers/voice.py` and `bot/whisper_service.py` provide optional voice transcription.
 
-- All user-facing strings are in Chinese
-- Config is loaded from environment variables (via `.env` + `python-dotenv`) in `bot/config.py`
-- The `//` prefix in user messages is converted to `/` to forward CLI-native subcommands
-- Telegram message output uses HTML parse mode; `safe_edit_text()` auto-falls back to plain text on parse errors
-- Long outputs are split into chunks via `split_text_into_chunks()` with code block boundary awareness
-- CLI process timeout is configurable via `CLI_EXEC_TIMEOUT` env var (default 4000s)
+Requirements:
 
-## Testing
+- `openai-whisper`
+- `pydub`
+- FFmpeg
 
-Tests use `pytest` + `pytest-asyncio` with `unittest.mock`. The `conftest.py` provides:
-- `mock_update` / `mock_context` fixtures with pre-configured `application.bot_data` structure matching `MultiBotManager._start_profile()`
-- `clean_sessions` autouse fixture that clears the global session store before/after each test
-- `ALLOWED_USER_IDS` is typically patched to `[]` (allow all) or a specific list for auth tests
+If those dependencies are missing, the voice handler is skipped and the rest of the bot still works.
+
+## Conventions
+
+- User-facing strings are Chinese
+- Config is loaded from environment variables in `bot/config.py`
+- Telegram output primarily uses HTML parse mode
+- The repository has tests, but no linter or type checker configured
+
+## Testing Notes
+
+Tests use `pytest`, `pytest-asyncio`, and `unittest.mock`.
+
+Useful fixtures from `tests/conftest.py`:
+
+- `mock_update`
+- `mock_context`
+- `clean_sessions`
+
+As of the current local review, the suite is mostly green but not fully clean; see `REVIEW.md` for the latest confirmed failures and live bug notes.

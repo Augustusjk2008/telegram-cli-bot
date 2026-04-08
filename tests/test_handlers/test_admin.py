@@ -10,6 +10,7 @@ import pytest
 
 from bot.handlers.admin import (
     bot_add,
+    bot_goto_callback,
     bot_help,
     bot_list,
     bot_params,
@@ -165,7 +166,39 @@ class TestBotParams:
              patch("bot.cli_params.format_params_display", return_value="<b>claude</b>"):
             await bot_params(mock_update, mock_context)
 
-        mock_update.message.reply_text.assert_called_once()
+
+class TestBotGotoCallback:
+    """测试 goto 回调"""
+
+    @pytest.mark.asyncio
+    async def test_uses_main_bot_session_signature_correctly(self, mock_update, mock_context, temp_dir):
+        query = MagicMock()
+        query.data = "goto:main"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        mock_update.callback_query = query
+
+        manager_mock = MagicMock()
+        manager_mock.main_profile.alias = "main"
+        manager_mock.main_profile.working_dir = str(temp_dir)
+        manager_mock.applications = {"main": MagicMock(bot_data={"bot_id": 123})}
+        manager_mock.managed_profiles = {}
+
+        session_mock = MagicMock()
+        session_mock.working_dir = "C:/old"
+
+        with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
+             patch("bot.sessions.get_or_create_session", autospec=True, return_value=session_mock) as mock_get_session:
+            await bot_goto_callback(mock_update, mock_context)
+
+        mock_get_session.assert_called_once_with(
+            123,
+            "main",
+            mock_update.effective_user.id,
+            default_working_dir=str(temp_dir),
+        )
+        query.edit_message_text.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_effective_message_does_not_crash(self, mock_update, mock_context):

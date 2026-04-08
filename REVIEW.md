@@ -1,172 +1,118 @@
-# Code Review: Bugs, Redundancy, and UX Improvements
+# 代码审查记录
 
----
+更新日期：2026-04-08
 
-## 1. Bugs
+本文件记录 2026-04-08 这轮代码审查里发现并已完成修复、验证的问题，避免后续重复排查同一批历史缺陷。
 
-### B1 — [CRITICAL] Blocking event loop in `_terminate_process_tree` (`handlers/chat.py:59`)
-Declared `async def` but contains purely synchronous blocking calls:
-- `process.wait(timeout=3)` — blocks up to 3 s
-- `subprocess.run(["taskkill", ...], timeout=5)` — blocks up to 5 s
-- `process.kill()` + `process.wait(timeout=2)` — blocks up to 2 more s
+## 本轮已修复并验证
 
-Total potential block: **~10 s** on the asyncio event loop, freezing ALL bots during that window.
+### 1. `collect_cli_output()` 正常退出时偶发返回 `-1`
 
-**Fix:** Extract sync logic to a plain function; wrap with `loop.run_in_executor(None, ...)` inside the async version.
+- 修复位置：`bot/handlers/chat.py`
+- 处理方式：为 CLI 进程退出增加显式等待逻辑，在读取线程结束但 `poll()` 尚未回填时，再补一次短暂 `wait()`
+- 验证：
+  - `tests/test_handlers/test_chat.py`
+  - 新增了等待回填 returncode 的定向测试
 
----
+### 2. Web API `/cd` 没有复用 Telegram `/cd` 的会话清理语义
 
-### B2 — [CRITICAL] Session store read-modify-write is not atomic (`session_store.py:89`)
-`save_session()` calls `load_session_ids()` (acquires+releases `_store_lock`), then `save_session_ids(data)` (acquires+releases `_store_lock`) as two separate lock acquisitions. Between the two calls, another thread can write the file, causing silent data loss. Same issue in `remove_session` and `remove_all_sessions_for_bot`.
+- 修复位置：`bot/web/api_service.py`
+- 处理方式：
+  - 切换工作目录后执行 `session.clear_session_ids()`
+  - 子 Bot 同步持久化 `working_dir`
+  - 同步更新当前 alias 下已存在 session 的目录
+- 验证：
+  - `tests/test_web_api.py::test_change_working_directory_clears_session_ids`
 
-**Fix:** Hold `_store_lock` across the entire read-modify-write in each function.
+### 3. Web API CLI 聊天路径没有持久化 session，也没有 Kimi 失效恢复
 
----
+- 修复位置：`bot/web/api_service.py`
+- 处理方式：
+  - 增加 `should_reset_kimi_session()` 分支
+  - 在 session id 变更时调用 `session.persist()`
+  - 保持 Claude / Codex / Kimi 三条分支的行为和 Telegram 路径一致
+- 验证：
+  - `tests/test_web_api.py::test_run_cli_chat_resets_and_persists_kimi_session`
 
-### B3 — [HIGH] `threading.Lock` acquired synchronously in async handlers (`handlers/chat.py:613, 754`)
-`with session._lock:` is called directly inside coroutines (`handle_text_message`, `handle_stop_callback`). `session._lock` is a `threading.Lock`, not an `asyncio.Lock`. If another thread holds the lock, this blocks the asyncio event loop thread.
+### 4. 主 bot 网络错误兜底路径会因为缺参数抛 `TypeError`
 
-**Analysis after tracing all usages:** The lock is *never held across an `await`* in any handler — it's always acquired, sync work done, released, then `await` happens. The only possible contention is `terminate_process()` (holds lock up to 5s) called from `cleanup_expired_sessions`. However, `cleanup_expired_sessions` only touches sessions that have been idle for `SESSION_TIMEOUT` seconds — by definition not the same session an active user is messaging. In practice, the risk is negligible.
+- 修复位置：`bot/manager.py`
+- 处理方式：
+  - 从主 bot application 读取真实 `bot_id`
+  - 只有拿到有效 `bot_id` 才调用 `is_bot_processing(bot_id)`
+  - 取不到 `bot_id` 时记录警告并跳过重启判断
+- 验证：
+  - `tests/test_manager.py::TestManagerValidation::test_handle_network_error_exhausted_checks_main_bot_id`
 
-**Status:** Won't fix without a larger refactor (switching to `asyncio.Lock` would require making `terminate_process` async, which ripples through sync call sites).
+### 5. `/kill` 存在处理函数但没有注册命令
 
----
+- 修复位置：`bot/handlers/__init__.py`
+- 处理方式：补充 `CommandHandler("kill", kill_process)`
+- 同步修正：
+  - `bot/messages.py`
+  - `bot/messages.json`
+- 验证：
+  - `tests/test_assistant.py::TestRegisterHandlers::test_register_cli_handlers`
+  - `tests/test_handlers/test_basic.py`
 
-### B4 — [HIGH] `import select` and `import os` inside inner function (`handlers/chat.py:131`)
-`select` and `os` are imported inside `read_stdout()` which is called in a tight loop of a background thread. The `os` module is already imported at the top of the file. The `select` import is also redundant per call. Minor performance cost, but also a code smell.
+### 6. `webcli` 仍可被创建，但运行时会静默退回 CLI
 
-**Fix:** Move both imports to the top of the file.
+- 修复位置：`bot/manager.py`
+- 处理方式：
+  - 新增 bot 时直接拒绝 `webcli`
+  - 读取历史配置时将旧 `webcli` profile 明确回退为 `cli` 并记录 warning
+- 验证：
+  - `tests/test_assistant.py::TestMultiBotManagerWithAssistant::test_load_legacy_webcli_profile_falls_back_to_cli`
+  - `tests/test_assistant.py::TestMultiBotManagerWithAssistant::test_add_webcli_bot_is_rejected`
 
----
+### 7. `network_traffic.ps1` 和对应测试存在编码兼容问题
 
-### B5 — [MEDIUM] `get_profile` silently falls back to `main_profile` for unknown aliases (`manager.py:299`)
-```python
-def get_profile(self, alias: str) -> BotProfile:
-    if alias == self.main_profile.alias:
-        return self.main_profile
-    return self.managed_profiles.get(alias, self.main_profile)  # silent fallback!
+- 修复位置：
+  - `scripts/network_traffic.ps1`
+  - `tests/test_network_traffic.py`
+  - `pytest.ini`
+- 处理方式：
+  - 脚本输出改为 ASCII 友好的稳定字段
+  - 测试改成按 bytes 读取，再按本机编码/UTF-8/GB18030 回退解码
+  - 注册 `smoke` marker，并固定 `pytest-asyncio` loop scope
+- 验证：
+  - `tests/test_network_traffic.py`
+
+### 8. 主 Bot 切换回调在主会话创建时使用了错误的函数签名
+
+- 修复位置：`bot/handlers/admin.py`
+- 处理方式：`bot_goto_callback()` 改为使用 `get_or_create_session(bot_id, alias, user_id, default_working_dir=...)`
+- 验证：
+  - `tests/test_handlers/test_admin.py::TestBotGotoCallback::test_uses_main_bot_session_signature_correctly`
+
+## 测试结果
+
+本轮实际执行命令：
+
+```bash
+python -m pytest tests -q
 ```
-Any caller passing a typo or stale alias silently gets the main profile instead of an error, which can cause commands to be applied to the wrong bot.
 
-**Fix:** Return `None` or raise `KeyError` for unknown aliases; update callers to handle the miss explicitly.
+结果：
 
----
+- `245` 通过
+- `0` 失败
 
-### B6 — [MEDIUM] Dead backward-compatibility code path always skipped (`cli.py:133`)
-In `build_cli_command`, `handle_text_message` always passes `profile.cli_params`, so the `if params_config is not None:` branch is always taken from that path. However, `api_service.py` and `test_cli.py` call `build_cli_command` without `params_config`, so the fallback is still reachable. The fallback block is a maintenance burden — it duplicates all three CLI command builders.
+附带观察：
 
-**Fix:** Update `api_service.py` to pass a `CliParamsConfig`, update `test_cli.py`, then remove the fallback block.
+- `pytest` 退出时，当前 Windows 环境偶发出现 `pytest-current` 临时目录清理的 `PermissionError`；它发生在 atexit 阶段，不影响本轮测试结果
+- 仓库内提交的 `venv/Scripts/python.exe` 依然不能在当前机器上直接用，会报 `failed to locate pyvenv.cfg`
 
----
+## 本轮同步更新的文档
 
-### B7 — [MEDIUM] Kimi session resumption has no error-reset path (`handlers/chat.py:627`)
-For Claude and Codex there is logic to detect session initialization failure and reset `session_id`. For Kimi, `cli_session_id = session.kimi_session_id` is passed unconditionally once set, with no corresponding "should_reset_kimi_session" check. A stale Kimi session ID will keep being reused silently after it expires.
+本轮除代码修复外，还同步修正了以下文档或帮助文本的失真：
 
----
+- `CLAUDE.md`
+- `bot/data/README.md`
+- `bot/messages.py`
+- `bot/messages.json`
 
-### B8 — [LOW] `asyncio.get_event_loop()` in sync polling-error callback (`manager.py:85`)
-`_make_polling_error_callback` returns a sync callback that calls `asyncio.get_event_loop().time()`. In Python ≥ 3.10, `get_event_loop()` emits a `DeprecationWarning` when there is no current event loop in the calling thread. Should use `time.monotonic()` or pass the loop reference at closure creation.
+## 后续工作建议
 
----
-
-## 2. Redundant Code
-
-### R1 — `get_profile` vs `_get_profile_for_update` (`manager.py:298–309`)
-Two nearly identical methods differing only in whether they raise on unknown alias. The silent fallback in `get_profile` is confusing and error-prone (see B5). Unify to one method with a `strict=False` flag, or simply always raise.
-
----
-
-### R2 — `_get_store_path()` is a no-op indirection (`session_store.py:23`)
-```python
-def _get_store_path() -> Path:
-    return STORE_FILE
-```
-This function adds zero value — it just returns the module-level constant. Every call site can use `STORE_FILE` directly.
-
----
-
-### R3 — Duplicate progress-message delete + chunk-send pattern (`handlers/chat.py:468–540`)
-`collect_cli_output` and `stream_codex_json_output` both contain nearly identical blocks:
-- delete progress message
-- chunk output into 900-char pieces
-- send each chunk with `reply_text`
-- (on timeout) send two extra follow-up messages
-
-This 40-line pattern is duplicated verbatim. Extract to a shared `_send_cli_result(update, progress_message, final_text, icon, timed_out, ...)` helper.
-
----
-
-### R4 — `import os` and `import select` inside `read_stdout()` inner function (`handlers/chat.py:131, 335`)
-Both `collect_cli_output` and `stream_codex_json_output` import `os` (and `select` on Unix) inside the inner `read_stdout()` function. `os` is already imported at module top level. These should be removed from the inner function.
-
----
-
-### R5 — `threading.Event().wait(0.1)` creates a throw-away Event object (`handlers/chat.py:346`)
-```python
-threading.Event().wait(0.1)  # busy-wait workaround
-```
-This constructs a new Event object just to call `.wait()` on it once. Use `time.sleep(0.1)` instead.
-
----
-
-### R6 — `save_session_ids` / `load_session_ids` are bypassed after B2 fix
-After fixing B2, the public `load_session_ids` / `save_session_ids` functions are no longer called by any of the mutating helpers. They are still used by `load_session` (read-only). Consider whether the write-side helpers should be made private or removed.
-
----
-
-## 3. UX Improvement Opportunities
-
-### U1 — No feedback when a message is ignored because bot is busy
-If a user sends a message while the bot is processing (`session.is_processing == True`), `handle_text_message` silently returns without any reply. The user has no idea whether their message was received. A short "⏳ 正在处理上一条消息，请稍候..." reply would prevent confusion and repeated sends.
-
----
-
-### U2 — Timeout messages split across 3+ separate sends
-On timeout, up to N chunk messages are sent, then a timeout notice, then a session-retention notice — potentially 4+ separate Telegram messages in quick succession. Consolidate the timeout notice and session-retention hint into the last chunk message (or a single follow-up) to reduce notification noise.
-
----
-
-### U3 — No progress indication for `collect_cli_output` (non-Codex CLIs)
-`stream_codex_json_output` shows real-time partial output previews during processing. `collect_cli_output` (used by Kimi and Claude) only shows elapsed time with no content preview. Adding a truncated preview of the last N chars of stdout would give users confidence the CLI is working.
-
----
-
-### U4 — `/cd` command accepts any string without validating directory existence
-Users can `/cd` to a non-existent path. The session's `working_dir` is updated, but the next CLI call will immediately fail with a confusing error. The handler should check `os.path.isdir(path)` and reject invalid paths immediately with a clear message.
-
----
-
-### U5 — Bot-busy state has no stop button
-When the user sends a new message while the bot is busy (U1), there is no way to cancel the in-progress task from the new message context. The "busy" reply itself could include a "🛑 停止任务" inline button (reusing the same `stop_task` callback) so users can immediately interrupt without scrolling back.
-
----
-
-### U6 — No session ID display in `/status`
-The `/status` or session-info commands don't surface active session IDs (codex/kimi/claude). Power users debugging continuity issues have no way to know which session is in use without reading the log file.
-
----
-
-## Summary Table
-
-| ID | Severity | File | Status |
-|----|----------|------|--------|
-| B1 | CRITICAL | `handlers/chat.py:59` | **FIXED** |
-| B2 | CRITICAL | `session_store.py:89` | **FIXED** |
-| B3 | HIGH | `handlers/chat.py:613,754` | Won't fix (risk negligible in practice) |
-| B4 | HIGH | `sessions.py:20–31` | **FIXED** |
-| B5 | MEDIUM | `manager.py:298` | **FIXED** |
-| B6 | MEDIUM | `cli.py:133` | **FIXED** |
-| B7 | MEDIUM | `sessions.py` | **FIXED** |
-| B8 | LOW | `manager.py:85` | **FIXED** |
-| R1 | Medium | `manager.py:298–309` | Won't fix (different error types needed) |
-| R2 | Low | `session_store.py:23` | **FIXED** |
-| R3 | Medium | `handlers/chat.py:468–540` | Open |
-| R4 | Low | `handlers/chat.py:131,335` | **FIXED** |
-| R5 | Low | `handlers/chat.py:346` | **FIXED** |
-| R6 | Low | `session_store.py` | Won't fix (used by tests) |
-| U1 | High | `handlers/chat.py` | **FIXED** |
-| U2 | Medium | `handlers/chat.py` | **FIXED** |
-| U3 | Medium | `handlers/chat.py` | **FIXED** |
-| U4 | Medium | `handlers/basic.py` | N/A (already handled) |
-| U5 | Low | `handlers/chat.py` | **FIXED** |
-| U6 | Low | `handlers/basic.py` | N/A (`/start` already shows session IDs) |
+- 如果要继续推进 Web 端，请以 `bot/web/server.py` + `bot/web/api_service.py` 为后端基座，不要继续扩写旧的 `bot/handlers/webcli.py` / `bot/handlers/kimi_web.py` / `bot/handlers/tui_server.py`
+- 面向公网访问时，优先做 Web 侧权限收敛、移动端单列 UI、会话级认证，以及 Cloudflared named tunnel + Access 的部署链路

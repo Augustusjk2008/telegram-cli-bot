@@ -2,9 +2,43 @@
 测试网络流量读取脚本
 """
 
+import locale
 import subprocess
 import sys
 import pytest
+
+
+def _decode_output(data: bytes | None) -> str:
+    if not data:
+        return ""
+
+    encodings = [
+        locale.getpreferredencoding(False),
+        "utf-8",
+        "gb18030",
+        "cp936",
+    ]
+    tried = set()
+    for encoding in encodings:
+        normalized = (encoding or "").lower()
+        if not normalized or normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return data.decode("utf-8", errors="replace")
+
+
+def _run_powershell(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["powershell", "-NoProfile", *args],
+        capture_output=True,
+        text=False,
+        timeout=timeout,
+    )
 
 
 class TestNetworkTrafficScript:
@@ -33,41 +67,29 @@ class TestNetworkTrafficScript:
     def test_powershell_script_syntax(self):
         """测试 PowerShell 脚本语法是否正确"""
         # 使用 PowerShell 检查脚本语法
-        result = subprocess.run(
-            ["powershell", "-Command", 
-             "Get-Command scripts/network_traffic.ps1 | Out-Null; $?"],
-            capture_output=True,
-            text=True,
-            shell=True
+        result = _run_powershell(
+            "-Command",
+            "Get-Command scripts/network_traffic.ps1 | Out-Null; $?",
+            timeout=30,
         )
         # 只要 PowerShell 能识别脚本，就认为语法基本正确
         assert result.returncode == 0 or "Get-Command" in str(result)
     
     def test_powershell_execution(self):
         """测试 PowerShell 脚本可以执行"""
-        result = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/network_traffic.ps1"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = _run_powershell("-ExecutionPolicy", "Bypass", "-File", "scripts/network_traffic.ps1", timeout=30)
         
         # 检查输出包含预期内容
-        output = result.stdout + result.stderr
+        output = _decode_output(result.stdout) + _decode_output(result.stderr)
         
         # 脚本应该成功执行（即使某些系统上可能没有网络接口）
         assert "网络流量" in output or "network" in output.lower() or result.returncode == 0
     
     def test_script_outputs_traffic_info(self):
         """测试脚本输出流量信息"""
-        result = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/network_traffic.ps1"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = _run_powershell("-ExecutionPolicy", "Bypass", "-File", "scripts/network_traffic.ps1", timeout=30)
         
-        output = result.stdout
+        output = _decode_output(result.stdout)
         
         # 检查输出中包含预期的关键字
         assert any(keyword in output for keyword in [
@@ -81,26 +103,20 @@ class TestNetworkTrafficHelpers:
     
     def test_get_net_adapter_statistics_command(self):
         """测试 Get-NetAdapterStatistics 命令是否可用"""
-        result = subprocess.run(
-            ["powershell", "-Command", "Get-NetAdapterStatistics"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        result = _run_powershell("-Command", "Get-NetAdapterStatistics", timeout=10)
+        stderr = _decode_output(result.stderr)
         
         # 命令应该可以执行（即使没有输出或出错，命令本身应该存在）
         # PowerShell 中命令不存在会返回错误信息
-        assert "不是内部或外部命令" not in result.stderr
-        assert "is not recognized" not in result.stderr
+        assert "不是内部或外部命令" not in stderr
+        assert "is not recognized" not in stderr
     
     def test_network_interface_exists(self):
         """测试系统中存在网络接口"""
-        result = subprocess.run(
-            ["powershell", "-Command", 
-             "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1"],
-            capture_output=True,
-            text=True,
-            timeout=10
+        result = _run_powershell(
+            "-Command",
+            "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1",
+            timeout=10,
         )
         
         # 大多数系统至少有一个活动的网络接口

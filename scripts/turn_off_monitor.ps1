@@ -1,4 +1,4 @@
-# 关闭显示器 - 使用 SendMessageTimeout (非阻塞，带超时)
+# 关闭显示器
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;

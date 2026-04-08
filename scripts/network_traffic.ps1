@@ -22,10 +22,10 @@ function Format-Bytes {
     }
 }
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "       网络流量使用情况统计" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Output "========================================"
+Write-Output "       Network Traffic Usage"
+Write-Output "========================================"
+Write-Output ""
 
 # 获取所有网络接口统计信息
 $networkStats = Get-NetAdapterStatistics | Where-Object { $_.ReceivedBytes -gt 0 -or $_.SentBytes -gt 0 }
@@ -40,20 +40,20 @@ if ($networkStats) {
         $totalReceived += $received
         $totalSent += $sent
         
-        Write-Host "接口: $($adapter.Name)" -ForegroundColor Yellow
-        Write-Host "  接收流量: $(Format-Bytes -Bytes $received)" -ForegroundColor Green
-        Write-Host "  发送流量: $(Format-Bytes -Bytes $sent)" -ForegroundColor Green
-        Write-Host "  总流量:   $(Format-Bytes -Bytes ($received + $sent))" -ForegroundColor Green
-        Write-Host ""
+        Write-Output "Interface: $($adapter.Name)"
+        Write-Output "  ReceivedBytes: $(Format-Bytes -Bytes $received)"
+        Write-Output "  SentBytes: $(Format-Bytes -Bytes $sent)"
+        Write-Output "  TotalBytes: $(Format-Bytes -Bytes ($received + $sent))"
+        Write-Output ""
     }
     
-    Write-Host "----------------------------------------" -ForegroundColor Gray
-    Write-Host "总接收流量: $(Format-Bytes -Bytes $totalReceived)" -ForegroundColor Magenta
-    Write-Host "总发送流量: $(Format-Bytes -Bytes $totalSent)" -ForegroundColor Magenta
-    Write-Host "总流量:     $(Format-Bytes -Bytes ($totalReceived + $totalSent))" -ForegroundColor Magenta
+    Write-Output "----------------------------------------"
+    Write-Output "TotalReceived: $(Format-Bytes -Bytes $totalReceived)"
+    Write-Output "TotalSent: $(Format-Bytes -Bytes $totalSent)"
+    Write-Output "TotalTraffic: $(Format-Bytes -Bytes ($totalReceived + $totalSent))"
 } else {
-    Write-Host "未找到活动的网络接口或没有流量数据。" -ForegroundColor Red
+    Write-Output "No active network adapters or traffic data found."
 }
 
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Output ""
+Write-Output "========================================"

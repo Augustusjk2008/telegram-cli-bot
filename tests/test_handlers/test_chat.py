@@ -123,3 +123,57 @@ class TestCollectCliOutput:
         assert returncode == 0
         assert "hello from cli" in output
         assert mock_update.message.reply_text.await_args_list[1].args[0].startswith("✅")
+
+    @pytest.mark.asyncio
+    async def test_waits_for_missing_returncode_after_reader_finishes(self, mock_update):
+        import threading
+
+        from bot.handlers import chat
+
+        progress_message = MagicMock()
+        progress_message.delete = AsyncMock()
+        final_message = MagicMock()
+        mock_update.message.reply_text = AsyncMock(side_effect=[progress_message, final_message])
+
+        session_mock = MagicMock()
+        session_mock.stop_requested = False
+        session_mock._lock = threading.Lock()
+
+        class FakeStdout:
+            def __init__(self):
+                self._lines = ["hello from fake process\n"]
+
+            def readline(self):
+                return self._lines.pop(0) if self._lines else ""
+
+            def fileno(self):
+                return 0
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.returncode = None
+                self.wait_calls = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.wait_calls += 1
+                self.returncode = 0
+                return 0
+
+            def terminate(self):
+                self.returncode = 0
+
+        process = FakeProcess()
+
+        with patch.object(chat, "CLI_TIMEOUT_CHECK_INTERVAL", 0.01), \
+             patch.object(chat, "CLI_PROGRESS_UPDATE_INTERVAL", 60), \
+             patch.object(chat, "CLI_EXEC_TIMEOUT", 5):
+            output, returncode, timed_out = await chat.collect_cli_output(process, mock_update, session_mock)
+
+        assert timed_out is False
+        assert output == "hello from fake process\n"
+        assert returncode == 0
+        assert process.wait_calls == 1
