@@ -34,8 +34,20 @@ from bot.config import (
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
+from bot.web import WebApiServer
 
 logger = logging.getLogger(__name__)
+
+
+def safe_print(text: str = ""):
+    """向控制台安全输出，避免 Windows 非 UTF-8 终端因 emoji 崩溃。"""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        stream = sys.stdout
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        sanitized = text.encode(encoding, errors="replace").decode(encoding, errors="ignore")
+        stream.write(f"{sanitized}\n")
 
 
 def disable_console_quick_edit():
@@ -91,20 +103,28 @@ async def run_all_bots():
     )
 
     manager = MultiBotManager(main_profile=main_profile, storage_file=MANAGED_BOTS_FILE)
+    web_server = WebApiServer(manager) if config.WEB_ENABLED else None
 
     if TELEGRAM_ENABLED:
         await manager.start_all()
         await manager.start_watchdog()
         logger.info("主Bot与已启用子Bot已启动")
         logger.info("托管配置文件: %s", MANAGED_BOTS_FILE)
+    elif web_server is not None:
+        logger.info("Telegram 轮询已关闭，进入 Web API 本地模式")
     else:
-        raise RuntimeError("TELEGRAM_ENABLED 必须设置为 true")
+        raise RuntimeError("TELEGRAM_ENABLED 和 WEB_ENABLED 不能同时为 false")
+
+    if web_server is not None:
+        await web_server.start()
+        logger.info("Web API 已附加到主进程")
 
     try:
         await config.RESTART_EVENT.wait()
     finally:
-        if TELEGRAM_ENABLED:
-            await manager.shutdown_all()
+        if web_server is not None:
+            await web_server.stop()
+        await manager.shutdown_all()
         # 保存所有会话到持久化存储
         from bot.sessions import save_all_sessions
         save_all_sessions()
@@ -119,28 +139,28 @@ def main():
     msgs = get_messages()
     
     if TELEGRAM_ENABLED and TELEGRAM_BOT_TOKEN == "your_bot_token_here":
-        print("错误: 请设置 TELEGRAM_BOT_TOKEN 环境变量")
+        safe_print("错误: 请设置 TELEGRAM_BOT_TOKEN 环境变量")
         sys.exit(1)
 
     try:
         validate_cli_type(CLI_TYPE)
     except ValueError as e:
-        print(f"错误: {e}")
+        safe_print(f"错误: {e}")
         sys.exit(1)
 
-    print(msgs.get("startup", "banner"))
-    print(msgs.get("startup", "title"))
-    print(msgs.get("startup", "version"))
-    print(msgs.get("startup", "banner"))
-    print()
-    print(msgs.get("startup", "loading_config"))
-    print(f"   CLI类型: {CLI_TYPE}")
-    print(f"   工作目录: {WORKING_DIR}")
-    print(f"   会话超时: {SESSION_TIMEOUT}秒")
-    print(f"   托管配置: {MANAGED_BOTS_FILE}")
-    print(f"   Telegram: {'开启' if TELEGRAM_ENABLED else '关闭'}")
-    print(f"   Web API: 已禁用")
-    print(msgs.get("startup", "loaded"))
+    safe_print(msgs.get("startup", "banner"))
+    safe_print(msgs.get("startup", "title"))
+    safe_print(msgs.get("startup", "version"))
+    safe_print(msgs.get("startup", "banner"))
+    safe_print()
+    safe_print(msgs.get("startup", "loading_config"))
+    safe_print(f"   CLI类型: {CLI_TYPE}")
+    safe_print(f"   工作目录: {WORKING_DIR}")
+    safe_print(f"   会话超时: {SESSION_TIMEOUT}秒")
+    safe_print(f"   托管配置: {MANAGED_BOTS_FILE}")
+    safe_print(f"   Telegram: {'开启' if TELEGRAM_ENABLED else '关闭'}")
+    safe_print(f"   Web API: {'开启' if config.WEB_ENABLED else '关闭'}")
+    safe_print(msgs.get("startup", "loaded"))
 
     # 禁用控制台快速编辑模式，避免点击控制台导致程序暂停
     disable_console_quick_edit()
@@ -153,19 +173,19 @@ def main():
         try:
             asyncio.run(run_all_bots())
         except KeyboardInterrupt:
-            print(f"\n{msgs.get('startup', 'shutdown')}")
+            safe_print(f"\n{msgs.get('startup', 'shutdown')}")
             # 保存所有会话到持久化存储
             from bot.sessions import save_all_sessions
             save_all_sessions()
             break
         except Exception as e:
             logger.exception("运行异常，%s秒后自动重试: %s", MAIN_LOOP_RETRY_DELAY, e)
-            print(f"运行异常，将在 {MAIN_LOOP_RETRY_DELAY} 秒后自动重试: {e}")
+            safe_print(f"运行异常，将在 {MAIN_LOOP_RETRY_DELAY} 秒后自动重试: {e}")
             time.sleep(MAIN_LOOP_RETRY_DELAY)
             continue
 
         if config.RESTART_REQUESTED:
-            print(msgs.get("startup", "restart"))
+            safe_print(msgs.get("startup", "restart"))
             # 注意：重启前不恢复睡眠，避免屏幕盖着时系统进入睡眠
             # 新进程启动时会立即调用 prevent_system_sleep()
             # 短暂等待让启动问候消息的发送任务完成
@@ -173,7 +193,7 @@ def main():
             try:
                 reexec_current_process()
             except Exception as e:
-                print(f"进程级重启失败: {e}")
+                safe_print(f"进程级重启失败: {e}")
                 break
             break
         # 正常退出前保存会话

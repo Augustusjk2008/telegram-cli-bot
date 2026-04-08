@@ -218,6 +218,7 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
     if event_type == "item.completed":
         if isinstance(text_value, str) and text_value:
             result["completed_text"] = text_value
+            result["delta_text"] = text_value
         return result
 
     if event_type == "item.delta":

@@ -18,6 +18,10 @@ except ImportError:
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "your_bot_token_here")
 TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "true").lower() == "true"
 
+
+def _split_csv_env(raw_value: str) -> List[str]:
+    return [item.strip() for item in (raw_value or "").split(",") if item.strip()]
+
 ALLOWED_USER_IDS: List[int] = []
 _allowed_raw = os.environ.get("ALLOWED_USER_IDS", "")
 for uid in _allowed_raw.split(","):
@@ -58,17 +62,16 @@ if WHISPER_ENABLED:
 # Claude API 配置（用于助手模式）
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
-# Web CLI / ngrok 配置（已禁用）
-# 注意：Web 后端功能已被禁用，以下配置仅保留用于兼容性，不会生效
+# Web / legacy tunnel 配置
 NGROK_DIR = ""
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "").strip()  # 代理商 API 地址
-WEB_ENABLED = False  # Web 功能已禁用
-WEB_HOST = "127.0.0.1"
-WEB_PORT = 8765
-WEB_PUBLIC_URL = ""
-WEB_API_TOKEN = ""
-WEB_ALLOWED_ORIGINS = []
+WEB_ENABLED = os.environ.get("WEB_ENABLED", "false").lower() == "true"
+WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+WEB_PORT = int(os.environ.get("WEB_PORT", "8765"))
+WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip()
+WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
+WEB_ALLOWED_ORIGINS = _split_csv_env(os.environ.get("WEB_ALLOWED_ORIGINS", ""))
 WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
 
 # ============ 常量定义 ============

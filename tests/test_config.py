@@ -69,6 +69,24 @@ class TestConfigConstants:
         import os
         assert os.path.isabs(WORKING_DIR)
 
+    def test_web_config_reads_environment(self, monkeypatch):
+        monkeypatch.setenv("WEB_ENABLED", "true")
+        monkeypatch.setenv("WEB_HOST", "127.0.0.1")
+        monkeypatch.setenv("WEB_PORT", "8765")
+        monkeypatch.setenv("WEB_API_TOKEN", "secret")
+        monkeypatch.setenv("WEB_ALLOWED_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
+
+        import importlib
+        import bot.config as config
+
+        importlib.reload(config)
+
+        assert config.WEB_ENABLED is True
+        assert config.WEB_HOST == "127.0.0.1"
+        assert config.WEB_PORT == 8765
+        assert config.WEB_API_TOKEN == "secret"
+        assert config.WEB_ALLOWED_ORIGINS == ["http://127.0.0.1:3000", "http://localhost:3000"]
+
 
 class TestRestartMechanism:
     """测试重启机制"""

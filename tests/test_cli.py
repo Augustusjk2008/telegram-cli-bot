@@ -150,6 +150,13 @@ class TestParseCodexJsonLine:
         result = parse_codex_json_line("")
         assert isinstance(result, dict)
 
+    def test_item_completed_also_exposes_stream_text(self):
+        result = parse_codex_json_line(
+            '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"OK"}}'
+        )
+        assert result["completed_text"] == "OK"
+        assert result["delta_text"] == "OK"
+
 
 class TestParseCodexJsonOutput:
     """测试 parse_codex_json_output"""

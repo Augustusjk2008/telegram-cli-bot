@@ -1,8 +1,28 @@
-import type { BotSummary, ChatMessage, FileEntry, SessionState } from "./types";
+import type {
+  BotOverview,
+  BotSummary,
+  ChatMessage,
+  DirectoryListing,
+  SessionState,
+  SystemScript,
+  SystemScriptResult,
+} from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
+import { mockChatMessages } from "../mocks/chat";
+import { mockFiles } from "../mocks/files";
 
 export class MockWebBotClient implements WebBotClient {
+  private currentPaths = new Map<string, string>();
+  private readonly scripts: SystemScript[] = [
+    {
+      scriptName: "network_traffic",
+      displayName: "网络流量",
+      description: "查看网络状态",
+      path: "C:\\scripts\\network_traffic.ps1",
+    },
+  ];
+
   async login(password: string): Promise<SessionState> {
     return {
       currentBotAlias: "main",
@@ -17,22 +37,95 @@ export class MockWebBotClient implements WebBotClient {
     return mockBots;
   }
 
+  async getBotOverview(botAlias: string): Promise<BotOverview> {
+    const bot = mockBots.find((item) => item.alias === botAlias) || mockBots[0];
+    return {
+      ...bot,
+      botMode: "cli",
+      messageCount: mockChatMessages[bot.alias]?.length || 0,
+      historyCount: mockChatMessages[bot.alias]?.length || 0,
+      isProcessing: false,
+    };
+  }
+
   async listMessages(botAlias: string): Promise<ChatMessage[]> {
-    return [];
+    return mockChatMessages[botAlias] || [];
   }
 
   async sendMessage(botAlias: string, text: string, onChunk: (chunk: string) => void): Promise<ChatMessage> {
+    let streamed = "";
+    await streamAssistantReply((chunk) => {
+      streamed += chunk;
+      onChunk(chunk);
+    });
     return {
       id: Date.now().toString(),
       role: "assistant",
-      text: "Mock response",
+      text: streamed || "Mock response",
       createdAt: new Date().toISOString(),
       state: "done"
     };
   }
 
-  async listFiles(botAlias: string, path: string): Promise<FileEntry[]> {
-    return [];
+  async getCurrentPath(botAlias: string): Promise<string> {
+    return this.currentPaths.get(botAlias) || "/";
+  }
+
+  async listFiles(botAlias: string): Promise<DirectoryListing> {
+    const currentPath = await this.getCurrentPath(botAlias);
+    const botFiles = mockFiles[botAlias] || {};
+    return {
+      workingDir: currentPath,
+      entries: botFiles[currentPath] || [],
+    };
+  }
+
+  async changeDirectory(botAlias: string, path: string): Promise<string> {
+    const currentPath = await this.getCurrentPath(botAlias);
+    let nextPath = currentPath;
+    if (path === "..") {
+      if (currentPath !== "/") {
+        const parts = currentPath.split("/").filter(Boolean);
+        parts.pop();
+        nextPath = parts.length ? `/${parts.join("/")}` : "/";
+      }
+    } else {
+      nextPath = currentPath === "/" ? `/${path}` : `${currentPath}/${path}`;
+    }
+    this.currentPaths.set(botAlias, nextPath);
+    return nextPath;
+  }
+
+  async readFile(botAlias: string, filename: string): Promise<string> {
+    return `Mock preview for ${filename}\n\nThis is a local preview.`;
+  }
+
+  async uploadFile(botAlias: string, file: File): Promise<void> {
+    return;
+  }
+
+  async downloadFile(botAlias: string, filename: string): Promise<void> {
+    return;
+  }
+
+  async resetSession(botAlias: string): Promise<void> {
+    return;
+  }
+
+  async killTask(botAlias: string): Promise<string> {
+    return "已发送终止任务请求";
+  }
+
+  async listSystemScripts(): Promise<SystemScript[]> {
+    return this.scripts;
+  }
+
+  async runSystemScript(scriptName: string): Promise<SystemScriptResult> {
+    return {
+      scriptName,
+      success: true,
+      output: `${scriptName} 执行完成（Mock）`,
+    };
   }
 }
 

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+import queue
 import subprocess
 import sys
+import threading
+import time
 import uuid
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 from bot.assistant.llm import (
     ANTHROPIC_AVAILABLE,
@@ -21,6 +24,7 @@ from bot.assistant.memory import get_memory_store
 from bot.cli import (
     build_cli_command,
     normalize_cli_type,
+    parse_codex_json_line,
     parse_codex_json_output,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
@@ -292,6 +296,39 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     return env
 
 
+def _chunk_text(text: str, size: int = 160) -> list[str]:
+    cleaned = text or ""
+    if not cleaned:
+        return []
+    return [cleaned[index:index + size] for index in range(0, len(cleaned), size)]
+
+
+def _wait_for_process_exit_sync(process: subprocess.Popen, timeout: float) -> Optional[int]:
+    try:
+        return process.wait(timeout=timeout)
+    except Exception:
+        return None
+
+
+def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0) -> None:
+    try:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=kill_timeout)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        process.kill()
+        try:
+            process.wait(timeout=kill_timeout)
+        except subprocess.TimeoutExpired:
+            pass
+    except Exception:
+        pass
+
+
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int, bool]:
     def run_process() -> tuple[str, int, bool]:
         try:
@@ -319,6 +356,256 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
     elif not final_text:
         final_text = msg("chat", "no_output")
     return final_text, thread_id, returncode, timed_out
+
+
+async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
+    profile = get_profile_or_raise(manager, alias)
+    if profile.bot_mode != "cli":
+        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
+
+    session = get_session_for_alias(manager, alias, user_id)
+    text = (user_text or "").strip()
+    if not text:
+        _raise(400, "empty_message", "消息不能为空")
+    if text.startswith("//"):
+        text = "/" + text[2:]
+
+    cli_type = normalize_cli_type(profile.cli_type)
+    env = _build_cli_env(cli_type)
+    resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
+    if resolved_cli is None:
+        _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+    with session._lock:
+        if session.is_processing:
+            _raise(409, "session_busy", msg("chat", "busy"))
+        session.is_processing = True
+        codex_session_id: Optional[str] = None
+        cli_session_id: Optional[str] = None
+        resume_session = False
+        new_kimi_session_id_created = False
+        if cli_type == "codex":
+            codex_session_id = session.codex_session_id
+            cli_session_id = session.codex_session_id
+            resume_session = bool(session.codex_session_id)
+        elif cli_type == "kimi":
+            if not session.kimi_session_id:
+                session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
+                new_kimi_session_id_created = True
+            cli_session_id = session.kimi_session_id
+        elif cli_type == "claude":
+            if not session.claude_session_id:
+                session.claude_session_id = str(uuid.uuid4())
+                session.claude_session_initialized = False
+            cli_session_id = session.claude_session_id
+            resume_session = session.claude_session_initialized
+
+    process: Optional[subprocess.Popen] = None
+    try:
+        session.touch()
+        try:
+            cmd, use_stdin = build_cli_command(
+                cli_type=cli_type,
+                resolved_cli=resolved_cli,
+                user_text=text,
+                env=env,
+                session_id=cli_session_id,
+                resume_session=resume_session,
+                json_output=(cli_type == "codex"),
+                params_config=profile.cli_params,
+            )
+        except ValueError as exc:
+            _raise(400, "invalid_cli_command", str(exc))
+
+        session.add_to_history("user", text)
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE if use_stdin else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                cwd=session.working_dir,
+                env=env,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except FileNotFoundError:
+            _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+        if use_stdin:
+            try:
+                assert process.stdin is not None
+                process.stdin.write(text + "\n")
+                process.stdin.flush()
+                process.stdin.close()
+            except (BrokenPipeError, OSError) as exc:
+                process.wait()
+                _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
+
+        with session._lock:
+            session.process = process
+
+        yield {
+            "type": "meta",
+            "alias": alias,
+            "cli_type": cli_type,
+            "working_dir": session.working_dir,
+            "resume_session": resume_session,
+        }
+
+        output_queue: queue.Queue[Any] = queue.Queue()
+        reader_done = threading.Event()
+        raw_output_parts: list[str] = []
+        thread_id: Optional[str] = None
+        streamed_any = False
+        timed_out = False
+
+        def read_stdout() -> None:
+            try:
+                if process is None or process.stdout is None:
+                    return
+                stdout = process.stdout
+                while True:
+                    line = stdout.readline()
+                    if line:
+                        output_queue.put(line)
+                        continue
+                    if process.poll() is not None:
+                        remaining = stdout.read()
+                        if remaining:
+                            output_queue.put(remaining)
+                        break
+                    time.sleep(0.05)
+            except Exception as exc:  # pragma: no cover - defensive
+                output_queue.put(exc)
+            finally:
+                reader_done.set()
+
+        threading.Thread(target=read_stdout, daemon=True).start()
+        loop = asyncio.get_running_loop()
+        start_time = loop.time()
+
+        while not reader_done.is_set() or not output_queue.empty():
+            if not timed_out and (loop.time() - start_time) >= CLI_EXEC_TIMEOUT and process.poll() is None:
+                timed_out = True
+                await loop.run_in_executor(None, _terminate_process_sync, process)
+
+            drained = False
+            while True:
+                try:
+                    item = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained = True
+                if isinstance(item, Exception):
+                    raise item
+
+                text_chunk = str(item)
+                raw_output_parts.append(text_chunk)
+
+                if cli_type == "codex":
+                    for line in text_chunk.splitlines():
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        parsed = parse_codex_json_line(stripped)
+                        if parsed["thread_id"]:
+                            thread_id = parsed["thread_id"]
+                        delta_text = parsed["delta_text"]
+                        if delta_text:
+                            streamed_any = True
+                            yield {"type": "delta", "text": delta_text}
+                else:
+                    if text_chunk:
+                        streamed_any = True
+                        yield {"type": "delta", "text": text_chunk}
+
+            if not drained:
+                await asyncio.sleep(0.1)
+
+        await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+        returncode = process.poll() if process is not None else -1
+        if returncode is None:
+            returncode = -1
+
+        raw_output = "".join(raw_output_parts)
+        session_id_changed = False
+        if cli_type == "codex":
+            response, parsed_thread_id = parse_codex_json_output(raw_output)
+            thread_id = thread_id or parsed_thread_id
+            with session._lock:
+                if thread_id:
+                    if session.codex_session_id != thread_id:
+                        session.codex_session_id = thread_id
+                        session_id_changed = True
+                elif should_reset_codex_session(codex_session_id, response, returncode):
+                    if session.codex_session_id is not None:
+                        session.codex_session_id = None
+                        session_id_changed = True
+        else:
+            response = raw_output.strip()
+            if cli_type == "claude":
+                with session._lock:
+                    if timed_out:
+                        pass
+                    elif should_mark_claude_session_initialized(response, returncode):
+                        if not session.claude_session_initialized:
+                            session.claude_session_initialized = True
+                            session_id_changed = True
+                    elif should_reset_claude_session(response, returncode):
+                        if session.claude_session_id is not None:
+                            session.claude_session_id = None
+                            session.claude_session_initialized = False
+                            session_id_changed = True
+            elif cli_type == "kimi":
+                with session._lock:
+                    if not timed_out and should_reset_kimi_session(response, returncode):
+                        if session.kimi_session_id is not None:
+                            session.kimi_session_id = None
+                            session_id_changed = True
+                    elif not timed_out and new_kimi_session_id_created and session.kimi_session_id is not None:
+                        session_id_changed = True
+
+        if timed_out:
+            response = response or msg("chat", "timeout_no_output")
+        else:
+            response = response or msg("chat", "no_output")
+
+        if not streamed_any:
+            for chunk in _chunk_text(response):
+                yield {"type": "delta", "text": chunk}
+
+        if session_id_changed:
+            session.persist()
+        session.add_to_history("assistant", response)
+        yield {
+            "type": "done",
+            "output": response,
+            "returncode": returncode,
+            "timed_out": timed_out,
+            "session": build_session_snapshot(profile, session),
+        }
+    finally:
+        with session._lock:
+            session.process = None
+            session.is_processing = False
+
+
+async def _stream_assistant_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
+    profile = get_profile_or_raise(manager, alias)
+    yield {
+        "type": "meta",
+        "alias": alias,
+        "cli_type": profile.cli_type,
+        "working_dir": profile.working_dir,
+        "resume_session": False,
+    }
+    data = await run_assistant_chat(manager, alias, user_id, user_text)
+    for chunk in _chunk_text(data["output"]):
+        yield {"type": "delta", "text": chunk}
+    yield {"type": "done", "output": data["output"], "returncode": 0, "timed_out": False, "session": data["session"]}
 
 
 async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
@@ -519,6 +806,24 @@ async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text
     if profile.bot_mode == "assistant":
         return await run_assistant_chat(manager, alias, user_id, user_text)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+
+
+async def stream_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
+    try:
+        profile = get_profile_or_raise(manager, alias)
+        if profile.bot_mode == "cli":
+            async for event in _stream_cli_chat(manager, alias, user_id, user_text):
+                yield event
+            return
+        if profile.bot_mode == "assistant":
+            async for event in _stream_assistant_chat(manager, alias, user_id, user_text):
+                yield event
+            return
+        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+    except WebApiError as exc:
+        yield {"type": "error", "code": exc.code, "message": exc.message}
+    except Exception as exc:  # pragma: no cover - defensive
+        yield {"type": "error", "code": "internal_error", "message": str(exc)}
 
 
 async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: int, command: str) -> dict[str, Any]:

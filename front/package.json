@@ -1,5 +1,5 @@
 {
-  "name": "react-example",
+  "name": "web-bot-front",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "powershell -NoProfile -Command \"Remove-Item -LiteralPath dist -Recurse -Force -ErrorAction SilentlyContinue\"",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test"

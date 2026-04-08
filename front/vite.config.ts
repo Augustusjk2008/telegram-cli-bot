@@ -12,6 +12,7 @@ export default defineConfig(({mode}) => {
       globals: true,
       environment: 'jsdom',
       setupFiles: ['./src/test/setup.ts'],
+      include: ['src/test/**/*.test.ts', 'src/test/**/*.test.tsx'],
     },
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
@@ -22,9 +23,17 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
+      host: '0.0.0.0',
+      port: 3000,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:8765',
+          changeOrigin: true,
+        },
+      },
     },
   };
 });

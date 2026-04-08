@@ -114,6 +114,29 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
             assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
 
 
+@pytest.mark.asyncio
+async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    async def fake_stream_chat(manager, alias, user_id, message):
+        yield {"type": "meta", "alias": alias}
+        yield {"type": "delta", "text": "hello"}
+        yield {"type": "done", "returncode": 0, "timed_out": False}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.stream_chat", fake_stream_chat):
+                resp = await client.post("/api/bots/main/chat/stream", json={"message": "hi"})
+                assert resp.status == 200
+                body = await resp.text()
+                assert "event: meta" in body
+                assert "event: delta" in body
+                assert "event: done" in body
+
+
 def test_read_missing_file_raises(web_manager: MultiBotManager):
     with pytest.raises(WebApiError) as exc_info:
         read_file_content(web_manager, "main", 1001, "missing.txt")

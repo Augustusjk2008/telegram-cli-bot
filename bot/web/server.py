@@ -50,6 +50,7 @@ from .api_service import (
     search_memories,
     start_managed_bot,
     stop_managed_bot,
+    stream_chat,
     update_bot_cli,
     update_bot_workdir,
 )
@@ -67,6 +68,11 @@ def _error_response(exc: WebApiError) -> web.Response:
 
 def _normalize_origin(origin: str) -> str:
     return origin.rstrip("/")
+
+
+def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
 
 
 @web.middleware
@@ -211,6 +217,27 @@ class WebApiServer:
         body = await self._parse_json(request)
         data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""))
         return _json({"ok": True, "data": data})
+
+    async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        async for event in stream_chat(self.manager, alias, auth.user_id, body.get("message", "")):
+            await response.write(_format_sse(event["type"], event))
+
+        await response.write_eof()
+        return response
 
     async def post_exec(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -403,6 +430,7 @@ class WebApiServer:
         app.router.add_get("/api/bots", self.get_bots)
         app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
+        app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
         app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
         app.router.add_get("/api/bots/{alias}/pwd", self.get_pwd)
         app.router.add_get("/api/bots/{alias}/ls", self.get_ls)
@@ -432,14 +460,16 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
         app.router.add_post("/api/admin/restart", self.admin_restart)
         
-        # Add static file serving for frontend
-        app.router.add_static("/assets", path=self._get_static_dir("assets"), name="assets")
+        # Add static file serving for frontend when dist exists
+        assets_dir = Path(self._get_static_dir("assets"))
+        if assets_dir.exists():
+            app.router.add_static("/assets", path=str(assets_dir), name="assets")
         app.router.add_get("/{tail:.*}", self.serve_index, name="index")
         return app
     
     def _get_static_dir(self, subdir=None):
         """Get static directory path."""
-        script_dir = Path(__file__).parent.parent.parent.parent
+        script_dir = Path(__file__).resolve().parent.parent.parent
         static_dir = script_dir / "front" / "dist"
         if subdir:
             static_dir = static_dir / subdir
