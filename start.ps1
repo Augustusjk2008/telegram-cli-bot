@@ -1,38 +1,122 @@
-# Telegram CLI Bridge Bot 启动脚本
-# 支持 PowerShell 5.1+ 和 PowerShell Core
+# Telegram CLI Bridge - Tray Startup Script
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$Host.UI.RawUI.WindowTitle = "Telegram CLI Bridge Bot"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+Set-Location $scriptDir
 
-Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "   Telegram CLI Bridge Bot 启动脚本" -ForegroundColor Cyan
-Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host ""
+# Create tray icon
+$notifyIcon = New-Object System.Windows.Forms.NotifyIcon
+$iconPath = Join-Path $scriptDir "icon.ico"
+if (Test-Path $iconPath) {
+    $notifyIcon.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($iconPath)
+} else {
+    $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
+}
+$notifyIcon.Text = "Telegram CLI Bridge - Running"
+$notifyIcon.Visible = $true
 
-# 获取脚本所在目录
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ScriptDir
+# Create context menu
+$contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 
-# 检查 .env 文件
-if (-not (Test-Path ".env")) {
-    Write-Host "[警告] 未找到 .env 文件，请配置环境变量！" -ForegroundColor Yellow
-    Read-Host "按 Enter 键继续"
+# Show Console menu item
+$showConsoleMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Console"
+$showConsoleMenuItem.Add_Click({
+    if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
+        $sig = @'
+[DllImport("user32.dll")]
+public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("kernel32.dll")]
+public static extern IntPtr GetConsoleWindow();
+'@
+        $type = Add-Type -MemberDefinition $sig -Name WinAPI -PassThru
+        $hwnd = $type::GetConsoleWindow()
+        if ($hwnd -ne [IntPtr]::Zero) {
+            [void]$type::ShowWindow($hwnd, 9)  # SW_RESTORE
+        }
+    }
+})
+[void]$contextMenu.Items.Add($showConsoleMenuItem)
+
+$openFolderMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Open Project Folder"
+$openFolderMenuItem.Add_Click({ Start-Process explorer.exe $scriptDir })
+[void]$contextMenu.Items.Add($openFolderMenuItem)
+
+[void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+$statusMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Status"
+$statusMenuItem.Add_Click({
+    $statusText = if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
+        "Bot is running`nPID: $($global:pythonProcess.Id)`nWorking Directory: $scriptDir"
+    } else {
+        "Bot process is not running`nWorking Directory: $scriptDir"
+    }
+    [System.Windows.Forms.MessageBox]::Show($statusText, "Telegram CLI Bridge", "OK", "Information")
+})
+[void]$contextMenu.Items.Add($statusMenuItem)
+
+$restartMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Restart Service"
+$restartMenuItem.Add_Click({
+    if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
+        $global:pythonProcess.Kill()
+        $global:pythonProcess.WaitForExit(5000)
+    }
+    Start-Sleep -Seconds 1
+    $global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru -WindowStyle Hidden
+    $notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
+    $notifyIcon.BalloonTipText = "Service restarted"
+    $notifyIcon.ShowBalloonTip(2000)
+})
+[void]$contextMenu.Items.Add($restartMenuItem)
+
+[void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+$exitMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Exit"
+$exitMenuItem.Add_Click({
+    $notifyIcon.Visible = $false
+    if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
+        $global:pythonProcess.Kill()
+        $global:pythonProcess.WaitForExit(5000)
+    }
+    [System.Windows.Forms.Application]::Exit()
+})
+[void]$contextMenu.Items.Add($exitMenuItem)
+
+$notifyIcon.ContextMenuStrip = $contextMenu
+
+$notifyIcon.Add_DoubleClick({
+    $sig = @'
+[DllImport("user32.dll")]
+public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("kernel32.dll")]
+public static extern IntPtr GetConsoleWindow();
+'@
+    $type = Add-Type -MemberDefinition $sig -Name WinAPI2 -PassThru -ErrorAction SilentlyContinue
+    if (!$type) { $type = [WinAPI2] }
+    $hwnd = $type::GetConsoleWindow()
+    if ($hwnd -ne [IntPtr]::Zero) {
+        [void]$type::ShowWindow($hwnd, 9)  # SW_RESTORE
+    }
+})
+
+# Start Python Bot in new console window
+$global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru
+
+$notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
+$notifyIcon.BalloonTipText = "Service started"
+$notifyIcon.ShowBalloonTip(2000)
+
+# Keep script running
+while (!$global:pythonProcess.HasExited) {
+    Start-Sleep -Milliseconds 100
+    [System.Windows.Forms.Application]::DoEvents()
 }
 
-Write-Host ""
-Write-Host "==========================================" -ForegroundColor Green
-Write-Host "   正在启动 Bot..." -ForegroundColor Green
-Write-Host "==========================================" -ForegroundColor Green
-Write-Host ""
+$notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
+$notifyIcon.BalloonTipText = "Service stopped!"
+$notifyIcon.ShowBalloonTip(5000)
 
-# 启动 Bot
-try {
-    python -m bot
-} catch {
-    Write-Host "[错误] Bot 运行出错: $_" -ForegroundColor Red
+while ($true) {
+    Start-Sleep -Milliseconds 100
+    [System.Windows.Forms.Application]::DoEvents()
 }
-
-# 如果 Bot 异常退出
-Write-Host ""
-Write-Host "[错误] Bot 已停止运行！" -ForegroundColor Red
-Read-Host "按 Enter 键退出"

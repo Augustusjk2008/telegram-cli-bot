@@ -7,6 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from .basic import start, reset, change_directory, print_working_directory, list_directory, show_history, handle_keyboard_command
 from .shell import execute_shell, remove_file
 from .file import upload_help, handle_document, download_file, cat_file, head_file
+from .file_browser import show_file_browser, handle_file_browser_callback
 from .chat import handle_text_message, handle_stop_callback
 from .admin import (
     bot_help,
@@ -60,6 +61,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("cd", change_directory))
     application.add_handler(CommandHandler("pwd", print_working_directory))
+    application.add_handler(CommandHandler("files", show_file_browser))
     application.add_handler(CommandHandler("ls", list_directory))
     application.add_handler(CommandHandler("exec", execute_shell))
     application.add_handler(CommandHandler("rm", remove_file))
@@ -88,6 +90,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_params_help", bot_params_help))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
         application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
+    application.add_handler(CallbackQueryHandler(handle_file_browser_callback, pattern="^fb:"))
 
     # 语音和音频处理（优先级高于文档和文字）
     if VOICE_HANDLER_AVAILABLE:
@@ -100,7 +103,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
     # 停止任务回调（必须在文本消息处理器之前）
     application.add_handler(CallbackQueryHandler(handle_stop_callback, pattern="^stop_task$"))
     
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(文件浏览|查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(files|ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
 
@@ -108,6 +111,7 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
     """注册助手模式的 handlers"""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
+    application.add_handler(CommandHandler("files", show_file_browser))
     application.add_handler(CommandHandler("history", show_history))
 
     # 记忆管理命令
@@ -138,6 +142,7 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_params_help", bot_params_help))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
         application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
+    application.add_handler(CallbackQueryHandler(handle_file_browser_callback, pattern="^fb:"))
 
     # 语音和音频处理（优先级高于文字）
     if VOICE_HANDLER_AVAILABLE:
@@ -148,7 +153,7 @@ def _register_assistant_handlers(application: Application, include_admin: bool):
     # 助手模式的文本消息处理
     if ASSISTANT_HANDLER_AVAILABLE:
         # 助手模式也支持键盘命令
-        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
+        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(文件浏览|查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(files|ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_assistant_message))
         logger.info("助手处理器已注册")
     else:

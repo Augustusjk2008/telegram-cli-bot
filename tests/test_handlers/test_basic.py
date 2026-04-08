@@ -4,12 +4,15 @@
 导入真实的 basic handler 函数进行测试
 """
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from bot.handlers.basic import (
     change_directory,
+    handle_keyboard_command,
     list_directory,
     print_working_directory,
     reset,
@@ -26,6 +29,14 @@ class TestStartHandler:
         with patch("bot.handlers.basic.check_auth", return_value=True):
             await start(mock_update, mock_context)
         mock_update.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_help_mentions_files_command(self, mock_update, mock_context):
+        with patch("bot.handlers.basic.check_auth", return_value=True):
+            await start(mock_update, mock_context)
+
+        call_text = mock_update.message.reply_text.call_args[0][0]
+        assert "/files" in call_text
 
     @pytest.mark.asyncio
     async def test_start_unauthorized(self, mock_update, mock_context):
@@ -186,3 +197,17 @@ class TestShowHistory:
             await show_history(mock_update, mock_context)
         call_text = mock_update.message.reply_text.call_args[0][0]
         assert "hello" in call_text or "user" in call_text.lower()
+
+
+class TestKeyboardCommands:
+    """测试快捷键盘命令映射"""
+
+    @pytest.mark.asyncio
+    async def test_keyboard_files_button_routes_to_file_browser(self, mock_update, mock_context):
+        mock_update.message.text = "文件浏览"
+        browser_module = SimpleNamespace(show_file_browser=AsyncMock())
+
+        with patch.dict(sys.modules, {"bot.handlers.file_browser": browser_module}):
+            await handle_keyboard_command(mock_update, mock_context)
+
+        browser_module.show_file_browser.assert_awaited_once_with(mock_update, mock_context)

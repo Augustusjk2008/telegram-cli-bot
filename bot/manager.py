@@ -60,7 +60,22 @@ class MultiBotManager:
         self._lock = asyncio.Lock()
         # 网络错误日志抑制状态: {alias: (error_type, last_log_time, count)}
         self._network_error_log_state: Dict[str, tuple] = {}
+        # 主bot连续网络错误计数（用于触发程序重启）
+        self._main_bot_network_error_count = 0
         self._load_profiles()
+
+    def _make_error_handler(self, alias: str):
+        """全局错误处理器，对网络错误静默处理"""
+        async def _on_error(update: object, context) -> None:
+            error = context.error
+            is_network_error = isinstance(error, (NetworkError, TimedOut)) or (
+                ConnectError is not None and isinstance(error, (ConnectError, ConnectTimeout, RemoteProtocolError))
+            )
+            if is_network_error:
+                logger.debug("Handler网络错误(已忽略) alias=%s: %s", alias, error)
+            else:
+                logger.error("Handler异常 alias=%s: %s", alias, error, exc_info=error)
+        return _on_error
 
     def _make_polling_error_callback(self, alias: str):
         """轮询错误回调，带智能日志抑制（适合网络不稳定环境）"""
@@ -113,6 +128,28 @@ class MultiBotManager:
 
         return _on_polling_error
 
+    def _handle_network_error_exhausted(self, alias: str):
+        """处理网络错误重试耗尽的情况"""
+        if alias != "main":
+            return
+
+        self._main_bot_network_error_count += 1
+        logger.warning(
+            "主bot网络错误计数: %d/10",
+            self._main_bot_network_error_count
+        )
+
+        if self._main_bot_network_error_count >= 10:
+            # 检查是否有活跃的CLI会话
+            if not is_bot_processing():
+                logger.critical("主bot连续网络错误达到10次且无活跃会话，触发程序重启")
+                import bot.config as config
+                if config.RESTART_EVENT:
+                    config.RESTART_REQUESTED = True
+                    config.RESTART_EVENT.set()
+            else:
+                logger.warning("主bot连续网络错误达到10次，但有活跃CLI会话，暂不重启")
+
     async def _start_updater_polling_with_retry(self, app: Application, alias: str):
         """带指数退避重试的启动轮询"""
         retry_count = 0
@@ -126,11 +163,15 @@ class MultiBotManager:
                     logger.info("轮询恢复成功 alias=%s (重试%d次)", alias, retry_count)
                     # 清除日志抑制状态，让下次错误能正常记录
                     self._network_error_log_state.pop(alias, None)
+                # 成功后重置主bot错误计数
+                if alias == "main":
+                    self._main_bot_network_error_count = 0
                 return
             except (NetworkError, TimedOut) as e:
                 retry_count += 1
                 if retry_count >= NETWORK_ERROR_MAX_RETRIES:
                     logger.error("网络错误重试耗尽 alias=%s: %s", alias, e)
+                    self._handle_network_error_exhausted(alias)
                     raise
 
                 # 指数退避: 1s, 2s, 4s, 8s... 最高60s
@@ -146,6 +187,7 @@ class MultiBotManager:
                     retry_count += 1
                     if retry_count >= NETWORK_ERROR_MAX_RETRIES:
                         logger.error("HTTPX连接错误重试耗尽 alias=%s: %s", alias, e)
+                        self._handle_network_error_exhausted(alias)
                         raise
 
                     delay = min(base_delay * (2 ** (retry_count - 1)), max_delay)
@@ -403,6 +445,9 @@ class MultiBotManager:
         app.bot_data["bot_alias"] = profile.alias
         app.bot_data["is_main"] = is_main
         app.bot_data["bot_mode"] = profile.bot_mode
+
+        # 注册全局错误处理器（网络错误静默重试）
+        app.add_error_handler(self._make_error_handler(profile.alias))
 
         register_handlers(app, include_admin=is_main)
 

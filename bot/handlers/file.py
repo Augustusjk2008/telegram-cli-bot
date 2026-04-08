@@ -13,6 +13,44 @@ from bot.utils import check_auth, is_safe_filename, safe_edit_text
 
 logger = logging.getLogger(__name__)
 
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+class FilePathError(ValueError):
+    """路径校验失败。"""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def resolve_session_path(session, filename: str) -> str:
+    """将用户输入文件名解析到当前工作目录，并做路径安全校验。"""
+    if not is_safe_filename(filename):
+        raise FilePathError("unsafe_filename")
+
+    real_working = os.path.abspath(session.working_dir)
+    real_path = os.path.abspath(os.path.join(session.working_dir, filename))
+    try:
+        common = os.path.commonpath([real_working, real_path])
+    except ValueError as exc:
+        raise FilePathError("unsafe_path") from exc
+
+    if common != real_working:
+        raise FilePathError("unsafe_path")
+
+    return real_path
+
+
+async def send_document_from_path(message, file_path: str):
+    with open(file_path, "rb") as handle:
+        await message.reply_document(document=handle)
+
+
+async def send_photo_from_path(message, file_path: str):
+    with open(file_path, "rb") as handle:
+        await message.reply_photo(photo=handle)
+
 
 async def upload_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -67,17 +105,14 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     filename = " ".join(context.args)
-    if not is_safe_filename(filename):
-        await update.message.reply_text(msg("download", "unsafe_filename"))
-        return
-
     session = get_current_session(update, context)
-    file_path = os.path.join(session.working_dir, filename)
-
-    real_path = os.path.abspath(file_path)
-    real_working = os.path.abspath(session.working_dir)
-    if not real_path.startswith(real_working):
-        await update.message.reply_text(msg("download", "unsafe_path"))
+    try:
+        file_path = resolve_session_path(session, filename)
+    except FilePathError as exc:
+        if exc.code == "unsafe_filename":
+            await update.message.reply_text(msg("download", "unsafe_filename"))
+        else:
+            await update.message.reply_text(msg("download", "unsafe_path"))
         return
 
     if not os.path.isfile(file_path):
@@ -89,8 +124,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        with open(file_path, "rb") as f:
-            await update.message.reply_document(document=f)
+        await send_document_from_path(update.message, file_path)
     except Exception as e:
         await update.message.reply_text(msg("download", "error", error=str(e)))
 

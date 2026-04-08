@@ -23,6 +23,7 @@
     "cmd_reset": "   /reset - 重置当前会话",
     "cmd_cd": "   /cd <路径> - 切换工作目录",
     "cmd_pwd": "   /pwd - 显示当前目录",
+    "cmd_files": "   /files - 交互式浏览当前目录",
     "cmd_ls": "   /ls - 列出目录内容",
     "cmd_exec": "   /exec <cmd> - 执行 Shell 命令",
     "cmd_history": "   /history - 查看会话历史",

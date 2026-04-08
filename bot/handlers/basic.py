@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # 只包含不需要参数的常用命令
 COMMON_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["查看目录", "当前路径"],
+        ["文件浏览", "查看目录", "当前路径"],
         ["重置会话", "系统脚本", "历史记录"],
     ],
     resize_keyboard=True,
@@ -38,7 +38,7 @@ COMMON_KEYBOARD = ReplyKeyboardMarkup(
 # 主Bot专属键盘（额外包含管理命令）
 MAIN_BOT_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["查看目录", "当前路径"],
+        ["文件浏览", "查看目录", "当前路径"],
         ["重置会话", "系统脚本", "历史记录"],
         ["机器人列表", "重启系统"],
     ],
@@ -48,6 +48,7 @@ MAIN_BOT_KEYBOARD = ReplyKeyboardMarkup(
 
 # 键盘中文到命令的映射
 KEYBOARD_TEXT_MAP = {
+    "文件浏览": "/files",
     "查看目录": "/ls",
     "当前路径": "/pwd",
     "重置会话": "/reset",
@@ -56,6 +57,32 @@ KEYBOARD_TEXT_MAP = {
     "机器人列表": "/bot_list",
     "重启系统": "/restart",
 }
+
+
+def resolve_working_directory(current_dir: str, new_path: str) -> str:
+    """将相对路径解析为绝对工作目录路径。"""
+    target = new_path
+    if not os.path.isabs(target):
+        target = os.path.join(current_dir, target)
+    return os.path.abspath(os.path.expanduser(target))
+
+
+async def update_session_working_directory(
+    context: ContextTypes.DEFAULT_TYPE,
+    session,
+    new_path: str,
+) -> str:
+    """复用 /cd 语义更新当前会话工作目录。"""
+    resolved_path = resolve_working_directory(session.working_dir, new_path)
+    if not os.path.isdir(resolved_path):
+        raise FileNotFoundError(resolved_path)
+
+    if not is_main_application(context):
+        await get_manager(context).set_bot_workdir(get_bot_alias(context), resolved_path)
+
+    session.clear_session_ids()
+    session.working_dir = resolved_path
+    return resolved_path
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,6 +144,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{msg('greeting', 'cmd_reset')}\n"
         f"{msg('greeting', 'cmd_cd')}\n"
         f"{msg('greeting', 'cmd_pwd')}\n"
+        f"{msg('greeting', 'cmd_files')}\n"
         f"{msg('greeting', 'cmd_ls')}\n"
         f"{msg('greeting', 'cmd_exec')}\n"
         f"{msg('greeting', 'cmd_history')}\n"
@@ -187,32 +215,27 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_current_session(update, context)
     new_path = " ".join(context.args)
+    resolved_path = resolve_working_directory(session.working_dir, new_path)
 
-    if not os.path.isabs(new_path):
-        new_path = os.path.join(session.working_dir, new_path)
-    new_path = os.path.abspath(os.path.expanduser(new_path))
+    try:
+        await update_session_working_directory(context, session, new_path)
+    except FileNotFoundError:
+        await update.message.reply_text(msg("cd", "not_exist", path=html.escape(resolved_path)), parse_mode="HTML")
+        return
+    except Exception as e:
+        logger.warning(
+            "保存子Bot工作目录失败 alias=%s path=%s error=%s",
+            get_bot_alias(context),
+            resolved_path,
+            e,
+        )
+        await update.message.reply_text(
+            msg("cd", "persist_failed", error=html.escape(str(e))),
+            parse_mode="HTML",
+        )
+        return
 
-    if os.path.isdir(new_path):
-        # 子 Bot 的 /cd 必须写回托管配置，否则重置/重启后仍会回到旧目录。
-        if not is_main_application(context):
-            alias = get_bot_alias(context)
-            try:
-                await get_manager(context).set_bot_workdir(alias, new_path)
-            except Exception as e:
-                logger.warning("保存子Bot工作目录失败 alias=%s path=%s error=%s", alias, new_path, e)
-                await update.message.reply_text(
-                    msg("cd", "persist_failed", error=html.escape(str(e))),
-                    parse_mode="HTML",
-                )
-                return
-
-        # 切换目录时清除会话ID
-        session.clear_session_ids()
-
-        session.working_dir = new_path
-        await update.message.reply_text(msg("cd", "success", path=html.escape(new_path)), parse_mode="HTML")
-    else:
-        await update.message.reply_text(msg("cd", "not_exist", path=html.escape(new_path)), parse_mode="HTML")
+    await update.message.reply_text(msg("cd", "success", path=html.escape(resolved_path)), parse_mode="HTML")
 
 
 async def print_working_directory(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -309,6 +332,12 @@ async def handle_keyboard_command(update: Update, context: ContextTypes.DEFAULT_
     # 首先检查是否是中文键盘按钮
     command = KEYBOARD_TEXT_MAP.get(text)
     if command:
+        if command == "/files":
+            from .file_browser import show_file_browser
+
+            await show_file_browser(update, context)
+            return
+
         # 检查是否是键盘命令
         handler = KEYBOARD_COMMAND_MAP.get(command)
         if handler:
@@ -331,6 +360,12 @@ async def handle_keyboard_command(update: Update, context: ContextTypes.DEFAULT_
     parts = text.split(maxsplit=1)
     if parts:
         command = parts[0].lower()
+        if command == "/files":
+            from .file_browser import show_file_browser
+
+            await show_file_browser(update, context)
+            return
+
         handler = KEYBOARD_COMMAND_MAP.get(command)
         if handler:
             await handler(update, context)
