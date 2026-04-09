@@ -1,5 +1,5 @@
 export type CliType = "kimi" | "claude" | "codex";
-export type BotStatus = "running" | "busy" | "offline";
+export type BotStatus = "running" | "busy" | "unread" | "offline";
 
 export type BotSummary = {
   alias: string;
@@ -97,4 +97,45 @@ export type TunnelSnapshot = {
   localUrl: string;
   lastError: string;
   pid?: number | null;
+};
+
+export type GitChangedFile = {
+  path: string;
+  status: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+};
+
+export type GitCommitSummary = {
+  hash: string;
+  shortHash: string;
+  authorName: string;
+  authoredAt: string;
+  subject: string;
+};
+
+export type GitOverview = {
+  repoFound: boolean;
+  canInit: boolean;
+  workingDir: string;
+  repoPath: string;
+  repoName: string;
+  currentBranch: string;
+  isClean: boolean;
+  aheadCount: number;
+  behindCount: number;
+  changedFiles: GitChangedFile[];
+  recentCommits: GitCommitSummary[];
+};
+
+export type GitDiffPayload = {
+  path: string;
+  staged: boolean;
+  diff: string;
+};
+
+export type GitActionResult = {
+  message: string;
+  overview: GitOverview;
 };

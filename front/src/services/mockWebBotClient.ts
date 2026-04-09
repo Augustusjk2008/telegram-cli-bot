@@ -5,6 +5,9 @@ import type {
   ChatStatusUpdate,
   CliParamsPayload,
   DirectoryListing,
+  GitActionResult,
+  GitDiffPayload,
+  GitOverview,
   SessionState,
   SystemScript,
   SystemScriptResult,
@@ -17,6 +20,72 @@ import { mockFiles } from "../mocks/files";
 
 export class MockWebBotClient implements WebBotClient {
   private currentPaths = new Map<string, string>();
+  private workdirOverrides = new Map<string, string>();
+  private gitOverviews = new Map<string, GitOverview>([
+    [
+      "main",
+      {
+        repoFound: true,
+        canInit: false,
+        workingDir: "C:\\workspace\\demo",
+        repoPath: "C:\\workspace\\demo",
+        repoName: "demo",
+        currentBranch: "main",
+        isClean: false,
+        aheadCount: 1,
+        behindCount: 0,
+        changedFiles: [
+          {
+            path: "bot/web/server.py",
+            status: "M ",
+            staged: true,
+            unstaged: false,
+            untracked: false,
+          },
+          {
+            path: "front/src/screens/GitScreen.tsx",
+            status: "??",
+            staged: false,
+            unstaged: false,
+            untracked: true,
+          },
+        ],
+        recentCommits: [
+          {
+            hash: "847b894",
+            shortHash: "847b894",
+            authorName: "Web Bot",
+            authoredAt: "2026-04-08 03:00:00 +0800",
+            subject: "feat: 实现完整的Web前端与后端集成",
+          },
+        ],
+      },
+    ],
+    [
+      "team2",
+      {
+        repoFound: true,
+        canInit: false,
+        workingDir: "C:\\workspace\\plans",
+        repoPath: "C:\\workspace\\plans",
+        repoName: "plans",
+        currentBranch: "feature/git-panel",
+        isClean: true,
+        aheadCount: 0,
+        behindCount: 0,
+        changedFiles: [],
+        recentCommits: [
+          {
+            hash: "cfb8d40",
+            shortHash: "cfb8d40",
+            authorName: "Web Bot",
+            authoredAt: "2026-04-09 13:00:00 +0800",
+            subject: "docs: add web tunnel and cli settings design",
+          },
+        ],
+      },
+    ],
+  ]);
   private readonly scripts: SystemScript[] = [
     {
       scriptName: "network_traffic",
@@ -25,6 +94,16 @@ export class MockWebBotClient implements WebBotClient {
       path: "C:\\scripts\\network_traffic.ps1",
     },
   ];
+
+  private getBotSummary(botAlias: string): BotSummary {
+    const fallback = mockBots[0];
+    const base = mockBots.find((item) => item.alias === botAlias) || fallback;
+    const workingDir = this.workdirOverrides.get(base.alias) || this.currentPaths.get(base.alias) || base.workingDir;
+    return {
+      ...base,
+      workingDir,
+    };
+  }
 
   async login(password: string): Promise<SessionState> {
     return {
@@ -37,11 +116,11 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async listBots(): Promise<BotSummary[]> {
-    return mockBots;
+    return mockBots.map((item) => this.getBotSummary(item.alias));
   }
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {
-    const bot = mockBots.find((item) => item.alias === botAlias) || mockBots[0];
+    const bot = this.getBotSummary(botAlias);
     return {
       ...bot,
       botMode: "cli",
@@ -111,6 +190,10 @@ export class MockWebBotClient implements WebBotClient {
     return `Mock preview for ${filename}\n\nThis is a local preview.`;
   }
 
+  async readFileFull(botAlias: string, filename: string): Promise<string> {
+    return `Mock full content for ${filename}\n\nThis is the full file content.`;
+  }
+
   async uploadFile(botAlias: string, file: File): Promise<void> {
     return;
   }
@@ -125,6 +208,157 @@ export class MockWebBotClient implements WebBotClient {
 
   async killTask(botAlias: string): Promise<string> {
     return "已发送终止任务请求";
+  }
+
+  async restartService(): Promise<void> {
+    return;
+  }
+
+  async getGitOverview(botAlias: string): Promise<GitOverview> {
+    const workingDir = this.workdirOverrides.get(botAlias) || this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+    const overview = this.gitOverviews.get(botAlias);
+    if (!overview) {
+      return {
+        repoFound: false,
+        canInit: true,
+        workingDir,
+        repoPath: "",
+        repoName: "",
+        currentBranch: "",
+        isClean: true,
+        aheadCount: 0,
+        behindCount: 0,
+        changedFiles: [],
+        recentCommits: [],
+      };
+    }
+    return {
+      ...overview,
+      workingDir,
+      repoPath: overview.repoPath || workingDir,
+    };
+  }
+
+  async initGitRepository(botAlias: string): Promise<GitOverview> {
+    const workingDir = this.workdirOverrides.get(botAlias) || this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+    const next: GitOverview = {
+      repoFound: true,
+      canInit: false,
+      workingDir,
+      repoPath: workingDir,
+      repoName: workingDir.split("\\").filter(Boolean).pop() || "repo",
+      currentBranch: "main",
+      isClean: true,
+      aheadCount: 0,
+      behindCount: 0,
+      changedFiles: [],
+      recentCommits: [],
+    };
+    this.gitOverviews.set(botAlias, next);
+    return next;
+  }
+
+  async getGitDiff(_botAlias: string, path: string, staged = false): Promise<GitDiffPayload> {
+    return {
+      path,
+      staged,
+      diff: `diff --git a/${path} b/${path}\n@@ -1 +1 @@\n-old line\n+new line`,
+    };
+  }
+
+  private async actionWithOverview(botAlias: string, message: string, mutator?: (overview: GitOverview) => GitOverview): Promise<GitActionResult> {
+    const current = await this.getGitOverview(botAlias);
+    const next = mutator ? mutator(current) : current;
+    this.gitOverviews.set(botAlias, next);
+    return {
+      message,
+      overview: next,
+    };
+  }
+
+  async stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已暂存所选文件", (overview) => ({
+      ...overview,
+      changedFiles: overview.changedFiles.map((item) =>
+        paths.includes(item.path)
+          ? { ...item, staged: true, untracked: false, status: item.unstaged ? "MM" : "M " }
+          : item,
+      ),
+      isClean: false,
+    }));
+  }
+
+  async unstageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已取消暂存所选文件", (overview) => ({
+      ...overview,
+      changedFiles: overview.changedFiles.map((item) =>
+        paths.includes(item.path)
+          ? { ...item, staged: false, status: item.untracked ? "??" : " M" }
+          : item,
+      ),
+    }));
+  }
+
+  async commitGitChanges(botAlias: string, message: string): Promise<GitActionResult> {
+    const subject = (message || "").trim() || "mock commit";
+    return this.actionWithOverview(botAlias, "已创建提交", (overview) => ({
+      ...overview,
+      isClean: true,
+      changedFiles: [],
+      recentCommits: [
+        {
+          hash: `${Date.now()}`,
+          shortHash: `${Date.now()}`.slice(-7),
+          authorName: "Web Bot",
+          authoredAt: new Date().toISOString(),
+          subject,
+        },
+        ...overview.recentCommits,
+      ],
+    }));
+  }
+
+  async fetchGitRemote(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已抓取远端更新");
+  }
+
+  async pullGitRemote(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已拉取远端更新");
+  }
+
+  async pushGitRemote(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已推送本地提交");
+  }
+
+  async stashGitChanges(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已暂存当前工作区", (overview) => ({
+      ...overview,
+      isClean: true,
+      changedFiles: [],
+    }));
+  }
+
+  async popGitStash(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已恢复最近一次暂存", (overview) => ({
+      ...overview,
+      isClean: false,
+      changedFiles: [
+        {
+          path: "restored.txt",
+          status: " M",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+        },
+      ],
+    }));
+  }
+
+  async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
+    const nextDir = workingDir.trim();
+    this.workdirOverrides.set(botAlias, nextDir);
+    this.currentPaths.set(botAlias, nextDir);
+    return this.getBotSummary(botAlias);
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
@@ -232,6 +466,23 @@ export class MockWebBotClient implements WebBotClient {
       scriptName,
       success: true,
       output: `${scriptName} 执行完成（Mock）`,
+    };
+  }
+
+  async runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
+    const logs = [
+      "cd /d front",
+      "npm run build",
+      "Web 前端构建完成",
+    ];
+    for (const line of logs) {
+      onLog(line);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return {
+      scriptName,
+      success: true,
+      output: "Web 前端构建完成",
     };
   }
 }

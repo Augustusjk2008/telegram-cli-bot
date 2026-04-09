@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import html
 import logging
 import os
 from pathlib import Path
@@ -58,10 +59,24 @@ from .api_service import (
     search_memories,
     start_managed_bot,
     stop_managed_bot,
+    stream_system_script,
     stream_chat,
     update_cli_params,
     update_bot_cli,
     update_bot_workdir,
+)
+from .git_service import (
+    commit_git_changes,
+    fetch_git_remote,
+    get_git_diff,
+    get_git_overview,
+    init_git_repository,
+    pop_git_stash,
+    pull_git_remote,
+    push_git_remote,
+    stage_git_paths,
+    stash_git_changes,
+    unstage_git_paths,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +208,41 @@ class WebApiServer:
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         return alias
+
+    async def _notify_tunnel_public_url(self, snapshot: dict[str, Any], *, reason: str) -> bool:
+        if snapshot.get("status") != "running":
+            return False
+        if snapshot.get("source") != "quick_tunnel":
+            return False
+
+        public_url = str(snapshot.get("public_url") or "").strip()
+        if not public_url:
+            return False
+
+        main_app = self.manager.applications.get(self.manager.main_profile.alias)
+        if main_app is None or not ALLOWED_USER_IDS:
+            return False
+
+        text = (
+            "🌐 <b>Web 公网地址已就绪</b>\n\n"
+            f"来源: <code>{html.escape(reason)}</code>\n"
+            f"公网地址: <code>{html.escape(public_url)}</code>\n"
+            f"本地地址: <code>{html.escape(str(snapshot.get('local_url') or ''))}</code>"
+        )
+
+        sent_any = False
+        for user_id in ALLOWED_USER_IDS:
+            try:
+                await main_app.bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+                sent_any = True
+            except Exception as exc:
+                logger.warning("发送 Web 公网地址通知失败 user_id=%s: %s", user_id, exc)
+
+        return sent_any
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -341,6 +391,74 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit)})
 
+    async def get_git_overview_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_git_overview(self.manager, alias, auth.user_id)})
+
+    async def post_git_init(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": init_git_repository(self.manager, alias, auth.user_id)})
+
+    async def get_git_diff_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        path = request.query.get("path", "")
+        staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
+        return _json({"ok": True, "data": get_git_diff(self.manager, alias, auth.user_id, path, staged=staged)})
+
+    async def post_git_stage(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        overview = stage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
+        return _json({"ok": True, "data": {"message": "已暂存所选文件", "overview": overview}})
+
+    async def post_git_unstage(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        overview = unstage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
+        return _json({"ok": True, "data": {"message": "已取消暂存所选文件", "overview": overview}})
+
+    async def post_git_commit(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        overview = commit_git_changes(self.manager, alias, auth.user_id, body.get("message", ""))
+        return _json({"ok": True, "data": {"message": "已创建提交", "overview": overview}})
+
+    async def post_git_fetch(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        overview = fetch_git_remote(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": {"message": "已抓取远端更新", "overview": overview}})
+
+    async def post_git_pull(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        overview = pull_git_remote(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
+
+    async def post_git_push(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        overview = push_git_remote(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": {"message": "已推送本地提交", "overview": overview}})
+
+    async def post_git_stash(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        overview = stash_git_changes(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": {"message": "已暂存当前工作区", "overview": overview}})
+
+    async def post_git_stash_pop(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        overview = pop_git_stash(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": {"message": "已恢复最近一次暂存", "overview": overview}})
+
     async def upload_file(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -422,6 +540,38 @@ class WebApiServer:
         data = await run_system_script(body.get("script_name", ""))
         return _json({"ok": True, "data": data})
 
+    async def admin_run_script_stream(self, request: web.Request) -> web.StreamResponse:
+        await self._with_auth(request)
+        body = await self._parse_json(request)
+        script_name = str(body.get("script_name", ""))
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        client_disconnected = False
+        async for event in stream_system_script(script_name):
+            if client_disconnected:
+                continue
+            try:
+                await response.write(_format_sse(event["type"], event))
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                client_disconnected = True
+                logger.info("系统脚本 SSE 客户端已断开，继续在后台执行: script=%s", script_name)
+
+        if not client_disconnected:
+            try:
+                await response.write_eof()
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                logger.info("系统脚本 SSE 客户端在结束前断开: script=%s", script_name)
+        return response
+
     async def admin_processing(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -469,10 +619,10 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_update_workdir(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await update_bot_workdir(self.manager, alias, body.get("working_dir", ""))
+        data = await update_bot_workdir(self.manager, alias, body.get("working_dir", ""), auth.user_id)
         return _json({"ok": True, "data": data})
 
     async def admin_restart(self, request: web.Request) -> web.Response:
@@ -486,7 +636,9 @@ class WebApiServer:
 
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
-        return _json({"ok": True, "data": await self._tunnel_service.start()})
+        snapshot = await self._tunnel_service.start()
+        await self._notify_tunnel_public_url(snapshot, reason="manual_tunnel_start")
+        return _json({"ok": True, "data": snapshot})
 
     async def admin_tunnel_stop(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
@@ -494,7 +646,9 @@ class WebApiServer:
 
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
-        return _json({"ok": True, "data": await self._tunnel_service.restart()})
+        snapshot = await self._tunnel_service.restart()
+        await self._notify_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
+        return _json({"ok": True, "data": snapshot})
 
     async def admin_single_bot(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
@@ -519,6 +673,17 @@ class WebApiServer:
         app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
         app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
+        app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
+        app.router.add_post("/api/bots/{alias}/git/init", self.post_git_init)
+        app.router.add_get("/api/bots/{alias}/git/diff", self.get_git_diff_view)
+        app.router.add_post("/api/bots/{alias}/git/stage", self.post_git_stage)
+        app.router.add_post("/api/bots/{alias}/git/unstage", self.post_git_unstage)
+        app.router.add_post("/api/bots/{alias}/git/commit", self.post_git_commit)
+        app.router.add_post("/api/bots/{alias}/git/fetch", self.post_git_fetch)
+        app.router.add_post("/api/bots/{alias}/git/pull", self.post_git_pull)
+        app.router.add_post("/api/bots/{alias}/git/push", self.post_git_push)
+        app.router.add_post("/api/bots/{alias}/git/stash", self.post_git_stash)
+        app.router.add_post("/api/bots/{alias}/git/stash/pop", self.post_git_stash_pop)
         app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
@@ -530,6 +695,7 @@ class WebApiServer:
         app.router.add_get("/api/tool-stats", self.tool_stats)
         app.router.add_get("/api/admin/bots", self.admin_bots)
         app.router.add_get("/api/admin/scripts", self.admin_scripts)
+        app.router.add_post("/api/admin/scripts/run/stream", self.admin_run_script_stream)
         app.router.add_post("/api/admin/scripts/run", self.admin_run_script)
         app.router.add_get("/api/admin/bots/{alias}/processing", self.admin_processing)
         app.router.add_post("/api/admin/bots", self.admin_add_bot)
@@ -577,6 +743,7 @@ class WebApiServer:
         await self._site.start()
         if self._tunnel_service.should_autostart():
             tunnel_snapshot = await self._tunnel_service.start()
+            await self._notify_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
             logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
         logger.info(
             "Web API 已启动: http://%s:%s (token=%s, allowed_origins=%s)",

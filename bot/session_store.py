@@ -96,7 +96,7 @@ def save_session(
         session_data["kimi_session_id"] = kimi_session_id
     if claude_session_id:
         session_data["claude_session_id"] = claude_session_id
-    if working_dir:
+    if isinstance(working_dir, str) and working_dir:
         session_data["working_dir"] = working_dir
     if history:
         session_data["history"] = history

@@ -14,7 +14,7 @@
       "token": "8291157555:AAE_jkTJH5dulRmeEOwK_p_R73X42HC_ZvI",
       "cli_type": "codex",
       "cli_path": "codex",
-      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu",
+      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu\\docs",
       "enabled": true,
       "bot_mode": "cli",
       "cli_params": {
@@ -50,7 +50,7 @@
       "token": "8477054156:AAEf6cecw_bhKLfSDKy_hVUNZD_vw44WCN4",
       "cli_type": "codex",
       "cli_path": "codex",
-      "working_dir": "h:\\workspace\\KimiAgent",
+      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu",
       "enabled": true,
       "bot_mode": "cli"
     }

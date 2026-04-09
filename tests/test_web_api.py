@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,9 +21,17 @@ from bot.web.api_service import (
     get_directory_listing,
     get_session_for_alias,
     get_overview,
+    list_bots,
     read_file_content,
     run_cli_chat,
     save_uploaded_file,
+)
+from bot.web.git_service import (
+    commit_git_changes,
+    get_git_diff,
+    get_git_overview,
+    init_git_repository,
+    stage_git_paths,
 )
 from bot.web.server import WebApiServer
 
@@ -73,6 +82,17 @@ def test_overview_includes_running_reply_snapshot(web_manager: MultiBotManager):
     }
 
 
+def test_list_bots_includes_processing_state_for_current_user(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+
+    items = list_bots(web_manager, 1001)
+
+    assert items[0]["alias"] == "main"
+    assert items[0]["is_processing"] is True
+
+
 def test_change_working_directory_clears_session_ids(web_manager: MultiBotManager, temp_dir: Path):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-old"
@@ -99,6 +119,72 @@ def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
 
     content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=1)
     assert content["content"] == "line1"
+
+
+def _init_git_repo(repo_dir: Path):
+    subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Web Bot Test"], cwd=repo_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "web-bot@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+
+def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("line 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+    tracked.write_text("line 1\nline 2\n", encoding="utf-8")
+    (repo_dir / "new.txt").write_text("draft\n", encoding="utf-8")
+
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+    overview = get_git_overview(web_manager, "main", 1001)
+
+    assert overview["repo_found"] is True
+    assert overview["repo_path"] == str(repo_dir)
+    assert overview["repo_name"] == "repo"
+    assert overview["current_branch"]
+    assert any(item["path"] == "tracked.txt" for item in overview["changed_files"])
+    assert any(item["path"] == "new.txt" for item in overview["changed_files"])
+    assert overview["recent_commits"][0]["subject"] == "init"
+
+
+def test_init_git_repository_creates_repo_when_missing(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "new-repo"
+    repo_dir.mkdir()
+
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+    result = init_git_repository(web_manager, "main", 1001)
+
+    assert result["repo_found"] is True
+    assert result["repo_path"] == str(repo_dir)
+    assert (repo_dir / ".git").exists()
+
+
+def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    staged = stage_git_paths(web_manager, "main", 1001, ["tracked.txt"])
+    assert any(item["path"] == "tracked.txt" and item["staged"] for item in staged["changed_files"])
+
+    diff = get_git_diff(web_manager, "main", 1001, "tracked.txt", staged=True)
+    assert "+after" in diff["diff"]
+
+    committed = commit_git_changes(web_manager, "main", 1001, "feat: update tracked")
+    assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
 
 
 @pytest.mark.asyncio
@@ -156,6 +242,30 @@ async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager
                 assert "event: meta" in body
                 assert "event: delta" in body
                 assert "event: done" in body
+
+
+@pytest.mark.asyncio
+async def test_admin_run_script_stream_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    async def fake_stream_system_script(script_name: str):
+        yield {"type": "log", "text": "npm run build"}
+        yield {"type": "log", "text": "vite build finished"}
+        yield {"type": "done", "script_name": script_name, "success": True, "output": "Web 前端构建完成"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.stream_system_script", fake_stream_system_script):
+                resp = await client.post("/api/admin/scripts/run/stream", json={"script_name": "build_web_frontend"})
+                assert resp.status == 200
+                body = await resp.text()
+                assert "event: log" in body
+                assert "npm run build" in body
+                assert "event: done" in body
+                assert "Web 前端构建完成" in body
 
 
 @pytest.mark.asyncio
@@ -253,6 +363,114 @@ async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotMan
             assert fake_tunnel.restart_called is True
             assert payload["data"]["status"] == "running"
             assert payload["data"]["public_url"] == "https://fresh.trycloudflare.com"
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_restart_notifies_main_bot_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+
+    fake_main_bot = MagicMock()
+    fake_main_bot.send_message = AsyncMock()
+    web_manager.applications["main"] = MagicMock(bot=fake_main_bot)
+
+    class FakeTunnelService:
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+        async def restart(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://fresh.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+    server = WebApiServer(web_manager)
+    server._tunnel_service = FakeTunnelService()
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/admin/tunnel/restart")
+            assert resp.status == 200
+
+    fake_main_bot.send_message.assert_awaited_once()
+    sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
+    assert "fresh.trycloudflare.com" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+
+    fake_main_bot = MagicMock()
+    fake_main_bot.send_message = AsyncMock()
+    web_manager.applications["main"] = MagicMock(bot=fake_main_bot)
+
+    class FakeTunnelService:
+        def should_autostart(self):
+            return True
+
+        async def start(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://startup.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+        async def stop(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+    class FakeRunner:
+        async def setup(self):
+            return None
+
+        async def cleanup(self):
+            return None
+
+    class FakeSite:
+        def __init__(self, runner, host, port):
+            self.runner = runner
+            self.host = host
+            self.port = port
+
+        async def start(self):
+            return None
+
+    monkeypatch.setattr("bot.web.server.web.AppRunner", lambda app: FakeRunner())
+    monkeypatch.setattr("bot.web.server.web.TCPSite", FakeSite)
+
+    server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
+    await server.start()
+    await server.stop()
+
+    fake_main_bot.send_message.assert_awaited_once()
+    sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
+    assert "startup.trycloudflare.com" in sent_text
 
 
 def test_read_missing_file_raises(web_manager: MultiBotManager):

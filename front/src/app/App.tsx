@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Folder, Menu, MessageSquare, Settings } from "lucide-react";
+import { Folder, GitBranch, Menu, MessageSquare, Settings } from "lucide-react";
 import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -14,6 +14,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
 import { FilesScreen } from "../screens/FilesScreen";
+import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import "../styles/tokens.css";
@@ -21,6 +22,7 @@ import "../styles/global.css";
 
 const TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
+const UNREAD_STORAGE_KEY = "web-unread-bots";
 
 function readStoredToken() {
   return sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() || "";
@@ -51,21 +53,73 @@ function storeBotAlias(alias: string | null) {
   localStorage.setItem(BOT_STORAGE_KEY, trimmed);
 }
 
+function readUnreadBots() {
+  try {
+    const raw = localStorage.getItem(UNREAD_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeUnreadBots(items: string[]) {
+  if (items.length === 0) {
+    localStorage.removeItem(UNREAD_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(items));
+}
+
+function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
+  return bots.map((bot) => {
+    if (bot.status === "busy") {
+      return bot;
+    }
+    if (!unreadBots.includes(bot.alias)) {
+      return bot;
+    }
+    return {
+      ...bot,
+      status: "unread" as const,
+      lastActiveText: "未读",
+    };
+  });
+}
+
 export function App() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentTab, setCurrentTab] = useState<"chat" | "files" | "settings">("chat");
+  const [currentTab, setCurrentTab] = useState<"chat" | "files" | "git" | "settings">("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
+  const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
+  const [isChatImmersive, setIsChatImmersive] = useState(false);
+  const displayBots = applyUnreadStatus(bots, unreadBots);
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
     storeBotAlias(alias);
+    setIsChatImmersive(false);
+  }
+
+  async function openBotSwitcher() {
+    try {
+      const nextBots = await client.listBots();
+      setBots(nextBots);
+    } catch {
+      setBots([]);
+    } finally {
+      setShowSwitcher(true);
+    }
   }
 
   useEffect(() => {
@@ -74,6 +128,10 @@ export function App() {
     }
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
+
+  useEffect(() => {
+    storeUnreadBots(unreadBots);
+  }, [unreadBots]);
 
   useEffect(() => {
     if (!isLoggedIn || bots.length === 0) {
@@ -140,13 +198,16 @@ export function App() {
 
   function handleLogout() {
     clearStoredToken();
+    localStorage.removeItem(UNREAD_STORAGE_KEY);
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
     setIsLoggedIn(false);
     setCurrentBot(null);
     setCurrentTab("chat");
     setBots([]);
+    setUnreadBots([]);
     setMountedChatBots([]);
     setLoginError("");
+    setIsChatImmersive(false);
   }
 
   useEffect(() => {
@@ -156,6 +217,17 @@ export function App() {
     setMountedChatBots((prev) => (prev.includes(currentBot) ? prev : [...prev, currentBot]));
   }, [currentBot]);
 
+  useEffect(() => {
+    if (currentTab !== "chat" || !currentBot) {
+      return;
+    }
+    setUnreadBots((prev) => prev.filter((alias) => alias !== currentBot));
+  }, [currentBot, currentTab]);
+
+  function markBotUnread(alias: string) {
+    setUnreadBots((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
+  }
+
   if (!isLoggedIn) {
     return <LoginScreen onLogin={handleLogin} isLoading={loginLoading} error={loginError} />;
   }
@@ -164,61 +236,97 @@ export function App() {
     return <BotListScreen client={client} onSelect={handleSelectBot} />;
   }
 
+  const hideChatChrome = currentTab === "chat" && isChatImmersive;
+
   return (
     <div className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-[var(--bg)] shadow-xl overflow-hidden relative">
-      <header className="flex items-center justify-between p-3 bg-[var(--surface-strong)] border-b border-[var(--border)] shrink-0">
-        <button
-          onClick={() => setShowSwitcher(true)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-[var(--border)] transition-colors"
-        >
-          <Menu className="w-5 h-5" />
-          <span className="font-semibold">{currentBot}</span>
-        </button>
-      </header>
+      {!hideChatChrome ? (
+        <header className="flex items-center justify-between p-3 bg-[var(--surface-strong)] border-b border-[var(--border)] shrink-0">
+          <button
+            onClick={() => {
+              void openBotSwitcher();
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-[var(--border)] transition-colors"
+          >
+            <Menu className="w-5 h-5" />
+            <span className="font-semibold">{currentBot}</span>
+          </button>
+        </header>
+      ) : null}
 
       <div className="flex-1 overflow-hidden relative">
         <div className={clsx("absolute inset-0", currentTab === "chat" ? "block" : "hidden")}>
           {mountedChatBots.map((alias) => (
             <div key={`chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
-              <ChatScreen botAlias={alias} client={client} />
+              <ChatScreen
+                botAlias={alias}
+                client={client}
+                isVisible={currentTab === "chat" && alias === currentBot}
+                isImmersive={currentTab === "chat" && alias === currentBot ? isChatImmersive : false}
+                onToggleImmersive={() => setIsChatImmersive((prev) => !prev)}
+                onUnreadResult={markBotUnread}
+              />
             </div>
           ))}
         </div>
         <div className={clsx("absolute inset-0", currentTab === "files" ? "block" : "hidden")}>
           <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} />
         </div>
+        <div className={clsx("absolute inset-0", currentTab === "git" ? "block" : "hidden")}>
+          <GitScreen key={`git-${currentBot}`} botAlias={currentBot} client={client} />
+        </div>
         <div className={clsx("absolute inset-0", currentTab === "settings" ? "block" : "hidden")}>
           <SettingsScreen key={`settings-${currentBot}`} botAlias={currentBot} client={client} onLogout={handleLogout} />
         </div>
       </div>
 
-      <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
-        <button
-          onClick={() => setCurrentTab("chat")}
-          className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "chat" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-        >
-          <MessageSquare className="w-6 h-6 mb-1" />
-          <span className="text-[10px] font-medium">聊天</span>
-        </button>
-        <button
-          onClick={() => setCurrentTab("files")}
-          className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "files" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-        >
-          <Folder className="w-6 h-6 mb-1" />
-          <span className="text-[10px] font-medium">文件</span>
-        </button>
-        <button
-          onClick={() => setCurrentTab("settings")}
-          className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "settings" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-        >
-          <Settings className="w-6 h-6 mb-1" />
-          <span className="text-[10px] font-medium">设置</span>
-        </button>
-      </nav>
+      {!hideChatChrome ? (
+        <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
+          <button
+            onClick={() => {
+              setCurrentTab("chat");
+            }}
+            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "chat" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
+          >
+            <MessageSquare className="w-6 h-6 mb-1" />
+            <span className="text-[10px] font-medium">聊天</span>
+          </button>
+          <button
+            onClick={() => {
+              setCurrentTab("files");
+              setIsChatImmersive(false);
+            }}
+            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "files" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
+          >
+            <Folder className="w-6 h-6 mb-1" />
+            <span className="text-[10px] font-medium">文件</span>
+          </button>
+          <button
+            onClick={() => {
+              setCurrentTab("git");
+              setIsChatImmersive(false);
+            }}
+            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "git" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
+          >
+            <GitBranch className="w-6 h-6 mb-1" />
+            <span className="text-[10px] font-medium">Git</span>
+          </button>
+          <button
+            onClick={() => {
+              setCurrentTab("settings");
+              setIsChatImmersive(false);
+            }}
+            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "settings" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
+          >
+            <Settings className="w-6 h-6 mb-1" />
+            <span className="text-[10px] font-medium">设置</span>
+          </button>
+        </nav>
+      ) : null}
 
       {showSwitcher ? (
         <BotSwitcherSheet
-          bots={bots}
+          bots={displayBots}
           currentAlias={currentBot}
           onSelect={(alias) => {
             handleSelectBot(alias);

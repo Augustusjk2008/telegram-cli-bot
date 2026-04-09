@@ -34,9 +34,11 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onClose }: Prop
                   : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
               }`}
             >
-              <div className="flex flex-col items-start">
+              <div className="flex min-w-0 flex-col items-start">
                 <span className="font-semibold">{bot.alias}</span>
-                <span className="text-xs text-[var(--muted)]">{bot.cliType}</span>
+                <span className="max-w-full truncate text-xs text-[var(--muted)]" title={`${bot.cliType}: ${bot.workingDir}`}>
+                  {bot.cliType}: {bot.workingDir}
+                </span>
               </div>
               <StatusPill status={bot.status} />
             </button>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { LoaderCircle, RotateCcw, Square, Terminal } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
 import { ChatComposer } from "../components/ChatComposer";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ChatMessage, RunningReply, SystemScript } from "../services/types";
@@ -8,6 +8,10 @@ import type { WebBotClient } from "../services/webBotClient";
 type Props = {
   botAlias: string;
   client?: WebBotClient;
+  isVisible?: boolean;
+  isImmersive?: boolean;
+  onToggleImmersive?: () => void;
+  onUnreadResult?: (botAlias: string) => void;
 };
 
 function getCompactScriptTitle(script: SystemScript) {
@@ -121,7 +125,14 @@ function resolveStreamStartMs(runningReply?: RunningReply | null, elapsedSeconds
   return Date.now();
 }
 
-export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props) {
+export function ChatScreen({
+  botAlias,
+  client = new MockWebBotClient(),
+  isVisible = true,
+  isImmersive = false,
+  onToggleImmersive,
+  onUnreadResult,
+}: Props) {
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamMode, setStreamMode] = useState<"" | "sse" | "poll">("");
@@ -134,6 +145,12 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
   const [scripts, setScripts] = useState<SystemScript[]>([]);
   const [scriptError, setScriptError] = useState("");
   const [runningScriptName, setRunningScriptName] = useState("");
+  const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
+  const isVisibleRef = useRef(isVisible);
+
+  useEffect(() => {
+    isVisibleRef.current = isVisible;
+  }, [isVisible]);
 
   function appendSystemMessage(text: string) {
     setItems((prev) => [
@@ -226,6 +243,9 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
         setIsStreaming(false);
         setStreamMode("");
         setStreamStartedAtMs(null);
+        if (!isVisibleRef.current) {
+          onUnreadResult?.(botAlias);
+        }
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "恢复任务状态失败");
@@ -244,6 +264,15 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
       window.clearInterval(timer);
     };
   }, [botAlias, client, streamMode]);
+
+  useEffect(() => {
+    if (!isVisible || loading) {
+      return;
+    }
+    if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
+      bottomAnchorRef.current.scrollIntoView({ block: "end" });
+    }
+  }, [isVisible, loading, items, isStreaming]);
 
   async function handleSend(text: string) {
     const userMessage: ChatMessage = {
@@ -303,6 +332,9 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
       );
 
       setItems((prev) => prev.map((item) => (item.id === assistantId ? finalMessage : item)));
+      if (!isVisibleRef.current) {
+        onUnreadResult?.(botAlias);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "发送失败";
       setError(message);
@@ -381,51 +413,60 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
     }
   }
 
+  const killTaskActive = isStreaming || actionLoading === "kill";
+  const killTaskDisabled = !isStreaming || actionLoading === "kill";
+
   return (
-    <main className="flex flex-col h-full">
-      <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
-        <h1 className="text-lg font-semibold">{botAlias}</h1>
-        {isStreaming ? (
-          <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            <span>已等待 {elapsedSeconds} 秒</span>
-          </div>
-        ) : null}
-      </header>
-      <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {botAlias === "main" ? (
+    <main className="relative flex flex-col h-full">
+      {!isImmersive ? (
+        <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
+          <h1 className="text-lg font-semibold">{botAlias}</h1>
+          {isStreaming ? (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              <span>已等待 {elapsedSeconds} 秒</span>
+            </div>
+          ) : null}
+        </header>
+      ) : null}
+      {!isImmersive ? (
+        <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {botAlias === "main" ? (
+              <button
+                type="button"
+                onClick={() => void handleOpenScripts()}
+                disabled={actionLoading === "scripts"}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                <Terminal className="h-4 w-4" />
+                {actionLoading === "scripts" ? "加载脚本..." : "系统脚本"}
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => void handleOpenScripts()}
-              disabled={actionLoading === "scripts"}
+              onClick={() => void handleResetSession()}
+              disabled={actionLoading === "reset"}
               className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
             >
-              <Terminal className="h-4 w-4" />
-              {actionLoading === "scripts" ? "加载脚本..." : "系统脚本"}
+              <RotateCcw className="h-4 w-4" />
+              {actionLoading === "reset" ? "重置中..." : "重置会话"}
             </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void handleResetSession()}
-            disabled={actionLoading === "reset"}
-            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
-          >
-            <RotateCcw className="h-4 w-4" />
-            {actionLoading === "reset" ? "重置中..." : "重置会话"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleKillTask()}
-            disabled={actionLoading === "kill"}
-            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
-          >
-            <Square className="h-4 w-4" />
-            {actionLoading === "kill" ? "终止中..." : "终止任务"}
-          </button>
-        </div>
-      </section>
-      <section className="flex-1 overflow-y-auto p-4 space-y-4">
+            <button
+              type="button"
+              onClick={() => void handleKillTask()}
+              disabled={killTaskDisabled}
+              className={killTaskActive
+                ? "inline-flex shrink-0 items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
+                : "inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--muted)] disabled:opacity-60"}
+            >
+              <Square className="h-4 w-4" />
+              {actionLoading === "kill" ? "终止中..." : "终止任务"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+      <section className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4 space-y-4" : "flex-1 overflow-y-auto p-4 space-y-4"}>
         {loading ? (
           <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
         ) : null}
@@ -465,8 +506,17 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
             </div>
           </div>
         ))}
+        <div ref={bottomAnchorRef} aria-hidden="true" />
       </section>
-      <ChatComposer onSend={handleSend} disabled={isStreaming || loading} />
+      <button
+        type="button"
+        onClick={onToggleImmersive}
+        aria-label={isImmersive ? "退出沉浸模式" : "进入沉浸模式"}
+        className="absolute bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-card)] backdrop-blur hover:bg-[var(--surface-strong)]"
+      >
+        {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+      </button>
+      <ChatComposer onSend={handleSend} disabled={isStreaming || loading} compact={isImmersive} />
 
       {showScripts ? (
         <div className="fixed inset-0 z-50 flex items-end bg-black/45">

@@ -5,6 +5,9 @@ import type {
   ChatStatusUpdate,
   CliParamsPayload,
   DirectoryListing,
+  GitActionResult,
+  GitDiffPayload,
+  GitOverview,
   SessionState,
   SystemScript,
   SystemScriptResult,
@@ -26,10 +29,24 @@ export interface WebBotClient {
   listFiles(botAlias: string): Promise<DirectoryListing>;
   changeDirectory(botAlias: string, path: string): Promise<string>;
   readFile(botAlias: string, filename: string): Promise<string>;
+  readFileFull(botAlias: string, filename: string): Promise<string>;
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string): Promise<void>;
   resetSession(botAlias: string): Promise<void>;
   killTask(botAlias: string): Promise<string>;
+  restartService(): Promise<void>;
+  getGitOverview(botAlias: string): Promise<GitOverview>;
+  initGitRepository(botAlias: string): Promise<GitOverview>;
+  getGitDiff(botAlias: string, path: string, staged?: boolean): Promise<GitDiffPayload>;
+  stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;
+  unstageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;
+  commitGitChanges(botAlias: string, message: string): Promise<GitActionResult>;
+  fetchGitRemote(botAlias: string): Promise<GitActionResult>;
+  pullGitRemote(botAlias: string): Promise<GitActionResult>;
+  pushGitRemote(botAlias: string): Promise<GitActionResult>;
+  stashGitChanges(botAlias: string): Promise<GitActionResult>;
+  popGitStash(botAlias: string): Promise<GitActionResult>;
+  updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;
@@ -39,4 +56,5 @@ export interface WebBotClient {
   restartTunnel(): Promise<TunnelSnapshot>;
   listSystemScripts(): Promise<SystemScript[]>;
   runSystemScript(scriptName: string): Promise<SystemScriptResult>;
+  runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult>;
 }

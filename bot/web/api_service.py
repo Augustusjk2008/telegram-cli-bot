@@ -35,7 +35,7 @@ from bot.cli import (
     should_reset_kimi_session,
 )
 from bot.config import CLI_EXEC_TIMEOUT
-from bot.handlers.admin import execute_script, list_available_scripts
+from bot.handlers.admin import execute_script, list_available_scripts, stream_execute_script
 from bot.handlers.assistant import _build_system_prompt_with_memory
 from bot.handlers.shell import strip_ansi_escape
 from bot.manager import MultiBotManager
@@ -167,18 +167,22 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
 def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[int] = None) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     app = manager.applications.get(alias)
-    
+
     # 优先使用当前用户 session 的工作目录（如果用户已登录）
     working_dir = profile.working_dir
+    is_processing = False
     if user_id is not None:
         try:
             session = get_session_for_alias(manager, alias, user_id)
             if session and session.working_dir:
                 working_dir = session.working_dir
+            if session:
+                with session._lock:
+                    is_processing = session.is_processing
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
-    
+
     return {
         "alias": profile.alias,
         "enabled": profile.enabled,
@@ -188,6 +192,7 @@ def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[in
         "working_dir": working_dir,
         "is_main": alias == manager.main_profile.alias,
         "status": _build_run_status(manager, alias, profile),
+        "is_processing": is_processing,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(profile, alias == manager.main_profile.alias),
     }
@@ -202,7 +207,7 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     return {
-        "bot": build_bot_summary(manager, alias),
+        "bot": build_bot_summary(manager, alias, user_id),
         "session": build_session_snapshot(profile, session),
     }
 
@@ -1204,18 +1209,19 @@ def list_system_scripts() -> dict[str, Any]:
     return {"items": items}
 
 
-async def run_system_script(script_name: str) -> dict[str, Any]:
+def _resolve_system_script_path(script_name: str) -> Path:
     if not script_name or not script_name.strip():
         _raise(400, "empty_script_name", "脚本名不能为空")
-    scripts = list_available_scripts()
-    target_path: Optional[Path] = None
-    for name, _, _, path in scripts:
-        if name.lower() == script_name.strip().lower():
-            target_path = path
-            break
-    if target_path is None:
-        _raise(404, "script_not_found", f"未找到脚本: {script_name}")
 
+    for name, _, _, path in list_available_scripts():
+        if name.lower() == script_name.strip().lower():
+            return path
+
+    _raise(404, "script_not_found", f"未找到脚本: {script_name}")
+
+
+async def run_system_script(script_name: str) -> dict[str, Any]:
+    target_path = _resolve_system_script_path(script_name)
     loop = asyncio.get_running_loop()
     success, output = await loop.run_in_executor(None, execute_script, target_path)
     return {
@@ -1223,6 +1229,44 @@ async def run_system_script(script_name: str) -> dict[str, Any]:
         "success": success,
         "output": output,
     }
+
+
+async def _stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]]:
+    target_path = _resolve_system_script_path(script_name)
+    event_queue: queue.Queue[Any] = queue.Queue()
+    worker_done = threading.Event()
+
+    def run_stream() -> None:
+        try:
+            for event in stream_execute_script(target_path):
+                event_queue.put(event)
+        except Exception as exc:  # pragma: no cover - defensive
+            event_queue.put(exc)
+        finally:
+            worker_done.set()
+
+    threading.Thread(target=run_stream, daemon=True).start()
+
+    while not worker_done.is_set() or not event_queue.empty():
+        try:
+            item = event_queue.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]]:
+    try:
+        async for event in _stream_system_script(script_name):
+            yield event
+    except WebApiError as exc:
+        yield {"type": "error", "code": exc.code, "message": exc.message}
+    except Exception as exc:  # pragma: no cover - defensive
+        yield {"type": "error", "code": "script_stream_failed", "message": str(exc)}
 
 
 async def add_managed_bot(
@@ -1258,9 +1302,14 @@ async def update_bot_cli(manager: MultiBotManager, alias: str, cli_type: str, cl
     return {"bot": build_bot_summary(manager, alias)}
 
 
-async def update_bot_workdir(manager: MultiBotManager, alias: str, working_dir: str) -> dict[str, Any]:
+async def update_bot_workdir(
+    manager: MultiBotManager,
+    alias: str,
+    working_dir: str,
+    user_id: Optional[int] = None,
+) -> dict[str, Any]:
     await manager.set_bot_workdir(alias, working_dir)
-    return {"bot": build_bot_summary(manager, alias)}
+    return {"bot": build_bot_summary(manager, alias, user_id)}
 
 
 def get_processing_sessions(alias: str) -> list[dict[str, Any]]:

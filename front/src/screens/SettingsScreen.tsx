@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, CliParamField, CliParamsPayload, TunnelSnapshot } from "../services/types";
@@ -11,6 +11,7 @@ type Props = {
 };
 
 type DraftValues = Record<string, string | boolean>;
+type BuildLogStatus = "idle" | "running" | "success" | "error";
 
 function fieldLabel(key: string, field: CliParamField) {
   return field.description || key;
@@ -61,12 +62,20 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [workdirDraft, setWorkdirDraft] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
   const [savingParamKey, setSavingParamKey] = useState("");
+  const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
+  const [serviceAction, setServiceAction] = useState<"" | "restart_service" | "build_frontend">("");
+  const [showBuildLog, setShowBuildLog] = useState(false);
+  const [buildLogLines, setBuildLogLines] = useState<string[]>([]);
+  const [buildLogStatus, setBuildLogStatus] = useState<BuildLogStatus>("idle");
+  const [buildLogSummary, setBuildLogSummary] = useState("");
+  const buildLogViewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +92,7 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
         setOverview(overviewData);
         setCliParams(cliParamsData);
         setDraftValues(buildDraftValues(cliParamsData));
+        setWorkdirDraft(overviewData.workingDir);
         setTunnel(tunnelData);
         setLoading(false);
       })
@@ -96,6 +106,13 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       cancelled = true;
     };
   }, [botAlias, client]);
+
+  useEffect(() => {
+    if (!showBuildLog || !buildLogViewportRef.current) {
+      return;
+    }
+    buildLogViewportRef.current.scrollTop = buildLogViewportRef.current.scrollHeight;
+  }, [buildLogLines, buildLogSummary, showBuildLog]);
 
   const syncCliParams = (payload: CliParamsPayload) => {
     setCliParams(payload);
@@ -170,6 +187,28 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
     }
   };
 
+  const saveWorkdir = async () => {
+    const nextWorkdir = workdirDraft.trim();
+    if (!nextWorkdir) {
+      setError("工作目录不能为空");
+      return;
+    }
+
+    setSavingWorkdir(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextBot = await client.updateBotWorkdir(botAlias, nextWorkdir);
+      setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
+      setWorkdirDraft(nextBot.workingDir);
+      setNotice("工作目录已更新");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新工作目录失败");
+    } finally {
+      setSavingWorkdir(false);
+    }
+  };
+
   const runTunnelAction = async (action: "start" | "stop" | "restart") => {
     setTunnelAction(action);
     setError("");
@@ -188,6 +227,60 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       setTunnelAction("");
     }
   };
+
+  const restartService = async () => {
+    setServiceAction("restart_service");
+    setError("");
+    setNotice("");
+    try {
+      await client.restartService();
+      setNotice("已请求重启服务，请稍后刷新页面");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重启服务失败");
+    } finally {
+      setServiceAction("");
+    }
+  };
+
+  const buildFrontend = async () => {
+    setServiceAction("build_frontend");
+    setError("");
+    setNotice("");
+    setShowBuildLog(true);
+    setBuildLogLines([]);
+    setBuildLogStatus("running");
+    setBuildLogSummary("");
+    try {
+      const result = await client.runSystemScriptStream("build_web_frontend", (line) => {
+        setBuildLogLines((prev) => [...prev, line]);
+      });
+      if (!result.success) {
+        const message = result.output || "前端构建失败";
+        setBuildLogStatus("error");
+        setBuildLogSummary(message);
+        setError(message);
+        return;
+      }
+      setBuildLogStatus("success");
+      setBuildLogSummary(result.output || "前端构建完成");
+      setNotice("前端构建完成");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "前端构建失败";
+      setBuildLogStatus("error");
+      setBuildLogSummary(message);
+      setError(message);
+    } finally {
+      setServiceAction("");
+    }
+  };
+
+  const buildLogStatusText = buildLogStatus === "running"
+    ? "构建中"
+    : buildLogStatus === "success"
+      ? "构建成功"
+      : buildLogStatus === "error"
+        ? "构建失败"
+        : "等待开始";
 
   const copyTunnelUrl = async () => {
     if (!tunnel?.publicUrl) return;
@@ -228,11 +321,66 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
         ) : null}
 
         {overview ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-2">
-            <p><span className="font-medium text-[var(--text)]">Bot:</span> {overview.alias}</p>
-            <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
-            <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
-            <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
+          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4">
+            <div className="space-y-2">
+              <p><span className="font-medium text-[var(--text)]">Bot:</span> {overview.alias}</p>
+              <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
+              <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
+              <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
+            </div>
+
+            <div className="space-y-3 border-t border-[var(--border)] pt-4">
+              <div>
+                <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
+                <p className="text-xs text-[var(--muted)] mt-1">保存后会更新当前 Bot 的默认工作目录</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="bot-workdir"
+                  aria-label="工作目录"
+                  type="text"
+                  value={workdirDraft}
+                  onChange={(event) => setWorkdirDraft(event.target.value)}
+                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveWorkdir()}
+                  disabled={savingWorkdir}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {savingWorkdir ? "保存中..." : "保存工作目录"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {botAlias === "main" ? (
+          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text)]">服务管理</h2>
+              <p className="text-sm text-[var(--muted)]">仅主 Bot 可执行服务重启和前端构建</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void buildFrontend()}
+                disabled={serviceAction !== ""}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {serviceAction === "build_frontend" ? "构建中..." : "重建前端"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void restartService()}
+                disabled={serviceAction !== ""}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {serviceAction === "restart_service" ? "重启中..." : "重启服务"}
+              </button>
+            </div>
           </div>
         ) : null}
 
@@ -482,6 +630,42 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
                 {actionLoading === "kill" ? "终止中..." : "确定终止"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showBuildLog ? (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true" aria-labelledby="build-log-title">
+          <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-2xl w-full shadow-[var(--shadow-card)] space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <h2 id="build-log-title" className="text-lg font-bold text-[var(--text)]">前端构建日志</h2>
+                <p className="text-sm text-[var(--muted)]">状态: {buildLogStatusText}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBuildLog(false)}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div
+              ref={buildLogViewportRef}
+              className="h-72 overflow-y-auto rounded-xl bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all"
+            >
+              {buildLogLines.length > 0 ? buildLogLines.join("\n") : "等待构建输出..."}
+            </div>
+
+            {buildLogSummary ? (
+              <div className={buildLogStatus === "success"
+                ? "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+                : "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"}
+              >
+                {buildLogSummary}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

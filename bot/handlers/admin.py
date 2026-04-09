@@ -6,7 +6,9 @@ import locale
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
+from typing import Iterator
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -25,6 +27,7 @@ SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
 
 # 支持的脚本扩展名
 SCRIPT_EXTENSIONS = {'.bat', '.cmd', '.ps1', '.py', '.exe'}
+SCRIPT_EXEC_TIMEOUT = 60
 
 
 def _decode_process_output(data: bytes | str | None) -> str:
@@ -181,61 +184,166 @@ def list_available_scripts() -> list[tuple[str, str, str, Path]]:
     return scripts
 
 
+def _build_script_command(script_path: Path) -> tuple[list[str] | str, bool]:
+    """构建脚本执行命令，返回 (命令, 是否使用 shell)。"""
+    ext = script_path.suffix.lower()
+    if ext == '.exe':
+        return [str(script_path)], False
+    if ext == '.ps1':
+        return [
+            'powershell',
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            str(script_path),
+        ], False
+    if ext == '.py':
+        return ['python', str(script_path)], False
+    return str(script_path), True
+
+
+def _format_script_result(
+    returncode: int,
+    stdout_data: bytes | str | None = None,
+    stderr_data: bytes | str | None = None,
+    *,
+    timed_out: bool = False,
+) -> tuple[bool, str]:
+    stdout = strip_ansi_escape(_decode_process_output(stdout_data)).strip()
+    stderr = strip_ansi_escape(_decode_process_output(stderr_data)).strip()
+
+    if timed_out:
+        timeout_msg = f"执行超时（超过{SCRIPT_EXEC_TIMEOUT}秒）"
+        merged = stdout or stderr
+        if merged:
+            return False, f"{merged}\n\n{timeout_msg}".strip()
+        return False, timeout_msg
+
+    if returncode == 0:
+        output = stdout or stderr
+        return True, output if output else "执行成功（无输出）"
+
+    error_msg = stderr or stdout or f"退出码: {returncode}"
+    return False, f"执行失败: {error_msg}"
+
+
+def _iter_log_lines(text: str) -> Iterator[str]:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    for line in normalized.split("\n"):
+        cleaned = line.strip()
+        if cleaned:
+            yield cleaned
+
+
+def _terminate_script_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    process.kill()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def execute_script(script_path: Path) -> tuple[bool, str]:
     """执行脚本，返回 (成功, 输出/错误信息)"""
     try:
-        ext = script_path.suffix.lower()
-        
-        if ext == '.exe':
-            # 直接执行 exe
-            result = subprocess.run(
-                [str(script_path)],
-                capture_output=True,
-                text=False,
-                timeout=60,
-                shell=False
-            )
-        elif ext == '.ps1':
-            # PowerShell 脚本
-            result = subprocess.run(
-                ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script_path)],
-                capture_output=True,
-                text=False,
-                timeout=60,
-                shell=False
-            )
-        elif ext == '.py':
-            # Python 脚本
-            result = subprocess.run(
-                ['python', str(script_path)],
-                capture_output=True,
-                text=False,
-                timeout=60,
-                shell=False
-            )
-        else:
-            # bat/cmd 等使用 shell 执行
-            result = subprocess.run(
-                [str(script_path)],
-                capture_output=True,
-                text=False,
-                timeout=60,
-                shell=True
-            )
-        
-        if result.returncode == 0:
-            stdout = strip_ansi_escape(_decode_process_output(result.stdout))
-            output = stdout.strip() if stdout.strip() else "执行成功（无输出）"
-            return True, output
-        else:
-            stderr = strip_ansi_escape(_decode_process_output(result.stderr))
-            error_msg = stderr.strip() if stderr.strip() else f"退出码: {result.returncode}"
-            return False, f"执行失败: {error_msg}"
-            
-    except subprocess.TimeoutExpired:
-        return False, "执行超时（超过60秒）"
+        command, use_shell = _build_script_command(script_path)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=False,
+            timeout=SCRIPT_EXEC_TIMEOUT,
+            shell=use_shell,
+        )
+        return _format_script_result(result.returncode, result.stdout, result.stderr)
+    except subprocess.TimeoutExpired as exc:
+        return _format_script_result(-1, exc.output, exc.stderr, timed_out=True)
     except Exception as e:
         return False, f"执行异常: {str(e)}"
+
+
+def stream_execute_script(script_path: Path) -> Iterator[dict[str, object]]:
+    """流式执行脚本，逐步产生日志事件，最后输出 done 事件。"""
+    process: subprocess.Popen | None = None
+    collected_output: list[str] = []
+
+    try:
+        command, use_shell = _build_script_command(script_path)
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            shell=use_shell,
+        )
+        started_at = time.monotonic()
+
+        if process.stdout is not None:
+            while True:
+                if (time.monotonic() - started_at) >= SCRIPT_EXEC_TIMEOUT and process.poll() is None:
+                    _terminate_script_process(process)
+                    success, output = _format_script_result(
+                        process.returncode if process.returncode is not None else -1,
+                        "".join(collected_output),
+                        timed_out=True,
+                    )
+                    yield {
+                        "type": "done",
+                        "script_name": script_path.stem,
+                        "success": success,
+                        "output": output,
+                    }
+                    return
+
+                line = process.stdout.readline()
+                if line:
+                    decoded = strip_ansi_escape(_decode_process_output(line))
+                    collected_output.append(decoded)
+                    for log_line in _iter_log_lines(decoded):
+                        yield {"type": "log", "text": log_line}
+                    continue
+
+                if process.poll() is not None:
+                    remaining = process.stdout.read()
+                    if remaining:
+                        decoded = strip_ansi_escape(_decode_process_output(remaining))
+                        collected_output.append(decoded)
+                        for log_line in _iter_log_lines(decoded):
+                            yield {"type": "log", "text": log_line}
+                    break
+
+                time.sleep(0.05)
+
+        returncode = process.wait(timeout=2) if process is not None else -1
+        success, output = _format_script_result(returncode, "".join(collected_output))
+        yield {
+            "type": "done",
+            "script_name": script_path.stem,
+            "success": success,
+            "output": output,
+        }
+    except Exception as exc:
+        yield {
+            "type": "done",
+            "script_name": script_path.stem,
+            "success": False,
+            "output": f"执行异常: {str(exc)}",
+        }
+    finally:
+        if process is not None and process.stdout is not None:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
 
 
 async def bot_help(update: Update, context: ContextTypes.DEFAULT_TYPE):

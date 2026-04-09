@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
-import type { ChatMessage, SystemScript } from "../services/types";
+import type { ChatMessage, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
@@ -40,10 +40,136 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     }),
     changeDirectory: async () => "C:\\workspace",
     readFile: async () => "",
+    readFileFull: async () => "",
     uploadFile: async () => undefined,
     downloadFile: async () => undefined,
     resetSession: async () => undefined,
     killTask: async () => undefined,
+    restartService: async () => undefined,
+    getGitOverview: async (): Promise<GitOverview> => ({
+      repoFound: false,
+      canInit: true,
+      workingDir: "C:\\workspace",
+      repoPath: "",
+      repoName: "",
+      currentBranch: "",
+      isClean: true,
+      aheadCount: 0,
+      behindCount: 0,
+      changedFiles: [],
+      recentCommits: [],
+    }),
+    initGitRepository: async (): Promise<GitOverview> => ({
+      repoFound: true,
+      canInit: false,
+      workingDir: "C:\\workspace",
+      repoPath: "C:\\workspace",
+      repoName: "workspace",
+      currentBranch: "main",
+      isClean: true,
+      aheadCount: 0,
+      behindCount: 0,
+      changedFiles: [],
+      recentCommits: [],
+    }),
+    getGitDiff: async (): Promise<GitDiffPayload> => ({
+      path: "tracked.txt",
+      staged: false,
+      diff: "",
+    }),
+    stageGitPaths: async (): Promise<GitActionResult> => ({
+      message: "已暂存",
+      overview: await createClient().getGitOverview("main"),
+    }),
+    unstageGitPaths: async (): Promise<GitActionResult> => ({
+      message: "已取消暂存",
+      overview: await createClient().getGitOverview("main"),
+    }),
+    commitGitChanges: async (): Promise<GitActionResult> => ({
+      message: "已提交",
+      overview: await createClient().initGitRepository("main"),
+    }),
+    fetchGitRemote: async (): Promise<GitActionResult> => ({
+      message: "已抓取",
+      overview: await createClient().initGitRepository("main"),
+    }),
+    pullGitRemote: async (): Promise<GitActionResult> => ({
+      message: "已拉取",
+      overview: await createClient().initGitRepository("main"),
+    }),
+    pushGitRemote: async (): Promise<GitActionResult> => ({
+      message: "已推送",
+      overview: await createClient().initGitRepository("main"),
+    }),
+    stashGitChanges: async (): Promise<GitActionResult> => ({
+      message: "已暂存工作区",
+      overview: await createClient().initGitRepository("main"),
+    }),
+    popGitStash: async (): Promise<GitActionResult> => ({
+      message: "已恢复暂存",
+      overview: await createClient().initGitRepository("main"),
+    }),
+    updateBotWorkdir: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      lastActiveText: "运行中",
+    }),
+    getCliParams: async () => ({
+      cliType: "codex",
+      params: {},
+      defaults: {},
+      schema: {},
+    }),
+    updateCliParam: async () => ({
+      cliType: "codex",
+      params: {},
+      defaults: {},
+      schema: {},
+    }),
+    resetCliParams: async () => ({
+      cliType: "codex",
+      params: {},
+      defaults: {},
+      schema: {},
+    }),
+    getTunnelStatus: async () => ({
+      mode: "disabled",
+      status: "stopped",
+      source: "disabled",
+      publicUrl: "",
+      localUrl: "",
+      lastError: "",
+      pid: null,
+    }),
+    startTunnel: async () => ({
+      mode: "disabled",
+      status: "stopped",
+      source: "disabled",
+      publicUrl: "",
+      localUrl: "",
+      lastError: "",
+      pid: null,
+    }),
+    stopTunnel: async () => ({
+      mode: "disabled",
+      status: "stopped",
+      source: "disabled",
+      publicUrl: "",
+      localUrl: "",
+      lastError: "",
+      pid: null,
+    }),
+    restartTunnel: async () => ({
+      mode: "disabled",
+      status: "stopped",
+      source: "disabled",
+      publicUrl: "",
+      localUrl: "",
+      lastError: "",
+      pid: null,
+    }),
     listSystemScripts: async (): Promise<SystemScript[]> => [],
     runSystemScript: async () => ({
       scriptName: "demo",
@@ -103,6 +229,34 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
+test("kill button is disabled while idle and highlighted while streaming", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void) =>
+      new Promise<ChatMessage>((resolve) => {
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-later",
+            role: "assistant",
+            text: "稍后完成",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 300);
+      }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} isVisible />);
+
+  const killButton = await screen.findByRole("button", { name: "终止任务" });
+  expect(killButton).toBeDisabled();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByRole("button", { name: "终止任务" })).toBeEnabled();
+});
+
 test("switching bots resets chat history instead of mixing conversations", async () => {
   const client = createClient({
     listMessages: async (botAlias: string): Promise<ChatMessage[]> => {
@@ -132,6 +286,47 @@ test("switching bots resets chat history instead of mixing conversations", async
 
   expect(await screen.findByText("team2-history")).toBeInTheDocument();
   expect(screen.queryByText("main-history")).not.toBeInTheDocument();
+});
+
+test("scrolls to the latest message on first load and when shown again", async () => {
+  const original = HTMLElement.prototype.scrollIntoView;
+  const scrollSpy = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollSpy,
+  });
+
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-1",
+      role: "assistant",
+      text: "latest",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }],
+  });
+
+  try {
+    const { rerender } = render(<ChatScreen botAlias="main" client={client} isVisible />);
+    expect(await screen.findByText("latest")).toBeInTheDocument();
+    expect(scrollSpy).toHaveBeenCalled();
+
+    scrollSpy.mockClear();
+
+    rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
+    rerender(<ChatScreen botAlias="main" client={client} isVisible />);
+
+    expect(scrollSpy).toHaveBeenCalled();
+  } finally {
+    if (original) {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: original,
+      });
+    } else {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  }
 });
 
 test("shows waiting time while a reply is still pending", async () => {

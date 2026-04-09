@@ -1,4 +1,8 @@
 import type {
+  GitActionResult,
+  GitCommitSummary,
+  GitDiffPayload,
+  GitOverview,
   BotOverview,
   BotStatus,
   BotSummary,
@@ -29,6 +33,7 @@ type RawBotSummary = {
   alias: string;
   cli_type: CliType;
   status: string;
+  is_processing?: boolean;
   working_dir: string;
   bot_mode?: string;
 };
@@ -83,11 +88,53 @@ type RawTunnelSnapshot = {
   pid?: number | null;
 };
 
+type RawGitChangedFile = {
+  path: string;
+  status: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+};
+
+type RawGitCommitSummary = {
+  hash: string;
+  short_hash: string;
+  author_name: string;
+  authored_at: string;
+  subject: string;
+};
+
+type RawGitOverview = {
+  repo_found: boolean;
+  can_init: boolean;
+  working_dir: string;
+  repo_path: string;
+  repo_name: string;
+  current_branch: string;
+  is_clean: boolean;
+  ahead_count: number;
+  behind_count: number;
+  changed_files: RawGitChangedFile[];
+  recent_commits: RawGitCommitSummary[];
+};
+
+type RawGitDiffPayload = {
+  path: string;
+  staged: boolean;
+  diff: string;
+};
+
+type RawGitActionResult = {
+  message: string;
+  overview: RawGitOverview;
+};
+
 type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
   | { type: "status"; elapsed_seconds?: number; preview_text?: string }
-  | { type: "done"; output?: string }
+  | { type: "log"; text?: string }
+  | { type: "done"; output?: string; script_name?: string; success?: boolean }
   | { type: "error"; message?: string; code?: string };
 
 function mapStatus(status: string, isProcessing = false): BotStatus {
@@ -103,6 +150,9 @@ function mapStatus(status: string, isProcessing = false): BotStatus {
 function mapStatusText(status: BotStatus): string {
   if (status === "busy") {
     return "处理中";
+  }
+  if (status === "unread") {
+    return "未读";
   }
   if (status === "offline") {
     return "离线";
@@ -169,6 +219,57 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
     localUrl: raw.local_url || "",
     lastError: raw.last_error || "",
     pid: raw.pid ?? null,
+  };
+}
+
+function mapGitChangedFile(raw: RawGitChangedFile) {
+  return {
+    path: raw.path,
+    status: raw.status,
+    staged: Boolean(raw.staged),
+    unstaged: Boolean(raw.unstaged),
+    untracked: Boolean(raw.untracked),
+  };
+}
+
+function mapGitCommitSummary(raw: RawGitCommitSummary): GitCommitSummary {
+  return {
+    hash: raw.hash,
+    shortHash: raw.short_hash,
+    authorName: raw.author_name,
+    authoredAt: raw.authored_at,
+    subject: raw.subject,
+  };
+}
+
+function mapGitOverview(raw: RawGitOverview): GitOverview {
+  return {
+    repoFound: Boolean(raw.repo_found),
+    canInit: Boolean(raw.can_init),
+    workingDir: raw.working_dir || "",
+    repoPath: raw.repo_path || "",
+    repoName: raw.repo_name || "",
+    currentBranch: raw.current_branch || "",
+    isClean: Boolean(raw.is_clean),
+    aheadCount: Number(raw.ahead_count || 0),
+    behindCount: Number(raw.behind_count || 0),
+    changedFiles: (raw.changed_files || []).map(mapGitChangedFile),
+    recentCommits: (raw.recent_commits || []).map(mapGitCommitSummary),
+  };
+}
+
+function mapGitDiffPayload(raw: RawGitDiffPayload): GitDiffPayload {
+  return {
+    path: raw.path,
+    staged: Boolean(raw.staged),
+    diff: raw.diff || "",
+  };
+}
+
+function mapGitActionResult(raw: RawGitActionResult): GitActionResult {
+  return {
+    message: raw.message || "",
+    overview: mapGitOverview(raw.overview),
   };
 }
 
@@ -239,7 +340,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async listBots(): Promise<BotSummary[]> {
     const data = await this.requestJson<RawBotSummary[]>("/api/bots");
-    return data.map((item) => mapBotSummary(item));
+    return data.map((item) => mapBotSummary(item, Boolean(item.is_processing)));
   }
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {
@@ -257,6 +358,7 @@ export class RealWebBotClient implements WebBotClient {
     const summary = mapBotSummary(data.bot, data.session.is_processing);
     return {
       ...summary,
+      workingDir: data.session.working_dir || summary.workingDir,
       botMode: data.bot.bot_mode,
       messageCount: data.session.message_count,
       historyCount: data.session.history_count,
@@ -387,6 +489,16 @@ export class RealWebBotClient implements WebBotClient {
     return data.content;
   }
 
+  async readFileFull(botAlias: string, filename: string): Promise<string> {
+    const params = new URLSearchParams({
+      filename,
+      mode: "cat",
+      lines: "0",
+    });
+    const data = await this.requestJson<{ content: string }>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
+    return data.content;
+  }
+
   async uploadFile(botAlias: string, file: File): Promise<void> {
     const formData = new FormData();
     formData.append("file", file);
@@ -430,6 +542,112 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return data.message || "已发送终止任务请求";
+  }
+
+  async restartService(): Promise<void> {
+    await this.requestJson<{ restart_requested: boolean }>("/api/admin/restart", {
+      method: "POST",
+    });
+  }
+
+  async getGitOverview(botAlias: string): Promise<GitOverview> {
+    const data = await this.requestJson<RawGitOverview>(`/api/bots/${encodeURIComponent(botAlias)}/git`);
+    return mapGitOverview(data);
+  }
+
+  async initGitRepository(botAlias: string): Promise<GitOverview> {
+    const data = await this.requestJson<RawGitOverview>(`/api/bots/${encodeURIComponent(botAlias)}/git/init`, {
+      method: "POST",
+    });
+    return mapGitOverview(data);
+  }
+
+  async getGitDiff(botAlias: string, path: string, staged = false): Promise<GitDiffPayload> {
+    const params = new URLSearchParams({
+      path,
+      staged: staged ? "true" : "false",
+    });
+    const data = await this.requestJson<RawGitDiffPayload>(`/api/bots/${encodeURIComponent(botAlias)}/git/diff?${params.toString()}`);
+    return mapGitDiffPayload(data);
+  }
+
+  async stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/stage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ paths }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async unstageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/unstage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ paths }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async commitGitChanges(botAlias: string, message: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/commit`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ message }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async fetchGitRemote(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/fetch`, {
+      method: "POST",
+    });
+    return mapGitActionResult(data);
+  }
+
+  async pullGitRemote(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/pull`, {
+      method: "POST",
+    });
+    return mapGitActionResult(data);
+  }
+
+  async pushGitRemote(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/push`, {
+      method: "POST",
+    });
+    return mapGitActionResult(data);
+  }
+
+  async stashGitChanges(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/stash`, {
+      method: "POST",
+    });
+    return mapGitActionResult(data);
+  }
+
+  async popGitStash(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/stash/pop`, {
+      method: "POST",
+    });
+    return mapGitActionResult(data);
+  }
+
+  async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/workdir`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ working_dir: workingDir }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
@@ -509,5 +727,71 @@ export class RealWebBotClient implements WebBotClient {
       success: data.success,
       output: data.output,
     };
+  }
+
+  async runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
+    const response = await fetch("/api/admin/scripts/run/stream", {
+      method: "POST",
+      headers: this.headers({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({ script_name: scriptName }),
+    });
+
+    if (!response.ok || !response.body) {
+      let message = "执行脚本失败";
+      try {
+        const payload = (await response.json()) as JsonEnvelope<unknown>;
+        message = payload.error?.message || message;
+      } catch {
+        // ignore parse failures
+      }
+      throw new Error(message);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResult: SystemScriptResult | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        const block = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+
+        const event = parseSseBlock(block);
+        if (!event) {
+          separatorIndex = buffer.indexOf("\n\n");
+          continue;
+        }
+
+        if (event.type === "log" && event.text) {
+          onLog(event.text);
+        } else if (event.type === "done") {
+          finalResult = {
+            scriptName: event.script_name || scriptName,
+            success: Boolean(event.success),
+            output: event.output || "",
+          };
+        } else if (event.type === "error") {
+          throw new Error(event.message || "脚本执行失败");
+        }
+
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+    }
+
+    if (!finalResult) {
+      throw new Error("脚本执行已中断");
+    }
+
+    return finalResult;
   }
 }
