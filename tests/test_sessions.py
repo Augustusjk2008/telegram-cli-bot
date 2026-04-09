@@ -205,3 +205,77 @@ class TestSessionPersistence:
             
             # 应该恢复之前的 session_id
             assert s.kimi_session_id == "kimi_prev_session"
+
+    def test_persist_saves_history_workdir_and_running_reply(self, temp_dir: Path):
+        """测试会话快照会自动持久化"""
+        from unittest.mock import patch
+        from bot.session_store import load_session
+
+        store_file = temp_dir / ".session_store.json"
+        with patch("bot.session_store.STORE_FILE", store_file):
+            session = get_session(1, "main", 100, str(temp_dir))
+            session.working_dir = str(temp_dir / "workspace")
+            session.touch()
+            session.add_to_history("user", "hello")
+            session.start_running_reply("continue")
+            session.update_running_reply("partial")
+
+            data = load_session(1, 100)
+            assert data is not None
+            assert data["working_dir"] == str(temp_dir / "workspace")
+            assert data["message_count"] == 1
+            assert data["history"][0]["content"] == "hello"
+            assert data["running_user_text"] == "continue"
+            assert data["running_preview_text"] == "partial"
+            assert "last_activity" in data
+
+    def test_session_restored_with_history_workdir_and_running_reply(self, temp_dir: Path):
+        """测试从持久化存储恢复完整会话快照"""
+        from unittest.mock import patch
+        from bot.session_store import save_session
+
+        store_file = temp_dir / ".session_store.json"
+        restored_dir = temp_dir / "restored"
+        restored_dir.mkdir()
+        history = [
+            {
+                "timestamp": "2026-04-09T10:00:00",
+                "role": "user",
+                "content": "continue",
+            },
+            {
+                "timestamp": "2026-04-09T10:00:02",
+                "role": "assistant",
+                "content": "partial result",
+            },
+        ]
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(
+                bot_id=1,
+                user_id=100,
+                codex_session_id="thread_restored_123",
+                working_dir=str(restored_dir),
+                history=history,
+                message_count=7,
+                last_activity="2026-04-09T10:00:03",
+                running_user_text="continue",
+                running_preview_text="still running",
+                running_started_at="2026-04-09T10:00:01",
+                running_updated_at="2026-04-09T10:00:04",
+            )
+
+            with sessions_lock:
+                sessions.clear()
+
+            session = get_session(1, "main", 100, str(temp_dir))
+
+            assert session.codex_session_id == "thread_restored_123"
+            assert session.working_dir == str(restored_dir)
+            assert session.history == history
+            assert session.message_count == 7
+            assert session.running_user_text == "continue"
+            assert session.running_preview_text == "still running"
+            assert session.running_started_at == "2026-04-09T10:00:01"
+            assert session.running_updated_at == "2026-04-09T10:00:04"
+            assert session.is_processing is False

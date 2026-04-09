@@ -1,13 +1,15 @@
 """多Bot生命周期管理器"""
 
 import asyncio
+import html
 import json
 import logging
 import os
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 from telegram import Update
 from telegram.error import NetworkError, TimedOut
@@ -23,6 +25,7 @@ from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
 from bot.cli import resolve_cli_executable, validate_cli_type
+from bot.cli_params import coerce_param_value
 from bot.config import (
     ALLOWED_USER_IDS,
     BOT_ALIAS_RE,
@@ -47,7 +50,24 @@ from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_worki
 logger = logging.getLogger(__name__)
 
 
+class _ManagerNotificationHandler(logging.Handler):
+    """监听 bot.manager 的 warning/error，并交给当前 manager 投递。"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.WARNING or record.name != logger.name:
+            return
+
+        manager = MultiBotManager._active_notification_manager
+        if manager is None:
+            return
+
+        manager._enqueue_manager_alert(record)
+
+
 class MultiBotManager:
+    _notification_handler: Optional[_ManagerNotificationHandler] = None
+    _active_notification_manager: Optional["MultiBotManager"] = None
+
     def __init__(self, main_profile: BotProfile, storage_file: str):
         self.main_profile = main_profile
         self.storage_file = Path(storage_file)
@@ -62,7 +82,135 @@ class MultiBotManager:
         self._network_error_log_state: Dict[str, tuple] = {}
         # 主bot连续网络错误计数（用于触发程序重启）
         self._main_bot_network_error_count = 0
+        self._pending_manager_alerts: Deque[dict] = deque()
+        self._manager_alert_task: Optional[asyncio.Task] = None
+        self._main_bot_alert_retry_delay = 1.0
+        self._manager_alerts_enabled = True
+        self._manager_alert_lock = asyncio.Lock()
+        try:
+            self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
+        self._activate_manager_notifications()
         self._load_profiles()
+
+    def _activate_manager_notifications(self) -> None:
+        MultiBotManager._active_notification_manager = self
+        if MultiBotManager._notification_handler is None:
+            handler = _ManagerNotificationHandler()
+            handler.setLevel(logging.WARNING)
+            logger.addHandler(handler)
+            MultiBotManager._notification_handler = handler
+
+    def _enqueue_manager_alert(self, record: logging.LogRecord) -> None:
+        if not self._manager_alerts_enabled or not ALLOWED_USER_IDS:
+            return
+
+        payload = {
+            "level": record.levelname,
+            "created": float(record.created),
+            "message": record.getMessage(),
+        }
+
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._queue_manager_alert, payload)
+        else:
+            self._queue_manager_alert(payload)
+
+    def _queue_manager_alert(self, payload: dict) -> None:
+        if not self._manager_alerts_enabled:
+            return
+        self._pending_manager_alerts.append(payload)
+        self._ensure_manager_alert_task()
+
+    def _ensure_manager_alert_task(self) -> None:
+        if self._loop is None or not self._loop.is_running():
+            return
+        if self._manager_alert_task is not None and not self._manager_alert_task.done():
+            return
+        self._manager_alert_task = self._loop.create_task(self._deliver_manager_alerts())
+
+    def _main_bot_is_idle(self) -> bool:
+        main_app = self.applications.get(self.main_profile.alias)
+        if main_app is None:
+            return False
+
+        main_bot_id = main_app.bot_data.get("bot_id")
+        if not isinstance(main_bot_id, int):
+            return False
+
+        return not is_bot_processing(main_bot_id)
+
+    def _format_manager_alert_text(self, payload: dict) -> str:
+        level = str(payload["level"])
+        icon = "⚠️" if level == "WARNING" else "🚨"
+        timestamp = datetime.fromtimestamp(float(payload["created"])).strftime("%Y-%m-%d %H:%M:%S")
+        message = str(payload["message"])
+        if len(message) > 3000:
+            message = message[:3000] + "\n...(已截断)"
+
+        return (
+            f"{icon} <b>后台告警</b>\n"
+            f"级别: <code>{html.escape(level)}</code>\n"
+            f"时间: <code>{html.escape(timestamp)}</code>\n\n"
+            f"<pre>{html.escape(message)}</pre>"
+        )
+
+    async def _send_manager_alert(self, payload: dict) -> bool:
+        main_app = self.applications.get(self.main_profile.alias)
+        if main_app is None:
+            return False
+
+        text = self._format_manager_alert_text(payload)
+        sent_any = False
+        for user_id in ALLOWED_USER_IDS:
+            try:
+                await main_app.bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+                sent_any = True
+            except Exception as exc:
+                logger.debug("发送 manager 告警失败 user_id=%s: %s", user_id, exc)
+
+        return sent_any
+
+    async def _deliver_manager_alerts(self) -> None:
+        current_task = asyncio.current_task()
+        try:
+            async with self._manager_alert_lock:
+                while self._pending_manager_alerts and self._manager_alerts_enabled:
+                    if not self._main_bot_is_idle():
+                        await asyncio.sleep(self._main_bot_alert_retry_delay)
+                        continue
+
+                    payload = self._pending_manager_alerts[0]
+                    if await self._send_manager_alert(payload):
+                        self._pending_manager_alerts.popleft()
+                    else:
+                        await asyncio.sleep(self._main_bot_alert_retry_delay)
+        finally:
+            if self._manager_alert_task is current_task:
+                self._manager_alert_task = None
+            if self._pending_manager_alerts and self._manager_alerts_enabled:
+                self._ensure_manager_alert_task()
+
+    async def _stop_manager_alerts(self) -> None:
+        self._manager_alerts_enabled = False
+        self._pending_manager_alerts.clear()
+
+        task = self._manager_alert_task
+        self._manager_alert_task = None
+        if task is None:
+            return
+
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     def _make_error_handler(self, alias: str):
         """全局错误处理器，对网络错误静默处理"""
@@ -553,6 +701,7 @@ class MultiBotManager:
 
     async def shutdown_all(self):
         await self.stop_watchdog()
+        await self._stop_manager_alerts()
         aliases = list(self.applications.keys())
         for alias in aliases:
             if alias != self.main_profile.alias:
@@ -701,29 +850,8 @@ class MultiBotManager:
         
         async with self._lock:
             profile = self._get_profile_for_update(alias)
-            # 处理值类型转换
-            params = profile.cli_params.get_params(cli_type)
-            current_value = params.get(key)
-            
-            # 根据当前值的类型进行转换
-            if isinstance(current_value, bool):
-                # 布尔值转换
-                if isinstance(value, str):
-                    value = value.lower() in ("true", "1", "yes", "on")
-                else:
-                    value = bool(value)
-            elif isinstance(current_value, int):
-                value = int(value)
-            elif isinstance(current_value, float):
-                value = float(value)
-            elif isinstance(current_value, list):
-                # 列表类型，支持逗号分隔或 JSON 格式
-                if isinstance(value, str):
-                    value = [v.strip() for v in value.split(",") if v.strip()]
-                else:
-                    value = list(value)
-            
-            profile.cli_params.set_param(cli_type, key, value)
+            coerced_value = coerce_param_value(cli_type, key, value)
+            profile.cli_params.set_param(cli_type, key, coerced_value)
             self._save_profiles()
 
     async def reset_bot_cli_params(self, alias: str, cli_type: Optional[str] = None):

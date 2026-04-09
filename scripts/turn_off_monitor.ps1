@@ -1,8 +1,12 @@
 # 关闭显示器
-Add-Type @"
+$ErrorActionPreference = "Stop"
+
+try {
+    if (-not ("DisplayPower" -as [type])) {
+        Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public class DisplayPower {
+public static class DisplayPower {
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     public static extern IntPtr SendMessageTimeout(
         IntPtr hWnd,
@@ -33,8 +37,15 @@ public class DisplayPower {
         );
     }
 }
-"@
+'@
+    }
 
-Write-Host "Turning off screen..."
-[DisplayPower]::TurnOffMonitor()
-Write-Host "Done"
+    Write-Output "Turning off screen..."
+    [DisplayPower]::TurnOffMonitor()
+    Write-Output "Done"
+    exit 0
+}
+catch {
+    Write-Error $_
+    exit 1
+}

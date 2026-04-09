@@ -5,9 +5,11 @@ Bot 管理器测试
 （不测试 Telegram API 调用，只测试纯逻辑部分）
 """
 
+import asyncio
 import json
+import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -159,6 +161,59 @@ class TestManagerValidation:
             m._handle_network_error_exhausted("main")
 
         mock_processing.assert_called_once_with(123)
+
+    @pytest.mark.asyncio
+    async def test_manager_warning_sent_to_main_bot_when_idle(self, temp_dir: Path):
+        profile = BotProfile(alias="main", token="tok")
+        with patch("bot.manager.ALLOWED_USER_IDS", [987654321]), \
+             patch("bot.manager.is_bot_processing", autospec=True, return_value=False):
+            m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
+            app = MagicMock()
+            app.bot = MagicMock()
+            app.bot.send_message = AsyncMock()
+            app.bot_data = {"bot_id": 123}
+            m.applications["main"] = app
+
+            logging.getLogger("bot.manager").warning("测试告警 alias=%s", "team1")
+
+            for _ in range(20):
+                if app.bot.send_message.await_count:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert app.bot.send_message.await_count == 1
+            kwargs = app.bot.send_message.await_args.kwargs
+            assert kwargs["chat_id"] == 987654321
+            assert "测试告警 alias=team1" in kwargs["text"]
+            assert "WARNING" in kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_manager_warning_waits_until_main_bot_idle(self, temp_dir: Path):
+        profile = BotProfile(alias="main", token="tok")
+        with patch("bot.manager.ALLOWED_USER_IDS", [987654321]), \
+             patch("bot.manager.is_bot_processing", autospec=True, side_effect=[True, True, False]):
+            m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
+            m._main_bot_alert_retry_delay = 0.01
+            app = MagicMock()
+            app.bot = MagicMock()
+            app.bot.send_message = AsyncMock()
+            app.bot_data = {"bot_id": 123}
+            m.applications["main"] = app
+
+            logging.getLogger("bot.manager").error("测试错误 alias=%s", "team2")
+
+            await asyncio.sleep(0.005)
+            assert app.bot.send_message.await_count == 0
+
+            for _ in range(30):
+                if app.bot.send_message.await_count:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert app.bot.send_message.await_count == 1
+            kwargs = app.bot.send_message.await_args.kwargs
+            assert "测试错误 alias=team2" in kwargs["text"]
+            assert "ERROR" in kwargs["text"]
 
 
 class TestManagerGetProfile:

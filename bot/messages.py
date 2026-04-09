@@ -42,6 +42,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "cmd_ls": "   /ls - 列出目录内容",
         "cmd_exec": "   /exec <cmd> - 执行 Shell 命令",
         "cmd_history": "   /history - 查看会话历史",
+        "cmd_codex_status": "   /codex_status - 查询 Codex CLI 状态",
         "cmd_upload": "   /upload - 上传文件",
         "cmd_download": "   /download <文件> - 下载文件",
         "cmd_cat": "   /cat <文件> - 查看文件内容",
@@ -93,6 +94,12 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
     "history": {
         "empty": "📭 暂无历史记录",
         "header": "📜 最近历史:\n\n"
+    },
+    "codex_status": {
+        "unsupported_cli": "ℹ️ 当前 CLI 不是 Codex，无法查询 /codex_status",
+        "success": "📊 <b>Codex 状态</b>\n\n<code>{status_line}</code>\n\n<i>{note}</i>",
+        "note": "这是 Codex CLI 的状态显示，不一定等于账单额度。",
+        "failed": "❌ 查询 Codex 状态失败: <code>{error}</code>"
     },
     "upload": {
         "help": "📤 <b>文件上传帮助</b>\n\n直接发送文件即可上传。\n<b>注意:</b> 文件将保存在当前工作目录。",

@@ -3,8 +3,8 @@
     {
       "alias": "team1",
       "token": "8637959849:AAGMNtSZoDAxCyEac7k2h9EDs63d5Q757Ko",
-      "cli_type": "kimi",
-      "cli_path": "kimi",
+      "cli_type": "codex",
+      "cli_path": "codex",
       "working_dir": "h:\\workspace\\kimiagent\\game_agents",
       "enabled": true,
       "bot_mode": "cli"
@@ -12,9 +12,9 @@
     {
       "alias": "team2",
       "token": "8291157555:AAE_jkTJH5dulRmeEOwK_p_R73X42HC_ZvI",
-      "cli_type": "claude",
-      "cli_path": "claude",
-      "working_dir": "C:\\Users",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu",
       "enabled": true,
       "bot_mode": "cli",
       "cli_params": {
@@ -40,7 +40,7 @@
           "skip_git_check": true,
           "reasoning_effort": "xhigh",
           "json_output": true,
-          "model": null,
+          "model": "gpt-5.4",
           "extra_args": []
         }
       }
@@ -50,7 +50,7 @@
       "token": "8477054156:AAEf6cecw_bhKLfSDKy_hVUNZD_vw44WCN4",
       "cli_type": "codex",
       "cli_path": "codex",
-      "working_dir": "h:\\workspace\\kimiagent\\game_agents",
+      "working_dir": "h:\\workspace\\KimiAgent",
       "enabled": true,
       "bot_mode": "cli"
     }

@@ -4,11 +4,12 @@ import asyncio
 import html
 import logging
 import os
+from typing import Optional
 
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.cli import normalize_cli_type
+from bot.cli import normalize_cli_type, read_codex_status_from_terminal
 from bot.context_helpers import (
     get_bot_alias,
     get_bot_id,
@@ -82,6 +83,7 @@ async def update_session_working_directory(
 
     session.clear_session_ids()
     session.working_dir = resolved_path
+    session.persist()
     return resolved_path
 
 
@@ -153,6 +155,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{msg('greeting', 'cmd_ls')}\n"
         f"{msg('greeting', 'cmd_exec')}\n"
         f"{msg('greeting', 'cmd_history')}\n"
+        f"{msg('greeting', 'cmd_codex_status')}\n"
         f"{msg('greeting', 'cmd_upload')}\n"
         f"{msg('greeting', 'cmd_download')}\n"
         f"{msg('greeting', 'cmd_kill_note')}"
@@ -309,6 +312,60 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{icon} {content}")
 
     await update.message.reply_text(msg("history", "header") + "\n".join(lines))
+
+
+def _format_codex_status_error(error_code: Optional[str]) -> str:
+    mapping = {
+        "not_found": "未找到 Codex CLI 可执行文件",
+        "unsupported_platform": "当前平台暂不支持 /codex_status",
+        "pty_unavailable": "缺少 pywinpty，无法创建终端",
+        "timeout": "查询超时",
+        "no_status": "未能从 Codex 输出中提取状态信息",
+    }
+    if error_code in mapping:
+        return mapping[error_code]
+    if error_code:
+        return str(error_code)
+    return "未知错误"
+
+
+async def codex_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not check_auth(user_id):
+        return
+
+    profile = get_current_profile(context)
+    if normalize_cli_type(profile.cli_type) != "codex":
+        await update.message.reply_text(msg("codex_status", "unsupported_cli"))
+        return
+
+    session = get_current_session(update, context)
+    result = await asyncio.to_thread(
+        read_codex_status_from_terminal,
+        profile.cli_path,
+        session.working_dir,
+    )
+
+    if result.get("ok"):
+        await update.message.reply_text(
+            msg(
+                "codex_status",
+                "success",
+                status_line=html.escape(str(result.get("status_line") or "")),
+                note=html.escape(msg("codex_status", "note")),
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        msg(
+            "codex_status",
+            "failed",
+            error=html.escape(_format_codex_status_error(result.get("error"))),
+        ),
+        parse_mode="HTML",
+    )
 
 
 # 键盘命令映射（用于处理"/命令 中文描述"格式）

@@ -7,11 +7,13 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 test("renders standalone login screen without backend", () => {
@@ -27,6 +29,32 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
+  expect(sessionStorage.getItem("web-api-token")).toBe("123");
+  expect(localStorage.getItem("web-api-token")).toBeNull();
+});
+
+test("re-login after tab close restores the last selected bot", async () => {
+  const user = userEvent.setup();
+  const { unmount } = render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+  expect(localStorage.getItem("web-current-bot")).toBe("team2");
+
+  unmount();
+  sessionStorage.clear();
+
+  render(<App />);
+  expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
 });
 
 test("keeps the waiting state after switching bots away and back", async () => {
@@ -67,3 +95,42 @@ test("keeps the waiting state after switching bots away and back", async () => {
 
   expect(await screen.findByText(/已等待 [1-9]\d* 秒/, {}, { timeout: 1500 })).toBeInTheDocument();
 }, 10000);
+
+test("settings tab shows cli params and tunnel status", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+  expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
+  expect(screen.getByText("公网访问")).toBeInTheDocument();
+  expect(screen.getByText("https://demo.trycloudflare.com")).toBeInTheDocument();
+});
+
+test("settings tab can save cli params and restart tunnel", async () => {
+  const user = userEvent.setup();
+  const updateSpy = vi.spyOn(MockWebBotClient.prototype, "updateCliParam");
+  const restartSpy = vi.spyOn(MockWebBotClient.prototype, "restartTunnel");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await screen.findByLabelText("推理努力程度");
+
+  await user.selectOptions(screen.getByLabelText("推理努力程度"), "high");
+  await user.click(screen.getByRole("button", { name: "保存 推理努力程度" }));
+  expect(updateSpy).toHaveBeenCalledWith("main", "reasoning_effort", "high");
+  expect(await screen.findByText("参数已保存")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "重启 Tunnel" }));
+  expect(restartSpy).toHaveBeenCalledTimes(1);
+});

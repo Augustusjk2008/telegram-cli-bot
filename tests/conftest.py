@@ -88,3 +88,9 @@ def clean_sessions():
     yield
     with sessions_lock:
         sessions.clear()
+
+
+@pytest.fixture(autouse=True)
+def isolate_session_store(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    """所有测试默认使用独立的 session store 文件，避免污染工作区。"""
+    monkeypatch.setattr("bot.session_store.STORE_FILE", temp_dir / ".session_store.json")

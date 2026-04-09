@@ -4,7 +4,7 @@ import logging
 
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-from .basic import start, reset, kill_process, change_directory, print_working_directory, list_directory, show_history, handle_keyboard_command
+from .basic import start, reset, kill_process, change_directory, print_working_directory, list_directory, show_history, codex_status, handle_keyboard_command
 from .shell import execute_shell, remove_file
 from .file import upload_help, handle_document, download_file, cat_file, head_file
 from .file_browser import show_file_browser, handle_file_browser_callback
@@ -67,6 +67,7 @@ def _register_cli_handlers(application: Application, include_admin: bool):
     application.add_handler(CommandHandler("exec", execute_shell))
     application.add_handler(CommandHandler("rm", remove_file))
     application.add_handler(CommandHandler("history", show_history))
+    application.add_handler(CommandHandler("codex_status", codex_status))
     application.add_handler(CommandHandler("upload", upload_help))
     application.add_handler(CommandHandler("download", download_file))
     application.add_handler(CommandHandler("cat", cat_file))

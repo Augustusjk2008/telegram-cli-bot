@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, LogOut, RefreshCw, Square } from "lucide-react";
+import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview } from "../services/types";
+import type { BotOverview, CliParamField, CliParamsPayload, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -10,24 +10,80 @@ type Props = {
   onLogout: () => void;
 };
 
+type DraftValues = Record<string, string | boolean>;
+
+function fieldLabel(key: string, field: CliParamField) {
+  return field.description || key;
+}
+
+function buildDraftValues(payload: CliParamsPayload): DraftValues {
+  const drafts: DraftValues = {};
+  for (const [key, field] of Object.entries(payload.schema)) {
+    const value = payload.params[key];
+    if (field.type === "boolean") {
+      drafts[key] = Boolean(value);
+      continue;
+    }
+    if (field.type === "string_list") {
+      drafts[key] = Array.isArray(value) ? value.map((item) => String(item)).join("\n") : "";
+      continue;
+    }
+    drafts[key] = value == null ? "" : String(value);
+  }
+  return drafts;
+}
+
+function toRequestValue(field: CliParamField, value: string | boolean) {
+  if (field.type === "boolean") {
+    return Boolean(value);
+  }
+  if (field.type === "string_list") {
+    return String(value)
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return value;
+}
+
+function tunnelStatusText(status: TunnelSnapshot["status"]) {
+  if (status === "running") return "运行中";
+  if (status === "starting") return "启动中";
+  if (status === "error") return "异常";
+  return "已停止";
+}
+
 export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLogout }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
+  const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
+  const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
+  const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
+  const [savingParamKey, setSavingParamKey] = useState("");
+  const [resettingCliParams, setResettingCliParams] = useState(false);
+  const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
 
-    client.getBotOverview(botAlias)
-      .then((data) => {
+    Promise.all([
+      client.getBotOverview(botAlias),
+      client.getCliParams(botAlias),
+      client.getTunnelStatus(),
+    ])
+      .then(([overviewData, cliParamsData, tunnelData]) => {
         if (cancelled) return;
-        setOverview(data);
+        setOverview(overviewData);
+        setCliParams(cliParamsData);
+        setDraftValues(buildDraftValues(cliParamsData));
+        setTunnel(tunnelData);
         setLoading(false);
       })
       .catch((err: Error) => {
@@ -40,6 +96,11 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       cancelled = true;
     };
   }, [botAlias, client]);
+
+  const syncCliParams = (payload: CliParamsPayload) => {
+    setCliParams(payload);
+    setDraftValues(buildDraftValues(payload));
+  };
 
   const confirmReset = async () => {
     setActionLoading("reset");
@@ -71,6 +132,80 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
     }
   };
 
+  const saveCliParam = async (key: string) => {
+    if (!cliParams) return;
+    const field = cliParams.schema[key];
+    if (!field) return;
+
+    setSavingParamKey(key);
+    setError("");
+    setNotice("");
+    try {
+      const next = await client.updateCliParam(
+        botAlias,
+        key,
+        toRequestValue(field, draftValues[key] ?? ""),
+      );
+      syncCliParams(next);
+      setNotice("参数已保存");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存参数失败");
+    } finally {
+      setSavingParamKey("");
+    }
+  };
+
+  const resetCurrentCliParams = async () => {
+    setResettingCliParams(true);
+    setError("");
+    setNotice("");
+    try {
+      const next = await client.resetCliParams(botAlias);
+      syncCliParams(next);
+      setNotice("CLI 参数已恢复默认值");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重置 CLI 参数失败");
+    } finally {
+      setResettingCliParams(false);
+    }
+  };
+
+  const runTunnelAction = async (action: "start" | "stop" | "restart") => {
+    setTunnelAction(action);
+    setError("");
+    setNotice("");
+    try {
+      const next = action === "start"
+        ? await client.startTunnel()
+        : action === "stop"
+          ? await client.stopTunnel()
+          : await client.restartTunnel();
+      setTunnel(next);
+      setNotice(action === "restart" ? "Tunnel 已重启" : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Tunnel 操作失败");
+    } finally {
+      setTunnelAction("");
+    }
+  };
+
+  const copyTunnelUrl = async () => {
+    if (!tunnel?.publicUrl) return;
+    setTunnelAction("copy");
+    setError("");
+    setNotice("");
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(tunnel.publicUrl);
+      }
+      setNotice("公网地址已复制");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "复制公网地址失败");
+    } finally {
+      setTunnelAction("");
+    }
+  };
+
   return (
     <main className="flex flex-col h-full bg-[var(--bg)]">
       <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
@@ -91,6 +226,7 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
             {notice}
           </div>
         ) : null}
+
         {overview ? (
           <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-2">
             <p><span className="font-medium text-[var(--text)]">Bot:</span> {overview.alias}</p>
@@ -99,6 +235,172 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
             <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
           </div>
         ) : null}
+
+        {cliParams ? (
+          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">CLI 参数</h2>
+                <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams.cliType}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void resetCurrentCliParams()}
+                disabled={resettingCliParams}
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                <RefreshCw className="h-4 w-4" />
+                {resettingCliParams ? "重置中..." : "恢复默认参数"}
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {Object.entries(cliParams.schema).map(([key, field]) => {
+                const label = fieldLabel(key, field);
+                const value = draftValues[key] ?? "";
+                const inputId = `cli-param-${key}`;
+
+                return (
+                  <div key={key} className="rounded-xl border border-[var(--border)] p-3 space-y-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <label htmlFor={inputId} className="font-medium text-[var(--text)]">{label}</label>
+                        <p className="text-xs text-[var(--muted)]">{key}</p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`保存 ${label}`}
+                        onClick={() => void saveCliParam(key)}
+                        disabled={savingParamKey === key}
+                        className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                      >
+                        <Save className="h-4 w-4" />
+                        {savingParamKey === key ? "保存中..." : "保存"}
+                      </button>
+                    </div>
+
+                    {field.type === "boolean" ? (
+                      <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)]">
+                        <span>{label}</span>
+                        <input
+                          id={inputId}
+                          aria-label={label}
+                          type="checkbox"
+                          checked={Boolean(value)}
+                          onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
+                          className="h-4 w-4"
+                        />
+                      </label>
+                    ) : field.enum ? (
+                      <select
+                        id={inputId}
+                        aria-label={label}
+                        value={String(value)}
+                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                      >
+                        {field.enum.map((item) => (
+                          <option key={item} value={item}>{item}</option>
+                        ))}
+                      </select>
+                    ) : field.type === "string_list" ? (
+                      <textarea
+                        id={inputId}
+                        aria-label={label}
+                        rows={3}
+                        value={String(value)}
+                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                        placeholder="每行一个参数"
+                      />
+                    ) : (
+                      <input
+                        id={inputId}
+                        aria-label={label}
+                        type={field.type === "number" ? "number" : "text"}
+                        value={String(value)}
+                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {tunnel ? (
+          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-5 w-5 text-[var(--accent)]" />
+                  <h2 className="text-base font-semibold text-[var(--text)]">公网访问</h2>
+                </div>
+                <p className="text-sm text-[var(--muted)]">状态: {tunnelStatusText(tunnel.status)}</p>
+              </div>
+              <span className="rounded-full bg-[var(--surface-strong)] px-3 py-1 text-xs text-[var(--muted)]">
+                {tunnel.source === "manual_config" ? "手工地址" : "Quick Tunnel"}
+              </span>
+            </div>
+
+            <div className="space-y-2 text-sm text-[var(--muted)]">
+              <p className="break-all"><span className="font-medium text-[var(--text)]">公网:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
+              <p className="break-all"><span className="font-medium text-[var(--text)]">本地:</span> {tunnel.localUrl}</p>
+              {tunnel.lastError ? (
+                <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {tunnel.source !== "manual_config" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void runTunnelAction("start")}
+                    disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting"}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    启动 Tunnel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runTunnelAction("stop")}
+                    disabled={tunnelAction !== "" || tunnel.status === "stopped"}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    停止 Tunnel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runTunnelAction("restart")}
+                    disabled={tunnelAction !== ""}
+                    className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    <RotateCw className="h-4 w-4" />
+                    重启 Tunnel
+                  </button>
+                </>
+              ) : (
+                <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
+                  当前使用 `WEB_PUBLIC_URL` 手工配置地址
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void copyTunnelUrl()}
+                disabled={tunnelAction !== "" || !tunnel.publicUrl}
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                <Copy className="h-4 w-4" />
+                复制公网地址
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] overflow-hidden divide-y divide-[var(--border)]">
           <button
             onClick={() => setShowKillConfirm(true)}

@@ -3,10 +3,12 @@ import type {
   BotSummary,
   ChatMessage,
   ChatStatusUpdate,
+  CliParamsPayload,
   DirectoryListing,
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TunnelSnapshot,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
@@ -123,6 +125,102 @@ export class MockWebBotClient implements WebBotClient {
 
   async killTask(botAlias: string): Promise<string> {
     return "已发送终止任务请求";
+  }
+
+  async getCliParams(botAlias: string): Promise<CliParamsPayload> {
+    return {
+      cliType: botAlias === "main" ? "codex" : "kimi",
+      params: {
+        reasoning_effort: "xhigh",
+        model: "gpt-5.4",
+        skip_git_check: true,
+        json_output: true,
+        yolo: true,
+        extra_args: [],
+      },
+      defaults: {
+        reasoning_effort: "xhigh",
+        model: "gpt-5.4",
+        skip_git_check: true,
+        json_output: true,
+        yolo: true,
+        extra_args: [],
+      },
+      schema: {
+        reasoning_effort: {
+          type: "string",
+          enum: ["xhigh", "high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        model: {
+          type: "string",
+          description: "模型选择",
+        },
+        skip_git_check: {
+          type: "boolean",
+          description: "跳过 Git 仓库检查",
+        },
+        json_output: {
+          type: "boolean",
+          description: "JSON 格式输出",
+        },
+        yolo: {
+          type: "boolean",
+          description: "绕过审批和沙箱",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    };
+  }
+
+  async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {
+    const payload = await this.getCliParams(botAlias);
+    return {
+      ...payload,
+      params: {
+        ...payload.params,
+        [key]: value,
+      },
+    };
+  }
+
+  async resetCliParams(botAlias: string): Promise<CliParamsPayload> {
+    return this.getCliParams(botAlias);
+  }
+
+  async getTunnelStatus(): Promise<TunnelSnapshot> {
+    return {
+      mode: "cloudflare_quick",
+      status: "running",
+      source: "quick_tunnel",
+      publicUrl: "https://demo.trycloudflare.com",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "",
+      pid: 1234,
+    };
+  }
+
+  async startTunnel(): Promise<TunnelSnapshot> {
+    return this.getTunnelStatus();
+  }
+
+  async stopTunnel(): Promise<TunnelSnapshot> {
+    return {
+      mode: "cloudflare_quick",
+      status: "stopped",
+      source: "quick_tunnel",
+      publicUrl: "",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "",
+      pid: null,
+    };
+  }
+
+  async restartTunnel(): Promise<TunnelSnapshot> {
+    return this.getTunnelStatus();
   }
 
   async listSystemScripts(): Promise<SystemScript[]> {

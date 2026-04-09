@@ -3,10 +3,12 @@ import type {
   BotSummary,
   ChatMessage,
   ChatStatusUpdate,
+  CliParamsPayload,
   DirectoryListing,
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TunnelSnapshot,
 } from "./types";
 
 export interface WebBotClient {
@@ -28,6 +30,13 @@ export interface WebBotClient {
   downloadFile(botAlias: string, filename: string): Promise<void>;
   resetSession(botAlias: string): Promise<void>;
   killTask(botAlias: string): Promise<string>;
+  getCliParams(botAlias: string): Promise<CliParamsPayload>;
+  updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
+  resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;
+  getTunnelStatus(): Promise<TunnelSnapshot>;
+  startTunnel(): Promise<TunnelSnapshot>;
+  stopTunnel(): Promise<TunnelSnapshot>;
+  restartTunnel(): Promise<TunnelSnapshot>;
   listSystemScripts(): Promise<SystemScript[]>;
   runSystemScript(scriptName: string): Promise<SystemScriptResult>;
 }

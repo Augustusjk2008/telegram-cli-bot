@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 import queue
 import subprocess
@@ -21,6 +22,7 @@ from bot.assistant.llm import (
     get_tool_usage_stats,
 )
 from bot.assistant.memory import get_memory_store
+from bot.cli_params import get_default_params, get_params_schema
 from bot.cli import (
     build_cli_command,
     normalize_cli_type,
@@ -113,18 +115,31 @@ def _build_session_ids(session: UserSession) -> dict[str, Any]:
     }
 
 
-def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[str, Any]:
+def _build_running_reply_snapshot(session: UserSession) -> Optional[dict[str, Any]]:
+    if not session.running_started_at:
+        return None
     return {
-        "bot_alias": profile.alias,
-        "bot_mode": profile.bot_mode,
-        "cli_type": profile.cli_type,
-        "cli_path": profile.cli_path,
-        "working_dir": session.working_dir,
-        "message_count": session.message_count,
-        "history_count": len(session.history),
-        "is_processing": session.is_processing,
-        "session_ids": _build_session_ids(session),
+        "user_text": session.running_user_text or "",
+        "preview_text": session.running_preview_text or "",
+        "started_at": session.running_started_at,
+        "updated_at": session.running_updated_at or session.running_started_at,
     }
+
+
+def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[str, Any]:
+    with session._lock:
+        return {
+            "bot_alias": profile.alias,
+            "bot_mode": profile.bot_mode,
+            "cli_type": profile.cli_type,
+            "cli_path": profile.cli_path,
+            "working_dir": session.working_dir,
+            "message_count": session.message_count,
+            "history_count": len(session.history),
+            "is_processing": session.is_processing,
+            "running_reply": _build_running_reply_snapshot(session),
+            "session_ids": _build_session_ids(session),
+        }
 
 
 def _build_capabilities(profile: BotProfile, is_main: bool) -> list[str]:
@@ -190,6 +205,57 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
         "bot": build_bot_summary(manager, alias),
         "session": build_session_snapshot(profile, session),
     }
+
+
+def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
+    if not resolved_cli_type:
+        _raise(400, "missing_cli_type", "缺少 CLI 类型")
+
+    try:
+        params = profile.cli_params.get_params(resolved_cli_type)
+        schema = get_params_schema(resolved_cli_type)
+        defaults = get_default_params(resolved_cli_type)
+    except ValueError as exc:
+        _raise(400, "invalid_cli_type", str(exc))
+
+    return {
+        "cli_type": resolved_cli_type,
+        "params": copy.deepcopy(params),
+        "schema": schema,
+        "defaults": defaults,
+    }
+
+
+async def update_cli_params(
+    manager: MultiBotManager,
+    alias: str,
+    cli_type: Optional[str],
+    key: str,
+    value: Any,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
+    if not key or not key.strip():
+        _raise(400, "missing_param_key", "缺少参数名")
+
+    try:
+        await manager.set_bot_cli_param(alias, resolved_cli_type, key.strip(), value)
+    except ValueError as exc:
+        _raise(400, "invalid_param_value", str(exc))
+
+    return get_cli_params_payload(manager, alias, resolved_cli_type)
+
+
+async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
+    try:
+        await manager.reset_bot_cli_params(alias, resolved_cli_type)
+    except ValueError as exc:
+        _raise(400, "invalid_cli_type", str(exc))
+    return get_cli_params_payload(manager, alias, resolved_cli_type)
 
 
 def _resolve_safe_path(session: UserSession, filename: str) -> str:
@@ -259,6 +325,7 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
 
     session.clear_session_ids()
     session.working_dir = path
+    session.persist()
     return {"working_dir": session.working_dir}
 
 
@@ -476,6 +543,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
+    session.start_running_reply(text)
 
     try:
         session.touch()
@@ -615,6 +683,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                     if status_signature != last_status_signature and (
                         status_signature[0] > 0 or status_signature[1]
                     ):
+                        session.update_running_reply(status_event.get("preview_text"))
                         yield status_event
                         last_status_signature = status_signature
 
@@ -689,6 +758,9 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 session_id_changed = False
 
             session.add_to_history("assistant", response)
+            with session._lock:
+                session.is_processing = False
+            session.clear_running_reply()
             yield {
                 "type": "done",
                 "output": response,
@@ -701,6 +773,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         with session._lock:
             session.process = None
             session.is_processing = False
+        session.clear_running_reply()
 
 
 async def _stream_assistant_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
@@ -740,6 +813,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
+    session.start_running_reply(text)
 
     try:
         session.touch()
@@ -853,6 +927,9 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 session.persist()
 
             session.add_to_history("assistant", response)
+            with session._lock:
+                session.is_processing = False
+            session.clear_running_reply()
             return {
                 "output": response,
                 "returncode": returncode,
@@ -863,6 +940,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         with session._lock:
             session.process = None
             session.is_processing = False
+        session.clear_running_reply()
 
 
 async def run_assistant_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
@@ -877,43 +955,56 @@ async def run_assistant_chat(manager: MultiBotManager, alias: str, user_id: int,
         _raise(400, "empty_message", "消息不能为空")
 
     session = get_session_for_alias(manager, alias, user_id)
+    with session._lock:
+        if session.is_processing:
+            _raise(409, "session_busy", msg("chat", "busy"))
+        session.is_processing = True
     session.touch()
+    session.start_running_reply(text)
+    try:
+        messages = []
+        for item in session.history[-10:]:
+            if item["role"] in ("user", "assistant"):
+                messages.append({"role": item["role"], "content": item["content"]})
+        messages.append({"role": "user", "content": text})
 
-    messages = []
-    for item in session.history[-10:]:
-        if item["role"] in ("user", "assistant"):
-            messages.append({"role": item["role"], "content": item["content"]})
-    messages.append({"role": "user", "content": text})
+        system_prompt = _build_system_prompt_with_memory(user_id, len(session.history) == 0)
+        response_text = ""
+        usage: dict[str, Any] = {}
 
-    system_prompt = _build_system_prompt_with_memory(user_id, len(session.history) == 0)
-    response_text = ""
-    usage: dict[str, Any] = {}
+        async for event in call_claude_with_memory_tools_stream(
+            messages=messages,
+            system_prompt=system_prompt,
+            user_id=user_id,
+        ):
+            if event["type"] == "text":
+                response_text += event["text"]
+                session.update_running_reply(response_text)
+            elif event["type"] == "usage":
+                usage = event
 
-    async for event in call_claude_with_memory_tools_stream(
-        messages=messages,
-        system_prompt=system_prompt,
-        user_id=user_id,
-    ):
-        if event["type"] == "text":
-            response_text += event["text"]
-        elif event["type"] == "usage":
-            usage = event
+        final_text = response_text
+        if usage:
+            final_text += (
+                f"\n\n💰 Token 使用: {usage.get('input_tokens', 0)} 输入 + "
+                f"{usage.get('output_tokens', 0)} 输出 = "
+                f"{usage.get('input_tokens', 0) + usage.get('output_tokens', 0)} 总计"
+            )
 
-    final_text = response_text
-    if usage:
-        final_text += (
-            f"\n\n💰 Token 使用: {usage.get('input_tokens', 0)} 输入 + "
-            f"{usage.get('output_tokens', 0)} 输出 = "
-            f"{usage.get('input_tokens', 0) + usage.get('output_tokens', 0)} 总计"
-        )
-
-    session.add_to_history("user", text)
-    session.add_to_history("assistant", response_text)
-    return {
-        "output": final_text,
-        "usage": usage,
-        "session": build_session_snapshot(profile, session),
-    }
+        session.add_to_history("user", text)
+        session.add_to_history("assistant", response_text)
+        with session._lock:
+            session.is_processing = False
+        session.clear_running_reply()
+        return {
+            "output": final_text,
+            "usage": usage,
+            "session": build_session_snapshot(profile, session),
+        }
+    finally:
+        with session._lock:
+            session.is_processing = False
+        session.clear_running_reply()
 
 
 async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:

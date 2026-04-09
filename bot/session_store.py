@@ -1,8 +1,10 @@
-"""会话ID持久化存储
+"""会话快照持久化存储。
 
-按 (bot_id, user_id) 将会话ID保存到JSON文件，程序重启后可以恢复会话。
-每个bot有固定的cli_type，只存储对应类型的session_id。
-切换工作目录时会清除session_id（由调用方处理）。
+按 (bot_id, user_id) 将会话相关状态保存到 JSON 文件，程序重启后可以恢复：
+- 各 CLI 的 session_id
+- 用户工作目录
+- 有限聊天历史
+- 运行中回复的最近快照
 """
 
 import json
@@ -75,6 +77,14 @@ def save_session(
     codex_session_id: Optional[str] = None,
     kimi_session_id: Optional[str] = None,
     claude_session_id: Optional[str] = None,
+    working_dir: Optional[str] = None,
+    history: Optional[list[dict]] = None,
+    message_count: Optional[int] = None,
+    last_activity: Optional[str] = None,
+    running_user_text: Optional[str] = None,
+    running_preview_text: Optional[str] = None,
+    running_started_at: Optional[str] = None,
+    running_updated_at: Optional[str] = None,
 ):
     """保存会话信息到持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id)
@@ -86,6 +96,22 @@ def save_session(
         session_data["kimi_session_id"] = kimi_session_id
     if claude_session_id:
         session_data["claude_session_id"] = claude_session_id
+    if working_dir:
+        session_data["working_dir"] = working_dir
+    if history:
+        session_data["history"] = history
+    if isinstance(message_count, int):
+        session_data["message_count"] = max(0, message_count)
+    if last_activity:
+        session_data["last_activity"] = last_activity
+    if running_user_text:
+        session_data["running_user_text"] = running_user_text
+    if running_preview_text:
+        session_data["running_preview_text"] = running_preview_text
+    if running_started_at:
+        session_data["running_started_at"] = running_started_at
+    if running_updated_at:
+        session_data["running_updated_at"] = running_updated_at
 
     with _store_lock:
         try:

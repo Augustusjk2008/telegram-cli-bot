@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import type { ChatMessage, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -53,6 +53,10 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     ...overrides,
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 test("shows a user message after sending text", async () => {
   const client = createClient({
@@ -191,4 +195,112 @@ test("shows compact system script titles without verbose metadata", async () => 
   expect(await screen.findByRole("button", { name: "网络流量" })).toBeInTheDocument();
   expect(screen.queryByText("查看网络状态并输出详细路径")).not.toBeInTheDocument();
   expect(screen.queryByText("C:\\scripts\\network_traffic.ps1")).not.toBeInTheDocument();
+});
+
+test("restores in-progress reply after reopening and refreshes to final history", async () => {
+  vi.useFakeTimers();
+
+  let overviewCalls = 0;
+  let historyCalls = 0;
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        return [{
+          id: "user-1",
+          role: "user",
+          text: "继续执行",
+          createdAt: new Date().toISOString(),
+          state: "done",
+        }];
+      }
+      return [
+        {
+          id: "user-1",
+          role: "user",
+          text: "继续执行",
+          createdAt: new Date().toISOString(),
+          state: "done",
+        },
+        {
+          id: "assistant-final",
+          role: "assistant",
+          text: "最终结果",
+          createdAt: new Date().toISOString(),
+          state: "done",
+        },
+      ];
+    },
+    getBotOverview: async () => {
+      overviewCalls += 1;
+      if (overviewCalls === 1) {
+        return {
+          alias: "main",
+          cliType: "codex",
+          status: "busy",
+          workingDir: "C:\\workspace",
+          isProcessing: true,
+          runningReply: {
+            previewText: "处理中预览",
+            startedAt: "2026-04-09T10:40:00",
+            updatedAt: "2026-04-09T10:40:05",
+          },
+        };
+      }
+      return {
+        alias: "main",
+        cliType: "codex",
+        status: "running",
+        workingDir: "C:\\workspace",
+        isProcessing: false,
+      };
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("处理中预览")).toBeInTheDocument();
+  expect(screen.getByText(/正在生成|处理中预览/)).toBeInTheDocument();
+
+  await act(async () => {
+    vi.advanceTimersByTime(1100);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("最终结果")).toBeInTheDocument();
+}, 8000);
+
+test("shows the last unfinished preview after a restored session is no longer running", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "user-1",
+      role: "user",
+      text: "继续执行",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }],
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      runningReply: {
+        userText: "继续执行",
+        previewText: "恢复到上次预览",
+        startedAt: "2026-04-09T10:40:00",
+        updatedAt: "2026-04-09T10:40:05",
+      },
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("恢复到上次预览")).toBeInTheDocument();
+  expect(screen.getByText("检测到上次未完成任务，已恢复最近预览。")).toBeInTheDocument();
 });

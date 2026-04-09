@@ -1,9 +1,46 @@
+param(
+    [ValidateSet("default", "web")]
+    [string]$Mode = "default"
+)
+
 # Telegram CLI Bridge - Tray Startup Script
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $scriptDir
+$restartExitCode = 75
+$env:TELEGRAM_CLI_BRIDGE_SUPERVISOR = "1"
+
+if ($Mode -eq "web") {
+    $env:TELEGRAM_ENABLED = "false"
+    $env:WEB_ENABLED = "true"
+}
+
+$serviceName = if ($Mode -eq "web") {
+    "Telegram CLI Bridge - Web Mode"
+} else {
+    "Telegram CLI Bridge"
+}
+
+function Start-BotProcess {
+    param(
+        [switch]$Hidden
+    )
+
+    $startParams = @{
+        FilePath = "python"
+        ArgumentList = @("-m", "bot")
+        WorkingDirectory = $scriptDir
+        PassThru = $true
+    }
+
+    if ($Hidden) {
+        $startParams.WindowStyle = "Hidden"
+    }
+
+    return Start-Process @startParams
+}
 
 # Create tray icon
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -13,7 +50,7 @@ if (Test-Path $iconPath) {
 } else {
     $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
 }
-$notifyIcon.Text = "Telegram CLI Bridge - Running"
+$notifyIcon.Text = "$serviceName - Running"
 $notifyIcon.Visible = $true
 
 # Create context menu
@@ -47,11 +84,11 @@ $openFolderMenuItem.Add_Click({ Start-Process explorer.exe $scriptDir })
 $statusMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Status"
 $statusMenuItem.Add_Click({
     $statusText = if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
-        "Bot is running`nPID: $($global:pythonProcess.Id)`nWorking Directory: $scriptDir"
+        "Bot is running`nMode: $Mode`nPID: $($global:pythonProcess.Id)`nWorking Directory: $scriptDir"
     } else {
-        "Bot process is not running`nWorking Directory: $scriptDir"
+        "Bot process is not running`nMode: $Mode`nWorking Directory: $scriptDir"
     }
-    [System.Windows.Forms.MessageBox]::Show($statusText, "Telegram CLI Bridge", "OK", "Information")
+    [System.Windows.Forms.MessageBox]::Show($statusText, $serviceName, "OK", "Information")
 })
 [void]$contextMenu.Items.Add($statusMenuItem)
 
@@ -62,8 +99,8 @@ $restartMenuItem.Add_Click({
         $global:pythonProcess.WaitForExit(5000)
     }
     Start-Sleep -Seconds 1
-    $global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru -WindowStyle Hidden
-    $notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
+    $global:pythonProcess = Start-BotProcess -Hidden
+    $notifyIcon.BalloonTipTitle = $serviceName
     $notifyIcon.BalloonTipText = "Service restarted"
     $notifyIcon.ShowBalloonTip(2000)
 })
@@ -100,21 +137,33 @@ public static extern IntPtr GetConsoleWindow();
 })
 
 # Start Python Bot in new console window
-$global:pythonProcess = Start-Process python -ArgumentList "-m", "bot" -WorkingDirectory $scriptDir -PassThru
+$global:pythonProcess = Start-BotProcess
 
-$notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
+$notifyIcon.BalloonTipTitle = $serviceName
 $notifyIcon.BalloonTipText = "Service started"
 $notifyIcon.ShowBalloonTip(2000)
 
 # Keep script running
-while (!$global:pythonProcess.HasExited) {
-    Start-Sleep -Milliseconds 100
-    [System.Windows.Forms.Application]::DoEvents()
-}
+while ($true) {
+    while (!$global:pythonProcess.HasExited) {
+        Start-Sleep -Milliseconds 100
+        [System.Windows.Forms.Application]::DoEvents()
+    }
 
-$notifyIcon.BalloonTipTitle = "Telegram CLI Bridge"
-$notifyIcon.BalloonTipText = "Service stopped!"
-$notifyIcon.ShowBalloonTip(5000)
+    if ($global:pythonProcess.ExitCode -eq $restartExitCode) {
+        Start-Sleep -Seconds 1
+        $global:pythonProcess = Start-BotProcess
+        $notifyIcon.BalloonTipTitle = $serviceName
+        $notifyIcon.BalloonTipText = "Service restarted"
+        $notifyIcon.ShowBalloonTip(2000)
+        continue
+    }
+
+    $notifyIcon.BalloonTipTitle = $serviceName
+    $notifyIcon.BalloonTipText = "Service stopped!"
+    $notifyIcon.ShowBalloonTip(5000)
+    break
+}
 
 while ($true) {
     Start-Sleep -Milliseconds 100

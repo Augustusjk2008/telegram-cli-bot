@@ -12,6 +12,7 @@ import pytest
 
 from bot.handlers.basic import (
     change_directory,
+    codex_status,
     handle_keyboard_command,
     list_directory,
     print_working_directory,
@@ -37,6 +38,14 @@ class TestStartHandler:
 
         call_text = mock_update.message.reply_text.call_args[0][0]
         assert "/files" in call_text
+
+    @pytest.mark.asyncio
+    async def test_start_help_mentions_codex_status_command(self, mock_update, mock_context):
+        with patch("bot.handlers.basic.check_auth", return_value=True):
+            await start(mock_update, mock_context)
+
+        call_text = mock_update.message.reply_text.call_args[0][0]
+        assert "/codex_status" in call_text
 
     @pytest.mark.asyncio
     async def test_start_unauthorized(self, mock_update, mock_context):
@@ -197,6 +206,62 @@ class TestShowHistory:
             await show_history(mock_update, mock_context)
         call_text = mock_update.message.reply_text.call_args[0][0]
         assert "hello" in call_text or "user" in call_text.lower()
+
+
+class TestCodexStatus:
+    """测试 /codex_status"""
+
+    @pytest.mark.asyncio
+    async def test_codex_status_rejects_non_codex_cli(self, mock_update, mock_context):
+        profile_mock = MagicMock()
+        profile_mock.cli_type = "claude"
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock):
+            await codex_status(mock_update, mock_context)
+
+        call_text = mock_update.message.reply_text.call_args[0][0]
+        assert "不是 Codex" in call_text
+
+    @pytest.mark.asyncio
+    async def test_codex_status_returns_status_line(self, mock_update, mock_context, temp_dir):
+        profile_mock = MagicMock()
+        profile_mock.cli_type = "codex"
+        profile_mock.cli_path = "codex"
+        session_mock = MagicMock()
+        session_mock.working_dir = str(temp_dir)
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.basic.get_current_session", return_value=session_mock), \
+             patch(
+                 "bot.handlers.basic.read_codex_status_from_terminal",
+                 return_value={"ok": True, "status_line": "100% context left"},
+             ):
+            await codex_status(mock_update, mock_context)
+
+        call_text = mock_update.message.reply_text.call_args[0][0]
+        assert "100% context left" in call_text
+
+    @pytest.mark.asyncio
+    async def test_codex_status_returns_error_message(self, mock_update, mock_context, temp_dir):
+        profile_mock = MagicMock()
+        profile_mock.cli_type = "codex"
+        profile_mock.cli_path = "codex"
+        session_mock = MagicMock()
+        session_mock.working_dir = str(temp_dir)
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.basic.get_current_session", return_value=session_mock), \
+             patch(
+                 "bot.handlers.basic.read_codex_status_from_terminal",
+                 return_value={"ok": False, "error": "timeout"},
+             ):
+            await codex_status(mock_update, mock_context)
+
+        call_text = mock_update.message.reply_text.call_args[0][0]
+        assert "查询 Codex 状态失败" in call_text
 
 
 class TestKeyboardCommands:

@@ -37,7 +37,11 @@ class TestBotProfile:
     def test_defaults(self):
         p = BotProfile(alias="x", token="y")
         assert p.enabled is True
-        # cli_type/cli_path/working_dir 使用 config 中的默认值
+        assert p.cli_type == "codex"
+        assert p.cli_path == "codex"
+        assert p.cli_params.codex["model"] == "gpt-5.4"
+        assert p.cli_params.codex["reasoning_effort"] == "xhigh"
+        assert p.cli_params.codex["yolo"] is True
 
 
 class TestUserSession:

@@ -2,6 +2,7 @@
 
 import asyncio
 import html
+import locale
 import logging
 import os
 import subprocess
@@ -24,6 +25,33 @@ SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
 
 # 支持的脚本扩展名
 SCRIPT_EXTENSIONS = {'.bat', '.cmd', '.ps1', '.py', '.exe'}
+
+
+def _decode_process_output(data: bytes | str | None) -> str:
+    """按本机编码回退解码子进程输出，避免 Windows PowerShell 中文乱码。"""
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+
+    encodings = [
+        locale.getpreferredencoding(False),
+        "utf-8",
+        "gb18030",
+        "cp936",
+    ]
+    tried: set[str] = set()
+    for encoding in encodings:
+        normalized = (encoding or "").lower()
+        if not normalized or normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return data.decode("utf-8", errors="replace")
 
 
 def get_script_display_name(script_path: Path) -> str:
@@ -163,20 +191,16 @@ def execute_script(script_path: Path) -> tuple[bool, str]:
             result = subprocess.run(
                 [str(script_path)],
                 capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
+                text=False,
                 timeout=60,
                 shell=False
             )
         elif ext == '.ps1':
             # PowerShell 脚本
             result = subprocess.run(
-                ['powershell', '-ExecutionPolicy', 'Bypass', '-File', str(script_path)],
+                ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script_path)],
                 capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
+                text=False,
                 timeout=60,
                 shell=False
             )
@@ -185,9 +209,7 @@ def execute_script(script_path: Path) -> tuple[bool, str]:
             result = subprocess.run(
                 ['python', str(script_path)],
                 capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
+                text=False,
                 timeout=60,
                 shell=False
             )
@@ -196,19 +218,17 @@ def execute_script(script_path: Path) -> tuple[bool, str]:
             result = subprocess.run(
                 [str(script_path)],
                 capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
+                text=False,
                 timeout=60,
                 shell=True
             )
         
         if result.returncode == 0:
-            stdout = strip_ansi_escape(result.stdout or "")
+            stdout = strip_ansi_escape(_decode_process_output(result.stdout))
             output = stdout.strip() if stdout.strip() else "执行成功（无输出）"
             return True, output
         else:
-            stderr = strip_ansi_escape(result.stderr or "")
+            stderr = strip_ansi_escape(_decode_process_output(result.stderr))
             error_msg = stderr.strip() if stderr.strip() else f"退出码: {result.returncode}"
             return False, f"执行失败: {error_msg}"
             

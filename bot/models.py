@@ -87,14 +87,20 @@ class UserSession:
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
     is_processing: bool = False
+    running_user_text: Optional[str] = None
+    running_preview_text: str = ""
+    running_started_at: Optional[str] = None
+    running_updated_at: Optional[str] = None
     stop_requested: bool = False
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def touch(self):
-        self.last_activity = datetime.now()
-        self.message_count += 1
+        with self._lock:
+            self.last_activity = datetime.now()
+            self.message_count += 1
+        self.persist()
 
     def is_expired(self) -> bool:
         elapsed = (datetime.now() - self.last_activity).total_seconds()
@@ -111,6 +117,34 @@ class UserSession:
             )
             if len(self.history) > 100:
                 self.history = self.history[-100:]
+        self.persist()
+
+    def start_running_reply(self, user_text: str):
+        now = datetime.now().isoformat()
+        with self._lock:
+            self.running_user_text = user_text
+            self.running_preview_text = ""
+            self.running_started_at = now
+            self.running_updated_at = now
+        self.persist()
+
+    def update_running_reply(self, preview_text: Optional[str] = None):
+        now = datetime.now().isoformat()
+        with self._lock:
+            if self.running_started_at is None:
+                self.running_started_at = now
+            if preview_text is not None:
+                self.running_preview_text = preview_text
+            self.running_updated_at = now
+        self.persist()
+
+    def clear_running_reply(self):
+        with self._lock:
+            self.running_user_text = None
+            self.running_preview_text = ""
+            self.running_started_at = None
+            self.running_updated_at = None
+        self.persist()
 
     def terminate_process(self):
         with self._lock:
@@ -127,6 +161,11 @@ class UserSession:
                 self.process = None
             self.stop_requested = False
             self.is_processing = False
+            self.running_user_text = None
+            self.running_preview_text = ""
+            self.running_started_at = None
+            self.running_updated_at = None
+        self.persist()
 
     def persist(self):
         """持久化当前会话状态（session_ids）

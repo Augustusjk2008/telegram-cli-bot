@@ -4,11 +4,15 @@ import type {
   BotSummary,
   ChatMessage,
   ChatStatusUpdate,
+  CliParamsPayload,
+  CliType,
   DirectoryListing,
   FileEntry,
+  RunningReply,
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TunnelSnapshot,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
@@ -23,7 +27,7 @@ type JsonEnvelope<T> = {
 
 type RawBotSummary = {
   alias: string;
-  cli_type: "kimi" | "claude" | "codex";
+  cli_type: CliType;
   status: string;
   working_dir: string;
   bot_mode?: string;
@@ -47,6 +51,36 @@ type RawSystemScript = {
   display_name: string;
   description: string;
   path: string;
+};
+
+type RawRunningReply = {
+  user_text?: string;
+  preview_text?: string;
+  started_at: string;
+  updated_at?: string;
+};
+
+type RawCliParamsPayload = {
+  cli_type: CliType;
+  params: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  schema: Record<string, {
+    type: "boolean" | "string" | "number" | "string_list";
+    enum?: string[];
+    description?: string;
+    nullable?: boolean;
+    integer?: boolean;
+  }>;
+};
+
+type RawTunnelSnapshot = {
+  mode: "disabled" | "cloudflare_quick" | "manual";
+  status: "stopped" | "starting" | "running" | "error";
+  source: "disabled" | "quick_tunnel" | "manual_config";
+  public_url?: string;
+  local_url?: string;
+  last_error?: string;
+  pid?: number | null;
 };
 
 type StreamEvent =
@@ -102,6 +136,39 @@ function mapSystemScript(raw: RawSystemScript): SystemScript {
     displayName: raw.display_name,
     description: raw.description,
     path: raw.path,
+  };
+}
+
+function mapRunningReply(raw?: RawRunningReply | null): RunningReply | null {
+  if (!raw?.started_at) {
+    return null;
+  }
+  return {
+    userText: raw.user_text,
+    previewText: raw.preview_text,
+    startedAt: raw.started_at,
+    updatedAt: raw.updated_at,
+  };
+}
+
+function mapCliParamsPayload(raw: RawCliParamsPayload): CliParamsPayload {
+  return {
+    cliType: raw.cli_type,
+    params: raw.params || {},
+    defaults: raw.defaults || {},
+    schema: raw.schema || {},
+  };
+}
+
+function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
+  return {
+    mode: raw.mode,
+    status: raw.status,
+    source: raw.source,
+    publicUrl: raw.public_url || "",
+    localUrl: raw.local_url || "",
+    lastError: raw.last_error || "",
+    pid: raw.pid ?? null,
   };
 }
 
@@ -183,6 +250,7 @@ export class RealWebBotClient implements WebBotClient {
         message_count: number;
         history_count: number;
         is_processing: boolean;
+        running_reply?: RawRunningReply | null;
       };
     }>(`/api/bots/${encodeURIComponent(botAlias)}`);
 
@@ -193,6 +261,7 @@ export class RealWebBotClient implements WebBotClient {
       messageCount: data.session.message_count,
       historyCount: data.session.history_count,
       isProcessing: data.session.is_processing,
+      runningReply: mapRunningReply(data.session.running_reply),
     };
   }
 
@@ -361,6 +430,65 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return data.message || "已发送终止任务请求";
+  }
+
+  async getCliParams(botAlias: string): Promise<CliParamsPayload> {
+    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`);
+    return mapCliParamsPayload(data);
+  }
+
+  async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {
+    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        key,
+        value,
+        ...(cliType ? { cli_type: cliType } : {}),
+      }),
+    });
+    return mapCliParamsPayload(data);
+  }
+
+  async resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload> {
+    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params/reset`, {
+      method: "POST",
+      ...(cliType ? {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ cli_type: cliType }),
+      } : {}),
+    });
+    return mapCliParamsPayload(data);
+  }
+
+  async getTunnelStatus(): Promise<TunnelSnapshot> {
+    const data = await this.requestJson<RawTunnelSnapshot>("/api/admin/tunnel");
+    return mapTunnelSnapshot(data);
+  }
+
+  async startTunnel(): Promise<TunnelSnapshot> {
+    const data = await this.requestJson<RawTunnelSnapshot>("/api/admin/tunnel/start", {
+      method: "POST",
+    });
+    return mapTunnelSnapshot(data);
+  }
+
+  async stopTunnel(): Promise<TunnelSnapshot> {
+    const data = await this.requestJson<RawTunnelSnapshot>("/api/admin/tunnel/stop", {
+      method: "POST",
+    });
+    return mapTunnelSnapshot(data);
+  }
+
+  async restartTunnel(): Promise<TunnelSnapshot> {
+    const data = await this.requestJson<RawTunnelSnapshot>("/api/admin/tunnel/restart", {
+      method: "POST",
+    });
+    return mapTunnelSnapshot(data);
   }
 
   async listSystemScripts(): Promise<SystemScript[]> {

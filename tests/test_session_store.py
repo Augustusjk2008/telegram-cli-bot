@@ -89,6 +89,43 @@ class TestSaveAndLoadSession:
             assert "kimi_session_id" not in data
             assert "claude_session_id" not in data
 
+    def test_save_and_load_session_snapshot_fields(self, temp_dir: Path):
+        """测试保存和加载会话快照字段"""
+        store_file = temp_dir / ".session_store.json"
+        history = [
+            {
+                "timestamp": "2026-04-09T12:00:00",
+                "role": "user",
+                "content": "hello",
+            }
+        ]
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(
+                bot_id=1,
+                user_id=100,
+                codex_session_id="thread_abc123",
+                working_dir="C:\\workspace\\saved",
+                history=history,
+                message_count=3,
+                last_activity="2026-04-09T12:00:01",
+                running_user_text="continue",
+                running_preview_text="partial",
+                running_started_at="2026-04-09T12:00:02",
+                running_updated_at="2026-04-09T12:00:03",
+            )
+
+            data = load_session(1, 100)
+            assert data is not None
+            assert data["working_dir"] == "C:\\workspace\\saved"
+            assert data["history"] == history
+            assert data["message_count"] == 3
+            assert data["last_activity"] == "2026-04-09T12:00:01"
+            assert data["running_user_text"] == "continue"
+            assert data["running_preview_text"] == "partial"
+            assert data["running_started_at"] == "2026-04-09T12:00:02"
+            assert data["running_updated_at"] == "2026-04-09T12:00:03"
+
 
 class TestRemoveSession:
     """测试删除会话"""

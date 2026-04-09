@@ -19,6 +19,38 @@ import { SettingsScreen } from "../screens/SettingsScreen";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
+const TOKEN_STORAGE_KEY = "web-api-token";
+const BOT_STORAGE_KEY = "web-current-bot";
+
+function readStoredToken() {
+  return sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() || "";
+}
+
+function storeToken(token: string) {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    return;
+  }
+  sessionStorage.setItem(TOKEN_STORAGE_KEY, trimmed);
+}
+
+function clearStoredToken() {
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+function readStoredBotAlias() {
+  return localStorage.getItem(BOT_STORAGE_KEY)?.trim() || "";
+}
+
+function storeBotAlias(alias: string | null) {
+  const trimmed = alias?.trim() || "";
+  if (!trimmed) {
+    return;
+  }
+  localStorage.setItem(BOT_STORAGE_KEY, trimmed);
+}
+
 export function App() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
@@ -31,6 +63,11 @@ export function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
 
+  function handleSelectBot(alias: string | null) {
+    setCurrentBot(alias);
+    storeBotAlias(alias);
+  }
+
   useEffect(() => {
     if (!isLoggedIn) {
       return;
@@ -39,26 +76,42 @@ export function App() {
   }, [client, isLoggedIn]);
 
   useEffect(() => {
-    if (useMockClient) {
+    if (!isLoggedIn || bots.length === 0) {
       return;
     }
-    const storedToken = localStorage.getItem("web-api-token");
+
+    if (currentBot && bots.some((bot) => bot.alias === currentBot)) {
+      return;
+    }
+
+    const storedAlias = readStoredBotAlias();
+    if (storedAlias && bots.some((bot) => bot.alias === storedAlias)) {
+      setCurrentBot(storedAlias);
+      return;
+    }
+
+    setCurrentBot(null);
+  }, [bots, currentBot, isLoggedIn]);
+
+  useEffect(() => {
+    const storedToken = readStoredToken();
     if (!storedToken) {
       return;
     }
 
-    const nextClient = new RealWebBotClient();
+    const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
     nextClient.login(storedToken)
       .then((session) => {
+        const restoredAlias = readStoredBotAlias() || session.currentBotAlias || "";
         setClient(nextClient);
         setIsLoggedIn(true);
-        setCurrentBot(session.currentBotAlias || null);
-        setMountedChatBots(session.currentBotAlias ? [session.currentBotAlias] : []);
+        setCurrentBot(restoredAlias || null);
+        setMountedChatBots(restoredAlias ? [restoredAlias] : []);
         setLoginError("");
       })
       .catch(() => {
-        localStorage.removeItem("web-api-token");
+        clearStoredToken();
         setLoginError("本地保存的访问口令已失效，请重新登录");
       })
       .finally(() => {
@@ -72,13 +125,12 @@ export function App() {
     setLoginError("");
     try {
       const session = await nextClient.login(token);
-      if (!useMockClient) {
-        localStorage.setItem("web-api-token", token);
-      }
+      const restoredAlias = readStoredBotAlias() || session.currentBotAlias || "";
+      storeToken(token);
       setClient(nextClient);
       setIsLoggedIn(true);
-      setCurrentBot(session.currentBotAlias || null);
-      setMountedChatBots(session.currentBotAlias ? [session.currentBotAlias] : []);
+      setCurrentBot(restoredAlias || null);
+      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "登录失败");
     } finally {
@@ -87,7 +139,7 @@ export function App() {
   }
 
   function handleLogout() {
-    localStorage.removeItem("web-api-token");
+    clearStoredToken();
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
     setIsLoggedIn(false);
     setCurrentBot(null);
@@ -109,7 +161,7 @@ export function App() {
   }
 
   if (!currentBot) {
-    return <BotListScreen client={client} onSelect={setCurrentBot} />;
+    return <BotListScreen client={client} onSelect={handleSelectBot} />;
   }
 
   return (
@@ -169,7 +221,7 @@ export function App() {
           bots={bots}
           currentAlias={currentBot}
           onSelect={(alias) => {
-            setCurrentBot(alias);
+            handleSelectBot(alias);
             setCurrentTab("chat");
           }}
           onClose={() => setShowSwitcher(false)}

@@ -8,10 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.client_exceptions import ClientConnectionResetError
 
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_service import (
+    AuthContext,
     _build_stream_status_event,
     WebApiError,
     change_working_directory,
@@ -51,6 +53,24 @@ def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: 
 
     listing = get_directory_listing(web_manager, "main", 1001)
     assert any(item["name"] == "hello.txt" for item in listing["entries"])
+
+
+def test_overview_includes_running_reply_snapshot(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+        session.running_preview_text = "处理中预览"
+        session.running_started_at = "2026-04-09T10:40:00"
+        session.running_updated_at = "2026-04-09T10:40:05"
+
+    overview = get_overview(web_manager, "main", 1001)
+
+    assert overview["session"]["running_reply"] == {
+        "user_text": "",
+        "preview_text": "处理中预览",
+        "started_at": "2026-04-09T10:40:00",
+        "updated_at": "2026-04-09T10:40:05",
+    }
 
 
 def test_change_working_directory_clears_session_ids(web_manager: MultiBotManager, temp_dir: Path):
@@ -138,6 +158,103 @@ async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager
                 assert "event: done" in body
 
 
+@pytest.mark.asyncio
+async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    web_manager.main_profile.cli_type = "codex"
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/cli-params")
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["cli_type"] == "codex"
+            assert payload["data"]["params"]["reasoning_effort"] == "xhigh"
+            assert payload["data"]["schema"]["reasoning_effort"]["type"] == "string"
+            assert payload["data"]["schema"]["reasoning_effort"]["enum"] == ["xhigh", "high", "medium", "low"]
+
+            resp = await client.patch(
+                "/api/bots/main/cli-params",
+                json={"key": "reasoning_effort", "value": "high"},
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["params"]["reasoning_effort"] == "high"
+
+            resp = await client.post("/api/bots/main/cli-params/reset")
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["params"]["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "https://demo.trycloudflare.com")
+
+    server = WebApiServer(web_manager)
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/tunnel")
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["public_url"] == "https://demo.trycloudflare.com"
+            assert payload["data"]["source"] == "manual_config"
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    class FakeTunnelService:
+        def __init__(self):
+            self.restart_called = False
+
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+        async def restart(self):
+            self.restart_called = True
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://fresh.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+    server = WebApiServer(web_manager)
+    fake_tunnel = FakeTunnelService()
+    server._tunnel_service = fake_tunnel
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/admin/tunnel/restart")
+            assert resp.status == 200
+            payload = await resp.json()
+            assert fake_tunnel.restart_called is True
+            assert payload["data"]["status"] == "running"
+            assert payload["data"]["public_url"] == "https://fresh.trycloudflare.com"
+
+
 def test_read_missing_file_raises(web_manager: MultiBotManager):
     with pytest.raises(WebApiError) as exc_info:
         read_file_content(web_manager, "main", 1001, "missing.txt")
@@ -160,7 +277,7 @@ async def test_run_cli_chat_resets_and_persists_kimi_session(web_manager: MultiB
 
     assert data["returncode"] == 1
     assert session.kimi_session_id is None
-    session.persist.assert_called_once_with()
+    session.persist.assert_called()
 
 
 @pytest.mark.asyncio
@@ -205,3 +322,53 @@ def test_codex_status_event_skips_json_meta_preview():
         "type": "status",
         "elapsed_seconds": 3,
     }
+
+
+@pytest.mark.asyncio
+async def test_post_chat_stream_continues_processing_after_client_disconnect(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+    request = MagicMock()
+    consumed: list[str] = []
+
+    async def fake_stream_chat(manager, alias, user_id, message):
+        for event in [
+            {"type": "meta", "alias": alias},
+            {"type": "status", "elapsed_seconds": 1},
+            {"type": "done", "output": "ok"},
+        ]:
+            consumed.append(event["type"])
+            yield event
+
+    class FakeStreamResponse:
+        def __init__(self, *args, **kwargs):
+            self.write_calls = 0
+            self.write_eof_called = False
+
+        async def prepare(self, req):
+            return self
+
+        async def write(self, data):
+            self.write_calls += 1
+            if self.write_calls == 2:
+                raise ClientConnectionResetError("Cannot write to closing transport")
+
+        async def write_eof(self):
+            self.write_eof_called = True
+
+    response_holder: dict[str, FakeStreamResponse] = {}
+
+    def fake_stream_response(*args, **kwargs):
+        response = FakeStreamResponse(*args, **kwargs)
+        response_holder["response"] = response
+        return response
+
+    with patch.object(server, "_with_auth", AsyncMock(return_value=AuthContext(user_id=1001, token_used=False))), \
+         patch.object(server, "_manager_alias", return_value="main"), \
+         patch.object(server, "_parse_json", AsyncMock(return_value={"message": "hi"})), \
+         patch("bot.web.server.stream_chat", fake_stream_chat), \
+         patch("bot.web.server.web.StreamResponse", side_effect=fake_stream_response):
+        response = await server.post_chat_stream(request)
+
+    assert response is response_holder["response"]
+    assert consumed == ["meta", "status", "done"]
+    assert response_holder["response"].write_eof_called is False

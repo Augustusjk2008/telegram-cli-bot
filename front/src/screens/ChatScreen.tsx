@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { LoaderCircle, RotateCcw, Square, Terminal } from "lucide-react";
 import { ChatComposer } from "../components/ChatComposer";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { ChatMessage, SystemScript } from "../services/types";
+import type { ChatMessage, RunningReply, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -19,9 +19,113 @@ function getCompactScriptTitle(script: SystemScript) {
   return firstSentence || script.scriptName;
 }
 
+function runningUserId(botAlias: string) {
+  return `running-user-${botAlias}`;
+}
+
+function runningAssistantId(botAlias: string) {
+  return `running-assistant-${botAlias}`;
+}
+
+function restoredSystemId(botAlias: string) {
+  return `restored-system-${botAlias}`;
+}
+
+function restoredAssistantId(botAlias: string) {
+  return `restored-assistant-${botAlias}`;
+}
+
+function mergeRunningReply(items: ChatMessage[], botAlias: string, runningReply?: RunningReply | null) {
+  const nextItems = items.filter(
+    (item) => item.id !== runningUserId(botAlias) && item.id !== runningAssistantId(botAlias),
+  );
+
+  if (runningReply?.userText) {
+    const hasUserMessage = nextItems.some((item) => item.role === "user" && item.text === runningReply.userText);
+    if (!hasUserMessage) {
+      nextItems.push({
+        id: runningUserId(botAlias),
+        role: "user",
+        text: runningReply.userText,
+        createdAt: runningReply.startedAt,
+        state: "done",
+      });
+    }
+  }
+
+  nextItems.push({
+    id: runningAssistantId(botAlias),
+    role: "assistant",
+    text: runningReply?.previewText || "",
+    createdAt: runningReply?.startedAt || new Date().toISOString(),
+    state: "streaming",
+  });
+
+  return nextItems;
+}
+
+function mergeRestoredReply(items: ChatMessage[], botAlias: string, runningReply?: RunningReply | null) {
+  if (!runningReply) {
+    return items;
+  }
+
+  const nextItems = items.filter(
+    (item) =>
+      item.id !== runningUserId(botAlias)
+      && item.id !== runningAssistantId(botAlias)
+      && item.id !== restoredSystemId(botAlias)
+      && item.id !== restoredAssistantId(botAlias),
+  );
+
+  if (runningReply.userText) {
+    const hasUserMessage = nextItems.some((item) => item.role === "user" && item.text === runningReply.userText);
+    if (!hasUserMessage) {
+      nextItems.push({
+        id: runningUserId(botAlias),
+        role: "user",
+        text: runningReply.userText,
+        createdAt: runningReply.startedAt,
+        state: "done",
+      });
+    }
+  }
+
+  nextItems.push({
+    id: restoredSystemId(botAlias),
+    role: "system",
+    text: "检测到上次未完成任务，已恢复最近预览。",
+    createdAt: runningReply.updatedAt || runningReply.startedAt,
+    state: "done",
+  });
+  nextItems.push({
+    id: restoredAssistantId(botAlias),
+    role: "assistant",
+    text: runningReply.previewText || "上次任务在完成前中断，未留下预览文本。",
+    createdAt: runningReply.updatedAt || runningReply.startedAt,
+    state: "error",
+  });
+
+  return nextItems;
+}
+
+function resolveStreamStartMs(runningReply?: RunningReply | null, elapsedSeconds?: number) {
+  if (runningReply?.startedAt) {
+    const parsed = Date.parse(runningReply.startedAt);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  if (typeof elapsedSeconds === "number") {
+    return Date.now() - elapsedSeconds * 1000;
+  }
+  return Date.now();
+}
+
 export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props) {
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamMode, setStreamMode] = useState<"" | "sse" | "poll">("");
+  const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -49,11 +153,23 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
     setLoading(true);
     setError("");
     setItems([]);
+    setIsStreaming(false);
+    setStreamMode("");
+    setStreamStartedAtMs(null);
 
-    client.listMessages(botAlias)
-      .then((messages) => {
+    Promise.all([client.listMessages(botAlias), client.getBotOverview(botAlias)])
+      .then(([messages, overview]) => {
         if (cancelled) return;
-        setItems((prev) => (prev.length > 0 ? [...messages, ...prev] : messages));
+        if (overview.isProcessing) {
+          setItems(mergeRunningReply(messages, botAlias, overview.runningReply));
+          setIsStreaming(true);
+          setStreamMode("poll");
+          setStreamStartedAtMs(resolveStreamStartMs(overview.runningReply));
+        } else if (overview.runningReply) {
+          setItems(mergeRestoredReply(messages, botAlias, overview.runningReply));
+        } else {
+          setItems(messages);
+        }
         setLoading(false);
       })
       .catch((err: Error) => {
@@ -68,20 +184,66 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
   }, [botAlias, client]);
 
   useEffect(() => {
-    if (!isStreaming) {
+    if (!isStreaming || !streamStartedAtMs) {
       setElapsedSeconds(0);
       return;
     }
 
-    setElapsedSeconds(0);
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - streamStartedAtMs) / 1000)));
+    };
+    updateElapsed();
     const timer = window.setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
+      updateElapsed();
     }, 1000);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [isStreaming]);
+  }, [isStreaming, streamStartedAtMs]);
+
+  useEffect(() => {
+    if (streamMode !== "poll") {
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const overview = await client.getBotOverview(botAlias);
+        if (cancelled) return;
+
+        if (overview.isProcessing) {
+          setIsStreaming(true);
+          setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(overview.runningReply));
+          setItems((prev) => mergeRunningReply(prev, botAlias, overview.runningReply));
+          return;
+        }
+
+        const messages = await client.listMessages(botAlias);
+        if (cancelled) return;
+        setItems(messages);
+        setIsStreaming(false);
+        setStreamMode("");
+        setStreamStartedAtMs(null);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "恢复任务状态失败");
+        setIsStreaming(false);
+        setStreamMode("");
+        setStreamStartedAtMs(null);
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [botAlias, client, streamMode]);
 
   async function handleSend(text: string) {
     const userMessage: ChatMessage = {
@@ -103,6 +265,8 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
     setError("");
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     setIsStreaming(true);
+    setStreamMode("sse");
+    setStreamStartedAtMs(Date.now());
 
     try {
       let usingPreviewReplace = false;
@@ -123,7 +287,7 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
         },
         (status) => {
           if (typeof status.elapsedSeconds === "number") {
-            setElapsedSeconds((prev) => Math.max(prev, status.elapsedSeconds || 0));
+            setStreamStartedAtMs(resolveStreamStartMs(undefined, status.elapsedSeconds));
           }
           if (status.previewText) {
             usingPreviewReplace = true;
@@ -151,6 +315,8 @@ export function ChatScreen({ botAlias, client = new MockWebBotClient() }: Props)
       );
     } finally {
       setIsStreaming(false);
+      setStreamMode("");
+      setStreamStartedAtMs(null);
     }
   }
 

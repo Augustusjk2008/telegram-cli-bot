@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+from aiohttp.client_exceptions import ClientConnectionResetError
 
 from bot.config import (
     ALLOWED_USER_IDS,
@@ -17,9 +18,14 @@ from bot.config import (
     WEB_DEFAULT_USER_ID,
     WEB_HOST,
     WEB_PORT,
+    WEB_PUBLIC_URL,
+    WEB_TUNNEL_AUTOSTART,
+    WEB_TUNNEL_CLOUDFLARED_PATH,
+    WEB_TUNNEL_MODE,
     request_restart,
 )
 from bot.manager import MultiBotManager
+from .tunnel_service import TunnelService
 from .api_service import (
     AuthContext,
     WebApiError,
@@ -35,6 +41,7 @@ from .api_service import (
     get_history,
     get_memory_tool_stats,
     get_overview,
+    get_cli_params_payload,
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
@@ -44,6 +51,7 @@ from .api_service import (
     read_file_content,
     remove_managed_bot,
     reset_user_session,
+    reset_cli_params,
     run_chat,
     run_system_script,
     save_uploaded_file,
@@ -51,6 +59,7 @@ from .api_service import (
     start_managed_bot,
     stop_managed_bot,
     stream_chat,
+    update_cli_params,
     update_bot_cli,
     update_bot_workdir,
 )
@@ -128,10 +137,18 @@ async def cors_middleware(request: web.Request, handler):
 class WebApiServer:
     """可嵌入现有进程的 Web API 服务器。"""
 
-    def __init__(self, manager: MultiBotManager):
+    def __init__(self, manager: MultiBotManager, tunnel_service: TunnelService | None = None):
         self.manager = manager
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
+        self._tunnel_service = tunnel_service or TunnelService(
+            host=WEB_HOST,
+            port=WEB_PORT,
+            mode=WEB_TUNNEL_MODE,
+            autostart=WEB_TUNNEL_AUTOSTART,
+            public_url=WEB_PUBLIC_URL,
+            cloudflared_path=WEB_TUNNEL_CLOUDFLARED_PATH,
+        )
 
     def _auth_context(self, request: web.Request) -> AuthContext:
         raw_token = ""
@@ -233,10 +250,29 @@ class WebApiServer:
         )
         await response.prepare(request)
 
+        client_disconnected = False
         async for event in stream_chat(self.manager, alias, auth.user_id, body.get("message", "")):
-            await response.write(_format_sse(event["type"], event))
+            if client_disconnected:
+                continue
+            try:
+                await response.write(_format_sse(event["type"], event))
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                client_disconnected = True
+                logger.info(
+                    "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
+                    alias,
+                    auth.user_id,
+                )
 
-        await response.write_eof()
+        if not client_disconnected:
+            try:
+                await response.write_eof()
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                logger.info(
+                    "Web SSE 客户端在结束前断开: alias=%s user_id=%s",
+                    alias,
+                    auth.user_id,
+                )
         return response
 
     async def post_exec(self, request: web.Request) -> web.Response:
@@ -272,6 +308,32 @@ class WebApiServer:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": kill_user_process(self.manager, alias, auth.user_id)})
+
+    async def get_cli_params(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        cli_type = request.query.get("cli_type") or None
+        return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
+
+    async def patch_cli_params(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await update_cli_params(
+            self.manager,
+            alias=alias,
+            cli_type=body.get("cli_type"),
+            key=str(body.get("key", "")),
+            value=body.get("value"),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def post_cli_params_reset(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        data = await reset_cli_params(self.manager, alias, body.get("cli_type"))
+        return _json({"ok": True, "data": data})
 
     async def get_history_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -418,6 +480,22 @@ class WebApiServer:
         request_restart()
         return _json({"ok": True, "data": {"restart_requested": True}})
 
+    async def admin_tunnel(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": self._tunnel_service.snapshot()})
+
+    async def admin_tunnel_start(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": await self._tunnel_service.start()})
+
+    async def admin_tunnel_stop(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": await self._tunnel_service.stop()})
+
+    async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": await self._tunnel_service.restart()})
+
     async def admin_single_bot(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -437,6 +515,9 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/cd", self.post_cd)
         app.router.add_post("/api/bots/{alias}/reset", self.post_reset)
         app.router.add_post("/api/bots/{alias}/kill", self.post_kill)
+        app.router.add_get("/api/bots/{alias}/cli-params", self.get_cli_params)
+        app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
+        app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
         app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
@@ -459,6 +540,10 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
         app.router.add_post("/api/admin/restart", self.admin_restart)
+        app.router.add_get("/api/admin/tunnel", self.admin_tunnel)
+        app.router.add_post("/api/admin/tunnel/start", self.admin_tunnel_start)
+        app.router.add_post("/api/admin/tunnel/stop", self.admin_tunnel_stop)
+        app.router.add_post("/api/admin/tunnel/restart", self.admin_tunnel_restart)
         
         # Add static file serving for frontend when dist exists
         assets_dir = Path(self._get_static_dir("assets"))
@@ -490,6 +575,9 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=WEB_HOST, port=WEB_PORT)
         await self._site.start()
+        if self._tunnel_service.should_autostart():
+            tunnel_snapshot = await self._tunnel_service.start()
+            logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
         logger.info(
             "Web API 已启动: http://%s:%s (token=%s, allowed_origins=%s)",
             WEB_HOST,
@@ -501,6 +589,7 @@ class WebApiServer:
     async def stop(self):
         if self._runner is None:
             return
+        await self._tunnel_service.stop()
         await self._runner.cleanup()
         self._runner = None
         self._site = None

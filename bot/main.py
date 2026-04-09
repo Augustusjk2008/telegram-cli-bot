@@ -25,10 +25,12 @@ from bot.config import (
     CLI_PATH,
     MAIN_LOOP_RETRY_DELAY,
     MANAGED_BOTS_FILE,
+    RESTART_EXIT_CODE,
     SESSION_TIMEOUT,
     TELEGRAM_ENABLED,
     TELEGRAM_BOT_TOKEN,
     WORKING_DIR,
+    is_supervised_restart,
     reexec_current_process,
 )
 from bot.manager import MultiBotManager
@@ -190,6 +192,8 @@ def main():
             # 新进程启动时会立即调用 prevent_system_sleep()
             # 短暂等待让启动问候消息的发送任务完成
             time.sleep(0.5)
+            if is_supervised_restart():
+                raise SystemExit(RESTART_EXIT_CODE)
             try:
                 reexec_current_process()
             except Exception as e:

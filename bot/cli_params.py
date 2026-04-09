@@ -4,6 +4,7 @@
 """
 
 import copy
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,7 +45,7 @@ DEFAULT_CODEX_PARAMS = {
     "reasoning_effort": "xhigh",     # -c model_reasoning_effort
     # 可选参数
     "json_output": True,             # --json: JSON格式输出
-    "model": None,                   # --model: 模型选择
+    "model": "gpt-5.4",              # --model: 模型选择
     # 高级参数
     "extra_args": [],                # 额外参数列表
 }
@@ -58,6 +59,42 @@ DEFAULT_PARAMS_MAP = {
 
 # 支持的 CLI 类型
 SUPPORTED_CLI_TYPES = set(DEFAULT_PARAMS_MAP.keys())
+
+PARAM_SCHEMA_MAP = {
+    "kimi": {
+        "quiet": {"type": "boolean", "description": "静默模式"},
+        "yolo": {"type": "boolean", "description": "自动确认"},
+        "thinking": {"type": "boolean", "description": "显示思考过程"},
+        "model": {"type": "string", "description": "模型选择", "nullable": True},
+        "temperature": {"type": "number", "description": "温度参数", "nullable": True},
+        "max_tokens": {"type": "number", "description": "最大 token 数", "nullable": True, "integer": True},
+        "extra_args": {"type": "string_list", "description": "额外参数"},
+    },
+    "claude": {
+        "yolo": {"type": "boolean", "description": "跳过权限确认"},
+        "effort": {
+            "type": "string",
+            "description": "努力程度",
+            "enum": ["max", "high", "medium", "low"],
+        },
+        "disable_prompts": {"type": "boolean", "description": "禁用交互式提示"},
+        "session_id": {"type": "string", "description": "会话 ID", "nullable": True},
+        "model": {"type": "string", "description": "模型选择", "nullable": True},
+        "extra_args": {"type": "string_list", "description": "额外参数"},
+    },
+    "codex": {
+        "yolo": {"type": "boolean", "description": "绕过审批和沙箱"},
+        "skip_git_check": {"type": "boolean", "description": "跳过 Git 仓库检查"},
+        "reasoning_effort": {
+            "type": "string",
+            "description": "推理努力程度",
+            "enum": ["xhigh", "high", "medium", "low"],
+        },
+        "json_output": {"type": "boolean", "description": "JSON 格式输出"},
+        "model": {"type": "string", "description": "模型选择"},
+        "extra_args": {"type": "string_list", "description": "额外参数"},
+    },
+}
 
 
 @dataclass
@@ -122,6 +159,92 @@ class CliParamsConfig:
             if cli_type not in SUPPORTED_CLI_TYPES:
                 raise ValueError(f"不支持的 CLI 类型: {cli_type}")
             setattr(self, cli_type, copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type]))
+
+
+def get_default_params(cli_type: str) -> Dict[str, Any]:
+    """获取指定 CLI 类型的默认参数。"""
+    cli_type = cli_type.lower().strip()
+    if cli_type not in SUPPORTED_CLI_TYPES:
+        raise ValueError(f"不支持的 CLI 类型: {cli_type}")
+    return copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type])
+
+
+def get_params_schema(cli_type: str) -> Dict[str, Dict[str, Any]]:
+    """获取指定 CLI 类型的参数 schema。"""
+    cli_type = cli_type.lower().strip()
+    if cli_type not in SUPPORTED_CLI_TYPES:
+        raise ValueError(f"不支持的 CLI 类型: {cli_type}")
+    return copy.deepcopy(PARAM_SCHEMA_MAP[cli_type])
+
+
+def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
+    """根据 schema 将外部输入转换为内部参数值。"""
+    cli_type = cli_type.lower().strip()
+    schema = get_params_schema(cli_type)
+    if key not in schema:
+        raise ValueError(f"未知参数: {key}")
+
+    field = schema[key]
+    field_type = field["type"]
+    nullable = bool(field.get("nullable", False))
+
+    if nullable and (value is None or (isinstance(value, str) and not value.strip())):
+        return None
+
+    if field_type == "boolean":
+        if isinstance(value, bool):
+            coerced = value
+        elif isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                coerced = True
+            elif normalized in {"false", "0", "no", "off"}:
+                coerced = False
+            else:
+                raise ValueError(f"参数 {key} 需要布尔值")
+        else:
+            coerced = bool(value)
+    elif field_type == "number":
+        try:
+            coerced = int(value) if field.get("integer") else float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"参数 {key} 需要数字") from exc
+    elif field_type == "string_list":
+        if value is None:
+            coerced = []
+        elif isinstance(value, list):
+            coerced = [str(item).strip() for item in value if str(item).strip()]
+        elif isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                coerced = []
+            else:
+                parsed = None
+                if stripped.startswith("["):
+                    try:
+                        loaded = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        loaded = None
+                    if isinstance(loaded, list):
+                        parsed = loaded
+                if parsed is not None:
+                    coerced = [str(item).strip() for item in parsed if str(item).strip()]
+                elif "\n" in stripped:
+                    coerced = [item.strip() for item in stripped.splitlines() if item.strip()]
+                else:
+                    coerced = [item.strip() for item in stripped.split(",") if item.strip()]
+        else:
+            raise ValueError(f"参数 {key} 需要字符串列表")
+    else:
+        coerced = str(value).strip()
+        if nullable and not coerced:
+            coerced = None
+
+    enum_values = field.get("enum")
+    if enum_values and coerced not in enum_values:
+        raise ValueError(f"参数 {key} 的可选值为: {', '.join(enum_values)}")
+
+    return coerced
 
 
 def build_cli_args_from_config(
@@ -373,7 +496,7 @@ def get_params_help(cli_type: str) -> str:
   对应环境变量: CLAUDE_CODE_DISABLE_PROMPTS=1
 
 <code>model</code> - 模型选择 (字符串)
-  默认: None
+  默认: "gpt-5.4"
   对应参数: --model
 
 <code>extra_args</code> - 额外参数 (字符串列表)

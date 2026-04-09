@@ -132,6 +132,54 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("getBotOverview maps running reply snapshot", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            bot: {
+              alias: "main",
+              cli_type: "codex",
+              status: "running",
+              working_dir: "C:\\workspace\\demo",
+            },
+            session: {
+              working_dir: "C:\\workspace\\demo",
+              message_count: 3,
+              history_count: 2,
+              is_processing: true,
+              running_reply: {
+                preview_text: "处理中预览",
+                started_at: "2026-04-09T10:40:00",
+                updated_at: "2026-04-09T10:40:05",
+              },
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const overview = await client.getBotOverview("main");
+
+    expect(overview.runningReply).toEqual({
+      previewText: "处理中预览",
+      startedAt: "2026-04-09T10:40:00",
+      updatedAt: "2026-04-09T10:40:05",
+    });
+  });
+
   test("listSystemScripts returns available admin scripts", async () => {
     fetchMock
       .mockResolvedValueOnce({
@@ -172,6 +220,125 @@ describe("RealWebBotClient", () => {
         path: "C:\\scripts\\network_traffic.ps1",
       },
     ]);
+  });
+
+  test("getCliParams maps backend cli param payload", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            cli_type: "codex",
+            params: {
+              reasoning_effort: "xhigh",
+              extra_args: ["--search"],
+            },
+            defaults: {
+              reasoning_effort: "xhigh",
+              extra_args: [],
+            },
+            schema: {
+              reasoning_effort: {
+                type: "string",
+                enum: ["xhigh", "high", "medium", "low"],
+                description: "推理努力程度",
+              },
+              extra_args: {
+                type: "string_list",
+                description: "额外参数",
+              },
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const payload = await client.getCliParams("main");
+
+    expect(payload).toEqual({
+      cliType: "codex",
+      params: {
+        reasoning_effort: "xhigh",
+        extra_args: ["--search"],
+      },
+      defaults: {
+        reasoning_effort: "xhigh",
+        extra_args: [],
+      },
+      schema: {
+        reasoning_effort: {
+          type: "string",
+          enum: ["xhigh", "high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    });
+  });
+
+  test("restartTunnel posts to admin tunnel restart endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            mode: "cloudflare_quick",
+            status: "running",
+            source: "quick_tunnel",
+            public_url: "https://fresh.trycloudflare.com",
+            local_url: "http://127.0.0.1:8765",
+            last_error: "",
+            pid: 1234,
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const snapshot = await client.restartTunnel();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/tunnel/restart",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    expect(snapshot).toEqual({
+      mode: "cloudflare_quick",
+      status: "running",
+      source: "quick_tunnel",
+      publicUrl: "https://fresh.trycloudflare.com",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "",
+      pid: 1234,
+    });
   });
 
   test("sendMessage forwards status events before final output", async () => {

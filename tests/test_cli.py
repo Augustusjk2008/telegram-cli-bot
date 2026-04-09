@@ -11,10 +11,13 @@ from unittest.mock import patch
 import pytest
 
 from bot.cli import (
+    _should_finish_codex_status_poll,
     build_cli_command,
+    extract_codex_status,
     normalize_cli_type,
     parse_codex_json_line,
     parse_codex_json_output,
+    read_codex_status_from_terminal,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
     should_reset_claude_session,
@@ -134,6 +137,23 @@ class TestBuildCliCommand:
         )
         assert "codex" in cmd
 
+    def test_codex_defaults_include_model_yolo_and_reasoning_effort(self):
+        env = {}
+        cmd, use_stdin = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env=env,
+            params_config=CliParamsConfig(),
+        )
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--model" in cmd
+        model_index = cmd.index("--model")
+        assert cmd[model_index + 1] == "gpt-5.4"
+        assert '-c' in cmd
+        config_index = cmd.index("-c")
+        assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
+
 
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""
@@ -168,6 +188,110 @@ class TestParseCodexJsonOutput:
     def test_simple_output(self):
         text, thread_id = parse_codex_json_output("plain text output")
         assert isinstance(text, str)
+
+
+class TestExtractCodexStatus:
+    """测试 Codex 状态文本提取"""
+
+    def test_prefers_context_line_from_status_output(self):
+        raw = (
+            "\x1b[2m  gpt-5.4 xhigh · 100% left · ~\\repo\x1b[22m\n"
+            "› /status\n"
+            "  100% context left\n"
+        )
+        parsed = extract_codex_status(raw)
+        assert parsed["status_line"] == "100% context left"
+
+    def test_falls_back_to_footer_status_line(self):
+        raw = "  gpt-5.4 xhigh · 87% left · ~\\repo\n"
+        parsed = extract_codex_status(raw)
+        assert parsed["status_line"] == "gpt-5.4 xhigh · 87% left · ~\\repo"
+
+
+class TestShouldFinishCodexStatusPoll:
+    """测试 Codex /status 轮询完成判定"""
+
+    def test_waits_when_only_old_footer_is_available(self):
+        parsed = {
+            "status_line": "gpt-5.4 xhigh · 87% left · ~\\repo",
+            "source": "fallback_footer",
+        }
+
+        should_finish = _should_finish_codex_status_poll(
+            parsed,
+            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
+            sent_at=100.0,
+            now=104.9,
+            fallback_wait_seconds=5.0,
+        )
+
+        assert should_finish is False
+
+    def test_accepts_status_command_output_immediately(self):
+        parsed = {
+            "status_line": "100% context left",
+            "source": "status_command_context",
+        }
+
+        should_finish = _should_finish_codex_status_poll(
+            parsed,
+            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
+            sent_at=100.0,
+            now=101.0,
+            fallback_wait_seconds=5.0,
+        )
+
+        assert should_finish is True
+
+    def test_accepts_changed_footer_before_fallback_deadline(self):
+        parsed = {
+            "status_line": "gpt-5.4 xhigh · 83% left · ~\\repo",
+            "source": "fallback_footer",
+        }
+
+        should_finish = _should_finish_codex_status_poll(
+            parsed,
+            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
+            sent_at=100.0,
+            now=101.0,
+            fallback_wait_seconds=5.0,
+        )
+
+        assert should_finish is True
+
+    def test_falls_back_after_wait_deadline(self):
+        parsed = {
+            "status_line": "gpt-5.4 xhigh · 87% left · ~\\repo",
+            "source": "fallback_footer",
+        }
+
+        should_finish = _should_finish_codex_status_poll(
+            parsed,
+            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
+            sent_at=100.0,
+            now=105.0,
+            fallback_wait_seconds=5.0,
+        )
+
+        assert should_finish is True
+
+
+class TestReadCodexStatusFromTerminal:
+    """测试 Codex PTY 状态查询包装器"""
+
+    def test_returns_not_found_when_cli_missing(self):
+        with patch("bot.cli.resolve_cli_executable", return_value=None):
+            result = read_codex_status_from_terminal("codex", "C:/repo")
+        assert result["ok"] is False
+        assert result["error"] == "not_found"
+
+    def test_returns_parsed_status_line(self):
+        with patch("bot.cli.resolve_cli_executable", return_value="C:/bin/codex.cmd"), \
+             patch("bot.cli._run_codex_status_terminal", return_value="› /status\n100% context left\n"):
+            result = read_codex_status_from_terminal("codex", "C:/repo")
+
+        assert result["ok"] is True
+        assert result["status_line"] == "100% context left"
 
 
 class TestShouldResetCodexSession:

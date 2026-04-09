@@ -4,6 +4,8 @@
 导入真实的 admin handler 函数进行测试
 """
 
+import subprocess
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +21,7 @@ from bot.handlers.admin import (
     bot_set_workdir,
     bot_start,
     bot_stop,
+    execute_script,
     restart_main,
 )
 
@@ -215,5 +218,37 @@ class TestBotGotoCallback:
              patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
              patch("bot.cli_params.format_params_display", return_value="<b>claude</b>"):
             await bot_params(mock_update, mock_context)
+
+
+class TestExecuteScript:
+    """测试系统脚本执行"""
+
+    def test_powershell_invocation_uses_noninteractive_mode_and_decodes_gbk_errors(self):
+        script_path = Path("scripts/turn_off_monitor.ps1")
+        captured: dict[str, object] = {}
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=1,
+                stdout=b"",
+                stderr="脚本错误".encode("gbk"),
+            )
+
+        with patch("bot.handlers.admin.subprocess.run", side_effect=fake_run):
+            success, output = execute_script(script_path)
+
+        assert success is False
+        assert output == "执行失败: 脚本错误"
+        assert captured["args"][0][:5] == [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+        ]
+        assert captured["kwargs"]["text"] is False
 
 

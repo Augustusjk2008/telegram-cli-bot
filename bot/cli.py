@@ -3,13 +3,22 @@
 import json
 import logging
 import os
+import queue
+import re
 import shutil
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
 from bot.cli_params import build_cli_args_from_config, CliParamsConfig
 
 logger = logging.getLogger(__name__)
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[@-_]")
+CONTEXT_LEFT_RE = re.compile(r"\d+%\s+context\s+left", re.IGNORECASE)
+GENERIC_LEFT_RE = re.compile(r"\d+%\s+left", re.IGNORECASE)
+CODEX_STATUS_FALLBACK_WAIT_SECONDS = 8.0
 
 
 def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> Optional[str]:
@@ -267,6 +276,191 @@ def parse_codex_json_output(raw_output: str) -> Tuple[str, Optional[str]]:
         final_text = "(无输出)"
 
     return final_text, thread_id
+
+
+def strip_ansi_terminal_text(text: str) -> str:
+    """清洗终端控制字符，保留可读文本。"""
+    return ANSI_ESCAPE_RE.sub("", (text or "").replace("\r", "\n"))
+
+
+def extract_codex_status(raw_output: str) -> Dict[str, Optional[str]]:
+    """从 Codex 交互终端输出中提取状态行。"""
+    cleaned_output = strip_ansi_terminal_text(raw_output)
+    lines = [" ".join(line.split()) for line in cleaned_output.splitlines() if line.strip()]
+
+    def _find_status(target_lines: List[str], source_prefix: str) -> Optional[Dict[str, Optional[str]]]:
+        for line in reversed(target_lines):
+            match = CONTEXT_LEFT_RE.search(line)
+            if match:
+                return {"status_line": match.group(0), "source": f"{source_prefix}_context"}
+        for line in reversed(target_lines):
+            if ("·" in line or "•" in line) and GENERIC_LEFT_RE.search(line):
+                return {"status_line": line.strip(), "source": f"{source_prefix}_footer"}
+        for line in reversed(target_lines):
+            match = GENERIC_LEFT_RE.search(line)
+            if match:
+                return {"status_line": match.group(0), "source": f"{source_prefix}_generic"}
+        return None
+
+    status_indices = [index for index, line in enumerate(lines) if "/status" in line]
+    if status_indices:
+        after_status = _find_status(lines[status_indices[-1] + 1 :], "status_command")
+        if after_status:
+            return {
+                "status_line": after_status["status_line"],
+                "source": after_status["source"],
+                "cleaned_output": cleaned_output,
+            }
+
+    fallback = _find_status(lines, "fallback")
+    if fallback:
+        return {
+            "status_line": fallback["status_line"],
+            "source": fallback["source"],
+            "cleaned_output": cleaned_output,
+        }
+
+    return {"status_line": None, "source": None, "cleaned_output": cleaned_output}
+
+
+def _build_codex_status_terminal_argv(resolved_cli: str) -> List[str]:
+    ext = os.path.splitext(resolved_cli)[1].lower()
+    if ext == ".ps1":
+        return [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            resolved_cli,
+            "--no-alt-screen",
+        ]
+    if ext in {".cmd", ".bat"}:
+        return ["cmd.exe", "/d", "/c", resolved_cli, "--no-alt-screen"]
+    return [resolved_cli, "--no-alt-screen"]
+
+
+def _should_finish_codex_status_poll(
+    parsed: Dict[str, Optional[str]],
+    initial_status_line: Optional[str],
+    sent_at: Optional[float],
+    now: float,
+    fallback_wait_seconds: float = CODEX_STATUS_FALLBACK_WAIT_SECONDS,
+) -> bool:
+    """判断 /status 发出后，当前状态是否足够新，可以结束轮询。"""
+    status_line = parsed.get("status_line")
+    source = str(parsed.get("source") or "")
+
+    if not status_line:
+        return False
+    if source.startswith("status_command"):
+        return True
+    if initial_status_line and status_line != initial_status_line:
+        return True
+    if sent_at is None:
+        return False
+    return now - sent_at >= fallback_wait_seconds
+
+
+def _run_codex_status_terminal(resolved_cli: str, working_dir: str, timeout: float) -> str:
+    if os.name != "nt":
+        raise RuntimeError("unsupported_platform")
+
+    try:
+        from winpty import PtyProcess
+    except ImportError as exc:
+        raise RuntimeError("pty_unavailable") from exc
+
+    process = PtyProcess.spawn(_build_codex_status_terminal_argv(resolved_cli), cwd=working_dir)
+    output_queue: "queue.Queue[str]" = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            while True:
+                chunk = process.read(4096)
+                if not chunk:
+                    break
+                output_queue.put(chunk)
+        except Exception:
+            return
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    chunks: List[str] = []
+    sent_status = False
+    sent_at: Optional[float] = None
+    initial_status_line: Optional[str] = None
+    started_at = time.time()
+
+    try:
+        while time.time() - started_at < timeout:
+            try:
+                chunk = output_queue.get(timeout=0.5)
+            except queue.Empty:
+                chunk = ""
+
+            if chunk:
+                chunks.append(chunk)
+
+            parsed = extract_codex_status("".join(chunks))
+            if not sent_status and parsed["status_line"]:
+                initial_status_line = parsed["status_line"]
+                process.write("/status\r")
+                sent_status = True
+                sent_at = time.time()
+                continue
+
+            if sent_status and _should_finish_codex_status_poll(
+                parsed,
+                initial_status_line=initial_status_line,
+                sent_at=sent_at,
+                now=time.time(),
+            ):
+                return "".join(chunks)
+
+        raise TimeoutError("timeout")
+    finally:
+        try:
+            process.terminate(force=True)
+        except Exception:
+            pass
+
+
+def read_codex_status_from_terminal(cli_path: str, working_dir: str, timeout: float = 15.0) -> Dict[str, Optional[str]]:
+    """通过 PTY 启动 Codex 交互界面并读取 /status。"""
+    resolved_cli = resolve_cli_executable(cli_path, working_dir)
+    if not resolved_cli:
+        return {"ok": False, "error": "not_found", "status_line": None}
+
+    if os.name != "nt":
+        return {"ok": False, "error": "unsupported_platform", "status_line": None}
+
+    try:
+        raw_output = _run_codex_status_terminal(resolved_cli, working_dir, timeout)
+    except TimeoutError:
+        return {"ok": False, "error": "timeout", "status_line": None}
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc), "status_line": None}
+    except Exception as exc:
+        logger.warning("读取 Codex 状态失败: %s", exc)
+        return {"ok": False, "error": str(exc), "status_line": None}
+
+    parsed = extract_codex_status(raw_output)
+    status_line = parsed.get("status_line")
+    if status_line:
+        return {
+            "ok": True,
+            "error": None,
+            "status_line": status_line,
+            "source": parsed.get("source"),
+        }
+
+    return {
+        "ok": False,
+        "error": "no_status",
+        "status_line": None,
+        "source": parsed.get("source"),
+    }
 
 
 # ============ 会话重置判定函数 ============

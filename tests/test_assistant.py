@@ -90,6 +90,7 @@ class TestRegisterHandlers:
             if hasattr(call.args[0], "commands")
         ]
         assert any("kill" in handler.commands for handler in command_handlers)
+        assert any("codex_status" in handler.commands for handler in command_handlers)
 
     def test_register_assistant_handlers(self):
         """测试注册助手模式的 handlers"""

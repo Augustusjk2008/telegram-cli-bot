@@ -9,9 +9,15 @@ from typing import List, Optional, Set
 
 # 加载 .env 文件中的环境变量
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
+    _DOTENV_VALUES = {
+        key: value
+        for key, value in dotenv_values().items()
+        if value is not None
+    }
     load_dotenv()
 except ImportError:
+    _DOTENV_VALUES = {}
     pass  # python-dotenv 未安装时跳过
 
 # ============ 环境变量读取 ============
@@ -21,6 +27,14 @@ TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "true").lower() == "true"
 
 def _split_csv_env(raw_value: str) -> List[str]:
     return [item.strip() for item in (raw_value or "").split(",") if item.strip()]
+
+
+def _get_project_config(name: str, default: str = "") -> str:
+    """读取项目配置，优先使用仓库 .env 中的显式值。"""
+    dotenv_value = _DOTENV_VALUES.get(name)
+    if dotenv_value is not None and str(dotenv_value).strip():
+        return str(dotenv_value)
+    return os.environ.get(name, default)
 
 ALLOWED_USER_IDS: List[int] = []
 _allowed_raw = os.environ.get("ALLOWED_USER_IDS", "")
@@ -32,8 +46,8 @@ for uid in _allowed_raw.split(","):
         except ValueError:
             logging.warning(f"忽略无效的用户ID: {uid}")
 
-CLI_TYPE = os.environ.get("CLI_TYPE", "kimi").strip().lower()
-CLI_PATH = os.environ.get("CLI_PATH", "kimi")
+CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
+CLI_PATH = _get_project_config("CLI_PATH", "codex")
 WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))
 SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "3600"))
 CLI_EXEC_TIMEOUT = int(os.environ.get("CLI_EXEC_TIMEOUT", "4000"))  # CLI 执行超时（秒），超过此时间自动终止
@@ -73,6 +87,9 @@ WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip()
 WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
 WEB_ALLOWED_ORIGINS = _split_csv_env(os.environ.get("WEB_ALLOWED_ORIGINS", ""))
 WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
+WEB_TUNNEL_MODE = os.environ.get("WEB_TUNNEL_MODE", "disabled").strip().lower() or "disabled"
+WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() == "true"
+WEB_TUNNEL_CLOUDFLARED_PATH = os.environ.get("WEB_TUNNEL_CLOUDFLARED_PATH", "").strip()
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}
@@ -141,16 +158,32 @@ logging.getLogger("aiohttp").setLevel(logging.WARNING)
 # ============ 全局可变状态 ============
 RESTART_REQUESTED = False
 RESTART_EVENT: Optional[asyncio.Event] = None
+RESTART_EXIT_CODE = 75
+RESTART_SUPERVISOR_ENV = "TELEGRAM_CLI_BRIDGE_SUPERVISOR"
 
 
 # ============ 重启相关函数 ============
-def reexec_current_process() -> None:
-    """用当前解释器和参数重启整个进程（可重新加载代码）。"""
+def build_reexec_args() -> tuple[str, list[str]]:
+    """构建当前进程的重启命令，优先保留原始调用方式。"""
     python_exe = sys.executable
+    orig_argv = getattr(sys, "orig_argv", None) or []
+    if len(orig_argv) >= 2:
+        return python_exe, [python_exe, *orig_argv[1:]]
+
     script = sys.argv[0] if sys.argv else "bot_advanced.py"
     if script and script != "-m":
         script = os.path.abspath(script)
-    args = [python_exe, script, *sys.argv[1:]]
+    return python_exe, [python_exe, script, *sys.argv[1:]]
+
+
+def is_supervised_restart() -> bool:
+    """当前进程是否由外部启动器托管。"""
+    return os.environ.get(RESTART_SUPERVISOR_ENV, "").strip() == "1"
+
+
+def reexec_current_process() -> None:
+    """用当前解释器和参数重启整个进程（可重新加载代码）。"""
+    python_exe, args = build_reexec_args()
 
     logger.warning("正在执行进程级重启: %s", args)
     try:

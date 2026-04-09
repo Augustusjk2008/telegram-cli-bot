@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from datetime import datetime
 from typing import Dict, Tuple
 
 from bot.models import UserSession
@@ -12,6 +13,15 @@ logger = logging.getLogger(__name__)
 # 全局会话存储
 sessions: Dict[Tuple[int, int], UserSession] = {}
 sessions_lock = threading.Lock()
+
+
+def _parse_stored_datetime(value) -> datetime:
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return datetime.now()
 
 
 def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_working_dir: str = None) -> UserSession:
@@ -40,28 +50,65 @@ def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_wor
             kimi_session_id = None
             claude_session_id = None
             claude_session_initialized = False
+            working_dir = default_working_dir
+            history = []
+            message_count = 0
+            last_activity = datetime.now()
+            running_user_text = None
+            running_preview_text = ""
+            running_started_at = None
+            running_updated_at = None
             
             if stored_data:
                 codex_session_id = stored_data.get("codex_session_id")
                 kimi_session_id = stored_data.get("kimi_session_id")
                 claude_session_id = stored_data.get("claude_session_id")
+                working_dir = stored_data.get("working_dir") or default_working_dir
+                history_data = stored_data.get("history")
+                if isinstance(history_data, list):
+                    history = [item for item in history_data if isinstance(item, dict)]
+                try:
+                    message_count = max(0, int(stored_data.get("message_count", 0) or 0))
+                except (TypeError, ValueError):
+                    message_count = 0
+                last_activity = _parse_stored_datetime(stored_data.get("last_activity"))
+                running_user_text = stored_data.get("running_user_text") or None
+                running_preview_text = stored_data.get("running_preview_text") or ""
+                running_started_at = stored_data.get("running_started_at") or None
+                running_updated_at = stored_data.get("running_updated_at") or None
                 # 恢复时标记为已初始化（因为我们有 session_id）
                 claude_session_initialized = bool(claude_session_id)
-                if codex_session_id or kimi_session_id or claude_session_id:
+                if (
+                    codex_session_id
+                    or kimi_session_id
+                    or claude_session_id
+                    or history
+                    or running_started_at
+                    or working_dir != default_working_dir
+                ):
                     logger.info(f"已恢复会话: bot={bot_id}, user={user_id}, "
                               f"codex={codex_session_id is not None}, "
                               f"kimi={kimi_session_id is not None}, "
-                              f"claude={claude_session_id is not None}")
+                              f"claude={claude_session_id is not None}, "
+                              f"history={len(history)}, "
+                              f"running={running_started_at is not None}")
             
             sessions[key] = UserSession(
                 bot_id=bot_id,
                 bot_alias=bot_alias,
                 user_id=user_id,
-                working_dir=default_working_dir,
+                working_dir=working_dir,
+                history=history,
                 codex_session_id=codex_session_id,
                 kimi_session_id=kimi_session_id,
                 claude_session_id=claude_session_id,
                 claude_session_initialized=claude_session_initialized,
+                running_user_text=running_user_text,
+                running_preview_text=running_preview_text,
+                running_started_at=running_started_at,
+                running_updated_at=running_updated_at,
+                last_activity=last_activity,
+                message_count=message_count,
             )
         return sessions[key]
 
@@ -72,13 +119,22 @@ get_session = get_or_create_session
 
 def _save_session_to_store(session: UserSession):
     """保存会话到持久化存储"""
-    save_session(
-        bot_id=session.bot_id,
-        user_id=session.user_id,
-        codex_session_id=session.codex_session_id,
-        kimi_session_id=session.kimi_session_id,
-        claude_session_id=session.claude_session_id,
-    )
+    with session._lock:
+        save_session(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            codex_session_id=session.codex_session_id,
+            kimi_session_id=session.kimi_session_id,
+            claude_session_id=session.claude_session_id,
+            working_dir=session.working_dir,
+            history=[dict(item) for item in session.history],
+            message_count=session.message_count,
+            last_activity=session.last_activity.isoformat(),
+            running_user_text=session.running_user_text,
+            running_preview_text=session.running_preview_text,
+            running_started_at=session.running_started_at,
+            running_updated_at=session.running_updated_at,
+        )
 
 
 def reset_session(bot_id: int, user_id: int) -> bool:
@@ -144,6 +200,7 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
         for session in sessions.values():
             if session.bot_alias == bot_alias:
                 session.working_dir = working_dir
+                session.persist()
                 updated_count += 1
     return updated_count
 

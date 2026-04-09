@@ -14,11 +14,13 @@ from bot.config import (
     POLLING_TIMEOUT,
     POLLING_WATCHDOG_INTERVAL,
     RESERVED_ALIASES,
+    RESTART_EXIT_CODE,
     RESTART_EVENT,
     RESTART_REQUESTED,
     SESSION_TIMEOUT,
     SUPPORTED_CLI_TYPES,
     WORKING_DIR,
+    build_reexec_args,
     reexec_current_process,
     request_restart,
 )
@@ -114,3 +116,18 @@ class TestRestartMechanism:
         assert event.is_set()
         config.RESTART_EVENT = None
         config.RESTART_REQUESTED = False
+
+    def test_restart_exit_code_for_supervisor(self):
+        assert RESTART_EXIT_CODE == 75
+
+    def test_build_reexec_args_prefers_orig_argv(self, monkeypatch):
+        import bot.config as config
+
+        monkeypatch.setattr(config.sys, "executable", r"C:\Python\python.exe")
+        monkeypatch.setattr(config.sys, "argv", ["C:\\repo\\bot\\__main__.py", "--flag"])
+        monkeypatch.setattr(config.sys, "orig_argv", ["C:\\Python\\python.exe", "-m", "bot", "--flag"])
+
+        executable, args = build_reexec_args()
+
+        assert executable == r"C:\Python\python.exe"
+        assert args == [r"C:\Python\python.exe", "-m", "bot", "--flag"]
