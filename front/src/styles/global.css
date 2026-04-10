@@ -10,3 +10,27 @@ html, body, #root {
 * {
   box-sizing: border-box;
 }
+
+.terminal-shell {
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.terminal-shell .xterm {
+  width: max-content;
+  min-width: 100%;
+}
+
+.terminal-shell .xterm .xterm-viewport {
+  overflow: auto !important;
+  touch-action: pan-x pan-y;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling: touch;
+}
+
+.terminal-shell .xterm .xterm-screen {
+  width: max-content;
+  min-width: 100%;
+}

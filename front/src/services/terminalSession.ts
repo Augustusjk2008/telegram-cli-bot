@@ -6,6 +6,7 @@ export type TerminalSessionOptions = {
   token: string;
   cwd: string;
   shell?: string;
+  fontSize?: number;
   onOpen?: () => void;
   onClose?: () => void;
   onError?: (message: string) => void;
@@ -26,7 +27,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   const term = new Terminal({
     cursorBlink: true,
     convertEol: false,
-    fontSize: 14,
+    fontSize: options.fontSize ?? 13,
     fontFamily: '"Cascadia Code", "Consolas", "Courier New", monospace',
     theme: {
       background: "#0b1020",

@@ -401,6 +401,28 @@ async def test_admin_run_script_stream_returns_sse_events(web_manager: MultiBotM
 
 
 @pytest.mark.asyncio
+async def test_admin_restart_returns_response_before_triggering_restart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.RESTART_RESPONSE_DELAY_SECONDS", 0.001, raising=False)
+
+    restart_calls: list[str] = []
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.request_restart", side_effect=lambda: restart_calls.append("called")):
+                resp = await client.post("/api/admin/restart")
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["data"]["restart_requested"] is True
+                assert restart_calls == []
+                await asyncio.sleep(0.02)
+                assert restart_calls == ["called"]
+
+
+@pytest.mark.asyncio
 async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     web_manager.main_profile.cli_type = "codex"
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")

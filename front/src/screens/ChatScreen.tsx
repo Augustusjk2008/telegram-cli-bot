@@ -604,14 +604,16 @@ export function ChatScreen({
         ))}
         <div ref={bottomAnchorRef} aria-hidden="true" />
       </section>
-      <button
-        type="button"
-        onClick={onToggleImmersive}
-        aria-label={isImmersive ? "退出沉浸模式" : "进入沉浸模式"}
-        className="absolute bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-card)] backdrop-blur hover:bg-[var(--surface-strong)]"
-      >
-        {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
-      </button>
+      {isVisible && onToggleImmersive ? (
+        <button
+          type="button"
+          onClick={onToggleImmersive}
+          aria-label={isImmersive ? "退出沉浸模式" : "进入沉浸模式"}
+          className="absolute bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-card)] backdrop-blur hover:bg-[var(--surface-strong)]"
+        >
+          {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+        </button>
+      ) : null}
       <ChatComposer onSend={handleSend} disabled={isStreaming || loading} compact={isImmersive} />
 
       {previewName ? (

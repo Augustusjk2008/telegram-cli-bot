@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TerminalScreen } from "../screens/TerminalScreen";
 
+const createTerminalSessionMock = vi.hoisted(() => vi.fn());
+
 const terminalSessionMock = vi.hoisted(() => ({
   sendControl: vi.fn(),
   sendText: vi.fn(),
@@ -13,7 +15,7 @@ const terminalSessionMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/terminalSession", () => ({
-  createTerminalSession: vi.fn((_container: HTMLElement, options: { onOpen?: () => void }) => ({
+  createTerminalSession: createTerminalSessionMock.mockImplementation((_container: HTMLElement, options: { onOpen?: () => void }) => ({
     term: {
       onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
       onScroll: vi.fn(() => ({ dispose: vi.fn() })),
@@ -30,6 +32,7 @@ vi.mock("../services/terminalSession", () => ({
 }));
 
 beforeEach(() => {
+  createTerminalSessionMock.mockClear();
   terminalSessionMock.sendControl.mockReset();
   terminalSessionMock.sendText.mockReset();
   terminalSessionMock.fit.mockReset();
@@ -70,6 +73,50 @@ test("shows mobile terminal controls in the shared terminal screen", async () =>
 
   await user.click(screen.getByRole("button", { name: "Ctrl+C" }));
   expect(terminalSessionMock.sendControl).toHaveBeenCalledWith("\u0003");
+});
+
+test("uses a smaller terminal font and a viewport that supports bidirectional drag", async () => {
+  render(
+    <TerminalScreen
+      authToken="123"
+      botAlias="main"
+      isVisible
+      preferredWorkingDir="C:\\workspace\\demo"
+    />,
+  );
+
+  const viewport = await screen.findByTestId("terminal-viewport");
+
+  expect(viewport).toHaveStyle({
+    overflow: "scroll",
+    touchAction: "pan-x pan-y",
+  });
+  expect(createTerminalSessionMock).toHaveBeenCalledWith(
+    expect.any(HTMLElement),
+    expect.objectContaining({
+      fontSize: 12,
+    }),
+  );
+});
+
+test("removes helper copy and lets the user close the terminal session", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <TerminalScreen
+      authToken="123"
+      botAlias="main"
+      isVisible
+      preferredWorkingDir="C:\\workspace\\demo"
+    />,
+  );
+
+  expect(screen.queryByText(/手机优先：看输出为主/)).not.toBeInTheDocument();
+
+  await user.click(await screen.findByRole("button", { name: "关闭终端" }));
+
+  expect(terminalSessionMock.dispose).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("终端已关闭")).toBeInTheDocument();
 });
 
 test("shows a jump-to-latest action after scrolling away from terminal output bottom", async () => {

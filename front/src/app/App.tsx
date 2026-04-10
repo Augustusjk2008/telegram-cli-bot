@@ -105,6 +105,7 @@ export function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [isChatImmersive, setIsChatImmersive] = useState(false);
+  const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const displayBots = applyUnreadStatus(bots, unreadBots);
   const currentBotSummary = displayBots.find((bot) => bot.alias === currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
 
@@ -113,6 +114,7 @@ export function App() {
     setShowBotManager(false);
     storeBotAlias(alias);
     setIsChatImmersive(false);
+    setIsTerminalImmersive(false);
   }
 
   async function openBotSwitcher() {
@@ -196,6 +198,7 @@ export function App() {
         setShowBotManager(false);
         setMountedChatBots(restoredAlias ? [restoredAlias] : []);
         setLoginError("");
+        setIsTerminalImmersive(false);
       })
       .catch(() => {
         clearStoredToken();
@@ -219,6 +222,7 @@ export function App() {
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setIsTerminalImmersive(false);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "登录失败");
     } finally {
@@ -239,6 +243,7 @@ export function App() {
     setMountedChatBots([]);
     setLoginError("");
     setIsChatImmersive(false);
+    setIsTerminalImmersive(false);
   }
 
   useEffect(() => {
@@ -267,11 +272,12 @@ export function App() {
     return <BotListScreen client={client} onSelect={handleSelectBot} />;
   }
 
-  const hideChatChrome = currentTab === "chat" && isChatImmersive;
+  const hideOuterChrome = (currentTab === "chat" && isChatImmersive)
+    || (currentTab === "terminal" && isTerminalImmersive);
 
   return (
     <div className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-[var(--bg)] shadow-xl overflow-hidden relative">
-      {!hideChatChrome ? (
+      {!hideOuterChrome ? (
         <header className="flex items-center justify-between p-3 bg-[var(--surface-strong)] border-b border-[var(--border)] shrink-0">
           <button
             onClick={() => {
@@ -294,7 +300,9 @@ export function App() {
                 client={client}
                 isVisible={currentTab === "chat" && alias === currentBot}
                 isImmersive={currentTab === "chat" && alias === currentBot ? isChatImmersive : false}
-                onToggleImmersive={() => setIsChatImmersive((prev) => !prev)}
+                onToggleImmersive={currentTab === "chat" && alias === currentBot
+                  ? () => setIsChatImmersive((prev) => !prev)
+                  : undefined}
                 onUnreadResult={markBotUnread}
               />
             </div>
@@ -310,6 +318,10 @@ export function App() {
             client={client}
             isVisible={currentTab === "terminal"}
             preferredWorkingDir={currentBotSummary?.workingDir || ""}
+            isImmersive={currentTab === "terminal" ? isTerminalImmersive : false}
+            onToggleImmersive={currentTab === "terminal"
+              ? () => setIsTerminalImmersive((prev) => !prev)
+              : undefined}
           />
         </div>
         <div className={clsx("absolute inset-0", currentTab === "git" ? "block" : "hidden")}>
@@ -320,11 +332,12 @@ export function App() {
         </div>
       </div>
 
-      {!hideChatChrome ? (
+      {!hideOuterChrome ? (
         <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
           <button
             onClick={() => {
               setCurrentTab("chat");
+              setIsTerminalImmersive(false);
             }}
             className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "chat" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
           >
@@ -335,6 +348,7 @@ export function App() {
             onClick={() => {
               setCurrentTab("files");
               setIsChatImmersive(false);
+              setIsTerminalImmersive(false);
             }}
             className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "files" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
           >
@@ -355,6 +369,7 @@ export function App() {
             onClick={() => {
               setCurrentTab("git");
               setIsChatImmersive(false);
+              setIsTerminalImmersive(false);
             }}
             className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "git" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
           >
@@ -365,6 +380,7 @@ export function App() {
             onClick={() => {
               setCurrentTab("settings");
               setIsChatImmersive(false);
+              setIsTerminalImmersive(false);
             }}
             className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "settings" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
           >
@@ -381,11 +397,13 @@ export function App() {
           onSelect={(alias) => {
             handleSelectBot(alias);
             setCurrentTab("chat");
+            setIsTerminalImmersive(false);
           }}
           onManage={() => {
             setShowBotManager(true);
             setShowSwitcher(false);
             setIsChatImmersive(false);
+            setIsTerminalImmersive(false);
           }}
           onClose={() => setShowSwitcher(false)}
         />

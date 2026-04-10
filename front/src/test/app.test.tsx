@@ -446,3 +446,21 @@ test("terminal tab keeps one shared session alive and rebuilds from the current 
   await user.click(screen.getByRole("button", { name: "重建终端" }));
   expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("2");
 });
+
+test("terminal immersive mode hides outer app chrome but keeps the terminal visible", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "终端" });
+
+  await user.click(screen.getByRole("button", { name: "终端" }));
+  await user.click(await screen.findByRole("button", { name: "进入沉浸模式" }));
+
+  expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "聊天" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("terminal-screen-root")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "退出沉浸模式" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "关闭终端" })).toBeInTheDocument();
+});

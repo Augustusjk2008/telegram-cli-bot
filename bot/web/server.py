@@ -86,6 +86,7 @@ from .git_service import (
 )
 
 logger = logging.getLogger(__name__)
+RESTART_RESPONSE_DELAY_SECONDS = 0.2
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -162,6 +163,7 @@ class WebApiServer:
         self.manager = manager
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
+        self._restart_task: asyncio.Task[None] | None = None
         self._tunnel_service = tunnel_service or TunnelService(
             host=WEB_HOST,
             port=WEB_PORT,
@@ -211,6 +213,19 @@ class WebApiServer:
         auth = self._auth_context(request)
         request["auth"] = auth
         return auth
+
+    def _schedule_restart_request(self) -> None:
+        if self._restart_task is not None and not self._restart_task.done():
+            return
+
+        async def delayed_restart() -> None:
+            try:
+                await asyncio.sleep(RESTART_RESPONSE_DELAY_SECONDS)
+                request_restart()
+            except asyncio.CancelledError:
+                return
+
+        self._restart_task = asyncio.create_task(delayed_restart())
 
     def _manager_alias(self, request: web.Request) -> str:
         alias = request.match_info.get("alias", "").strip().lower()
@@ -784,7 +799,7 @@ class WebApiServer:
 
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
-        request_restart()
+        self._schedule_restart_request()
         return _json({"ok": True, "data": {"restart_requested": True}})
 
     async def admin_tunnel(self, request: web.Request) -> web.Response:
@@ -915,6 +930,11 @@ class WebApiServer:
     async def stop(self, *, preserve_tunnel: bool = False):
         if self._runner is None:
             return
+        if self._restart_task is not None and not self._restart_task.done():
+            self._restart_task.cancel()
+        if self._restart_task is not None:
+            await asyncio.gather(self._restart_task, return_exceptions=True)
+            self._restart_task = None
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:
