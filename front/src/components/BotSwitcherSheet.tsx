@@ -6,10 +6,11 @@ type Props = {
   bots: BotSummary[];
   currentAlias: string;
   onSelect: (alias: string) => void;
+  onManage: () => void;
   onClose: () => void;
 };
 
-export function BotSwitcherSheet({ bots, currentAlias, onSelect, onClose }: Props) {
+export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -18,6 +19,17 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onClose }: Prop
           <h2 className="text-lg font-bold">切换 Bot</h2>
           <button onClick={onClose} className="p-2 -mr-2 rounded-full hover:bg-[var(--border)]">
             <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 pb-0">
+          <button
+            type="button"
+            onClick={() => {
+              onManage();
+            }}
+            className="w-full rounded-xl border border-[var(--border)] px-4 py-3 text-left font-medium hover:bg-[var(--surface-strong)]"
+          >
+            Bot 管理
           </button>
         </div>
         <div className="overflow-y-auto p-4 space-y-2">

@@ -59,6 +59,8 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
+  const [cliTypeDraft, setCliTypeDraft] = useState("codex");
+  const [cliPathDraft, setCliPathDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -67,6 +69,7 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
   const [savingParamKey, setSavingParamKey] = useState("");
+  const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
@@ -92,6 +95,8 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
         setOverview(overviewData);
         setCliParams(cliParamsData);
         setDraftValues(buildDraftValues(cliParamsData));
+        setCliTypeDraft(overviewData.cliType);
+        setCliPathDraft(overviewData.cliPath || "");
         setWorkdirDraft(overviewData.workingDir);
         setTunnel(tunnelData);
         setLoading(false);
@@ -184,6 +189,31 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       setError(err instanceof Error ? err.message : "重置 CLI 参数失败");
     } finally {
       setResettingCliParams(false);
+    }
+  };
+
+  const saveCliConfig = async () => {
+    const nextCliPath = cliPathDraft.trim();
+    if (!nextCliPath) {
+      setError("CLI 路径不能为空");
+      return;
+    }
+
+    setSavingCliConfig(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
+      const nextCliParams = await client.getCliParams(botAlias);
+      setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
+      setCliTypeDraft(nextBot.cliType);
+      setCliPathDraft(nextBot.cliPath || nextCliPath);
+      syncCliParams(nextCliParams);
+      setNotice("CLI 配置已更新");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新 CLI 配置失败");
+    } finally {
+      setSavingCliConfig(false);
     }
   };
 
@@ -325,8 +355,52 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
             <div className="space-y-2">
               <p><span className="font-medium text-[var(--text)]">Bot:</span> {overview.alias}</p>
               <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
+              {overview.cliPath ? (
+                <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
+              ) : null}
               <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
               <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
+            </div>
+
+            <div className="space-y-3 border-t border-[var(--border)] pt-4">
+              <div>
+                <h2 className="font-medium text-[var(--text)]">Bot CLI 配置</h2>
+                <p className="mt-1 text-xs text-[var(--muted)]">修改当前 Bot 使用的 CLI 类型和可执行路径。</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">CLI 类型</span>
+                  <select
+                    aria-label="CLI 类型"
+                    value={cliTypeDraft}
+                    onChange={(event) => setCliTypeDraft(event.target.value)}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value="codex">codex</option>
+                    <option value="claude">claude</option>
+                    <option value="kimi">kimi</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">CLI 路径</span>
+                  <input
+                    aria-label="CLI 路径"
+                    type="text"
+                    value={cliPathDraft}
+                    onChange={(event) => setCliPathDraft(event.target.value)}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => void saveCliConfig()}
+                disabled={savingCliConfig}
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
+              </button>
             </div>
 
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
