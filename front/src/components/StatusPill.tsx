@@ -11,7 +11,7 @@ export function StatusPill({ status, className }: Props) {
     running: { label: "运行中", color: "bg-green-100 text-green-800 border-green-200" },
     busy: { label: "处理中", color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
     unread: { label: "未读", color: "bg-sky-100 text-sky-800 border-sky-200" },
-    offline: { label: "离线", color: "bg-gray-100 text-gray-800 border-gray-200" },
+    offline: { label: "离线", color: "bg-red-100 text-red-800 border-red-300 font-semibold shadow-sm shadow-red-200/70" },
   };
 
   const config = statusMap[status];

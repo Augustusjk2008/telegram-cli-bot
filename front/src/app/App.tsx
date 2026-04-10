@@ -18,10 +18,10 @@ import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { TerminalScreen } from "../screens/TerminalScreen";
+import { APP_NAME, applyUiTheme, persistUiTheme, readStoredUiTheme, type UiThemeName } from "../theme";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
-const APP_NAME = "🦞Safe Claw";
 const TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
 const UNREAD_STORAGE_KEY = "web-unread-bots";
@@ -95,6 +95,7 @@ function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
 export function App() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
+  const [themeName, setThemeName] = useState<UiThemeName>(() => readStoredUiTheme());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentTab, setCurrentTab] = useState<"chat" | "files" | "terminal" | "git" | "settings">("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
@@ -135,6 +136,11 @@ export function App() {
     }
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
+
+  useEffect(() => {
+    applyUiTheme(themeName);
+    persistUiTheme(themeName);
+  }, [themeName]);
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -247,6 +253,10 @@ export function App() {
     setIsTerminalImmersive(false);
   }
 
+  function handleThemeChange(nextTheme: UiThemeName) {
+    setThemeName(nextTheme);
+  }
+
   useEffect(() => {
     if (!currentBot) {
       return;
@@ -319,6 +329,7 @@ export function App() {
             client={client}
             isVisible={currentTab === "terminal"}
             preferredWorkingDir={currentBotSummary?.workingDir || ""}
+            themeName={themeName}
             isImmersive={currentTab === "terminal" ? isTerminalImmersive : false}
             onToggleImmersive={currentTab === "terminal"
               ? () => setIsTerminalImmersive((prev) => !prev)
@@ -329,7 +340,14 @@ export function App() {
           <GitScreen key={`git-${currentBot}`} botAlias={currentBot} client={client} />
         </div>
         <div className={clsx("absolute inset-0", currentTab === "settings" ? "block" : "hidden")}>
-          <SettingsScreen key={`settings-${currentBot}`} botAlias={currentBot} client={client} onLogout={handleLogout} />
+          <SettingsScreen
+            key={`settings-${currentBot}`}
+            botAlias={currentBot}
+            client={client}
+            onLogout={handleLogout}
+            themeName={themeName}
+            onThemeChange={handleThemeChange}
+          />
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
 import type { WebBotClient } from "../services/webBotClient";
+import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 
 type Props = {
   authToken: string;
@@ -11,6 +12,7 @@ type Props = {
   client?: WebBotClient;
   isVisible: boolean;
   preferredWorkingDir: string;
+  themeName?: UiThemeName;
   isImmersive?: boolean;
   onToggleImmersive?: () => void;
 };
@@ -52,6 +54,7 @@ export function TerminalScreen({
   client = defaultTerminalClient,
   isVisible,
   preferredWorkingDir,
+  themeName = DEFAULT_UI_THEME,
   isImmersive = false,
   onToggleImmersive,
 }: Props) {
@@ -61,6 +64,7 @@ export function TerminalScreen({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const latestWorkingDirRef = useRef(preferredWorkingDir.trim());
+  const lastThemeRef = useRef(themeName);
   const isFollowingRef = useRef(true);
   const [launchKey, setLaunchKey] = useState(0);
   const [instanceId, setInstanceId] = useState(0);
@@ -217,6 +221,7 @@ export function TerminalScreen({
         cwd: workingDir,
         shell: "powershell",
         fontSize: terminalFontSize,
+        themeName,
         onOpen: () => {
           setIsConnected(true);
           setError("");
@@ -281,7 +286,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [activeWorkingDir, authToken, isTerminalClosed, isVisible, launchKey]);
+  }, [activeWorkingDir, authToken, isTerminalClosed, isVisible, launchKey, themeName]);
 
   useEffect(() => {
     if (!isVisible || !sessionRef.current) {
@@ -319,6 +324,19 @@ export function TerminalScreen({
       window.visualViewport?.removeEventListener("resize", refitTerminal);
     };
   }, [instanceId]);
+
+  useEffect(() => {
+    if (lastThemeRef.current === themeName) {
+      return;
+    }
+
+    lastThemeRef.current = themeName;
+
+    if (!sessionRef.current) {
+      return;
+    }
+    rebuildTerminal();
+  }, [themeName]);
 
   useEffect(() => {
     return () => {
@@ -374,9 +392,9 @@ export function TerminalScreen({
         </div>
       </header>
 
-      <section className="relative flex-1 overflow-hidden bg-[#09101f]">
+      <section className="relative flex-1 overflow-hidden bg-[var(--terminal-bg)]">
         {isTerminalClosed ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-300">
+          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--terminal-muted)]">
             终端已关闭
           </div>
         ) : (

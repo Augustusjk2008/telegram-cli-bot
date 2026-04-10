@@ -598,6 +598,38 @@ describe("RealWebBotClient", () => {
     expect(settings).toEqual({ port: "" });
   });
 
+  test("requestJson reports a friendly error when the server returns HTML", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === "content-type" ? "text/html; charset=utf-8" : null),
+        },
+        clone: () => ({
+          text: async () => "<!doctype html><html></html>",
+        }),
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(client.getTunnelStatus()).rejects.toThrow(
+      "服务返回了页面内容而不是 JSON，请确认 Web API 已启动，并且前后端版本已同步更新",
+    );
+  });
+
   test("restartService tolerates connection reset caused by server restart", async () => {
     fetchMock
       .mockResolvedValueOnce({

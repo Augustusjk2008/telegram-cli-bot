@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -250,8 +251,16 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
           {bots.map((bot) => {
             const isMain = bot.alias === "main" || bot.isMain;
             const isRenaming = renamingAlias === bot.alias;
+            const isOffline = bot.status === "offline";
             return (
-              <section key={bot.alias} className="space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <section
+                key={bot.alias}
+                className={
+                  isOffline
+                    ? "space-y-3 rounded-2xl border border-red-300 bg-red-50/80 p-4 shadow-[0_0_0_1px_rgba(252,165,165,0.32)]"
+                    : "space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4"
+                }
+              >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
@@ -259,17 +268,36 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                       {isMain ? (
                         <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
                       ) : null}
+                      <StatusPill status={bot.status} className={isOffline ? "px-3 py-1 text-sm" : ""} />
                     </div>
                     <p className="text-sm text-[var(--muted)]">CLI: {bot.cliType}{bot.cliPath ? ` / ${bot.cliPath}` : ""}</p>
                     <p className="break-all text-sm text-[var(--muted)]">目录: {bot.workingDir}</p>
-                    <p className="text-sm text-[var(--muted)]">状态: {bot.lastActiveText}</p>
+                    <p className={isOffline ? "text-sm text-red-700" : "text-sm text-[var(--muted)]"}>
+                      状态: {bot.lastActiveText}
+                    </p>
+                    {isOffline ? (
+                      <div className="rounded-xl border border-red-200 bg-white/85 px-3 py-2 text-sm text-red-700">
+                        该 Bot 当前离线，需先启动后才能进入。
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     type="button"
-                    onClick={() => onSelect(bot.alias)}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
+                    onClick={() => {
+                      if (isOffline) {
+                        return;
+                      }
+                      onSelect(bot.alias);
+                    }}
+                    disabled={isOffline}
+                    className={
+                      isOffline
+                        ? "cursor-not-allowed rounded-lg border border-red-200 bg-white/70 px-3 py-2 text-sm text-red-600 opacity-100"
+                        : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    }
                   >
-                    进入
+                    {isOffline ? "离线不可进入" : "进入"}
                   </button>
                 </div>
 

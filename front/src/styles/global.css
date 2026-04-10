@@ -3,6 +3,10 @@ html, body, #root {
   min-height: 100%;
   overflow-x: hidden;
   background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 12% 12%, var(--bg-glow) 0, transparent 32%),
+    radial-gradient(circle at 88% 0%, var(--bg-glow-strong) 0, transparent 26%),
+    linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
   color: var(--text);
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }

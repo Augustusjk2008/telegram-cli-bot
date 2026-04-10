@@ -51,8 +51,11 @@ afterEach(() => {
 test("renders standalone login screen without backend", () => {
   render(<App />);
   expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
+  expect(screen.getByText("【志在空间 威震长空】")).toBeInTheDocument();
+  expect(screen.getByText("2026")).toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
   expect(document.title).toBe("🦞Safe Claw");
+  expect(document.documentElement.dataset.theme).toBe("deep-space");
 });
 
 test("shows bottom navigation after entering demo app shell", async () => {
@@ -141,10 +144,67 @@ test("settings tab shows cli params and tunnel status", async () => {
 
   await user.click(screen.getByRole("button", { name: "设置" }));
 
+  expect(await screen.findByText("界面主题")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "深空轨道" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "经典暖色" })).toBeInTheDocument();
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
   expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
   expect(screen.getByText("公网访问")).toBeInTheDocument();
   expect(screen.getByText("https://demo.trycloudflare.com")).toBeInTheDocument();
+});
+
+test("settings tab can switch and persist the global theme", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(await screen.findByRole("button", { name: "经典暖色" }));
+
+  expect(document.documentElement.dataset.theme).toBe("classic");
+  expect(localStorage.getItem("web-ui-theme")).toBe("classic");
+  expect(await screen.findByText("界面主题已切换")).toBeInTheDocument();
+});
+
+test("settings tab ignores optional tunnel failures and keeps core settings available", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "getTunnelStatus").mockRejectedValue(
+    new Error("Unexpected token '<', \"<!doctype \"... is not valid JSON"),
+  );
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+  expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
+  expect(screen.queryByText(/Unexpected token/)).not.toBeInTheDocument();
+});
+
+test("settings tab keeps existing load errors visible after theme switching", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "getBotOverview").mockRejectedValue(new Error("加载设置失败"));
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  expect((await screen.findAllByText("加载设置失败")).length).toBeGreaterThan(0);
+
+  await user.click(screen.getByRole("button", { name: "经典暖色" }));
+
+  expect(screen.queryAllByText("加载设置失败").length).toBeGreaterThan(0);
+  expect(await screen.findByText("界面主题已切换")).toBeInTheDocument();
 });
 
 test("settings tab can save cli params and restart tunnel", async () => {
@@ -444,6 +504,69 @@ test("bot manager stays open even when a stored bot alias exists", async () => {
   expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
   expect(document.title).toBe("Bot 管理 - 🦞Safe Claw");
+});
+
+test("bot manager highlights offline bots and blocks entering them", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "main",
+      cliType: "kimi",
+      status: "running",
+      workingDir: "C:\\workspace\\demo",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "team2",
+      cliType: "claude",
+      status: "offline",
+      workingDir: "C:\\workspace\\plans",
+      lastActiveText: "离线",
+    },
+  ]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  expect(await screen.findByText("该 Bot 当前离线，需先启动后才能进入。")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "team2 当前离线，不可进入" })).toBeDisabled();
+});
+
+test("bot switcher disables offline bots", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "main",
+      cliType: "kimi",
+      status: "running",
+      workingDir: "C:\\workspace\\demo",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "team2",
+      cliType: "claude",
+      status: "offline",
+      workingDir: "C:\\workspace\\plans",
+      lastActiveText: "离线",
+    },
+  ]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+
+  expect(await screen.findByText("离线中，暂不可切换")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /team2/i })).toBeDisabled();
 });
 
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {

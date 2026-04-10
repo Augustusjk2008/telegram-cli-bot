@@ -3,11 +3,14 @@ import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square }
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { DEFAULT_UI_THEME, UI_THEME_OPTIONS, type UiThemeName } from "../theme";
 
 type Props = {
   botAlias: string;
   client?: WebBotClient;
   onLogout: () => void;
+  themeName?: UiThemeName;
+  onThemeChange?: (themeName: UiThemeName) => void;
 };
 
 type DraftValues = Record<string, string | boolean>;
@@ -54,7 +57,17 @@ function tunnelStatusText(status: TunnelSnapshot["status"]) {
   return "已停止";
 }
 
-export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLogout }: Props) {
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+export function SettingsScreen({
+  botAlias,
+  client = new MockWebBotClient(),
+  onLogout,
+  themeName = DEFAULT_UI_THEME,
+  onThemeChange,
+}: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
@@ -88,14 +101,27 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
     setLoading(true);
     setError("");
 
-    Promise.all([
+    Promise.allSettled([
       client.getBotOverview(botAlias),
       client.getCliParams(botAlias),
       client.getTunnelStatus(),
       botAlias === "main" ? client.getGitProxySettings() : Promise.resolve(null),
     ])
-      .then(([overviewData, cliParamsData, tunnelData, gitProxyData]) => {
+      .then(([overviewResult, cliParamsResult, tunnelResult, gitProxyResult]) => {
         if (cancelled) return;
+
+        if (overviewResult.status !== "fulfilled" || cliParamsResult.status !== "fulfilled") {
+          const reason = overviewResult.status !== "fulfilled" ? overviewResult.reason : cliParamsResult.reason;
+          setError(getErrorMessage(reason, "加载设置失败"));
+          setLoading(false);
+          return;
+        }
+
+        const overviewData = overviewResult.value;
+        const cliParamsData = cliParamsResult.value;
+        const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
+        const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
+
         setOverview(overviewData);
         setCliParams(cliParamsData);
         setDraftValues(buildDraftValues(cliParamsData));
@@ -107,9 +133,9 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
         setGitProxyPortDraft(gitProxyData?.port || "");
         setLoading(false);
       })
-      .catch((err: Error) => {
+      .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err.message || "加载设置失败");
+        setError(getErrorMessage(err, "加载设置失败"));
         setLoading(false);
       });
 
@@ -267,6 +293,14 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
     }
   };
 
+  const handleThemeChange = (nextTheme: UiThemeName) => {
+    if (nextTheme === themeName) {
+      return;
+    }
+    setNotice("界面主题已切换");
+    onThemeChange?.(nextTheme);
+  };
+
   const runTunnelAction = async (action: "start" | "stop" | "restart") => {
     setTunnelAction(action);
     setError("");
@@ -377,6 +411,71 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
             {notice}
           </div>
         ) : null}
+
+        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text)]">界面主题</h2>
+            <p className="text-sm text-[var(--muted)]">仅影响当前浏览器。登录页和内部页面会统一切换配色风格。</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {UI_THEME_OPTIONS.map((themeOption) => {
+              const isActive = themeName === themeOption.value;
+              return (
+                <button
+                  key={themeOption.value}
+                  type="button"
+                  aria-label={themeOption.label}
+                  aria-pressed={isActive}
+                  onClick={() => handleThemeChange(themeOption.value)}
+                  className={
+                    isActive
+                      ? "rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] p-4 text-left shadow-sm"
+                      : "rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4 text-left hover:bg-[var(--surface-strong)]"
+                  }
+                >
+                  <div
+                    className="mb-3 rounded-2xl border p-3"
+                    style={{
+                      backgroundColor: themeOption.preview.surface,
+                      borderColor: themeOption.preview.border,
+                    }}
+                  >
+                    <div className="flex gap-2">
+                      <span
+                        className="h-3 w-8 rounded-full"
+                        style={{ backgroundColor: themeOption.preview.accent }}
+                      />
+                      <span
+                        className="h-3 w-8 rounded-full border"
+                        style={{
+                          backgroundColor: themeOption.preview.surface,
+                          borderColor: themeOption.preview.border,
+                        }}
+                      />
+                      <span
+                        className="h-3 w-8 rounded-full"
+                        style={{ backgroundColor: themeOption.preview.accentStrong }}
+                      />
+                    </div>
+                    <div
+                      className="mt-3 flex items-center justify-between rounded-xl border px-3 py-2 text-[11px]"
+                      style={{
+                        backgroundColor: themeOption.preview.surface,
+                        borderColor: themeOption.preview.border,
+                        color: themeOption.preview.text,
+                      }}
+                    >
+                      <span>{themeOption.label}</span>
+                      <span style={{ color: themeOption.preview.muted }}>Preview</span>
+                    </div>
+                  </div>
+                  <div className="font-medium text-[var(--text)]">{themeOption.label}</div>
+                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{themeOption.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {overview ? (
           <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4">

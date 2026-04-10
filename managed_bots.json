@@ -1,7 +1,16 @@
 {
   "bots": [
     {
-      "alias": "rk3588",
+      "alias": "helm_simu",
+      "token": "",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu",
+      "enabled": true,
+      "bot_mode": "cli"
+    },
+    {
+      "alias": "rk3588_openeuler",
       "token": "",
       "cli_type": "codex",
       "cli_path": "codex",
@@ -15,7 +24,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "h:\\Resources\\RTLinux\\Demos\\MB_DDF",
-      "enabled": true,
+      "enabled": false,
       "bot_mode": "cli"
     }
   ]

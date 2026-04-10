@@ -1,12 +1,14 @@
 import { AttachAddon } from "@xterm/addon-attach";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { DEFAULT_UI_THEME, getTerminalTheme, type UiThemeName } from "../theme";
 
 export type TerminalSessionOptions = {
   token: string;
   cwd: string;
   shell?: string;
   fontSize?: number;
+  themeName?: UiThemeName;
   onOpen?: () => void;
   onClose?: () => void;
   onError?: (message: string) => void;
@@ -29,27 +31,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     convertEol: false,
     fontSize: options.fontSize ?? 13,
     fontFamily: '"Cascadia Code", "Consolas", "Courier New", monospace',
-    theme: {
-      background: "#0b1020",
-      foreground: "#dce7f3",
-      cursor: "#f8fafc",
-      black: "#0f172a",
-      red: "#ef4444",
-      green: "#22c55e",
-      yellow: "#f59e0b",
-      blue: "#60a5fa",
-      magenta: "#c084fc",
-      cyan: "#22d3ee",
-      white: "#e2e8f0",
-      brightBlack: "#334155",
-      brightRed: "#f87171",
-      brightGreen: "#4ade80",
-      brightYellow: "#fbbf24",
-      brightBlue: "#93c5fd",
-      brightMagenta: "#d8b4fe",
-      brightCyan: "#67e8f9",
-      brightWhite: "#f8fafc",
-    },
+    theme: getTerminalTheme(options.themeName ?? DEFAULT_UI_THEME),
   });
   const fitAddon = new FitAddon();
   let socket: WebSocket | null = null;

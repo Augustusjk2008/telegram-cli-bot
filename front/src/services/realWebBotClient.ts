@@ -349,7 +349,27 @@ export class RealWebBotClient implements WebBotClient {
       cache: "no-store",
       headers: this.headers(init.headers),
     });
-    const payload = (await response.json()) as JsonEnvelope<T>;
+    const responseClone = typeof response.clone === "function" ? response.clone() : null;
+    let payload: JsonEnvelope<T>;
+    try {
+      payload = (await response.json()) as JsonEnvelope<T>;
+    } catch {
+      const contentType = response.headers?.get?.("content-type") || "";
+      let previewText = "";
+      try {
+        previewText = responseClone && typeof responseClone.text === "function"
+          ? await responseClone.text()
+          : "";
+      } catch {
+        previewText = "";
+      }
+      const looksLikeHtml = contentType.includes("text/html") || /^\s*</.test(previewText);
+      throw new Error(
+        looksLikeHtml
+          ? "服务返回了页面内容而不是 JSON，请确认 Web API 已启动，并且前后端版本已同步更新"
+          : "服务返回了无法解析的数据，请刷新页面后重试",
+      );
+    }
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error?.message || "请求失败");
     }

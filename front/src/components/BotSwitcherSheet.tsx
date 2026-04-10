@@ -33,28 +33,40 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClo
           </button>
         </div>
         <div className="overflow-y-auto p-4 space-y-2">
-          {bots.map((bot) => (
-            <button
-              key={bot.alias}
-              onClick={() => {
-                onSelect(bot.alias);
-                onClose();
-              }}
-              className={`w-full flex items-center justify-between p-4 rounded-xl border ${
-                currentAlias === bot.alias 
-                  ? "border-[var(--accent)] bg-[var(--accent)]/5" 
-                  : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
-              }`}
-            >
-              <div className="flex min-w-0 flex-col items-start">
-                <span className="font-semibold">{bot.alias}</span>
-                <span className="max-w-full truncate text-xs text-[var(--muted)]" title={`${bot.cliType}: ${bot.workingDir}`}>
-                  {bot.cliType}: {bot.workingDir}
-                </span>
-              </div>
-              <StatusPill status={bot.status} />
-            </button>
-          ))}
+          {bots.map((bot) => {
+            const isOffline = bot.status === "offline";
+            return (
+              <button
+                key={bot.alias}
+                disabled={isOffline}
+                onClick={() => {
+                  if (isOffline) {
+                    return;
+                  }
+                  onSelect(bot.alias);
+                  onClose();
+                }}
+                className={`w-full flex items-center justify-between p-4 rounded-xl border ${
+                  isOffline
+                    ? "cursor-not-allowed border-red-200 bg-red-50/80 opacity-95"
+                    : currentAlias === bot.alias
+                      ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                      : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
+                }`}
+              >
+                <div className="flex min-w-0 flex-col items-start">
+                  <span className="font-semibold">{bot.alias}</span>
+                  <span className="max-w-full truncate text-xs text-[var(--muted)]" title={`${bot.cliType}: ${bot.workingDir}`}>
+                    {bot.cliType}: {bot.workingDir}
+                  </span>
+                  {isOffline ? (
+                    <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
+                  ) : null}
+                </div>
+                <StatusPill status={bot.status} />
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
