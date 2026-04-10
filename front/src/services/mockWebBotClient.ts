@@ -153,6 +153,7 @@ export class MockWebBotClient implements WebBotClient {
       role: "assistant",
       text: streamed || "Mock response",
       createdAt: new Date().toISOString(),
+      elapsedSeconds: 1,
       state: "done"
     };
   }

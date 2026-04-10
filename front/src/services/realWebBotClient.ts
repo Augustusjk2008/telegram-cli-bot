@@ -42,6 +42,7 @@ type RawHistoryItem = {
   timestamp?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  elapsed_seconds?: number;
 };
 
 type RawFileEntry = {
@@ -134,7 +135,7 @@ type StreamEvent =
   | { type: "delta"; text?: string }
   | { type: "status"; elapsed_seconds?: number; preview_text?: string }
   | { type: "log"; text?: string }
-  | { type: "done"; output?: string; script_name?: string; success?: boolean }
+  | { type: "done"; output?: string; elapsed_seconds?: number; script_name?: string; success?: boolean }
   | { type: "error"; message?: string; code?: string };
 
 function mapStatus(status: string, isProcessing = false): BotStatus {
@@ -374,6 +375,7 @@ export class RealWebBotClient implements WebBotClient {
       role: item.role,
       text: item.content,
       createdAt: item.timestamp || new Date().toISOString(),
+      elapsedSeconds: typeof item.elapsed_seconds === "number" ? item.elapsed_seconds : undefined,
       state: "done",
     }));
   }
@@ -408,6 +410,7 @@ export class RealWebBotClient implements WebBotClient {
     let buffer = "";
     let streamedText = "";
     let finalText = "";
+    let finalElapsedSeconds: number | undefined;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -431,12 +434,18 @@ export class RealWebBotClient implements WebBotClient {
           streamedText += event.text;
           onChunk(event.text);
         } else if (event.type === "status") {
+          if (typeof event.elapsed_seconds === "number") {
+            finalElapsedSeconds = event.elapsed_seconds;
+          }
           onStatus?.({
             elapsedSeconds: event.elapsed_seconds,
             previewText: event.preview_text,
           });
         } else if (event.type === "done") {
           finalText = event.output || streamedText;
+          if (typeof event.elapsed_seconds === "number") {
+            finalElapsedSeconds = event.elapsed_seconds;
+          }
         } else if (event.type === "error") {
           throw new Error(event.message || "流式响应失败");
         }
@@ -451,6 +460,7 @@ export class RealWebBotClient implements WebBotClient {
       role: "assistant",
       text: messageText,
       createdAt: new Date().toISOString(),
+      elapsedSeconds: finalElapsedSeconds,
       state: "done",
     };
   }

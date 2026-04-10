@@ -33,6 +33,7 @@ export type ChatMessage = {
   role: "user" | "assistant" | "system";
   text: string;
   createdAt: string;
+  elapsedSeconds?: number;
   state?: "done" | "streaming" | "error";
 };
 

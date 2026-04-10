@@ -106,15 +106,16 @@ class UserSession:
         elapsed = (datetime.now() - self.last_activity).total_seconds()
         return elapsed > SESSION_TIMEOUT
 
-    def add_to_history(self, role: str, content: str):
+    def add_to_history(self, role: str, content: str, *, elapsed_seconds: Optional[int] = None):
         with self._lock:
-            self.history.append(
-                {
-                    "timestamp": datetime.now().isoformat(),
-                    "role": role,
-                    "content": content,
-                }
-            )
+            item = {
+                "timestamp": datetime.now().isoformat(),
+                "role": role,
+                "content": content,
+            }
+            if isinstance(elapsed_seconds, int) and elapsed_seconds >= 0:
+                item["elapsed_seconds"] = elapsed_seconds
+            self.history.append(item)
             if len(self.history) > 100:
                 self.history = self.history[-100:]
         self.persist()

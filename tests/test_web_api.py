@@ -15,6 +15,7 @@ from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_service import (
     AuthContext,
+    _stream_cli_chat,
     _build_stream_status_event,
     WebApiError,
     change_working_directory,
@@ -23,6 +24,7 @@ from bot.web.api_service import (
     get_overview,
     list_bots,
     read_file_content,
+    run_assistant_chat,
     run_cli_chat,
     save_uploaded_file,
 )
@@ -527,6 +529,68 @@ async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBot
     assert data["returncode"] == 0
     assert session.claude_session_initialized is True
     session.persist.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, return_value=("完成回复", 0, False)):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert data["output"] == "完成回复"
+    assert isinstance(data["elapsed_seconds"], int)
+    assert data["elapsed_seconds"] >= 0
+    assert session.history[-1]["role"] == "assistant"
+    assert session.history[-1]["content"] == "完成回复"
+    assert session.history[-1]["elapsed_seconds"] == data["elapsed_seconds"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: MultiBotManager):
+    fake_stdout = MagicMock()
+    fake_stdout.readline.return_value = ""
+    fake_stdout.read.return_value = ""
+
+    fake_process = MagicMock()
+    fake_process.stdout = fake_stdout
+    fake_process.poll.return_value = 0
+    fake_process.wait.return_value = 0
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["output"] == "（无输出）" or isinstance(done_event["output"], str)
+    assert isinstance(done_event["elapsed_seconds"], int)
+    assert done_event["elapsed_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_run_assistant_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
+    web_manager.main_profile.bot_mode = "assistant"
+    session = get_session_for_alias(web_manager, "main", 1001)
+
+    async def fake_stream(*args, **kwargs):
+        yield {"type": "text", "text": "你好"}
+
+    with patch("bot.web.api_service.ANTHROPIC_AVAILABLE", True), \
+         patch("bot.web.api_service._build_system_prompt_with_memory", return_value="system"), \
+         patch("bot.web.api_service.call_claude_with_memory_tools_stream", fake_stream):
+        data = await run_assistant_chat(web_manager, "main", 1001, "hello")
+
+    assert data["output"] == "你好"
+    assert isinstance(data["elapsed_seconds"], int)
+    assert data["elapsed_seconds"] >= 0
+    assert session.history[-1]["role"] == "assistant"
+    assert session.history[-1]["content"] == "你好"
+    assert session.history[-1]["elapsed_seconds"] == data["elapsed_seconds"]
 
 
 def test_codex_status_event_skips_json_meta_preview():

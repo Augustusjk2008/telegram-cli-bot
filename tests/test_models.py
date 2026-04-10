@@ -91,6 +91,14 @@ class TestUserSession:
         assert "timestamp" in s.history[0]
         assert s.history[1]["role"] == "assistant"
 
+    def test_add_to_history_preserves_elapsed_seconds(self):
+        s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")
+        s.add_to_history("assistant", "world", elapsed_seconds=3)
+
+        assert s.history[0]["role"] == "assistant"
+        assert s.history[0]["content"] == "world"
+        assert s.history[0]["elapsed_seconds"] == 3
+
     def test_history_truncation(self):
         s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")
         for i in range(120):

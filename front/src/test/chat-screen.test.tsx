@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -192,6 +192,7 @@ test("shows a user message after sending text", async () => {
         id: "assistant-immediate",
         role: "assistant",
         text: "已收到",
+        elapsedSeconds: 3,
         createdAt: new Date().toISOString(),
         state: "done",
       };
@@ -203,6 +204,7 @@ test("shows a user message after sending text", async () => {
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "修一下这个 bug");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
   expect(await screen.findByText("修一下这个 bug")).toBeInTheDocument();
+  expect(await screen.findByText("用时 3 秒")).toBeInTheDocument();
 });
 
 test("shows streaming state before assistant message completes", async () => {
@@ -225,8 +227,67 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "继续");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(await screen.findByText(/正在生成/)).toBeInTheDocument();
+  expect(await screen.findByText(/正在输出/)).toBeInTheDocument();
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
+});
+
+test("shows a streaming placeholder before the first assistant chunk arrives", async () => {
+  const client = createClient({
+    sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void) =>
+      new Promise<ChatMessage>((resolve) => {
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-final",
+            role: "assistant",
+            text: "# 最终结果\n- 已完成",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 300);
+      }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await userEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("正在输出...")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "最终结果" })).toBeInTheDocument();
+});
+
+test("renders loaded assistant history as markdown but keeps user and system text plain", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "# 用户消息",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "system-1",
+        role: "system",
+        text: "# 系统消息",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "# 助手结果\n- 第一项",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("heading", { name: "助手结果" })).toBeInTheDocument();
+  expect(screen.getByText("# 用户消息")).toBeInTheDocument();
+  expect(screen.getByText("# 系统消息")).toBeInTheDocument();
 });
 
 test("kill button is disabled while idle and highlighted while streaming", async () => {
@@ -353,7 +414,9 @@ test("shows waiting time while a reply is still pending", async () => {
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   expect(await screen.findByText("已等待 1 秒", {}, { timeout: 2500 })).toBeInTheDocument();
-  expect(await screen.findByText("done", {}, { timeout: 3000 })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByTestId("assistant-markdown-message")).toHaveTextContent("done");
+  }, { timeout: 3000 });
 }, 8000);
 
 test("shows reset kill and system-script actions for main bot", async () => {
@@ -498,4 +561,22 @@ test("shows the last unfinished preview after a restored session is no longer ru
 
   expect(await screen.findByText("恢复到上次预览")).toBeInTheDocument();
   expect(screen.getByText("检测到上次未完成任务，已恢复最近预览。")).toBeInTheDocument();
+});
+
+test("shows persisted elapsed badge from loaded history", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-1",
+      role: "assistant",
+      text: "历史结果",
+      createdAt: new Date().toISOString(),
+      elapsedSeconds: 8,
+      state: "done",
+    }],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("历史结果")).toBeInTheDocument();
+  expect(screen.getByText("用时 8 秒")).toBeInTheDocument();
 });

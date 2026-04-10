@@ -471,6 +471,10 @@ def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: 
     return event
 
 
+def _calculate_elapsed_seconds(loop: asyncio.AbstractEventLoop, started_at: float) -> int:
+    return max(0, int(loop.time() - started_at))
+
+
 def _wait_for_process_exit_sync(process: subprocess.Popen, timeout: float) -> Optional[int]:
     try:
         return process.wait(timeout=timeout)
@@ -762,13 +766,15 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 session.persist()
                 session_id_changed = False
 
-            session.add_to_history("assistant", response)
+            elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
+            session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
             with session._lock:
                 session.is_processing = False
             session.clear_running_reply()
             yield {
                 "type": "done",
                 "output": response,
+                "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
                 "timed_out": timed_out,
                 "session": build_session_snapshot(profile, session),
@@ -793,7 +799,14 @@ async def _stream_assistant_chat(manager: MultiBotManager, alias: str, user_id: 
     data = await run_assistant_chat(manager, alias, user_id, user_text)
     for chunk in _chunk_text(data["output"]):
         yield {"type": "delta", "text": chunk}
-    yield {"type": "done", "output": data["output"], "returncode": 0, "timed_out": False, "session": data["session"]}
+    yield {
+        "type": "done",
+        "output": data["output"],
+        "elapsed_seconds": data.get("elapsed_seconds"),
+        "returncode": 0,
+        "timed_out": False,
+        "session": data["session"],
+    }
 
 
 async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
@@ -822,6 +835,8 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
 
     try:
         session.touch()
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
         session_id_changed = False
         history_added = False
         max_attempts = 2 if cli_type == "claude" else 1
@@ -931,12 +946,14 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
             if session_id_changed:
                 session.persist()
 
-            session.add_to_history("assistant", response)
+            elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
+            session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
             with session._lock:
                 session.is_processing = False
             session.clear_running_reply()
             return {
                 "output": response,
+                "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
                 "timed_out": timed_out,
                 "session": build_session_snapshot(profile, session),
@@ -964,6 +981,8 @@ async def run_assistant_chat(manager: MultiBotManager, alias: str, user_id: int,
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
     session.touch()
     session.start_running_reply(text)
     try:
@@ -996,13 +1015,15 @@ async def run_assistant_chat(manager: MultiBotManager, alias: str, user_id: int,
                 f"{usage.get('input_tokens', 0) + usage.get('output_tokens', 0)} 总计"
             )
 
+        elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
         session.add_to_history("user", text)
-        session.add_to_history("assistant", response_text)
+        session.add_to_history("assistant", response_text, elapsed_seconds=elapsed_seconds)
         with session._lock:
             session.is_processing = False
         session.clear_running_reply()
         return {
             "output": final_text,
+            "elapsed_seconds": elapsed_seconds,
             "usage": usage,
             "session": build_session_snapshot(profile, session),
         }

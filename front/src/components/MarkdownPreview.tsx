@@ -6,6 +6,11 @@ type Props = {
   content: string;
 };
 
+type MarkdownContentProps = {
+  content: string;
+  variant?: "preview" | "chat";
+};
+
 function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<"code">) {
   const hasLanguageClass = Boolean(className && className.includes("language-"));
   if (hasLanguageClass) {
@@ -21,7 +26,7 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
 
   return (
     <code
-      className="rounded-md bg-[color:rgba(15,140,120,0.12)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--accent)]"
+      className="whitespace-pre-wrap break-all rounded-md bg-[color:rgba(15,140,120,0.12)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--accent)]"
       {...props}
     >
       {children}
@@ -29,28 +34,32 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
   );
 }
 
-export function MarkdownPreview({ content }: Props) {
+export function MarkdownContent({ content, variant = "preview" }: MarkdownContentProps) {
+  const containerClassName = variant === "chat"
+    ? "min-w-0 w-full text-[15px] leading-7 text-[var(--text)]"
+    : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
+
   return (
-    <div className="max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]">
+    <div className={containerClassName}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          h1: ({ children }) => <h1 className="mb-4 text-3xl font-semibold tracking-tight">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-3 mt-8 text-2xl font-semibold tracking-tight">{children}</h2>,
-          h3: ({ children }) => <h3 className="mb-3 mt-6 text-xl font-semibold">{children}</h3>,
-          h4: ({ children }) => <h4 className="mb-2 mt-5 text-lg font-semibold">{children}</h4>,
-          p: ({ children }) => <p className="my-3 break-words">{children}</p>,
+          h1: ({ children }) => <h1 className="mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-3 mt-8 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-3 mt-6 break-words text-xl font-semibold [overflow-wrap:anywhere]">{children}</h3>,
+          h4: ({ children }) => <h4 className="mb-2 mt-5 break-words text-lg font-semibold [overflow-wrap:anywhere]">{children}</h4>,
+          p: ({ children }) => <p className="my-3 break-words [overflow-wrap:anywhere]">{children}</p>,
           ul: ({ children }) => <ul className="my-4 list-disc space-y-2 pl-6">{children}</ul>,
           ol: ({ children }) => <ol className="my-4 list-decimal space-y-2 pl-6">{children}</ol>,
-          li: ({ children }) => <li className="pl-1">{children}</li>,
+          li: ({ children }) => <li className="break-words pl-1 [overflow-wrap:anywhere]">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-5 border-l-4 border-[color:rgba(15,140,120,0.45)] bg-[color:rgba(15,140,120,0.07)] px-4 py-3 text-[var(--muted)]">
+            <blockquote className="my-5 break-words border-l-4 border-[color:rgba(15,140,120,0.45)] bg-[color:rgba(15,140,120,0.07)] px-4 py-3 text-[var(--muted)] [overflow-wrap:anywhere]">
               {children}
             </blockquote>
           ),
           a: ({ href, children }) => (
             <a
-              className="font-medium text-[var(--accent)] underline decoration-[color:rgba(15,140,120,0.35)] underline-offset-4"
+              className="break-all font-medium text-[var(--accent)] underline decoration-[color:rgba(15,140,120,0.35)] underline-offset-4"
               href={href}
               rel="noreferrer"
               target="_blank"
@@ -58,7 +67,7 @@ export function MarkdownPreview({ content }: Props) {
               {children}
             </a>
           ),
-          pre: ({ children }) => <pre className="my-4 overflow-x-auto">{children}</pre>,
+          pre: ({ children }) => <pre className="my-4 min-w-0 overflow-x-auto">{children}</pre>,
           code: InlineCode,
           table: ({ children }) => (
             <div className="my-5 overflow-x-auto">
@@ -70,13 +79,13 @@ export function MarkdownPreview({ content }: Props) {
           thead: ({ children }) => <thead className="bg-[color:rgba(15,140,120,0.08)]">{children}</thead>,
           tbody: ({ children }) => <tbody>{children}</tbody>,
           tr: ({ children }) => <tr className="border-b border-[var(--border)] last:border-b-0">{children}</tr>,
-          th: ({ children }) => <th className="px-3 py-2 text-left text-sm font-semibold">{children}</th>,
-          td: ({ children }) => <td className="px-3 py-2 align-top text-sm">{children}</td>,
+          th: ({ children }) => <th className="break-words px-3 py-2 text-left text-sm font-semibold [overflow-wrap:anywhere]">{children}</th>,
+          td: ({ children }) => <td className="break-words px-3 py-2 align-top text-sm [overflow-wrap:anywhere]">{children}</td>,
           hr: () => <hr className="my-6 border-0 border-t border-[var(--border)]" />,
           img: ({ src, alt }) => (
             <div className="my-4 rounded-xl border border-dashed border-[color:rgba(15,140,120,0.35)] bg-[color:rgba(15,140,120,0.06)] px-4 py-3 text-sm text-[var(--muted)]">
               <span className="mr-2 font-medium text-[var(--text)]">图片路径</span>
-              <span>{src || alt || "(未提供路径)"}</span>
+              <span className="break-all">{src || alt || "(未提供路径)"}</span>
             </div>
           ),
         }}
@@ -85,4 +94,8 @@ export function MarkdownPreview({ content }: Props) {
       </ReactMarkdown>
     </div>
   );
+}
+
+export function MarkdownPreview({ content }: Props) {
+  return <MarkdownContent content={content} variant="preview" />;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
 import { ChatComposer } from "../components/ChatComposer";
+import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ChatMessage, RunningReply, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -275,6 +276,7 @@ export function ChatScreen({
   }, [isVisible, loading, items, isStreaming]);
 
   async function handleSend(text: string) {
+    const localStartedAtMs = Date.now();
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -295,7 +297,7 @@ export function ChatScreen({
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     setIsStreaming(true);
     setStreamMode("sse");
-    setStreamStartedAtMs(Date.now());
+    setStreamStartedAtMs(localStartedAtMs);
 
     try {
       let usingPreviewReplace = false;
@@ -331,7 +333,15 @@ export function ChatScreen({
         },
       );
 
-      setItems((prev) => prev.map((item) => (item.id === assistantId ? finalMessage : item)));
+      const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
+        ? finalMessage.elapsedSeconds
+        : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
+      const finalizedMessage: ChatMessage = {
+        ...finalMessage,
+        elapsedSeconds,
+      };
+
+      setItems((prev) => prev.map((item) => (item.id === assistantId ? finalizedMessage : item)));
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
       }
@@ -494,15 +504,32 @@ export function ChatScreen({
             <div
               className={
                 item.role === "user"
-                  ? "bg-[var(--accent)] text-white px-4 py-2 rounded-2xl max-w-[80%]"
+                  ? "flex max-w-[80%] min-w-0 flex-col items-end gap-1"
                   : item.role === "system"
-                    ? "bg-slate-100 text-slate-700 px-4 py-2 rounded-2xl max-w-[90%] border border-slate-200 whitespace-pre-wrap"
-                  : item.state === "error"
-                    ? "bg-red-50 text-red-700 px-4 py-2 rounded-2xl max-w-[80%] border border-red-200"
-                    : "bg-[var(--surface)] text-[var(--text)] px-4 py-2 rounded-2xl max-w-[80%] border border-[var(--border)] whitespace-pre-wrap"
+                    ? "flex max-w-[90%] min-w-0 flex-col items-center gap-1"
+                    : "flex max-w-[80%] min-w-0 flex-col items-start gap-1"
               }
             >
-              {item.text || (item.state === "streaming" ? "正在生成..." : "")}
+              <div
+                className={
+                  item.role === "user"
+                    ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white whitespace-pre-wrap break-all"
+                    : item.role === "system"
+                      ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2 text-slate-700 whitespace-pre-wrap break-all"
+                      : item.state === "error"
+                        ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700 whitespace-pre-wrap break-all"
+                        : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
+                }
+              >
+                {item.role === "assistant" && item.state !== "streaming" && item.state !== "error"
+                  ? <ChatMarkdownMessage content={item.text} />
+                  : item.text || (item.state === "streaming" ? "正在输出..." : "")}
+              </div>
+              {item.role === "assistant" && item.state !== "streaming" && typeof item.elapsedSeconds === "number" ? (
+                <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
+                  用时 {item.elapsedSeconds} 秒
+                </div>
+              ) : null}
             </div>
           </div>
         ))}

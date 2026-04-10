@@ -223,6 +223,16 @@ class TestBotGotoCallback:
 class TestExecuteScript:
     """测试系统脚本执行"""
 
+    def test_build_web_frontend_batch_is_ascii_safe_for_cmd(self):
+        script_path = Path("scripts/build_web_frontend.bat")
+        raw = script_path.read_bytes()
+        lines = script_path.read_text(encoding="utf-8").splitlines()
+
+        first_nonempty = next((line.strip() for line in lines if line.strip()), "")
+
+        assert first_nonempty.lower() == "@echo off"
+        assert all(byte < 128 for byte in raw)
+
     def test_powershell_invocation_uses_noninteractive_mode_and_decodes_gbk_errors(self):
         script_path = Path("scripts/turn_off_monitor.ps1")
         captured: dict[str, object] = {}

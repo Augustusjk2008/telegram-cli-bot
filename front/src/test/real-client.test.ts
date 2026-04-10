@@ -183,6 +183,50 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("listMessages maps persisted elapsed seconds from history", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [
+              {
+                timestamp: "2026-04-10T00:00:00",
+                role: "assistant",
+                content: "最终结果",
+                elapsed_seconds: 6,
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const messages = await client.listMessages("main");
+
+    expect(messages).toEqual([
+      {
+        id: "2026-04-10T00:00:00-0",
+        role: "assistant",
+        text: "最终结果",
+        createdAt: "2026-04-10T00:00:00",
+        elapsedSeconds: 6,
+        state: "done",
+      },
+    ]);
+  });
+
   test("updateBotWorkdir patches admin workdir endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({
@@ -530,7 +574,7 @@ describe("RealWebBotClient", () => {
       start(controller) {
         controller.enqueue(encoder.encode("event: meta\ndata: {\"type\":\"meta\",\"cli_type\":\"codex\"}\n\n"));
         controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"preview_text\":\"处理中预览\"}\n\n"));
-        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\"}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\",\"elapsed_seconds\":4}\n\n"));
         controller.close();
       },
     });
@@ -569,6 +613,7 @@ describe("RealWebBotClient", () => {
       },
     ]);
     expect(message.text).toBe("最终结果");
+    expect(message.elapsedSeconds).toBe(4);
   });
 
   test("getGitOverview maps git workspace payload", async () => {
