@@ -325,7 +325,7 @@ export function ChatScreen({
   function handleFileLinkClick(href: string) {
     const nextPath = resolvePreviewFilePath(href, workingDir);
     if (!nextPath) {
-      setError("暂不支持预览当前工作目录之外的文件链接");
+      setError("暂不支持预览该文件链接");
       return;
     }
     void loadPreview(nextPath, "preview");

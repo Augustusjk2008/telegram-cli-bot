@@ -123,6 +123,20 @@ def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
     assert content["content"] == "line1"
 
 
+def test_read_file_outside_workdir_by_absolute_path(web_manager: MultiBotManager, temp_dir: Path):
+    workspace_dir = temp_dir / "workspace"
+    workspace_dir.mkdir()
+    outside_dir = temp_dir / "outside"
+    outside_dir.mkdir()
+    target = outside_dir / "notes.txt"
+    target.write_text("outside\nline2\n", encoding="utf-8")
+
+    change_working_directory(web_manager, "main", 1001, str(workspace_dir))
+    content = read_file_content(web_manager, "main", 1001, str(target), mode="head", lines=1)
+
+    assert content["content"] == "outside"
+
+
 def _init_git_repo(repo_dir: Path):
     subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
     subprocess.run(["git", "config", "user.name", "Web Bot Test"], cwd=repo_dir, check=True, capture_output=True, text=True)

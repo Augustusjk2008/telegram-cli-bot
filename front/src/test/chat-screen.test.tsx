@@ -583,6 +583,28 @@ test("opens a file preview dialog when clicking a local markdown file link", asy
   expect(screen.getByRole("heading", { name: "README" })).toBeInTheDocument();
 });
 
+test("opens a file preview dialog when clicking a local absolute file link outside the working dir", async () => {
+  const user = userEvent.setup();
+  const readSpy = vi.fn(async () => "外部文件预览");
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-1",
+      role: "assistant",
+      text: "[查看日志](C:/logs/app.log)",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }],
+    readFile: readSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("link", { name: "查看日志" }));
+
+  expect(readSpy).toHaveBeenCalledWith("main", "C:/logs/app.log");
+  expect(await screen.findByRole("dialog", { name: "C:/logs/app.log" })).toBeInTheDocument();
+});
+
 test("restores in-progress reply after reopening and refreshes to final history", async () => {
   vi.useFakeTimers();
 

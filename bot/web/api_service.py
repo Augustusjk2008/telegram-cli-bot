@@ -42,7 +42,7 @@ from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.sessions import get_or_create_session, reset_session, sessions, sessions_lock, update_bot_working_dir
-from bot.utils import is_dangerous_command, is_safe_filename
+from bot.utils import is_dangerous_command
 
 
 class WebApiError(Exception):
@@ -264,17 +264,12 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
 
 
 def _resolve_safe_path(session: UserSession, filename: str) -> str:
-    if not is_safe_filename(filename):
-        _raise(400, "unsafe_filename", "文件名包含非法字符")
-    real_working = os.path.abspath(session.working_dir)
-    real_path = os.path.abspath(os.path.join(session.working_dir, filename))
-    try:
-        common = os.path.commonpath([real_working, real_path])
-    except ValueError:
-        common = ""
-    if common != real_working:
+    candidate = str(filename or "").strip()
+    if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_path", "文件路径不安全")
-    return real_path
+    if os.path.isabs(candidate):
+        return os.path.abspath(os.path.expanduser(candidate))
+    return os.path.abspath(os.path.join(session.working_dir, os.path.expanduser(candidate)))
 
 
 def _list_directory_entries(working_dir: str) -> dict[str, Any]:

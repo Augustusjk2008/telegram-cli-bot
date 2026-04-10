@@ -322,6 +322,12 @@ test("bot manager can add rename and delete managed bots", async () => {
   await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
 
   expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+  expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
+  expect(document.title).toBe("Bot 管理 - Telegram CLI Bridge");
 
   await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
   await user.type(screen.getByLabelText("Bot Token"), "333:abc");
@@ -342,6 +348,28 @@ test("bot manager can add rename and delete managed bots", async () => {
   await user.click(screen.getByRole("button", { name: "删除 planner" }));
 
   expect(screen.queryByText("planner")).not.toBeInTheDocument();
+});
+
+test("bot manager stays open even when a stored bot alias exists", async () => {
+  const user = userEvent.setup();
+  localStorage.setItem("web-current-bot", "main");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+
+  expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
+  expect(document.title).toBe("Bot 管理 - Telegram CLI Bridge");
 });
 
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {

@@ -96,6 +96,7 @@ export function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentTab, setCurrentTab] = useState<"chat" | "files" | "git" | "settings">("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
+  const [showBotManager, setShowBotManager] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
@@ -107,6 +108,7 @@ export function App() {
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
+    setShowBotManager(false);
     storeBotAlias(alias);
     setIsChatImmersive(false);
   }
@@ -134,12 +136,16 @@ export function App() {
       document.title = "Telegram CLI Bridge";
       return;
     }
+    if (showBotManager || !currentBot) {
+      document.title = "Bot 管理 - Telegram CLI Bridge";
+      return;
+    }
     if (currentBot) {
       document.title = `${currentBot} - Telegram CLI Bridge`;
       return;
     }
-    document.title = "Bot 管理 - Telegram CLI Bridge";
-  }, [currentBot, isLoggedIn]);
+    document.title = "Telegram CLI Bridge";
+  }, [currentBot, isLoggedIn, showBotManager]);
 
   useEffect(() => {
     storeUnreadBots(unreadBots);
@@ -147,6 +153,10 @@ export function App() {
 
   useEffect(() => {
     if (!isLoggedIn || bots.length === 0) {
+      return;
+    }
+
+    if (showBotManager) {
       return;
     }
 
@@ -161,7 +171,7 @@ export function App() {
     }
 
     setCurrentBot(null);
-  }, [bots, currentBot, isLoggedIn]);
+  }, [bots, currentBot, isLoggedIn, showBotManager]);
 
   useEffect(() => {
     const storedToken = readStoredToken();
@@ -177,6 +187,7 @@ export function App() {
         setClient(nextClient);
         setIsLoggedIn(true);
         setCurrentBot(restoredAlias || null);
+        setShowBotManager(false);
         setMountedChatBots(restoredAlias ? [restoredAlias] : []);
         setLoginError("");
       })
@@ -200,6 +211,7 @@ export function App() {
       setClient(nextClient);
       setIsLoggedIn(true);
       setCurrentBot(restoredAlias || null);
+      setShowBotManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "登录失败");
@@ -214,6 +226,7 @@ export function App() {
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
     setIsLoggedIn(false);
     setCurrentBot(null);
+    setShowBotManager(false);
     setCurrentTab("chat");
     setBots([]);
     setUnreadBots([]);
@@ -244,7 +257,7 @@ export function App() {
     return <LoginScreen onLogin={handleLogin} isLoading={loginLoading} error={loginError} />;
   }
 
-  if (!currentBot) {
+  if (showBotManager || !currentBot) {
     return <BotListScreen client={client} onSelect={handleSelectBot} />;
   }
 
@@ -345,7 +358,7 @@ export function App() {
             setCurrentTab("chat");
           }}
           onManage={() => {
-            setCurrentBot(null);
+            setShowBotManager(true);
             setShowSwitcher(false);
             setIsChatImmersive(false);
           }}

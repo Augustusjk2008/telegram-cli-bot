@@ -55,28 +55,23 @@ export function resolvePreviewFilePath(href: string, workingDir: string) {
   const normalizedCandidate = normalizePath(cleaned);
   const normalizedWorkingDir = normalizePath(workingDir || "");
 
-  if (!normalizedCandidate || normalizedCandidate === "." || normalizedCandidate === ".." || normalizedCandidate.includes("../")) {
+  if (!normalizedCandidate || normalizedCandidate === ".") {
     return null;
   }
 
   if (/^[A-Za-z]:\//.test(normalizedCandidate)) {
-    if (!normalizedWorkingDir) {
-      return null;
+    if (normalizedWorkingDir) {
+      const lowerCandidate = normalizedCandidate.toLowerCase();
+      const lowerWorkingDir = normalizedWorkingDir.toLowerCase();
+      if (lowerCandidate.startsWith(`${lowerWorkingDir}/`)) {
+        return normalizedCandidate.slice(normalizedWorkingDir.length + 1);
+      }
     }
-    const lowerCandidate = normalizedCandidate.toLowerCase();
-    const lowerWorkingDir = normalizedWorkingDir.toLowerCase();
-    if (!lowerCandidate.startsWith(`${lowerWorkingDir}/`)) {
-      return null;
-    }
-    return normalizedCandidate.slice(normalizedWorkingDir.length + 1);
+    return normalizedCandidate;
   }
 
   if (normalizedWorkingDir && normalizedCandidate.toLowerCase().startsWith(`${normalizedWorkingDir.toLowerCase()}/`)) {
     return normalizedCandidate.slice(normalizedWorkingDir.length + 1);
-  }
-
-  if (normalizedCandidate.startsWith("/")) {
-    return null;
   }
 
   return normalizedCandidate.replace(/^\.\//, "");
