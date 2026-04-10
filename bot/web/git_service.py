@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bot.manager import MultiBotManager
-from .api_service import WebApiError, get_session_for_alias
+from .api_service import WebApiError, get_profile_or_raise
 
 
 class GitCommandError(RuntimeError):
@@ -72,6 +72,11 @@ def _resolve_repo_root(working_dir: str) -> Optional[str]:
     if not output:
         return None
     return os.path.normpath(output)
+
+
+def _get_git_working_dir(manager: MultiBotManager, alias: str) -> str:
+    profile = get_profile_or_raise(manager, alias)
+    return profile.working_dir
 
 
 def _parse_status_header(header: str) -> tuple[str, int, int]:
@@ -216,32 +221,32 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
 
 
 def get_git_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
-    repo_root = _resolve_repo_root(session.working_dir)
-    return _build_git_overview(session.working_dir, repo_root)
+    working_dir = _get_git_working_dir(manager, alias)
+    repo_root = _resolve_repo_root(working_dir)
+    return _build_git_overview(working_dir, repo_root)
 
 
 def init_git_repository(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
-    repo_root = _resolve_repo_root(session.working_dir)
+    working_dir = _get_git_working_dir(manager, alias)
+    repo_root = _resolve_repo_root(working_dir)
     if repo_root:
-        return _build_git_overview(session.working_dir, repo_root)
+        return _build_git_overview(working_dir, repo_root)
 
     try:
-        _run_git(session.working_dir, ["init"])
+        _run_git(working_dir, ["init"])
     except GitCommandError as exc:
         _raise(400, "git_init_failed", str(exc))
 
-    repo_root = _resolve_repo_root(session.working_dir)
-    return _build_git_overview(session.working_dir, repo_root)
+    repo_root = _resolve_repo_root(working_dir)
+    return _build_git_overview(working_dir, repo_root)
 
 
 def _require_repo_root(manager: MultiBotManager, alias: str, user_id: int) -> tuple[str, str]:
-    session = get_session_for_alias(manager, alias, user_id)
-    repo_root = _resolve_repo_root(session.working_dir)
+    working_dir = _get_git_working_dir(manager, alias)
+    repo_root = _resolve_repo_root(working_dir)
     if not repo_root:
         _raise(409, "not_git_repo", "当前目录不在 Git 仓库中")
-    return session.working_dir, repo_root
+    return working_dir, repo_root
 
 
 def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, staged: bool = False) -> dict[str, Any]:

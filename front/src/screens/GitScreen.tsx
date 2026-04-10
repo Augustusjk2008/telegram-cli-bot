@@ -9,6 +9,13 @@ type Props = {
   client?: WebBotClient;
 };
 
+type DiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
+
+type ParsedDiffLine = {
+  text: string;
+  kind: DiffLineKind;
+};
+
 function groupedFiles(overview: GitOverview | null) {
   const changedFiles = overview?.changedFiles || [];
   return {
@@ -22,6 +29,53 @@ function sectionTitle(title: string, count: number) {
   return `${title} (${count})`;
 }
 
+function parseDiffLineKind(line: string): DiffLineKind {
+  if (
+    line.startsWith("diff --git")
+    || line.startsWith("index ")
+    || line.startsWith("--- ")
+    || line.startsWith("+++ ")
+    || line.startsWith("rename ")
+    || line.startsWith("new file ")
+    || line.startsWith("deleted file ")
+  ) {
+    return "meta";
+  }
+  if (line.startsWith("@@")) {
+    return "hunk";
+  }
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    return "add";
+  }
+  if (line.startsWith("-") && !line.startsWith("---")) {
+    return "delete";
+  }
+  return "context";
+}
+
+function parseDiffLines(diff: string): ParsedDiffLine[] {
+  return (diff || "").split(/\r?\n/).map((line) => ({
+    text: line,
+    kind: parseDiffLineKind(line),
+  }));
+}
+
+function diffLineClasses(kind: DiffLineKind) {
+  if (kind === "add") {
+    return "bg-emerald-50 text-emerald-700";
+  }
+  if (kind === "delete") {
+    return "bg-red-50 text-red-700";
+  }
+  if (kind === "hunk") {
+    return "bg-sky-50 text-sky-700";
+  }
+  if (kind === "meta") {
+    return "bg-slate-100 text-slate-600";
+  }
+  return "text-[var(--text)]";
+}
+
 export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,6 +86,7 @@ export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) 
   const [diffPayload, setDiffPayload] = useState<GitDiffPayload | null>(null);
   const [diffLoadingPath, setDiffLoadingPath] = useState("");
   const groups = useMemo(() => groupedFiles(overview), [overview]);
+  const parsedDiffLines = useMemo(() => parseDiffLines(diffPayload?.diff || ""), [diffPayload]);
   const stageAllPaths = useMemo(
     () => [...groups.unstaged, ...groups.untracked].map((item) => item.path),
     [groups.unstaged, groups.untracked],
@@ -354,9 +409,28 @@ export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) 
                 关闭
               </button>
             </div>
-            <pre className="max-h-[60vh] overflow-auto rounded-xl bg-[var(--bg)] p-4 text-sm whitespace-pre-wrap break-all">
-              {diffPayload.diff || "当前没有可显示的差异"}
-            </pre>
+            {parsedDiffLines.length > 0 ? (
+              <div className="max-h-[60vh] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg)] p-2 font-mono text-xs leading-6">
+                {parsedDiffLines.map((line, index) => (
+                  <div
+                    key={`${index}-${line.text}`}
+                    data-diff-kind={line.kind}
+                    className={`flex gap-3 rounded-md px-3 py-0.5 ${diffLineClasses(line.kind)}`}
+                  >
+                    <span className="w-8 shrink-0 select-none text-right text-slate-400">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 whitespace-pre">
+                      {line.text || " "}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl bg-[var(--bg)] p-4 text-sm text-[var(--muted)]">
+                当前没有可显示的差异
+              </div>
+            )}
           </div>
         </div>
       ) : null}

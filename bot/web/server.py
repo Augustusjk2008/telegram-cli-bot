@@ -6,6 +6,8 @@ import json
 import html
 import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -209,6 +211,46 @@ class WebApiServer:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         return alias
 
+    def _copy_text_to_clipboard(self, text: str) -> bool:
+        value = str(text or "").strip()
+        if not value:
+            return False
+
+        commands: list[list[str]] = []
+        if os.name == "nt":
+            commands.append(["clip"])
+        elif sys.platform == "darwin":
+            commands.append(["pbcopy"])
+        else:
+            commands.extend(
+                [
+                    ["xclip", "-selection", "clipboard"],
+                    ["xsel", "--clipboard", "--input"],
+                ]
+            )
+
+        creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        for command in commands:
+            try:
+                subprocess.run(
+                    command,
+                    input=value,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                    timeout=5,
+                    creationflags=creationflags,
+                )
+                return True
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                logger.warning("复制 Web 公网地址到剪贴板失败 command=%s: %s", command[0], exc)
+                return False
+
+        logger.warning("复制 Web 公网地址到剪贴板失败: 未找到可用的剪贴板命令")
+        return False
+
     async def _notify_tunnel_public_url(self, snapshot: dict[str, Any], *, reason: str) -> bool:
         if snapshot.get("status") != "running":
             return False
@@ -218,6 +260,8 @@ class WebApiServer:
         public_url = str(snapshot.get("public_url") or "").strip()
         if not public_url:
             return False
+
+        self._copy_text_to_clipboard(public_url)
 
         main_app = self.manager.applications.get(self.manager.main_profile.alias)
         if main_app is None or not ALLOWED_USER_IDS:
@@ -240,7 +284,7 @@ class WebApiServer:
                 )
                 sent_any = True
             except Exception as exc:
-                logger.warning("发送 Web 公网地址通知失败 user_id=%s: %s", user_id, exc)
+                logger.info("发送 Web 公网地址通知失败(已忽略) user_id=%s: %s", user_id, exc)
 
         return sent_any
 

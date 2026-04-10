@@ -339,3 +339,26 @@ test("disables the stage-all button when there are no unstaged or untracked file
 
   expect(await screen.findByRole("button", { name: "暂存全部" })).toBeDisabled();
 });
+
+test("renders diff lines with add and delete colors", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitDiff: async (): Promise<GitDiffPayload> => ({
+          path: "tracked.txt",
+          staged: false,
+          diff: "diff --git a/tracked.txt b/tracked.txt\n@@ -1 +1 @@\n-before\n+after",
+        }),
+      })}
+    />,
+  );
+
+  const diffButtons = await screen.findAllByRole("button", { name: "查看 Diff" });
+  await user.click(diffButtons[0]);
+
+  expect((await screen.findByText("-before")).closest('[data-diff-kind="delete"]')).toHaveClass("text-red-700");
+  expect(screen.getByText("+after").closest('[data-diff-kind="add"]')).toHaveClass("text-emerald-700");
+});

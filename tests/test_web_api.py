@@ -142,7 +142,7 @@ def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir:
     tracked.write_text("line 1\nline 2\n", encoding="utf-8")
     (repo_dir / "new.txt").write_text("draft\n", encoding="utf-8")
 
-    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+    web_manager.main_profile.working_dir = str(repo_dir)
     overview = get_git_overview(web_manager, "main", 1001)
 
     assert overview["repo_found"] is True
@@ -158,7 +158,7 @@ def test_init_git_repository_creates_repo_when_missing(web_manager: MultiBotMana
     repo_dir = temp_dir / "new-repo"
     repo_dir.mkdir()
 
-    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+    web_manager.main_profile.working_dir = str(repo_dir)
     result = init_git_repository(web_manager, "main", 1001)
 
     assert result["repo_found"] is True
@@ -177,7 +177,7 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
 
     tracked.write_text("before\nafter\n", encoding="utf-8")
-    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+    web_manager.main_profile.working_dir = str(repo_dir)
 
     staged = stage_git_paths(web_manager, "main", 1001, ["tracked.txt"])
     assert any(item["path"] == "tracked.txt" and item["staged"] for item in staged["changed_files"])
@@ -187,6 +187,50 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
 
     committed = commit_git_changes(web_manager, "main", 1001, "feat: update tracked")
     assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
+
+
+def test_git_overview_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("line 1\n", encoding="utf-8")
+
+    other_dir = temp_dir / "other"
+    other_dir.mkdir()
+
+    web_manager.main_profile.working_dir = str(repo_dir)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(other_dir)
+
+    overview = get_git_overview(web_manager, "main", 1001)
+
+    assert overview["working_dir"] == str(repo_dir)
+    assert overview["repo_found"] is True
+    assert overview["repo_path"] == str(repo_dir)
+
+
+def test_git_diff_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+
+    other_dir = temp_dir / "other"
+    other_dir.mkdir()
+
+    web_manager.main_profile.working_dir = str(repo_dir)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(other_dir)
+
+    diff = get_git_diff(web_manager, "main", 1001, "tracked.txt", staged=False)
+
+    assert diff["path"] == "tracked.txt"
+    assert "+after" in diff["diff"]
 
 
 @pytest.mark.asyncio
@@ -402,6 +446,7 @@ async def test_admin_tunnel_restart_notifies_main_bot_public_url(web_manager: Mu
 
     server = WebApiServer(web_manager)
     server._tunnel_service = FakeTunnelService()
+    server._copy_text_to_clipboard = MagicMock(return_value=True)
     app = server._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
@@ -411,6 +456,36 @@ async def test_admin_tunnel_restart_notifies_main_bot_public_url(web_manager: Mu
     fake_main_bot.send_message.assert_awaited_once()
     sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
     assert "fresh.trycloudflare.com" in sent_text
+    server._copy_text_to_clipboard.assert_called_once_with("https://fresh.trycloudflare.com")
+
+
+@pytest.mark.asyncio
+async def test_notify_tunnel_public_url_still_copies_when_telegram_send_fails(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+
+    fake_main_bot = MagicMock()
+    fake_main_bot.send_message = AsyncMock(side_effect=RuntimeError("network down"))
+    web_manager.applications["main"] = MagicMock(bot=fake_main_bot)
+
+    server = WebApiServer(web_manager)
+    server._copy_text_to_clipboard = MagicMock(return_value=True)
+
+    result = await server._notify_tunnel_public_url(
+        {
+            "mode": "cloudflare_quick",
+            "status": "running",
+            "source": "quick_tunnel",
+            "public_url": "https://failed.trycloudflare.com",
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "pid": 1234,
+        },
+        reason="web_server_start",
+    )
+
+    assert result is False
+    fake_main_bot.send_message.assert_awaited_once()
+    server._copy_text_to_clipboard.assert_called_once_with("https://failed.trycloudflare.com")
 
 
 @pytest.mark.asyncio
@@ -467,12 +542,14 @@ async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_ma
     monkeypatch.setattr("bot.web.server.web.TCPSite", FakeSite)
 
     server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
+    server._copy_text_to_clipboard = MagicMock(return_value=True)
     await server.start()
     await server.stop()
 
     fake_main_bot.send_message.assert_awaited_once()
     sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
     assert "startup.trycloudflare.com" in sent_text
+    server._copy_text_to_clipboard.assert_called_once_with("https://startup.trycloudflare.com")
 
 
 def test_read_missing_file_raises(web_manager: MultiBotManager):

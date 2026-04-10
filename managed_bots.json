@@ -50,7 +50,7 @@
       "token": "8477054156:AAEf6cecw_bhKLfSDKy_hVUNZD_vw44WCN4",
       "cli_type": "codex",
       "cli_path": "codex",
-      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu\\docs",
+      "working_dir": "h:\\workspace\\KimiAgent\\helm_simu",
       "enabled": true,
       "bot_mode": "cli"
     }
