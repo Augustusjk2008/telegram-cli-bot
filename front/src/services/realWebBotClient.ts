@@ -10,6 +10,7 @@ import type {
   ChatStatusUpdate,
   CliParamsPayload,
   CliType,
+  CreateBotInput,
   DirectoryListing,
   FileEntry,
   RunningReply,
@@ -32,10 +33,13 @@ type JsonEnvelope<T> = {
 type RawBotSummary = {
   alias: string;
   cli_type: CliType;
+  cli_path?: string;
   status: string;
   is_processing?: boolean;
   working_dir: string;
   bot_mode?: string;
+  enabled?: boolean;
+  is_main?: boolean;
 };
 
 type RawHistoryItem = {
@@ -163,13 +167,26 @@ function mapStatusText(status: BotStatus): string {
 
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const status = mapStatus(raw.status, isProcessing);
-  return {
+  const summary: BotSummary = {
     alias: raw.alias,
     cliType: raw.cli_type,
     status,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
   };
+  if (raw.cli_path) {
+    summary.cliPath = raw.cli_path;
+  }
+  if (raw.bot_mode) {
+    summary.botMode = raw.bot_mode;
+  }
+  if (typeof raw.enabled === "boolean") {
+    summary.enabled = raw.enabled;
+  }
+  if (typeof raw.is_main === "boolean") {
+    summary.isMain = raw.is_main;
+  }
+  return summary;
 }
 
 function mapFileEntry(raw: RawFileEntry): FileEntry {
@@ -357,15 +374,18 @@ export class RealWebBotClient implements WebBotClient {
     }>(`/api/bots/${encodeURIComponent(botAlias)}`);
 
     const summary = mapBotSummary(data.bot, data.session.is_processing);
-    return {
+    const overview: BotOverview = {
       ...summary,
       workingDir: data.session.working_dir || summary.workingDir,
-      botMode: data.bot.bot_mode,
       messageCount: data.session.message_count,
       historyCount: data.session.history_count,
       isProcessing: data.session.is_processing,
       runningReply: mapRunningReply(data.session.running_reply),
     };
+    if (data.bot.bot_mode) {
+      overview.botMode = data.bot.bot_mode;
+    }
+    return overview;
   }
 
   async listMessages(botAlias: string): Promise<ChatMessage[]> {
@@ -649,6 +669,17 @@ export class RealWebBotClient implements WebBotClient {
     return mapGitActionResult(data);
   }
 
+  async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cli`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ cli_type: cliType, cli_path: cliPath }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
   async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
     const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/workdir`, {
       method: "PATCH",
@@ -656,6 +687,55 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ working_dir: workingDir }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async addBot(input: CreateBotInput): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>("/api/admin/bots", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        alias: input.alias,
+        token: input.token,
+        bot_mode: input.botMode,
+        cli_type: input.cliType,
+        cli_path: input.cliPath,
+        working_dir: input.workingDir,
+      }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async renameBot(botAlias: string, newAlias: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/alias`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ new_alias: newAlias }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async removeBot(botAlias: string): Promise<void> {
+    await this.requestJson(`/api/admin/bots/${encodeURIComponent(botAlias)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async startBot(botAlias: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/start`, {
+      method: "POST",
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async stopBot(botAlias: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/stop`, {
+      method: "POST",
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }

@@ -45,7 +45,7 @@ from bot.config import (
 )
 from bot.handlers import register_handlers
 from bot.models import BotProfile
-from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_working_dir
+from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
 
@@ -820,6 +820,41 @@ class MultiBotManager:
             profile.cli_type = cli_type
             profile.cli_path = cli_path
             self._save_profiles()
+
+    async def rename_bot(self, alias: str, new_alias: str):
+        alias = alias.strip().lower()
+        new_alias = new_alias.strip().lower()
+        if alias == self.main_profile.alias:
+            raise ValueError(f"主 Bot `{alias}` 不支持改名")
+        self._validate_alias(new_alias)
+
+        async with self._lock:
+            if alias not in self.managed_profiles:
+                raise ValueError(f"不存在 alias `{alias}`")
+            if new_alias == alias:
+                raise ValueError("新旧 alias 不能相同")
+            if new_alias == self.main_profile.alias or new_alias in self.managed_profiles:
+                raise ValueError(f"alias `{new_alias}` 已存在")
+
+            profile = self.managed_profiles.pop(alias)
+            profile.alias = new_alias
+            self.managed_profiles[new_alias] = profile
+
+            app = self.applications.pop(alias, None)
+            if app is not None:
+                self.applications[new_alias] = app
+                app.bot_data["bot_alias"] = new_alias
+                bot_id = app.bot_data.get("bot_id")
+                if isinstance(bot_id, int):
+                    self.bot_id_to_alias[bot_id] = new_alias
+
+            lock = self._polling_restart_locks.pop(alias, None)
+            if lock is not None:
+                self._polling_restart_locks[new_alias] = lock
+
+            update_bot_alias(alias, new_alias)
+            self._save_profiles()
+            return profile
 
     async def set_bot_workdir(self, alias: str, working_dir: str):
         alias = alias.strip().lower()

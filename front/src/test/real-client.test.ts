@@ -278,6 +278,204 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("updateBotCli patches admin cli endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            bot: {
+              alias: "main",
+              cli_type: "claude",
+              cli_path: "claude.cmd",
+              status: "running",
+              is_processing: false,
+              working_dir: "C:\\workspace\\demo",
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const bot = await client.updateBotCli("main", "claude", "claude.cmd");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/main/cli",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ cli_type: "claude", cli_path: "claude.cmd" }),
+      }),
+    );
+    expect(bot).toEqual({
+      alias: "main",
+      cliType: "claude",
+      status: "running",
+      workingDir: "C:\\workspace\\demo",
+      lastActiveText: "运行中",
+      cliPath: "claude.cmd",
+    });
+  });
+
+  test("addBot posts admin bots endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            bot: {
+              alias: "team3",
+              cli_type: "codex",
+              cli_path: "codex",
+              bot_mode: "cli",
+              status: "running",
+              is_processing: false,
+              working_dir: "C:\\workspace\\team3",
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const bot = await client.addBot({
+      alias: "team3",
+      token: "333:abc",
+      botMode: "cli",
+      cliType: "codex",
+      cliPath: "codex",
+      workingDir: "C:\\workspace\\team3",
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          alias: "team3",
+          token: "333:abc",
+          bot_mode: "cli",
+          cli_type: "codex",
+          cli_path: "codex",
+          working_dir: "C:\\workspace\\team3",
+        }),
+      }),
+    );
+    expect(bot.alias).toBe("team3");
+    expect(bot.cliType).toBe("codex");
+  });
+
+  test("renameBot patches admin alias endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            bot: {
+              alias: "planner",
+              cli_type: "claude",
+              cli_path: "claude",
+              status: "running",
+              is_processing: false,
+              working_dir: "C:\\workspace\\plans",
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const bot = await client.renameBot("team2", "planner");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/team2/alias",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ new_alias: "planner" }),
+      }),
+    );
+    expect(bot.alias).toBe("planner");
+  });
+
+  test("removeBot deletes admin bot endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            removed: true,
+            alias: "team2",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    await client.removeBot("team2");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/team2",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
   test("restartService posts to admin restart endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

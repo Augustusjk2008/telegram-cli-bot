@@ -20,6 +20,7 @@ test("renders standalone login screen without backend", () => {
   render(<App />);
   expect(screen.getByRole("heading", { name: "Web Bot" })).toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
+  expect(document.title).toBe("Telegram CLI Bridge");
 });
 
 test("shows bottom navigation after entering demo app shell", async () => {
@@ -134,6 +135,29 @@ test("settings tab can save cli params and restart tunnel", async () => {
 
   await user.click(screen.getByRole("button", { name: "重启 Tunnel" }));
   expect(restartSpy).toHaveBeenCalledTimes(1);
+});
+
+test("settings tab can update bot cli configuration", async () => {
+  const user = userEvent.setup();
+  const updateCliSpy = vi.spyOn(MockWebBotClient.prototype, "updateBotCli");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  expect(document.title).toBe("main - Telegram CLI Bridge");
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.selectOptions(await screen.findByLabelText("CLI 类型"), "claude");
+  const cliPathInput = screen.getByLabelText("CLI 路径");
+  await user.clear(cliPathInput);
+  await user.type(cliPathInput, "claude.cmd");
+  await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+
+  expect(updateCliSpy).toHaveBeenCalledWith("main", "claude", "claude.cmd");
+  expect(await screen.findByText("CLI 配置已更新")).toBeInTheDocument();
 });
 
 test("settings tab can update bot working directory", async () => {
@@ -282,6 +306,42 @@ test("main bot settings can restart service and rebuild frontend with live logs"
   await user.click(screen.getByRole("button", { name: "重启服务" }));
   expect(restartServiceSpy).toHaveBeenCalledTimes(1);
   expect(await screen.findByText(/已请求重启服务/)).toBeInTheDocument();
+});
+
+test("bot manager can add rename and delete managed bots", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+
+  await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
+  await user.type(screen.getByLabelText("Bot Token"), "333:abc");
+  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team3");
+  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+
+  expect(await screen.findByText("team3")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "重命名 team2" }));
+  const renameInput = screen.getByLabelText("team2 新别名");
+  await user.clear(renameInput);
+  await user.type(renameInput, "planner");
+  await user.click(screen.getByRole("button", { name: "保存别名 team2" }));
+
+  expect(await screen.findByText("planner")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "删除 planner" }));
+
+  expect(screen.queryByText("planner")).not.toBeInTheDocument();
 });
 
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {

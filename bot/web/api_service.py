@@ -1323,6 +1323,11 @@ async def update_bot_cli(manager: MultiBotManager, alias: str, cli_type: str, cl
     return {"bot": build_bot_summary(manager, alias)}
 
 
+async def rename_managed_bot(manager: MultiBotManager, alias: str, new_alias: str) -> dict[str, Any]:
+    profile = await manager.rename_bot(alias, new_alias)
+    return {"bot": build_bot_summary(manager, profile.alias)}
+
+
 async def update_bot_workdir(
     manager: MultiBotManager,
     alias: str,

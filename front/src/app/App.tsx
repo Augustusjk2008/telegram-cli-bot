@@ -130,6 +130,18 @@ export function App() {
   }, [client, isLoggedIn]);
 
   useEffect(() => {
+    if (!isLoggedIn) {
+      document.title = "Telegram CLI Bridge";
+      return;
+    }
+    if (currentBot) {
+      document.title = `${currentBot} - Telegram CLI Bridge`;
+      return;
+    }
+    document.title = "Bot 管理 - Telegram CLI Bridge";
+  }, [currentBot, isLoggedIn]);
+
+  useEffect(() => {
     storeUnreadBots(unreadBots);
   }, [unreadBots]);
 
@@ -331,6 +343,11 @@ export function App() {
           onSelect={(alias) => {
             handleSelectBot(alias);
             setCurrentTab("chat");
+          }}
+          onManage={() => {
+            setCurrentBot(null);
+            setShowSwitcher(false);
+            setIsChatImmersive(false);
           }}
           onClose={() => setShowSwitcher(false)}
         />

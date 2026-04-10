@@ -205,6 +205,18 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
     return updated_count
 
 
+def update_bot_alias(old_alias: str, new_alias: str) -> int:
+    """更新指定 bot 的所有会话别名。"""
+    updated_count = 0
+    with sessions_lock:
+        for session in sessions.values():
+            if session.bot_alias == old_alias:
+                session.bot_alias = new_alias
+                session.persist()
+                updated_count += 1
+    return updated_count
+
+
 def save_all_sessions():
     """保存所有会话到持久化存储
     

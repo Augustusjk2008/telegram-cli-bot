@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatStatusUpdate,
   CliParamsPayload,
+  CreateBotInput,
   DirectoryListing,
   GitActionResult,
   GitDiffPayload,
@@ -46,7 +47,13 @@ export interface WebBotClient {
   pushGitRemote(botAlias: string): Promise<GitActionResult>;
   stashGitChanges(botAlias: string): Promise<GitActionResult>;
   popGitStash(botAlias: string): Promise<GitActionResult>;
+  updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary>;
+  addBot(input: CreateBotInput): Promise<BotSummary>;
+  renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;
+  removeBot(botAlias: string): Promise<void>;
+  startBot(botAlias: string): Promise<BotSummary>;
+  stopBot(botAlias: string): Promise<BotSummary>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;

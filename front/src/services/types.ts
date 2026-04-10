@@ -7,6 +7,10 @@ export type BotSummary = {
   status: BotStatus;
   workingDir: string;
   lastActiveText: string;
+  cliPath?: string;
+  botMode?: string;
+  enabled?: boolean;
+  isMain?: boolean;
 };
 
 export type RunningReply = {
@@ -21,7 +25,10 @@ export type BotOverview = {
   cliType: CliType;
   status: BotStatus;
   workingDir: string;
+  cliPath?: string;
   botMode?: string;
+  enabled?: boolean;
+  isMain?: boolean;
   messageCount?: number;
   historyCount?: number;
   isProcessing?: boolean;
@@ -88,6 +95,15 @@ export type CliParamsPayload = {
   params: Record<string, unknown>;
   defaults: Record<string, unknown>;
   schema: Record<string, CliParamField>;
+};
+
+export type CreateBotInput = {
+  alias: string;
+  token: string;
+  botMode: "cli" | "assistant";
+  cliType: CliType;
+  cliPath: string;
+  workingDir: string;
 };
 
 export type TunnelSnapshot = {

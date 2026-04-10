@@ -65,6 +65,7 @@ from .api_service import (
     stream_chat,
     update_cli_params,
     update_bot_cli,
+    rename_managed_bot,
     update_bot_workdir,
 )
 from .git_service import (
@@ -662,6 +663,13 @@ class WebApiServer:
         )
         return _json({"ok": True, "data": data})
 
+    async def admin_rename_bot(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await rename_managed_bot(self.manager, alias, str(body.get("new_alias", "")))
+        return _json({"ok": True, "data": data})
+
     async def admin_update_workdir(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -748,6 +756,7 @@ class WebApiServer:
         app.router.add_post("/api/admin/bots/{alias}/start", self.admin_start_bot)
         app.router.add_post("/api/admin/bots/{alias}/stop", self.admin_stop_bot)
         app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
+        app.router.add_patch("/api/admin/bots/{alias}/alias", self.admin_rename_bot)
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
         app.router.add_post("/api/admin/restart", self.admin_restart)
         app.router.add_get("/api/admin/tunnel", self.admin_tunnel)

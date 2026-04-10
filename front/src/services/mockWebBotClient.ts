@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatStatusUpdate,
   CliParamsPayload,
+  CreateBotInput,
   DirectoryListing,
   GitActionResult,
   GitDiffPayload,
@@ -19,6 +20,18 @@ import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
 
 export class MockWebBotClient implements WebBotClient {
+  private bots = new Map<string, BotSummary>(
+    mockBots.map((item) => [
+      item.alias,
+      {
+        ...item,
+        cliPath: item.cliType,
+        botMode: "cli",
+        enabled: true,
+        isMain: item.alias === "main",
+      },
+    ]),
+  );
   private currentPaths = new Map<string, string>();
   private workdirOverrides = new Map<string, string>();
   private gitOverviews = new Map<string, GitOverview>([
@@ -95,9 +108,31 @@ export class MockWebBotClient implements WebBotClient {
     },
   ];
 
+  private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
+    if (!map.has(oldKey)) {
+      return;
+    }
+    const value = map.get(oldKey) as T;
+    map.delete(oldKey);
+    map.set(newKey, value);
+  }
+
   private getBotSummary(botAlias: string): BotSummary {
-    const fallback = mockBots[0];
-    const base = mockBots.find((item) => item.alias === botAlias) || fallback;
+    const fallback = this.bots.get("main") || Array.from(this.bots.values())[0];
+    const base = this.bots.get(botAlias) || fallback;
+    if (!base) {
+      return {
+        alias: botAlias,
+        cliType: "codex",
+        status: "running",
+        workingDir: "C:\\workspace",
+        lastActiveText: "运行中",
+        cliPath: "codex",
+        botMode: "cli",
+        enabled: true,
+        isMain: false,
+      };
+    }
     const workingDir = this.workdirOverrides.get(base.alias) || this.currentPaths.get(base.alias) || base.workingDir;
     return {
       ...base,
@@ -116,14 +151,17 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async listBots(): Promise<BotSummary[]> {
-    return mockBots.map((item) => this.getBotSummary(item.alias));
+    return Array.from(this.bots.values()).map((item) => this.getBotSummary(item.alias));
   }
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {
     const bot = this.getBotSummary(botAlias);
     return {
       ...bot,
-      botMode: "cli",
+      botMode: bot.botMode || "cli",
+      cliPath: bot.cliPath,
+      enabled: bot.enabled,
+      isMain: bot.isMain,
       messageCount: mockChatMessages[bot.alias]?.length || 0,
       historyCount: mockChatMessages[bot.alias]?.length || 0,
       isProcessing: false,
@@ -355,16 +393,98 @@ export class MockWebBotClient implements WebBotClient {
     }));
   }
 
+  async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    const next = {
+      ...current,
+      cliType: cliType as BotSummary["cliType"],
+      cliPath: cliPath.trim(),
+    };
+    this.bots.set(botAlias, next);
+    return this.getBotSummary(botAlias);
+  }
+
   async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
     const nextDir = workingDir.trim();
     this.workdirOverrides.set(botAlias, nextDir);
     this.currentPaths.set(botAlias, nextDir);
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      workingDir: nextDir,
+    });
+    return this.getBotSummary(botAlias);
+  }
+
+  async addBot(input: CreateBotInput): Promise<BotSummary> {
+    const alias = input.alias.trim().toLowerCase();
+    const bot: BotSummary = {
+      alias,
+      cliType: input.cliType,
+      cliPath: input.cliPath.trim(),
+      botMode: input.botMode,
+      status: "running",
+      workingDir: input.workingDir.trim(),
+      lastActiveText: "运行中",
+      enabled: true,
+      isMain: false,
+    };
+    this.bots.set(alias, bot);
+    this.currentPaths.set(alias, bot.workingDir);
+    this.workdirOverrides.set(alias, bot.workingDir);
+    return this.getBotSummary(alias);
+  }
+
+  async renameBot(botAlias: string, newAlias: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    const alias = newAlias.trim().toLowerCase();
+    this.bots.delete(botAlias);
+    this.bots.set(alias, {
+      ...current,
+      alias,
+    });
+    this.moveKey(this.currentPaths, botAlias, alias);
+    this.moveKey(this.workdirOverrides, botAlias, alias);
+    this.moveKey(this.gitOverviews, botAlias, alias);
+    return this.getBotSummary(alias);
+  }
+
+  async removeBot(botAlias: string): Promise<void> {
+    if (botAlias === "main") {
+      return;
+    }
+    this.bots.delete(botAlias);
+    this.currentPaths.delete(botAlias);
+    this.workdirOverrides.delete(botAlias);
+    this.gitOverviews.delete(botAlias);
+  }
+
+  async startBot(botAlias: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      status: "running",
+      lastActiveText: "运行中",
+      enabled: true,
+    });
+    return this.getBotSummary(botAlias);
+  }
+
+  async stopBot(botAlias: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      status: "offline",
+      lastActiveText: "离线",
+      enabled: false,
+    });
     return this.getBotSummary(botAlias);
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
+    const cliType = this.getBotSummary(botAlias).cliType;
     return {
-      cliType: botAlias === "main" ? "codex" : "kimi",
+      cliType,
       params: {
         reasoning_effort: "xhigh",
         model: "gpt-5.4",

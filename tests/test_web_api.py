@@ -365,6 +365,33 @@ async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBo
 
 
 @pytest.mark.asyncio
+async def test_admin_rename_bot_route_updates_alias(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workdir = temp_dir / "repo"
+    workdir.mkdir()
+    web_manager.managed_profiles["sub1"] = BotProfile(
+        alias="sub1",
+        token="sub-token",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir=str(workdir),
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch("/api/admin/bots/sub1/alias", json={"new_alias": "team1"})
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["bot"]["alias"] == "team1"
+            assert "team1" in web_manager.managed_profiles
+            assert "sub1" not in web_manager.managed_profiles
+
+
+@pytest.mark.asyncio
 async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)

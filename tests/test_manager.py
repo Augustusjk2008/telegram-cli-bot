@@ -120,6 +120,41 @@ class TestManagerLoadSave:
         assert data["bots"][0]["alias"] == "sub1"
         assert data["bots"][0]["working_dir"] == str(new_dir)
 
+    @pytest.mark.asyncio
+    async def test_rename_bot_persists_to_storage_and_sessions(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        profile = BotProfile(alias="main", token="main_tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
+
+        workdir = temp_dir / "repo"
+        workdir.mkdir()
+        m.managed_profiles["sub1"] = BotProfile(
+            alias="sub1",
+            token="tok1",
+            cli_type="claude",
+            cli_path="claude",
+            working_dir=str(workdir),
+        )
+        app = MagicMock()
+        app.bot_data = {"bot_id": 123, "bot_alias": "sub1"}
+        m.applications["sub1"] = app
+        m.bot_id_to_alias[123] = "sub1"
+        session = get_or_create_session(123, "sub1", 456, default_working_dir=str(workdir))
+
+        await m.rename_bot("sub1", "team1")
+
+        assert "sub1" not in m.managed_profiles
+        assert "team1" in m.managed_profiles
+        assert m.managed_profiles["team1"].alias == "team1"
+        assert session.bot_alias == "team1"
+        assert "sub1" not in m.applications
+        assert m.applications["team1"] is app
+        assert m.bot_id_to_alias[123] == "team1"
+
+        data = json.loads(storage.read_text(encoding="utf-8"))
+        assert data["bots"][0]["alias"] == "team1"
+
 
 class TestManagerValidation:
     """测试验证逻辑"""
