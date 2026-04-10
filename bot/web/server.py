@@ -25,6 +25,7 @@ from bot.config import (
     WEB_TUNNEL_AUTOSTART,
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
+    WEB_TUNNEL_STATE_FILE,
     request_restart,
 )
 from bot.manager import MultiBotManager
@@ -166,6 +167,7 @@ class WebApiServer:
             autostart=WEB_TUNNEL_AUTOSTART,
             public_url=WEB_PUBLIC_URL,
             cloudflared_path=WEB_TUNNEL_CLOUDFLARED_PATH,
+            state_file=WEB_TUNNEL_STATE_FILE,
         )
 
     def _auth_context(self, request: web.Request) -> AuthContext:
@@ -806,10 +808,13 @@ class WebApiServer:
             ",".join(WEB_ALLOWED_ORIGINS),
         )
 
-    async def stop(self):
+    async def stop(self, *, preserve_tunnel: bool = False):
         if self._runner is None:
             return
-        await self._tunnel_service.stop()
+        if preserve_tunnel:
+            self._tunnel_service.preserve_for_restart()
+        else:
+            await self._tunnel_service.stop()
         await self._runner.cleanup()
         self._runner = None
         self._site = None

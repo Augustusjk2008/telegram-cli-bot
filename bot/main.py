@@ -94,6 +94,7 @@ def restore_system_sleep():
 
 
 async def run_all_bots():
+    config.RESTART_REQUESTED = False
     config.RESTART_EVENT = asyncio.Event()
     main_profile = BotProfile(
         alias="main",
@@ -125,7 +126,7 @@ async def run_all_bots():
         await config.RESTART_EVENT.wait()
     finally:
         if web_server is not None:
-            await web_server.stop()
+            await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
         await manager.shutdown_all()
         # 保存所有会话到持久化存储
         from bot.sessions import save_all_sessions
