@@ -1294,7 +1294,10 @@ async def add_managed_bot(
     cli_path: Optional[str],
     working_dir: Optional[str],
 ) -> dict[str, Any]:
-    profile = await manager.add_bot(alias, token, cli_type, cli_path, working_dir, bot_mode)
+    try:
+        profile = await manager.add_bot(alias, token, cli_type, cli_path, working_dir, bot_mode)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
     return {"bot": build_bot_summary(manager, profile.alias)}
 
 

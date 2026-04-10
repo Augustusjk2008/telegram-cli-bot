@@ -283,6 +283,21 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
 
 
 @pytest.mark.asyncio
+async def test_api_routes_disable_cache(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots")
+            assert resp.status == 200
+            assert resp.headers["Cache-Control"] == "no-store"
+            assert resp.headers["Pragma"] == "no-cache"
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
@@ -420,6 +435,40 @@ async def test_admin_restart_returns_response_before_triggering_restart(web_mana
                 assert restart_calls == []
                 await asyncio.sleep(0.02)
                 assert restart_calls == ["called"]
+
+
+@pytest.mark.asyncio
+async def test_admin_add_bot_route_accepts_empty_token_for_web_only_bot(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+                 patch.object(web_manager, "_start_profile", AsyncMock(return_value=None)) as start_profile:
+                resp = await client.post(
+                    "/api/admin/bots",
+                    json={
+                        "alias": "web_only",
+                        "token": "",
+                        "bot_mode": "cli",
+                        "cli_type": "codex",
+                        "cli_path": "codex",
+                        "working_dir": str(temp_dir),
+                    },
+                )
+                assert resp.status == 200
+                payload = await resp.json()
+
+    assert payload["data"]["bot"]["alias"] == "web_only"
+    assert web_manager.managed_profiles["web_only"].token == ""
+    start_profile.assert_awaited_once()
 
 
 @pytest.mark.asyncio

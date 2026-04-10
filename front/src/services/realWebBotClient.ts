@@ -335,6 +335,7 @@ export class RealWebBotClient implements WebBotClient {
   private async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(path, {
       ...init,
+      cache: "no-store",
       headers: this.headers(init.headers),
     });
     const payload = (await response.json()) as JsonEnvelope<T>;
@@ -575,9 +576,32 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async restartService(): Promise<void> {
-    await this.requestJson<{ restart_requested: boolean }>("/api/admin/restart", {
-      method: "POST",
-    });
+    try {
+      const response = await fetch("/api/admin/restart", {
+        method: "POST",
+        cache: "no-store",
+        keepalive: true,
+        headers: this.headers(),
+      });
+      try {
+        const payload = (await response.json()) as JsonEnvelope<{ restart_requested: boolean }>;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error?.message || "请求失败");
+        }
+      } catch (error) {
+        if (!response.ok) {
+          throw error;
+        }
+      }
+    } catch (error) {
+      if (error instanceof TypeError) {
+        return;
+      }
+      if (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      throw error;
+    }
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

@@ -47,8 +47,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
   }, [client]);
 
   async function createBot() {
-    if (!createDraft.alias.trim() || !createDraft.token.trim()) {
-      setError("别名和 Token 不能为空");
+    if (!createDraft.alias.trim()) {
+      setError("别名不能为空");
       return;
     }
 
@@ -184,8 +184,9 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             value={createDraft.token}
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, token: event.target.value }))}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder="123456:ABCDEF"
+            placeholder="留空则仅通过 Web 使用"
           />
+          <p className="text-xs text-[var(--muted)]">Telegram Token 可选。留空后该 Bot 不连接 Telegram，只能通过 Web 使用。</p>
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-sm">
               <span className="text-[var(--muted)]">新 Bot 模式</span>

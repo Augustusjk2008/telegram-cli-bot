@@ -103,6 +103,10 @@ class MultiBotManager:
             logger.addHandler(handler)
             MultiBotManager._notification_handler = handler
 
+    @staticmethod
+    def _profile_uses_telegram(profile: BotProfile) -> bool:
+        return bool((profile.token or "").strip())
+
     def _enqueue_manager_alert(self, record: logging.LogRecord) -> None:
         if not self._manager_alerts_enabled or not ALLOWED_USER_IDS:
             return
@@ -454,7 +458,7 @@ class MultiBotManager:
                 continue
             alias = str(item.get("alias", "")).strip().lower()
             token = str(item.get("token", "")).strip()
-            if not alias or not token or alias in RESERVED_ALIASES:
+            if not alias or alias in RESERVED_ALIASES:
                 continue
             raw_cli_type = str(item.get("cli_type", CLI_TYPE)).strip() or CLI_TYPE
             try:
@@ -566,9 +570,12 @@ class MultiBotManager:
             except Exception as e:
                 logger.warning(f"向用户 {user_id} 发送告别消息失败: {e}")
 
-    async def _start_profile(self, profile: BotProfile, is_main: bool = False) -> Application:
+    async def _start_profile(self, profile: BotProfile, is_main: bool = False) -> Optional[Application]:
         if profile.alias in self.applications:
             return self.applications[profile.alias]
+        if not self._profile_uses_telegram(profile):
+            logger.info("Bot `%s` 未配置 Telegram token，跳过 Telegram 启动，仅保留 Web 访问", profile.alias)
+            return None
 
         builder = Application.builder().token(profile.token)
         # 应用代理配置
@@ -722,9 +729,6 @@ class MultiBotManager:
         token = token.strip()
         self._validate_alias(alias)
 
-        if not token:
-            raise ValueError("token 不能为空")
-
         cli_type = validate_cli_type(cli_type or CLI_TYPE)
         cli_path = (cli_path or CLI_PATH).strip()
         working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
@@ -750,7 +754,7 @@ class MultiBotManager:
         async with self._lock:
             if alias in self.managed_profiles:
                 raise ValueError(f"alias `{alias}` 已存在")
-            if token == self.main_profile.token or any(p.token == token for p in self.managed_profiles.values()):
+            if token and (token == self.main_profile.token or any(p.token == token for p in self.managed_profiles.values() if p.token)):
                 raise ValueError("该 token 已被使用")
 
             profile = BotProfile(

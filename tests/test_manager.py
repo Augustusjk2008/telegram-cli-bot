@@ -91,6 +91,26 @@ class TestManagerLoadSave:
         m = MultiBotManager(main_profile=profile, storage_file=str(storage))
         assert len(m.managed_profiles) == 0
 
+    def test_load_web_only_bot_without_token(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({
+            "bots": [
+                {
+                    "alias": "web_only",
+                    "token": "",
+                    "cli_type": "codex",
+                    "cli_path": "codex",
+                    "working_dir": str(temp_dir),
+                    "enabled": True,
+                    "bot_mode": "cli",
+                }
+            ]
+        }))
+        profile = BotProfile(alias="main", token="main_tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
+        assert "web_only" in m.managed_profiles
+        assert m.managed_profiles["web_only"].token == ""
+
     @pytest.mark.asyncio
     async def test_set_bot_workdir_persists_to_storage_and_sessions(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
@@ -184,6 +204,49 @@ class TestManagerValidation:
         m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
         with pytest.raises(ValueError):
             m._validate_alias("-invalid")
+
+    @pytest.mark.asyncio
+    async def test_add_bot_allows_empty_token_for_web_only_mode(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        profile = BotProfile(alias="main", token="main_tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+             patch.object(m, "_start_profile", AsyncMock(return_value=None)) as start_profile:
+            created = await m.add_bot(
+                alias="web_only",
+                token="",
+                cli_type="codex",
+                cli_path="codex",
+                working_dir=str(temp_dir),
+                bot_mode="cli",
+            )
+
+        assert created.token == ""
+        assert m.managed_profiles["web_only"].token == ""
+        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["token"] == ""
+        start_profile.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_start_profile_skips_telegram_when_token_missing(self, temp_dir: Path):
+        profile = BotProfile(alias="main", token="tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
+        web_only = BotProfile(
+            alias="web_only",
+            token="",
+            cli_type="codex",
+            cli_path="codex",
+            working_dir=str(temp_dir),
+            enabled=True,
+            bot_mode="cli",
+        )
+
+        with patch("bot.manager.Application.builder", side_effect=AssertionError("should not connect telegram")):
+            app = await m._start_profile(web_only, is_main=False)
+
+        assert app is None
+        assert "web_only" not in m.applications
 
     def test_handle_network_error_exhausted_checks_main_bot_id(self, temp_dir: Path):
         profile = BotProfile(alias="main", token="tok")

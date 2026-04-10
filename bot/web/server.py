@@ -86,7 +86,8 @@ from .git_service import (
 )
 
 logger = logging.getLogger(__name__)
-RESTART_RESPONSE_DELAY_SECONDS = 0.2
+# 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
+RESTART_RESPONSE_DELAY_SECONDS = 1.0
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -153,6 +154,10 @@ async def cors_middleware(request: web.Request, handler):
     response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Credentials"] = "true"
+    if request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 

@@ -383,6 +383,27 @@ test("bot manager can add rename and delete managed bots", async () => {
   expect(screen.queryByText("planner")).not.toBeInTheDocument();
 });
 
+test("bot manager can create a web-only bot without telegram token", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  await user.type(screen.getByLabelText("新 Bot 别名"), "web-only");
+  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\web-only");
+  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+
+  expect(await screen.findByText("web-only")).toBeInTheDocument();
+});
+
 test("bot manager stays open even when a stored bot alias exists", async () => {
   const user = userEvent.setup();
   localStorage.setItem("web-current-bot", "main");

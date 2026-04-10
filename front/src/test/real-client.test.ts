@@ -79,6 +79,15 @@ describe("RealWebBotClient", () => {
         lastActiveText: "处理中",
       },
     ]);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
   });
 
   test("listFiles maps snake_case directory entries to camelCase", async () => {
@@ -505,6 +514,38 @@ describe("RealWebBotClient", () => {
       "/api/admin/restart",
       expect.objectContaining({
         method: "POST",
+        cache: "no-store",
+        keepalive: true,
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
+  test("restartService tolerates connection reset caused by server restart", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(client.restartService()).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/restart",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        keepalive: true,
         headers: expect.objectContaining({
           Authorization: "Bearer secret-token",
         }),
