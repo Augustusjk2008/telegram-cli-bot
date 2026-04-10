@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
+import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ChatMessage, RunningReply, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { resolvePreviewFilePath } from "../utils/fileLinks";
 
 type Props = {
   botAlias: string;
@@ -140,13 +142,21 @@ export function ChatScreen({
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill" | "scripts">("");
   const [showScripts, setShowScripts] = useState(false);
   const [scripts, setScripts] = useState<SystemScript[]>([]);
   const [scriptError, setScriptError] = useState("");
   const [runningScriptName, setRunningScriptName] = useState("");
+  const [previewName, setPreviewName] = useState("");
+  const [previewContent, setPreviewContent] = useState("");
+  const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
+  const [previewLoading, setPreviewLoading] = useState(false);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
 
   useEffect(() => {
@@ -171,13 +181,19 @@ export function ChatScreen({
     setLoading(true);
     setError("");
     setItems([]);
+    setWorkingDir("");
     setIsStreaming(false);
     setStreamMode("");
     setStreamStartedAtMs(null);
+    setPreviewName("");
+    setPreviewContent("");
+    shouldStickToBottomRef.current = true;
+    forceAutoScrollRef.current = true;
 
     Promise.all([client.listMessages(botAlias), client.getBotOverview(botAlias)])
       .then(([messages, overview]) => {
         if (cancelled) return;
+        setWorkingDir(overview.workingDir || "");
         if (overview.isProcessing) {
           setItems(mergeRunningReply(messages, botAlias, overview.runningReply));
           setIsStreaming(true);
@@ -230,6 +246,7 @@ export function ChatScreen({
       try {
         const overview = await client.getBotOverview(botAlias);
         if (cancelled) return;
+        setWorkingDir(overview.workingDir || "");
 
         if (overview.isProcessing) {
           setIsStreaming(true);
@@ -270,10 +287,49 @@ export function ChatScreen({
     if (!isVisible || loading) {
       return;
     }
+    if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
+      return;
+    }
     if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
       bottomAnchorRef.current.scrollIntoView({ block: "end" });
     }
+    forceAutoScrollRef.current = false;
   }, [isVisible, loading, items, isStreaming]);
+
+  function updateAutoScrollStickiness() {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 96;
+  }
+
+  async function loadPreview(name: string, mode: "preview" | "full") {
+    setPreviewLoading(true);
+    setError("");
+    try {
+      const content = mode === "full"
+        ? await client.readFileFull(botAlias, name)
+        : await client.readFile(botAlias, name);
+      setPreviewName(name);
+      setPreviewMode(mode);
+      setPreviewContent(content || "文件为空");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function handleFileLinkClick(href: string) {
+    const nextPath = resolvePreviewFilePath(href, workingDir);
+    if (!nextPath) {
+      setError("暂不支持预览当前工作目录之外的文件链接");
+      return;
+    }
+    void loadPreview(nextPath, "preview");
+  }
 
   async function handleSend(text: string) {
     const localStartedAtMs = Date.now();
@@ -294,6 +350,8 @@ export function ChatScreen({
     };
 
     setError("");
+    forceAutoScrollRef.current = true;
+    shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     setIsStreaming(true);
     setStreamMode("sse");
@@ -476,7 +534,12 @@ export function ChatScreen({
           </div>
         </section>
       ) : null}
-      <section className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4 space-y-4" : "flex-1 overflow-y-auto p-4 space-y-4"}>
+      <section
+        ref={scrollContainerRef}
+        data-testid="chat-scroll-container"
+        onScroll={updateAutoScrollStickiness}
+        className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4 space-y-4" : "flex-1 overflow-y-auto p-4 space-y-4"}
+      >
         {loading ? (
           <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
         ) : null}
@@ -522,9 +585,15 @@ export function ChatScreen({
                 }
               >
                 {item.role === "assistant" && item.state !== "streaming" && item.state !== "error"
-                  ? <ChatMarkdownMessage content={item.text} />
+                  ? <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
                   : item.text || (item.state === "streaming" ? "正在输出..." : "")}
               </div>
+              {item.role === "assistant" && item.state === "streaming" ? (
+                <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                  <span>正在输出</span>
+                </div>
+              ) : null}
               {item.role === "assistant" && item.state !== "streaming" && typeof item.elapsedSeconds === "number" ? (
                 <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
                   用时 {item.elapsedSeconds} 秒
@@ -544,6 +613,21 @@ export function ChatScreen({
         {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
       </button>
       <ChatComposer onSend={handleSend} disabled={isStreaming || loading} compact={isImmersive} />
+
+      {previewName ? (
+        <FilePreviewDialog
+          title={previewName}
+          content={previewContent}
+          mode={previewMode}
+          loading={previewLoading}
+          onClose={() => {
+            setPreviewName("");
+            setPreviewContent("");
+          }}
+          onLoadFull={previewMode !== "full" ? () => void loadPreview(previewName, "full") : undefined}
+          onDownload={() => void client.downloadFile(botAlias, previewName)}
+        />
+      ) : null}
 
       {showScripts ? (
         <div className="fixed inset-0 z-50 flex items-end bg-black/45">

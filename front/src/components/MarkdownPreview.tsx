@@ -1,15 +1,22 @@
 import type { ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 
 type Props = {
   content: string;
+  onFileLinkClick?: (href: string) => void;
 };
 
 type MarkdownContentProps = {
   content: string;
   variant?: "preview" | "chat";
+  onFileLinkClick?: (href: string) => void;
 };
+
+function safeUrlTransform(url: string) {
+  return isSafeMarkdownHref(url) ? url : "";
+}
 
 function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<"code">) {
   const hasLanguageClass = Boolean(className && className.includes("language-"));
@@ -34,7 +41,7 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
   );
 }
 
-export function MarkdownContent({ content, variant = "preview" }: MarkdownContentProps) {
+export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
   const containerClassName = variant === "chat"
     ? "min-w-0 w-full text-[15px] leading-7 text-[var(--text)]"
     : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
@@ -43,6 +50,7 @@ export function MarkdownContent({ content, variant = "preview" }: MarkdownConten
     <div className={containerClassName}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={safeUrlTransform}
         components={{
           h1: ({ children }) => <h1 className="mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h1>,
           h2: ({ children }) => <h2 className="mb-3 mt-8 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h2>,
@@ -57,16 +65,27 @@ export function MarkdownContent({ content, variant = "preview" }: MarkdownConten
               {children}
             </blockquote>
           ),
-          a: ({ href, children }) => (
-            <a
-              className="break-all font-medium text-[var(--accent)] underline decoration-[color:rgba(15,140,120,0.35)] underline-offset-4"
-              href={href}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            const nextHref = href || "";
+            const handleFileLink = Boolean(onFileLinkClick && nextHref && isLikelyLocalFileHref(nextHref));
+
+            return (
+              <a
+                className="break-all font-medium text-[var(--accent)] underline decoration-[color:rgba(15,140,120,0.35)] underline-offset-4"
+                href={nextHref || undefined}
+                rel={handleFileLink ? undefined : "noreferrer"}
+                target={handleFileLink ? undefined : "_blank"}
+                onClick={(event) => {
+                  if (handleFileLink) {
+                    event.preventDefault();
+                    onFileLinkClick?.(nextHref);
+                  }
+                }}
+              >
+                {children}
+              </a>
+            );
+          },
           pre: ({ children }) => <pre className="my-4 min-w-0 overflow-x-auto">{children}</pre>,
           code: InlineCode,
           table: ({ children }) => (
@@ -96,6 +115,6 @@ export function MarkdownContent({ content, variant = "preview" }: MarkdownConten
   );
 }
 
-export function MarkdownPreview({ content }: Props) {
-  return <MarkdownContent content={content} variant="preview" />;
+export function MarkdownPreview({ content, onFileLinkClick }: Props) {
+  return <MarkdownContent content={content} variant="preview" onFileLinkClick={onFileLinkClick} />;
 }

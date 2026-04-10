@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, Upload } from "lucide-react";
 import { FileList } from "../components/FileList";
-import { MarkdownPreview } from "../components/MarkdownPreview";
+import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileEntry } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -77,8 +77,6 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
     await loadPreview(name, "preview");
   };
 
-  const isMarkdownPreview = /\.(md|markdown)$/i.test(previewName);
-
   return (
     <main className="flex flex-col h-full bg-[var(--bg)]">
       <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)] flex items-center justify-between">
@@ -120,40 +118,18 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
       </section>
 
       {previewName ? (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-[var(--surface)] rounded-2xl p-5 max-w-3xl w-full shadow-[var(--shadow-card)]">
-            <div className="flex items-center justify-between mb-4 gap-4">
-              <h2 className="text-lg font-semibold truncate">{previewName}</h2>
-              <button onClick={() => { setPreviewName(""); setPreviewContent(""); }} className="px-3 py-1 rounded-lg border border-[var(--border)]">
-                关闭
-              </button>
-            </div>
-            {isMarkdownPreview ? (
-              <MarkdownPreview content={previewContent} />
-            ) : (
-              <pre className="max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all">
-                {previewContent}
-              </pre>
-            )}
-            <div className="mt-4 flex justify-end gap-2">
-              {previewMode !== "full" ? (
-                <button
-                  onClick={() => void loadPreview(previewName, "full")}
-                  disabled={previewLoading}
-                  className="px-4 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  {previewLoading ? "读取中..." : "全文读取"}
-                </button>
-              ) : null}
-              <button
-                onClick={() => void client.downloadFile(botAlias, previewName)}
-                className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white"
-              >
-                下载
-              </button>
-            </div>
-          </div>
-        </div>
+        <FilePreviewDialog
+          title={previewName}
+          content={previewContent}
+          mode={previewMode}
+          loading={previewLoading}
+          onClose={() => {
+            setPreviewName("");
+            setPreviewContent("");
+          }}
+          onLoadFull={previewMode !== "full" ? () => void loadPreview(previewName, "full") : undefined}
+          onDownload={() => void client.downloadFile(botAlias, previewName)}
+        />
       ) : null}
     </main>
   );

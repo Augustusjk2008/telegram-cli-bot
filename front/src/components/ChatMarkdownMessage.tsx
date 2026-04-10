@@ -3,6 +3,7 @@ import { MarkdownContent } from "./MarkdownPreview";
 
 type Props = {
   content: string;
+  onFileLinkClick?: (href: string) => void;
 };
 
 type State = {
@@ -36,12 +37,12 @@ class ChatMarkdownBoundary extends Component<Props, State> {
 
     return (
       <div data-testid="assistant-markdown-message" className="min-w-0 w-full">
-        <MarkdownContent content={this.props.content} variant="chat" />
+        <MarkdownContent content={this.props.content} variant="chat" onFileLinkClick={this.props.onFileLinkClick} />
       </div>
     );
   }
 }
 
-export function ChatMarkdownMessage({ content }: Props) {
-  return <ChatMarkdownBoundary content={content} />;
+export function ChatMarkdownMessage({ content, onFileLinkClick }: Props) {
+  return <ChatMarkdownBoundary content={content} onFileLinkClick={onFileLinkClick} />;
 }

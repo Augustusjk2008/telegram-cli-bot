@@ -259,7 +259,7 @@ test("main bot settings can restart service and rebuild frontend with live logs"
       return {
         scriptName,
         success: true,
-        output: "Web 前端构建完成",
+        output: "vite build finished",
       };
     },
   );
@@ -277,7 +277,7 @@ test("main bot settings can restart service and rebuild frontend with live logs"
   const buildDialog = await screen.findByRole("dialog", { name: "前端构建日志" });
   expect(buildDialog).toHaveTextContent("npm run build");
   expect(buildDialog).toHaveTextContent("vite build finished");
-  expect(await screen.findByText("前端构建完成")).toBeInTheDocument();
+  expect(await screen.findByText("前端构建成功")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "重启服务" }));
   expect(restartServiceSpy).toHaveBeenCalledTimes(1);

@@ -32,6 +32,10 @@ export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) 
   const [diffPayload, setDiffPayload] = useState<GitDiffPayload | null>(null);
   const [diffLoadingPath, setDiffLoadingPath] = useState("");
   const groups = useMemo(() => groupedFiles(overview), [overview]);
+  const stageAllPaths = useMemo(
+    () => [...groups.unstaged, ...groups.untracked].map((item) => item.path),
+    [groups.unstaged, groups.untracked],
+  );
 
   async function loadOverview() {
     setLoading(true);
@@ -226,14 +230,30 @@ export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) 
                 placeholder="输入 commit message"
                 className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]"
               />
-              <button
-                type="button"
-                onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage))}
-                disabled={actionLoading !== "" || overview.isClean}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
-              >
-                {actionLoading === "commit" ? "提交中..." : "提交更改"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runAction("stage-all", async () => {
+                    const result = await client.stageGitPaths(botAlias, stageAllPaths);
+                    return {
+                      message: "已暂存全部改动",
+                      overview: result.overview,
+                    };
+                  })}
+                  disabled={actionLoading !== "" || stageAllPaths.length === 0}
+                  className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  {actionLoading === "stage-all" ? "暂存中..." : "暂存全部"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage))}
+                  disabled={actionLoading !== "" || overview.isClean}
+                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  {actionLoading === "commit" ? "提交中..." : "提交更改"}
+                </button>
+              </div>
             </div>
 
             <div className="space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">

@@ -1,93 +1,196 @@
-# CLAUDE.md
+# Agent Guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working in this repository.
 
-## Project Overview
+## Project Snapshot
 
-Telegram CLI Bridge — a Telegram bot that bridges user messages to AI coding CLI tools (Kimi, Claude Code, Codex). Supports multiple bot instances managed from a single main bot. Written in Python, runs on Windows.
+Telegram CLI Bridge is a Windows-first Python Telegram bot that forwards user messages to local AI coding CLIs and exposes a Web management UI.
+
+Current local CLI targets:
+
+- `kimi`
+- `claude`
+- `codex`
+
+Current runtime bot modes:
+
+- `cli`
+- `assistant`
+
+The repository supports one main bot plus multiple managed sub-bots loaded from `managed_bots.json`.
 
 ## Commands
 
 ```bash
-# Run the bot
+# Start the Telegram bot
 python -m bot
 
-# Run all tests
-python -m pytest tests/ -v
+# Run the backend test suite
+python -m pytest tests -q
 
-# Run a single test file
-python -m pytest tests/test_cli.py -v
+# Run focused backend tests
+python -m pytest tests/test_handlers/test_chat.py -q
+python -m pytest tests/test_web_api.py -q
+python -m pytest tests/test_assistant.py -q
 
-# Run a single test by name
-python -m pytest tests/test_cli.py::test_function_name -v
+# Run frontend tests
+cd front && npm test
 
-# Run handler tests
-python -m pytest tests/test_handlers/ -v
+# Build the frontend
+cd front && npm run build
 
-# Install dependencies (use the venv)
-pip install -r requirements.txt
+# Optional frontend type check
+cd front && npm run lint
 ```
 
-There is no linter, type checker, or build step configured. No `pyproject.toml` or `setup.cfg`.
+Do not assume the committed `venv/` is usable on every machine. Prefer the active Python environment unless you have verified the local virtualenv.
 
-## Architecture
+## Runtime Shape
 
-### Entry Point & Lifecycle
+### Entry Point
 
-`bot/__main__.py` -> `bot/main.py:main()` — runs `asyncio.run(run_all_bots())` in a retry loop. Supports process-level restart via `os.execv` (triggered by `/restart` command). The restart signal flows through `config.RESTART_REQUESTED` / `config.RESTART_EVENT`.
+- `bot/__main__.py` imports `bot/main.py:main()`
+- `main()` runs `asyncio.run(run_all_bots())` inside a restart loop
+- `/restart` sets `config.RESTART_REQUESTED` and `config.RESTART_EVENT`, then re-execs the process
 
-### Multi-Bot System
+### Multi-Bot Manager
 
-`bot/manager.py:MultiBotManager` is the central orchestrator. It manages:
-- One **main bot** (from `.env` config) with admin privileges
-- Zero or more **managed sub-bots** (from `managed_bots.json`) without admin commands
-- Each bot is a separate `telegram.ext.Application` instance with its own polling loop
-- A watchdog task auto-restarts dead polling loops
+`bot/manager.py:MultiBotManager` is the central orchestrator.
 
-The main bot vs sub-bot distinction is controlled by `bot_data["is_main"]` on each Application, which determines whether admin handler commands are registered (`register_handlers(app, include_admin=is_main)`).
+- Main bot comes from `.env`
+- Managed bots come from `managed_bots.json`
+- Each bot owns its own `telegram.ext.Application`
+- A watchdog restarts polling when an application's updater stops unexpectedly
 
-### Session Model
+### Active Bot Modes
 
-Sessions are keyed by `(bot_id, user_id)` tuple in `bot/sessions.py`. Each `UserSession` (in `bot/models.py`) tracks:
-- Working directory, conversation history, processing state
-- CLI-specific session IDs (`codex_session_id`, `kimi_session_id`, `claude_session_id`) for conversation continuity
-- A `subprocess.Popen` reference for the active CLI process
-- Thread-safe via `threading.Lock` (subprocess runs in executor threads)
+Two modes are active in the current runtime:
 
-### CLI Abstraction Layer
+- `cli`: forwards messages to local CLI tools
+- `assistant`: routes messages to the API-backed assistant flow with memory tools
 
-`bot/cli.py` handles three CLI backends with a unified interface:
-- **Kimi**: uses `--quiet -y --thinking -S <session_id> -p <prompt>`
-- **Claude Code**: uses `-p --dangerously-skip-permissions --effort high` with `--session-id` / `-r` for session resume
-- **Codex**: uses `exec` subcommand with `--json` output, `--dangerously-bypass-approvals-and-sandbox`
+Legacy `webcli` code still exists in the repository, but manager validation now rejects new `webcli` bots and downgrades legacy saved `webcli` profiles to `cli`. Treat `webcli` as legacy compatibility code, not a current production mode.
 
-Key functions: `build_cli_command()` constructs args per CLI type, `resolve_cli_executable()` resolves paths (with Windows .cmd/.bat fallback and npm global dir search), `should_reset_*_session()` detects stale sessions from error output.
+## Core Modules
 
-### Handler Structure
+### Sessions
 
-`bot/handlers/__init__.py:register_handlers()` wires all command and message handlers:
-- `basic.py` — `/start`, `/reset`, `/kill`, `/cd`, `/pwd`, `/ls`, `/history`
-- `chat.py` — text message handler; spawns CLI subprocess, reads output non-streaming via `process.communicate()` in executor, sends chunked responses to Telegram
-- `shell.py` — `/exec` for direct shell commands (with dangerous command blocklist)
-- `file.py` — file upload/download via Telegram
-- `admin.py` — `/bot_add`, `/bot_remove`, `/bot_start`, `/bot_stop`, `/bot_list`, `/bot_set_cli`, `/bot_set_workdir`, `/restart` (main bot only)
+`bot/sessions.py` stores sessions by `(bot_id, user_id)`.
 
-### Context Helpers
+Each `UserSession` in `bot/models.py` tracks:
 
-`bot/context_helpers.py` extracts bot/session/profile info from Telegram's `Update`/`Context` objects. The `MultiBotManager` instance is stored at `context.application.bot_data["manager"]`.
+- current working directory
+- conversation history in memory
+- processing state and active subprocess
+- per-CLI session ids for `codex`, `kimi`, and `claude`
 
-## Key Conventions
+Only CLI session ids are persisted to `.session_store.json`. Full chat history remains in memory.
 
-- All user-facing strings are in Chinese
-- Config is loaded from environment variables (via `.env` + `python-dotenv`) in `bot/config.py`
-- The `//` prefix in user messages is converted to `/` to forward CLI-native subcommands
-- Telegram message output uses HTML parse mode; `safe_edit_text()` auto-falls back to plain text on parse errors
-- Long outputs are split into chunks via `split_text_into_chunks()` with code block boundary awareness
-- CLI process timeout is configurable via `CLI_EXEC_TIMEOUT` env var (default 4000s)
+### CLI Chat Flow
 
-## Testing
+- Telegram CLI chat path: `bot/handlers/chat.py`
+- Command construction and CLI parameter handling: `bot/cli.py`, `bot/cli_params.py`
+- Supported CLI types: `kimi`, `claude`, `codex`
 
-Tests use `pytest` + `pytest-asyncio` with `unittest.mock`. The `conftest.py` provides:
-- `mock_update` / `mock_context` fixtures with pre-configured `application.bot_data` structure matching `MultiBotManager._start_profile()`
-- `clean_sessions` autouse fixture that clears the global session store before/after each test
-- `ALLOWED_USER_IDS` is typically patched to `[]` (allow all) or a specific list for auth tests
+Important behavior:
+
+- user text starting with `//` is rewritten to `/...` before sending to the CLI
+- Codex runs with JSON output and is parsed by `parse_codex_json_output()`
+- long Telegram replies are chunked with `split_text_into_chunks()`
+- Telegram output primarily uses HTML parse mode with fallback helpers for unsafe markup
+
+### Handler Registration
+
+`bot/handlers/__init__.py` wires handlers based on `bot_mode`.
+
+Current CLI-mode command surface includes:
+
+- `/start`, `/reset`, `/kill`, `/cd`, `/pwd`, `/files`, `/ls`, `/history`
+- `/exec`, `/rm`
+- `/upload`, `/download`, `/cat`, `/head`
+- `/codex_status`
+
+Main-bot-only admin surface includes:
+
+- `/restart`
+- `/bot_help`, `/bot_list`, `/bot_add`, `/bot_remove`, `/bot_start`, `/bot_stop`
+- `/bot_set_cli`, `/bot_set_workdir`, `/bot_kill`
+- `/system`
+- `/bot_params`, `/bot_params_set`, `/bot_params_reset`, `/bot_params_help`
+
+Assistant-mode command surface includes:
+
+- `/start`, `/reset`, `/files`, `/history`
+- `/memory`, `/memory_add`, `/memory_search`, `/memory_delete`, `/memory_clear`
+- `/tool_stats`
+
+### Voice
+
+`bot/handlers/voice.py` and `bot/whisper_service.py` provide optional voice transcription.
+
+Required optional dependencies:
+
+- `openai-whisper`
+- `pydub`
+- FFmpeg
+
+If those dependencies are missing, the voice handler is skipped and the rest of the bot still runs.
+
+### Web API And Frontend
+
+The repository also contains a Web control surface:
+
+- backend API server: `bot/web/server.py`, `bot/web/api_service.py`, `bot/web/git_service.py`
+- frontend app: `front/`
+
+The frontend currently includes screens for:
+
+- chat
+- files
+- git
+- settings
+
+Current Web capabilities include:
+
+- streaming Web chat for `cli` and `assistant` bot modes
+- Markdown rendering for completed assistant chat replies, with raw-text fallback on render failure
+- file browsing and file preview
+- Git overview, diff, stage/unstage, stage-all, commit, fetch/pull/push, stash/pop
+- CLI parameter editing
+- tunnel status management
+- admin script execution and service restart hooks
+
+## Conventions
+
+- User-facing strings are Chinese
+- Config is loaded from environment variables in `bot/config.py`
+- `.env` loading uses `python-dotenv`
+- The repository has backend tests and frontend tests, but no backend linter or backend type checker configured
+
+## Testing Notes
+
+Backend tests use:
+
+- `pytest`
+- `pytest-asyncio`
+- `unittest.mock`
+
+Useful fixtures from `tests/conftest.py`:
+
+- `mock_update`
+- `mock_context`
+- `clean_sessions`
+
+Frontend tests use:
+
+- `vitest`
+- Testing Library
+- Playwright for browser-level layout checks
+
+Useful frontend test files include:
+
+- `front/src/test/chat-screen.test.tsx`
+- `front/src/test/files-screen.test.tsx`
+- `front/src/test/git-screen.test.tsx`
+- `front/src/test/app.test.tsx`
+- `front/src/test/mobile-layout.spec.ts`

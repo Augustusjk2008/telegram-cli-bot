@@ -257,17 +257,17 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       if (!result.success) {
         const message = result.output || "前端构建失败";
         setBuildLogStatus("error");
-        setBuildLogSummary(message);
+        setBuildLogSummary("前端构建失败");
         setError(message);
         return;
       }
       setBuildLogStatus("success");
-      setBuildLogSummary(result.output || "前端构建完成");
+      setBuildLogSummary("前端构建成功");
       setNotice("前端构建完成");
     } catch (err) {
       const message = err instanceof Error ? err.message : "前端构建失败";
       setBuildLogStatus("error");
-      setBuildLogSummary(message);
+      setBuildLogSummary("前端构建失败");
       setError(message);
     } finally {
       setServiceAction("");

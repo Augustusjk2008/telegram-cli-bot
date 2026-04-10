@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -6,7 +6,7 @@ import type { ChatMessage, GitActionResult, GitDiffPayload, GitOverview, SystemS
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
-  return {
+  const baseClient: WebBotClient = {
     login: async () => ({
       currentBotAlias: "main",
       currentPath: "/",
@@ -176,8 +176,13 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       success: true,
       output: "ok",
     }),
-    ...overrides,
+    runSystemScriptStream: async () => ({
+      scriptName: "demo",
+      success: true,
+      output: "ok",
+    }),
   };
+  return { ...baseClient, ...overrides };
 }
 
 afterEach(() => {
@@ -227,7 +232,7 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "继续");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(await screen.findByText(/正在输出/)).toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
@@ -419,6 +424,33 @@ test("shows waiting time while a reply is still pending", async () => {
   }, { timeout: 3000 });
 }, 8000);
 
+test("keeps showing a visible streaming badge while preview text is updating", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void, onStatus) =>
+      new Promise<ChatMessage>((resolve) => {
+        onStatus?.({ previewText: "正在整理上下文" });
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-done",
+            role: "assistant",
+            text: "完成",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 300);
+      }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("正在整理上下文")).toBeInTheDocument();
+  expect(screen.getByText("正在输出")).toBeInTheDocument();
+});
+
 test("shows reset kill and system-script actions for main bot", async () => {
   const client = createClient({
     listSystemScripts: async () => [{
@@ -435,6 +467,79 @@ test("shows reset kill and system-script actions for main bot", async () => {
   expect(screen.getByRole("button", { name: "重置会话" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
 });
+
+test("does not force-scroll to the bottom once the user scrolls away during streaming", async () => {
+  const user = userEvent.setup();
+  const original = HTMLElement.prototype.scrollIntoView;
+  const scrollSpy = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollSpy,
+  });
+
+  const client = createClient({
+    sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void, onStatus) =>
+      new Promise<ChatMessage>((resolve) => {
+        onStatus?.({ previewText: "第一段预览" });
+        window.setTimeout(() => {
+          onStatus?.({ previewText: "第二段预览" });
+        }, 80);
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-final",
+            role: "assistant",
+            text: "最终结果",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 160);
+      }),
+  });
+
+  let scrollTop = 1500;
+
+  try {
+    render(<ChatScreen botAlias="main" client={client} />);
+    expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId("chat-scroll-container");
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: {
+        configurable: true,
+        get: () => 2200,
+      },
+      clientHeight: {
+        configurable: true,
+        get: () => 600,
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+      },
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByText("第一段预览")).toBeInTheDocument();
+
+    scrollSpy.mockClear();
+    scrollTop = 400;
+    fireEvent.scroll(scrollContainer);
+
+    expect(await screen.findByText("最终结果")).toBeInTheDocument();
+    expect(scrollSpy).not.toHaveBeenCalled();
+  } finally {
+    if (original) {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: original,
+      });
+    } else {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  }
+}, 10000);
 
 test("shows compact system script titles without verbose metadata", async () => {
   const user = userEvent.setup();
@@ -453,6 +558,29 @@ test("shows compact system script titles without verbose metadata", async () => 
   expect(await screen.findByRole("button", { name: "网络流量" })).toBeInTheDocument();
   expect(screen.queryByText("查看网络状态并输出详细路径")).not.toBeInTheDocument();
   expect(screen.queryByText("C:\\scripts\\network_traffic.ps1")).not.toBeInTheDocument();
+});
+
+test("opens a file preview dialog when clicking a local markdown file link", async () => {
+  const user = userEvent.setup();
+  const readSpy = vi.fn(async () => "# README\n\n文件预览");
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-1",
+      role: "assistant",
+      text: "[查看 README](C:/workspace/README.md)",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }],
+    readFile: readSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("link", { name: "查看 README" }));
+
+  expect(readSpy).toHaveBeenCalledWith("main", "README.md");
+  expect(await screen.findByRole("dialog", { name: "README.md" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "README" })).toBeInTheDocument();
 });
 
 test("restores in-progress reply after reopening and refreshes to final history", async () => {

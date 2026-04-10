@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { GitScreen } from "../screens/GitScreen";
 import type {
   BotOverview,
@@ -18,7 +18,7 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
-function buildRepoOverview(): GitOverview {
+function buildRepoOverview(overrides: Partial<GitOverview> = {}): GitOverview {
   return {
     repoFound: true,
     canInit: false,
@@ -54,11 +54,12 @@ function buildRepoOverview(): GitOverview {
         subject: "feat: initial commit",
       },
     ],
+    ...overrides,
   };
 }
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
-  return {
+  const baseClient: WebBotClient = {
     login: async (): Promise<SessionState> => ({
       currentBotAlias: "main",
       currentPath: "C:\\workspace\\repo",
@@ -200,8 +201,13 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       success: true,
       output: "ok",
     }),
-    ...overrides,
+    runSystemScriptStream: async (): Promise<SystemScriptResult> => ({
+      scriptName: "demo",
+      success: true,
+      output: "ok",
+    }),
   };
+  return { ...baseClient, ...overrides };
 }
 
 test("renders git repo summary and changed files", async () => {
@@ -238,4 +244,98 @@ test("shows init action when current directory is not a git repo", async () => {
   expect(await screen.findByText("当前目录不在 Git 仓库中")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "初始化 Git 仓库" }));
   expect(await screen.findByText("当前分支")).toBeInTheDocument();
+});
+
+test("stages all unstaged and untracked files from the commit panel", async () => {
+  const user = userEvent.setup();
+  const stageSpy = vi.fn(async () => ({
+    message: "已暂存全部改动",
+    overview: buildRepoOverview({
+      changedFiles: [
+        {
+          path: "tracked.txt",
+          status: "M ",
+          staged: true,
+          unstaged: false,
+          untracked: false,
+        },
+        {
+          path: "notes.md",
+          status: "M ",
+          staged: true,
+          unstaged: false,
+          untracked: false,
+        },
+        {
+          path: "draft.txt",
+          status: "A ",
+          staged: true,
+          unstaged: false,
+          untracked: false,
+        },
+      ],
+    }),
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview: async (): Promise<GitOverview> => buildRepoOverview({
+          changedFiles: [
+            {
+              path: "tracked.txt",
+              status: "M ",
+              staged: true,
+              unstaged: false,
+              untracked: false,
+            },
+            {
+              path: "notes.md",
+              status: " M",
+              staged: false,
+              unstaged: true,
+              untracked: false,
+            },
+            {
+              path: "draft.txt",
+              status: "??",
+              staged: false,
+              unstaged: false,
+              untracked: true,
+            },
+          ],
+        }),
+        stageGitPaths: stageSpy,
+      })}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "暂存全部" }));
+
+  expect(stageSpy).toHaveBeenCalledWith("main", ["notes.md", "draft.txt"]);
+  expect(await screen.findByText("已暂存全部改动")).toBeInTheDocument();
+});
+
+test("disables the stage-all button when there are no unstaged or untracked files", async () => {
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview: async (): Promise<GitOverview> => buildRepoOverview({
+          changedFiles: [
+            {
+              path: "tracked.txt",
+              status: "M ",
+              staged: true,
+              unstaged: false,
+              untracked: false,
+            },
+          ],
+        }),
+      })}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "暂存全部" })).toBeDisabled();
 });

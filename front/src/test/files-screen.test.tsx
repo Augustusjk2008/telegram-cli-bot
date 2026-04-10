@@ -195,6 +195,11 @@ function createClient(): WebBotClient {
       success: true,
       output: "ok",
     }),
+    runSystemScriptStream: async (): Promise<SystemScriptResult> => ({
+      scriptName: "demo",
+      success: true,
+      output: "ok",
+    }),
   };
 }
 
