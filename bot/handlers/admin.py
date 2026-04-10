@@ -19,6 +19,7 @@ from bot.handlers.shell import strip_ansi_escape
 from bot.messages import msg
 from bot.sessions import sessions, sessions_lock
 from bot.utils import safe_edit_text
+from bot.app_settings import build_git_proxy_env
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,7 @@ def execute_script(script_path: Path) -> tuple[bool, str]:
             text=False,
             timeout=SCRIPT_EXEC_TIMEOUT,
             shell=use_shell,
+            env=build_git_proxy_env(),
         )
         return _format_script_result(result.returncode, result.stdout, result.stderr)
     except subprocess.TimeoutExpired as exc:
@@ -284,6 +286,7 @@ def stream_execute_script(script_path: Path) -> Iterator[dict[str, object]]:
             stderr=subprocess.STDOUT,
             text=False,
             shell=use_shell,
+            env=build_git_proxy_env(),
         )
         started_at = time.monotonic()
 

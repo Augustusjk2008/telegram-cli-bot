@@ -8,7 +8,7 @@ export function LoginScreen({ onLogin, isLoading, error }: Props) {
   return (
     <main className="flex flex-col items-center justify-center min-h-[100dvh] bg-[var(--bg)] p-4">
       <div className="w-full max-w-sm bg-[var(--surface)] p-8 rounded-2xl shadow-[var(--shadow-card)] border border-[var(--border)]">
-        <h1 className="text-3xl font-bold text-center mb-8 text-[var(--text)]">Web Bot</h1>
+        <h1 className="text-3xl font-bold text-center mb-8 text-[var(--text)]">🦞Safe Claw</h1>
         <form
           className="flex flex-col gap-4"
           onSubmit={(event) => {

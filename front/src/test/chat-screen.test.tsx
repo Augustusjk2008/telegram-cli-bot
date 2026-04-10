@@ -46,6 +46,8 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     resetSession: async () => undefined,
     killTask: async () => undefined,
     restartService: async () => undefined,
+    getGitProxySettings: async () => ({ port: "" }),
+    updateGitProxySettings: async () => ({ port: "" }),
     getGitOverview: async (): Promise<GitOverview> => ({
       repoFound: false,
       canInit: true,

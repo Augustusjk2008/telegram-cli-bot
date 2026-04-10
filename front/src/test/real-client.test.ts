@@ -523,6 +523,81 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("getGitProxySettings reads admin git proxy endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            port: "7897",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const settings = await client.getGitProxySettings();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/git-proxy",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    expect(settings).toEqual({ port: "7897" });
+  });
+
+  test("updateGitProxySettings patches admin git proxy endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            port: "",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const settings = await client.updateGitProxySettings("");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/git-proxy",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ port: "" }),
+      }),
+    );
+    expect(settings).toEqual({ port: "" });
+  });
+
   test("restartService tolerates connection reset caused by server restart", async () => {
     fetchMock
       .mockResolvedValueOnce({

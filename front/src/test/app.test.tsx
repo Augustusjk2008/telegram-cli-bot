@@ -50,9 +50,9 @@ afterEach(() => {
 
 test("renders standalone login screen without backend", () => {
   render(<App />);
-  expect(screen.getByRole("heading", { name: "Web Bot" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
-  expect(document.title).toBe("Telegram CLI Bridge");
+  expect(document.title).toBe("🦞Safe Claw");
 });
 
 test("shows bottom navigation after entering demo app shell", async () => {
@@ -180,7 +180,7 @@ test("settings tab can update bot cli configuration", async () => {
   await user.click(screen.getByRole("button", { name: "登录" }));
   await screen.findByRole("button", { name: "聊天" });
 
-  expect(document.title).toBe("main - Telegram CLI Bridge");
+  expect(document.title).toBe("main - 🦞Safe Claw");
 
   await user.click(screen.getByRole("button", { name: "设置" }));
   await user.selectOptions(await screen.findByLabelText("CLI 类型"), "claude");
@@ -211,6 +211,26 @@ test("settings tab can update bot working directory", async () => {
 
   expect(workdirSpy).toHaveBeenCalledWith("main", "C:\\workspace\\updated");
   expect(await screen.findByText("工作目录已更新")).toBeInTheDocument();
+});
+
+test("settings tab can save persistent git proxy port", async () => {
+  const user = userEvent.setup();
+  const proxySpy = vi.spyOn(MockWebBotClient.prototype, "updateGitProxySettings");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  const input = await screen.findByLabelText("Git 代理端口");
+  await user.clear(input);
+  await user.type(input, "7897");
+  await user.click(screen.getByRole("button", { name: "保存 Git 代理" }));
+
+  expect(proxySpy).toHaveBeenCalledWith("7897");
+  expect(await screen.findByText("Git 代理设置已保存")).toBeInTheDocument();
 });
 
 test("opening bot switcher refreshes bot status and shows busy", async () => {
@@ -360,7 +380,7 @@ test("bot manager can add rename and delete managed bots", async () => {
   });
   expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("Bot 管理 - Telegram CLI Bridge");
+  expect(document.title).toBe("Bot 管理 - 🦞Safe Claw");
 
   await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
   await user.type(screen.getByLabelText("Bot Token"), "333:abc");
@@ -423,7 +443,7 @@ test("bot manager stays open even when a stored bot alias exists", async () => {
 
   expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("Bot 管理 - Telegram CLI Bridge");
+  expect(document.title).toBe("Bot 管理 - 🦞Safe Claw");
 });
 
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {

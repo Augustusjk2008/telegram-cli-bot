@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from bot.app_settings import get_git_proxy_config_args
 from bot.manager import MultiBotManager
 from .api_service import WebApiError, get_profile_or_raise
 
@@ -36,7 +37,7 @@ def _normalize_repo_relative_path(path: str) -> str:
 def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
-            ["git", *args],
+            ["git", *get_git_proxy_config_args(), *args],
             cwd=repo_root,
             capture_output=True,
             text=True,
@@ -56,7 +57,7 @@ def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subproce
 def _resolve_repo_root(working_dir: str) -> Optional[str]:
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", *get_git_proxy_config_args(), "rev-parse", "--show-toplevel"],
             cwd=working_dir,
             capture_output=True,
             text=True,

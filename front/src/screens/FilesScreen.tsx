@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, Upload } from "lucide-react";
+import { ChevronLeft, House, Upload } from "lucide-react";
 import { FileList } from "../components/FileList";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -57,6 +57,10 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
     }
   };
 
+  const handleHome = async () => {
+    await loadListing();
+  };
+
   const loadPreview = async (name: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     try {
@@ -88,20 +92,31 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
           ) : null}
           <h1 className="text-lg font-semibold truncate">{botAlias} - {currentPath}</h1>
         </div>
-        <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
-          <Upload className="w-5 h-5" />
-          <input
-            type="file"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              void client.uploadFile(botAlias, file)
-                .then(() => loadListing())
-                .catch((err: Error) => setError(err.message || "上传失败"));
-            }}
-          />
-        </label>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Home"
+            title="回到工作目录"
+            onClick={() => void handleHome()}
+            className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+          >
+            <House className="w-5 h-5" />
+          </button>
+          <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
+            <Upload className="w-5 h-5" />
+            <input
+              type="file"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                void client.uploadFile(botAlias, file)
+                  .then(() => loadListing())
+                  .catch((err: Error) => setError(err.message || "上传失败"));
+              }}
+            />
+          </label>
+        </div>
       </header>
 
       <section className="flex-1 overflow-y-auto p-4">

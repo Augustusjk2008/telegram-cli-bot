@@ -95,6 +95,8 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     resetSession: async () => undefined,
     killTask: async () => "已发送终止任务请求",
     restartService: async () => undefined,
+    getGitProxySettings: async () => ({ port: "" }),
+    updateGitProxySettings: async () => ({ port: "" }),
     updateBotWorkdir: async () => ({
       alias: "main",
       cliType: "codex",

@@ -6,6 +6,15 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "h:\\workspace\\KimiAgent\\openEuler",
+      "enabled": false,
+      "bot_mode": "cli"
+    },
+    {
+      "alias": "taskbook",
+      "token": "",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "h:\\Resources\\RTLinux\\Demos\\MB_DDF",
       "enabled": true,
       "bot_mode": "cli"
     }

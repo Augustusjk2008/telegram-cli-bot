@@ -156,3 +156,7 @@ export type GitActionResult = {
   message: string;
   overview: GitOverview;
 };
+
+export type GitProxySettings = {
+  port: string;
+};

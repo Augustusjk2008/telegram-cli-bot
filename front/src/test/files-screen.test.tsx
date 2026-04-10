@@ -5,8 +5,8 @@ import { FilesScreen } from "../screens/FilesScreen";
 import type { BotOverview, BotSummary, ChatMessage, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
-function createClient(): WebBotClient {
-  return {
+function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
+  const baseClient: WebBotClient = {
     login: async (): Promise<SessionState> => ({
       currentBotAlias: "main",
       currentPath: "C:\\workspace",
@@ -64,6 +64,8 @@ function createClient(): WebBotClient {
     downloadFile: async () => undefined,
     resetSession: async () => undefined,
     killTask: async () => "已发送终止任务请求",
+    getGitProxySettings: async () => ({ port: "" }),
+    updateGitProxySettings: async () => ({ port: "" }),
     updateBotWorkdir: async () => ({
       alias: "main",
       cliType: "codex",
@@ -201,6 +203,7 @@ function createClient(): WebBotClient {
       output: "ok",
     }),
   };
+  return { ...baseClient, ...overrides };
 }
 
 test("renders markdown files as formatted content", async () => {
@@ -250,4 +253,27 @@ test("can load full file content from preview modal", async () => {
   expect(readFullSpy).toHaveBeenCalledWith("main", "notes.txt");
   expect(await screen.findByText((content) => content.includes("完整内容"))).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+});
+
+test("home button refreshes the file view to the latest working directory", async () => {
+  const user = userEvent.setup();
+  const listFilesSpy = vi
+    .fn<() => Promise<DirectoryListing>>()
+    .mockResolvedValueOnce({
+      workingDir: "C:\\workspace\\old",
+      entries: [{ name: "old.txt", isDir: false }],
+    })
+    .mockResolvedValueOnce({
+      workingDir: "C:\\workspace\\new-home",
+      entries: [{ name: "new.txt", isDir: false }],
+    });
+
+  render(<FilesScreen botAlias="main" client={createClient({ listFiles: listFilesSpy })} />);
+
+  expect(await screen.findByText("main - C:\\workspace\\old")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Home" }));
+
+  expect(listFilesSpy).toHaveBeenCalledTimes(2);
+  expect(await screen.findByText("main - C:\\workspace\\new-home")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /new\.txt/i })).toBeInTheDocument();
 });

@@ -16,6 +16,7 @@ from typing import Any
 from aiohttp import WSMsgType, web
 from aiohttp.client_exceptions import ClientConnectionResetError
 
+from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.config import (
     ALLOWED_USER_IDS,
     WEB_ALLOWED_ORIGINS,
@@ -868,6 +869,19 @@ class WebApiServer:
         data = await update_bot_workdir(self.manager, alias, body.get("working_dir", ""), auth.user_id)
         return _json({"ok": True, "data": data})
 
+    async def admin_get_git_proxy(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": get_git_proxy_settings()})
+
+    async def admin_patch_git_proxy(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        body = await self._parse_json(request)
+        try:
+            data = update_git_proxy_port(body.get("port", ""))
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_git_proxy_port", str(exc)) from exc
+        return _json({"ok": True, "data": data})
+
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         self._schedule_restart_request()
@@ -950,6 +964,8 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
         app.router.add_patch("/api/admin/bots/{alias}/alias", self.admin_rename_bot)
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
+        app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
+        app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)
         app.router.add_post("/api/admin/restart", self.admin_restart)
         app.router.add_get("/api/admin/tunnel", self.admin_tunnel)
         app.router.add_post("/api/admin/tunnel/start", self.admin_tunnel_start)

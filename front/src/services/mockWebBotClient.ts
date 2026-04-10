@@ -8,6 +8,7 @@ import type {
   DirectoryListing,
   GitActionResult,
   GitDiffPayload,
+  GitProxySettings,
   GitOverview,
   SessionState,
   SystemScript,
@@ -107,6 +108,7 @@ export class MockWebBotClient implements WebBotClient {
       path: "C:\\scripts\\network_traffic.ps1",
     },
   ];
+  private gitProxySettings: GitProxySettings = { port: "" };
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -251,6 +253,17 @@ export class MockWebBotClient implements WebBotClient {
 
   async restartService(): Promise<void> {
     return;
+  }
+
+  async getGitProxySettings(): Promise<GitProxySettings> {
+    return { ...this.gitProxySettings };
+  }
+
+  async updateGitProxySettings(port: string): Promise<GitProxySettings> {
+    this.gitProxySettings = {
+      port: (port || "").trim(),
+    };
+    return { ...this.gitProxySettings };
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

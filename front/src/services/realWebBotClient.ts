@@ -2,6 +2,7 @@ import type {
   GitActionResult,
   GitCommitSummary,
   GitDiffPayload,
+  GitProxySettings,
   GitOverview,
   BotOverview,
   BotStatus,
@@ -132,6 +133,10 @@ type RawGitDiffPayload = {
 type RawGitActionResult = {
   message: string;
   overview: RawGitOverview;
+};
+
+type RawGitProxySettings = {
+  port?: string;
 };
 
 type StreamEvent =
@@ -288,6 +293,12 @@ function mapGitActionResult(raw: RawGitActionResult): GitActionResult {
   return {
     message: raw.message || "",
     overview: mapGitOverview(raw.overview),
+  };
+}
+
+function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
+  return {
+    port: raw.port || "",
   };
 }
 
@@ -602,6 +613,22 @@ export class RealWebBotClient implements WebBotClient {
       }
       throw error;
     }
+  }
+
+  async getGitProxySettings(): Promise<GitProxySettings> {
+    const data = await this.requestJson<RawGitProxySettings>("/api/admin/git-proxy");
+    return mapGitProxySettings(data);
+  }
+
+  async updateGitProxySettings(port: string): Promise<GitProxySettings> {
+    const data = await this.requestJson<RawGitProxySettings>("/api/admin/git-proxy", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ port }),
+    });
+    return mapGitProxySettings(data);
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

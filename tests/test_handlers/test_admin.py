@@ -23,7 +23,9 @@ from bot.handlers.admin import (
     bot_stop,
     execute_script,
     restart_main,
+    stream_execute_script,
 )
+from bot.app_settings import update_git_proxy_port
 
 
 class TestBotHelp:
@@ -260,5 +262,80 @@ class TestExecuteScript:
             "Bypass",
         ]
         assert captured["kwargs"]["text"] is False
+
+    def test_execute_script_overrides_git_proxy_with_empty_values(self, temp_dir, monkeypatch):
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
+        update_git_proxy_port("")
+        script_path = Path("scripts/turn_off_monitor.ps1")
+        captured: dict[str, object] = {}
+
+        def fake_run(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=b"", stderr=b"")
+
+        with patch("bot.handlers.admin.subprocess.run", side_effect=fake_run):
+            success, output = execute_script(script_path)
+
+        assert success is True
+        assert output == "执行成功（无输出）"
+        env = captured["kwargs"]["env"]
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.proxy"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_KEY_1"] == "https.proxy"
+        assert env["GIT_CONFIG_VALUE_1"] == ""
+
+    def test_stream_execute_script_overrides_git_proxy_with_configured_port(self, temp_dir, monkeypatch):
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
+        update_git_proxy_port("7897")
+        script_path = Path("scripts/turn_off_monitor.ps1")
+        captured: dict[str, object] = {}
+
+        class FakeStdout:
+            def __init__(self):
+                self._lines = [b"building\n", b""]
+
+            def readline(self):
+                return self._lines.pop(0)
+
+            def read(self):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.returncode = 0
+
+            def poll(self):
+                return 0 if not self.stdout._lines else None
+
+            def wait(self, timeout=None):
+                return 0
+
+            def terminate(self):
+                return None
+
+            def kill(self):
+                return None
+
+        def fake_popen(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return FakeProcess()
+
+        with patch("bot.handlers.admin.subprocess.Popen", side_effect=fake_popen):
+            events = list(stream_execute_script(script_path))
+
+        env = captured["kwargs"]["env"]
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_VALUE_0"] == "http://127.0.0.1:7897"
+        assert env["GIT_CONFIG_VALUE_1"] == "http://127.0.0.1:7897"
+        assert events[0] == {"type": "log", "text": "building"}
+        assert events[-1]["type"] == "done"
+        assert events[-1]["success"] is True
 
 

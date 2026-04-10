@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, CliParamField, CliParamsPayload, TunnelSnapshot } from "../services/types";
+import type { BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -58,9 +58,11 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
+  const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
+  const [gitProxyPortDraft, setGitProxyPortDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -71,6 +73,7 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
   const [savingParamKey, setSavingParamKey] = useState("");
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
+  const [savingGitProxy, setSavingGitProxy] = useState(false);
   const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const [serviceAction, setServiceAction] = useState<"" | "restart_service" | "build_frontend">("");
@@ -89,8 +92,9 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       client.getBotOverview(botAlias),
       client.getCliParams(botAlias),
       client.getTunnelStatus(),
+      botAlias === "main" ? client.getGitProxySettings() : Promise.resolve(null),
     ])
-      .then(([overviewData, cliParamsData, tunnelData]) => {
+      .then(([overviewData, cliParamsData, tunnelData, gitProxyData]) => {
         if (cancelled) return;
         setOverview(overviewData);
         setCliParams(cliParamsData);
@@ -99,6 +103,8 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
         setCliPathDraft(overviewData.cliPath || "");
         setWorkdirDraft(overviewData.workingDir);
         setTunnel(tunnelData);
+        setGitProxySettings(gitProxyData);
+        setGitProxyPortDraft(gitProxyData?.port || "");
         setLoading(false);
       })
       .catch((err: Error) => {
@@ -236,6 +242,28 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
       setError(err instanceof Error ? err.message : "更新工作目录失败");
     } finally {
       setSavingWorkdir(false);
+    }
+  };
+
+  const saveGitProxy = async () => {
+    const nextPort = gitProxyPortDraft.trim();
+    if (nextPort && (!/^\d+$/.test(nextPort) || Number(nextPort) < 1 || Number(nextPort) > 65535)) {
+      setError("代理端口必须是 1 到 65535 之间的整数");
+      return;
+    }
+
+    setSavingGitProxy(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextSettings = await client.updateGitProxySettings(nextPort);
+      setGitProxySettings(nextSettings);
+      setGitProxyPortDraft(nextSettings.port);
+      setNotice("Git 代理设置已保存");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存 Git 代理失败");
+    } finally {
+      setSavingGitProxy(false);
     }
   };
 
@@ -432,30 +460,62 @@ export function SettingsScreen({ botAlias, client = new MockWebBotClient(), onLo
         ) : null}
 
         {botAlias === "main" ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--text)]">服务管理</h2>
-              <p className="text-sm text-[var(--muted)]">仅主 Bot 可执行服务重启和前端构建</p>
+          <>
+            <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
+                <p className="text-sm text-[var(--muted)]">仅影响当前程序中的 Git 操作和系统脚本中的 Git。留空则直连，不使用代理。</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  aria-label="Git 代理端口"
+                  type="text"
+                  inputMode="numeric"
+                  value={gitProxyPortDraft}
+                  onChange={(event) => setGitProxyPortDraft(event.target.value)}
+                  placeholder="例如 7897"
+                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveGitProxy()}
+                  disabled={savingGitProxy}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {savingGitProxy ? "保存中..." : "保存 Git 代理"}
+                </button>
+              </div>
+              <p className="text-xs text-[var(--muted)]">
+                当前状态: {gitProxySettings?.port ? `127.0.0.1:${gitProxySettings.port}` : "直连"}
+              </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void buildFrontend()}
-                disabled={serviceAction !== ""}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                {serviceAction === "build_frontend" ? "构建中..." : "重建前端"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void restartService()}
-                disabled={serviceAction !== ""}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                {serviceAction === "restart_service" ? "重启中..." : "重启服务"}
-              </button>
+
+            <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">服务管理</h2>
+                <p className="text-sm text-[var(--muted)]">仅主 Bot 可执行服务重启和前端构建</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void buildFrontend()}
+                  disabled={serviceAction !== ""}
+                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  {serviceAction === "build_frontend" ? "构建中..." : "重建前端"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void restartService()}
+                  disabled={serviceAction !== ""}
+                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  {serviceAction === "restart_service" ? "重启中..." : "重启服务"}
+                </button>
+              </div>
             </div>
-          </div>
+          </>
         ) : null}
 
         {cliParams ? (

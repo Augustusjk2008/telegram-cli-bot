@@ -21,6 +21,7 @@ import { TerminalScreen } from "../screens/TerminalScreen";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
+const APP_NAME = "🦞Safe Claw";
 const TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
 const UNREAD_STORAGE_KEY = "web-unread-bots";
@@ -137,22 +138,22 @@ export function App() {
 
   useEffect(() => {
     if (!isLoggedIn) {
-      document.title = "Telegram CLI Bridge";
+      document.title = APP_NAME;
       return;
     }
     if (showBotManager || !currentBot) {
-      document.title = "Bot 管理 - Telegram CLI Bridge";
+      document.title = `Bot 管理 - ${APP_NAME}`;
       return;
     }
     if (currentTab === "terminal") {
-      document.title = "终端 - Telegram CLI Bridge";
+      document.title = `终端 - ${APP_NAME}`;
       return;
     }
     if (currentBot) {
-      document.title = `${currentBot} - Telegram CLI Bridge`;
+      document.title = `${currentBot} - ${APP_NAME}`;
       return;
     }
-    document.title = "Telegram CLI Bridge";
+    document.title = APP_NAME;
   }, [currentBot, currentTab, isLoggedIn, showBotManager]);
 
   useEffect(() => {

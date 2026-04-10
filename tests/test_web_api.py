@@ -29,6 +29,7 @@ from bot.web.api_service import (
     run_cli_chat,
     save_uploaded_file,
 )
+from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.web.git_service import (
     commit_git_changes,
     get_git_diff,
@@ -246,6 +247,99 @@ def test_git_diff_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_di
 
     assert diff["path"] == "tracked.txt"
     assert "+after" in diff["diff"]
+
+
+def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    settings_file = temp_dir / ".web_admin_settings.json"
+    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
+
+    assert get_git_proxy_settings() == {"port": ""}
+
+    saved = update_git_proxy_port("7897")
+
+    assert saved == {"port": "7897"}
+    assert get_git_proxy_settings() == {"port": "7897"}
+    assert json.loads(settings_file.read_text(encoding="utf-8")) == {
+        "git_proxy_port": "7897",
+    }
+
+
+def test_git_commands_explicitly_disable_proxy_when_port_is_empty(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings_file = temp_dir / ".web_admin_settings.json"
+    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
+    update_git_proxy_port("")
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    web_manager.main_profile.working_dir = str(repo_dir)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs):
+        calls.append(cmd)
+        if cmd[-2:] == ["rev-parse", "--show-toplevel"]:
+            return subprocess.CompletedProcess(cmd, 0, f"{repo_dir}\n", "")
+        if "status" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "## main\n", "")
+        if "log" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("bot.web.git_service.subprocess.run", fake_run)
+
+    overview = get_git_overview(web_manager, "main", 1001)
+
+    assert overview["repo_found"] is True
+    assert calls[0][:5] == ["git", "-c", "http.proxy=", "-c", "https.proxy="]
+    assert calls[1][:5] == ["git", "-c", "http.proxy=", "-c", "https.proxy="]
+
+
+def test_git_commands_use_local_proxy_port_when_configured(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings_file = temp_dir / ".web_admin_settings.json"
+    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
+    update_git_proxy_port("7897")
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    web_manager.main_profile.working_dir = str(repo_dir)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs):
+        calls.append(cmd)
+        if cmd[-2:] == ["rev-parse", "--show-toplevel"]:
+            return subprocess.CompletedProcess(cmd, 0, f"{repo_dir}\n", "")
+        if "status" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "## main\n", "")
+        if "log" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("bot.web.git_service.subprocess.run", fake_run)
+
+    overview = get_git_overview(web_manager, "main", 1001)
+
+    assert overview["repo_found"] is True
+    assert calls[0][:5] == [
+        "git",
+        "-c",
+        "http.proxy=http://127.0.0.1:7897",
+        "-c",
+        "https.proxy=http://127.0.0.1:7897",
+    ]
+    assert calls[1][:5] == [
+        "git",
+        "-c",
+        "http.proxy=http://127.0.0.1:7897",
+        "-c",
+        "https.proxy=http://127.0.0.1:7897",
+    ]
 
 
 @pytest.mark.asyncio
@@ -519,6 +613,56 @@ async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBo
             payload = await resp.json()
             assert payload["data"]["public_url"] == "https://demo.trycloudflare.com"
             assert payload["data"]["source"] == "manual_config"
+
+
+@pytest.mark.asyncio
+async def test_admin_git_proxy_routes_support_get_and_patch(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", temp_dir / ".web_admin_settings.json")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/git-proxy")
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"] == {"port": ""}
+
+            resp = await client.patch("/api/admin/git-proxy", json={"port": "7897"})
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"] == {"port": "7897"}
+
+            resp = await client.get("/api/admin/git-proxy")
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"] == {"port": "7897"}
+
+
+@pytest.mark.asyncio
+async def test_admin_git_proxy_route_rejects_invalid_port(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", temp_dir / ".web_admin_settings.json")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch("/api/admin/git-proxy", json={"port": "70000"})
+            assert resp.status == 400
+            payload = await resp.json()
+            assert payload["error"]["code"] == "invalid_git_proxy_port"
 
 
 @pytest.mark.asyncio

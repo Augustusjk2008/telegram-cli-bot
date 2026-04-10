@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 .session_store.json
+.web_admin_settings.json
 .env
 *.log
 docs/superpowers/

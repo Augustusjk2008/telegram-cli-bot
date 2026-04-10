@@ -8,6 +8,7 @@ import type {
   DirectoryListing,
   GitActionResult,
   GitDiffPayload,
+  GitProxySettings,
   GitOverview,
   SessionState,
   SystemScript,
@@ -36,6 +37,8 @@ export interface WebBotClient {
   resetSession(botAlias: string): Promise<void>;
   killTask(botAlias: string): Promise<string>;
   restartService(): Promise<void>;
+  getGitProxySettings(): Promise<GitProxySettings>;
+  updateGitProxySettings(port: string): Promise<GitProxySettings>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
   initGitRepository(botAlias: string): Promise<GitOverview>;
   getGitDiff(botAlias: string, path: string, staged?: boolean): Promise<GitDiffPayload>;
