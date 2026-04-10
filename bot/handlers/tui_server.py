@@ -43,8 +43,10 @@ class PtyWrapper:
         """读取输出"""
         if self.is_pty:
             try:
-                return self.process.read(timeout=timeout)
-            except:
+                # winpty.PtyProcess.read() 只接受 size 参数，不接受 timeout 关键字参数。
+                # 之前这里一直抛 TypeError 并被吞掉，导致 Web 终端永远读不到输出。
+                return self.process.read(4096)
+            except Exception:
                 return b""
         else:
             # 对于 subprocess，使用非阻塞读取

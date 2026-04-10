@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -9,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from aiohttp.client_exceptions import ClientConnectionResetError
+from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
@@ -302,6 +303,77 @@ async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager
                 assert "event: meta" in body
                 assert "event: delta" in body
                 assert "event: done" in body
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_requires_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with pytest.raises(WSServerHandshakeError):
+                await client.ws_connect("/terminal/ws")
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_forwards_process_output_and_input(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    started: dict[str, object] = {"writes": []}
+
+    class FakeProcess:
+        is_pty = False
+        pid = 4321
+        reads = [b"PS C:\\demo> ", b"output\r\n"]
+
+        def read(self, timeout: int = 1000) -> bytes:
+            if self.reads:
+                return self.reads.pop(0)
+            return b""
+
+        def write(self, data: bytes) -> None:
+            started["writes"].append(data)
+
+        def isalive(self) -> bool:
+            return bool(self.reads)
+
+        def terminate(self) -> None:
+            started["terminated"] = True
+
+        def close(self) -> None:
+            started["closed"] = True
+
+    def fake_create_shell_process(shell_type: str, cwd: str, use_pty: bool = True):
+        started["shell_type"] = shell_type
+        started["cwd"] = cwd
+        started["use_pty"] = use_pty
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.create_shell_process", side_effect=fake_create_shell_process):
+                ws = await client.ws_connect("/terminal/ws?token=secret")
+                await ws.send_json({"shell": "powershell", "cwd": str(temp_dir)})
+                first_message = await ws.receive_json()
+                assert first_message == {"pty_mode": False}
+                output_message = await ws.receive()
+                assert output_message.data == b"PS C:\\demo> "
+                await ws.send_str("pwd\r")
+                for _ in range(20):
+                    if started["writes"]:
+                        break
+                    await asyncio.sleep(0.01)
+                assert started["cwd"] == str(temp_dir)
+                assert started["shell_type"] == "powershell"
+                assert started["use_pty"] is True
+                assert started["writes"] == [b"pwd\r"]
+                await ws.close()
 
 
 @pytest.mark.asyncio

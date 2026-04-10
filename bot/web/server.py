@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import html
 import logging
@@ -11,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from aiohttp.client_exceptions import ClientConnectionResetError
 
 from bot.config import (
@@ -29,6 +30,7 @@ from bot.config import (
     request_restart,
 )
 from bot.manager import MultiBotManager
+from bot.handlers.tui_server import create_shell_process
 from .tunnel_service import TunnelService
 from .api_service import (
     AuthContext,
@@ -177,6 +179,8 @@ class WebApiServer:
             raw_token = auth_header[7:].strip()
         if not raw_token:
             raw_token = request.headers.get("X-API-Token", "").strip()
+        if not raw_token:
+            raw_token = request.query.get("token", "").strip()
         if WEB_API_TOKEN and raw_token != WEB_API_TOKEN:
             raise WebApiError(401, "unauthorized", "访问令牌无效")
 
@@ -378,6 +382,105 @@ class WebApiServer:
         body = await self._parse_json(request)
         data = await execute_shell_command(self.manager, alias, auth.user_id, body.get("command", ""))
         return _json({"ok": True, "data": data})
+
+    async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
+        await self._with_auth(request)
+        ws = web.WebSocketResponse(heartbeat=30.0)
+        await ws.prepare(request)
+
+        process = None
+        tasks: list[asyncio.Task[Any]] = []
+        try:
+            init_message = await ws.receive()
+            init_data: dict[str, Any] = {}
+            if init_message.type == WSMsgType.TEXT:
+                try:
+                    parsed = json.loads(init_message.data or "{}")
+                    if isinstance(parsed, dict):
+                        init_data = parsed
+                except json.JSONDecodeError:
+                    init_data = {}
+
+            shell_type = str(init_data.get("shell") or request.query.get("shell") or "powershell").strip() or "powershell"
+            raw_cwd = str(init_data.get("cwd") or request.query.get("cwd") or os.getcwd()).strip() or os.getcwd()
+            cwd = os.path.abspath(os.path.expanduser(raw_cwd))
+            if not os.path.isdir(cwd):
+                cwd = os.getcwd()
+
+            force_no_pty = bool(init_data.get("no_pty", False))
+            process = create_shell_process(shell_type, cwd, use_pty=not force_no_pty)
+            await ws.send_json({"pty_mode": process.is_pty})
+            loop = asyncio.get_running_loop()
+
+            async def forward_output() -> None:
+                while True:
+                    data = await loop.run_in_executor(None, lambda: process.read(timeout=100))
+                    if data:
+                        if isinstance(data, str):
+                            data = data.encode("utf-8", errors="replace")
+                        await ws.send_bytes(data)
+                        continue
+                    if not process.isalive():
+                        break
+                    await asyncio.sleep(0.02)
+
+            async def forward_input() -> None:
+                while not ws.closed:
+                    message = await ws.receive()
+                    if message.type == WSMsgType.BINARY:
+                        process.write(message.data)
+                        continue
+
+                    if message.type == WSMsgType.TEXT:
+                        text = message.data or ""
+                        if text.startswith("{"):
+                            try:
+                                payload = json.loads(text)
+                            except json.JSONDecodeError:
+                                payload = None
+                            if isinstance(payload, dict) and payload.get("type") in {"resize", "ping"}:
+                                continue
+                        process.write(text.encode("utf-8"))
+                        await asyncio.sleep(0)
+                        continue
+
+                    if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                        break
+
+            tasks = [
+                asyncio.create_task(forward_output()),
+                asyncio.create_task(forward_input()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                task.result()
+        except Exception as exc:
+            logger.exception("终端 WebSocket 处理失败: %s", exc)
+            if not ws.closed:
+                try:
+                    await ws.send_json({"error": str(exc)})
+                except Exception:
+                    pass
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if process is not None:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                try:
+                    process.close()
+                except Exception:
+                    pass
+
+        return ws
 
     async def get_pwd(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -718,6 +821,7 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
         app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
+        app.router.add_get("/terminal/ws", self.terminal_ws)
         app.router.add_get("/api/bots/{alias}/pwd", self.get_pwd)
         app.router.add_get("/api/bots/{alias}/ls", self.get_ls)
         app.router.add_post("/api/bots/{alias}/cd", self.post_cd)

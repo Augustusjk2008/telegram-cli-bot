@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Folder, GitBranch, Menu, MessageSquare, Settings } from "lucide-react";
+import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
 import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -17,6 +17,7 @@ import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
+import { TerminalScreen } from "../screens/TerminalScreen";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
@@ -94,7 +95,7 @@ export function App() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentTab, setCurrentTab] = useState<"chat" | "files" | "git" | "settings">("chat");
+  const [currentTab, setCurrentTab] = useState<"chat" | "files" | "terminal" | "git" | "settings">("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
   const [showBotManager, setShowBotManager] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
@@ -105,6 +106,7 @@ export function App() {
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const displayBots = applyUnreadStatus(bots, unreadBots);
+  const currentBotSummary = displayBots.find((bot) => bot.alias === currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
@@ -140,12 +142,16 @@ export function App() {
       document.title = "Bot 管理 - Telegram CLI Bridge";
       return;
     }
+    if (currentTab === "terminal") {
+      document.title = "终端 - Telegram CLI Bridge";
+      return;
+    }
     if (currentBot) {
       document.title = `${currentBot} - Telegram CLI Bridge`;
       return;
     }
     document.title = "Telegram CLI Bridge";
-  }, [currentBot, isLoggedIn, showBotManager]);
+  }, [currentBot, currentTab, isLoggedIn, showBotManager]);
 
   useEffect(() => {
     storeUnreadBots(unreadBots);
@@ -297,6 +303,15 @@ export function App() {
         <div className={clsx("absolute inset-0", currentTab === "files" ? "block" : "hidden")}>
           <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} />
         </div>
+        <div className={clsx("absolute inset-0", currentTab === "terminal" ? "block" : "hidden")}>
+          <TerminalScreen
+            authToken={readStoredToken()}
+            botAlias={currentBot}
+            client={client}
+            isVisible={currentTab === "terminal"}
+            preferredWorkingDir={currentBotSummary?.workingDir || ""}
+          />
+        </div>
         <div className={clsx("absolute inset-0", currentTab === "git" ? "block" : "hidden")}>
           <GitScreen key={`git-${currentBot}`} botAlias={currentBot} client={client} />
         </div>
@@ -325,6 +340,16 @@ export function App() {
           >
             <Folder className="w-6 h-6 mb-1" />
             <span className="text-[10px] font-medium">文件</span>
+          </button>
+          <button
+            onClick={() => {
+              setCurrentTab("terminal");
+              setIsChatImmersive(false);
+            }}
+            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "terminal" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
+          >
+            <SquareTerminal className="w-6 h-6 mb-1" />
+            <span className="text-[10px] font-medium">终端</span>
           </button>
           <button
             onClick={() => {

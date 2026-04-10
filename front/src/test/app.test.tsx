@@ -5,7 +5,39 @@ import { App } from "../app/App";
 import type { ChatMessage } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 
+const terminalSessionMock = vi.hoisted(() => ({
+  sendControl: vi.fn(),
+  sendText: vi.fn(),
+  fit: vi.fn(),
+  focus: vi.fn(),
+  dispose: vi.fn(),
+  scrollToBottom: vi.fn(),
+}));
+
+vi.mock("../services/terminalSession", () => ({
+  createTerminalSession: vi.fn((_container: HTMLElement, options: { onOpen?: () => void }) => ({
+    term: {
+      onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
+      onScroll: vi.fn(() => ({ dispose: vi.fn() })),
+      scrollToBottom: terminalSessionMock.scrollToBottom,
+      textarea: document.createElement("textarea"),
+    },
+    connect: vi.fn(() => options.onOpen?.()),
+    dispose: terminalSessionMock.dispose,
+    fit: terminalSessionMock.fit,
+    focus: terminalSessionMock.focus,
+    sendControl: terminalSessionMock.sendControl,
+    sendText: terminalSessionMock.sendText,
+  })),
+}));
+
 beforeEach(() => {
+  terminalSessionMock.sendControl.mockReset();
+  terminalSessionMock.sendText.mockReset();
+  terminalSessionMock.fit.mockReset();
+  terminalSessionMock.focus.mockReset();
+  terminalSessionMock.dispose.mockReset();
+  terminalSessionMock.scrollToBottom.mockReset();
   localStorage.clear();
   sessionStorage.clear();
 });
@@ -29,6 +61,7 @@ test("shows bottom navigation after entering demo app shell", async () => {
   await userEvent.click(screen.getByRole("button", { name: "登录" }));
   expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "终端" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
   expect(sessionStorage.getItem("web-api-token")).toBe("123");
@@ -386,4 +419,30 @@ test("immersive chat mode hides outer chrome but keeps the composer visible", as
   expect(screen.queryByRole("button", { name: "文件" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "重置会话" })).not.toBeInTheDocument();
   expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+});
+
+test("terminal tab keeps one shared session alive and rebuilds from the current bot workdir", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "终端" });
+
+  await user.click(screen.getByRole("button", { name: "终端" }));
+
+  expect(await screen.findByTestId("terminal-screen-root")).toBeInTheDocument();
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+
+  await user.click(screen.getByRole("button", { name: "Git" }));
+  await user.click(screen.getByRole("button", { name: "终端" }));
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+  await user.click(screen.getByRole("button", { name: "终端" }));
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+
+  await user.click(screen.getByRole("button", { name: "重建终端" }));
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("2");
 });
