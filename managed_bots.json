@@ -1,3 +1,13 @@
 {
-  "bots": []
+  "bots": [
+    {
+      "alias": "rk3588",
+      "token": "",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "h:\\workspace\\KimiAgent\\openEuler",
+      "enabled": true,
+      "bot_mode": "cli"
+    }
+  ]
 }

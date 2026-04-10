@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +89,7 @@ from .git_service import (
 logger = logging.getLogger(__name__)
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
+_TERMINAL_OUTPUT_EOF = object()
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -105,6 +107,70 @@ def _normalize_origin(origin: str) -> str:
 def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
+
+
+class _TerminalOutputPump:
+    """用 daemon 线程读取终端输出，避免阻塞读把主进程退出卡住。"""
+
+    def __init__(self, process: Any):
+        self._process = process
+        self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._thread is not None:
+            return
+
+        self._loop = loop
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"terminal-output-{getattr(self._process, 'pid', 'unknown')}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    async def read(self) -> bytes | object:
+        return await self._queue.get()
+
+    def _put(self, item: bytes | object) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(self._queue.put_nowait, item)
+        except RuntimeError:
+            # 事件循环正在关闭时无需再投递。
+            return
+
+    def _run(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    data = self._process.read(timeout=100)
+                except Exception as exc:
+                    logger.debug("终端输出读取结束 pid=%s: %s", getattr(self._process, "pid", "unknown"), exc)
+                    break
+
+                if data:
+                    if isinstance(data, str):
+                        data = data.encode("utf-8", errors="replace")
+                    self._put(data)
+                    continue
+
+                try:
+                    if not self._process.isalive():
+                        break
+                except Exception:
+                    break
+
+                self._stop_event.wait(0.02)
+        finally:
+            self._put(_TERMINAL_OUTPUT_EOF)
 
 
 @web.middleware
@@ -409,6 +475,7 @@ class WebApiServer:
         await ws.prepare(request)
 
         process = None
+        output_pump: _TerminalOutputPump | None = None
         tasks: list[asyncio.Task[Any]] = []
         try:
             init_message = await ws.receive()
@@ -431,18 +498,15 @@ class WebApiServer:
             process = create_shell_process(shell_type, cwd, use_pty=not force_no_pty)
             await ws.send_json({"pty_mode": process.is_pty})
             loop = asyncio.get_running_loop()
+            output_pump = _TerminalOutputPump(process)
+            output_pump.start(loop)
 
             async def forward_output() -> None:
                 while True:
-                    data = await loop.run_in_executor(None, lambda: process.read(timeout=100))
-                    if data:
-                        if isinstance(data, str):
-                            data = data.encode("utf-8", errors="replace")
-                        await ws.send_bytes(data)
-                        continue
-                    if not process.isalive():
+                    data = await output_pump.read()
+                    if data is _TERMINAL_OUTPUT_EOF:
                         break
-                    await asyncio.sleep(0.02)
+                    await ws.send_bytes(data)
 
             async def forward_input() -> None:
                 while not ws.closed:
@@ -485,6 +549,8 @@ class WebApiServer:
                 except Exception:
                     pass
         finally:
+            if output_pump is not None:
+                output_pump.stop()
             for task in tasks:
                 if not task.done():
                     task.cancel()
