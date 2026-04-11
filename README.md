@@ -50,9 +50,15 @@
 python -m pip install -r requirements.txt
 ```
 
-### 2. 新建 `.env`
+### 2. 从模板生成 `.env`
 
-在仓库根目录新建一个 `.env` 文件，先填最小配置：
+先复制示例配置文件：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+然后编辑 `.env`，至少填下面这些字段：
 
 ```env
 TELEGRAM_BOT_TOKEN=填入你的 Telegram Bot Token
@@ -65,6 +71,8 @@ WEB_ENABLED=false
 
 ALLOWED_USER_IDS=
 ```
+
+如果你不想用复制命令，也可以在仓库根目录手动新建 `.env`，再填同样的内容。
 
 说明：
 
