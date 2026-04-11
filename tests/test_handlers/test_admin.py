@@ -22,6 +22,7 @@ from bot.handlers.admin import (
     bot_start,
     bot_stop,
     execute_script,
+    list_available_scripts,
     restart_main,
     stream_execute_script,
 )
@@ -224,6 +225,33 @@ class TestBotGotoCallback:
 
 class TestExecuteScript:
     """测试系统脚本执行"""
+
+    def test_list_available_scripts_only_returns_sh_and_py_on_linux(self, tmp_path, monkeypatch):
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "build_web_frontend.sh").write_text("# build web\nnpm run build\n", encoding="utf-8")
+        (scripts_dir / "turn_off_monitor.ps1").write_text("# monitor\n", encoding="utf-8")
+
+        monkeypatch.setattr("bot.handlers.admin.SCRIPTS_DIR", scripts_dir)
+        monkeypatch.setattr("bot.platform.runtime.os.name", "posix")
+
+        scripts = list_available_scripts()
+
+        assert [item[0] for item in scripts] == ["build_web_frontend"]
+
+    def test_execute_script_uses_bash_for_sh(self):
+        script_path = Path("scripts/build_web_frontend.sh")
+        captured: dict[str, object] = {}
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args[0]
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=b"", stderr=b"")
+
+        with patch("bot.handlers.admin.subprocess.run", side_effect=fake_run):
+            success, output = execute_script(script_path)
+
+        assert success is True
+        assert captured["args"] == ["bash", str(script_path)]
 
     def test_build_web_frontend_batch_is_ascii_safe_for_cmd(self):
         script_path = Path("scripts/build_web_frontend.bat")

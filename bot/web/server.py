@@ -33,6 +33,7 @@ from bot.config import (
 )
 from bot.manager import MultiBotManager
 from bot.handlers.tui_server import create_shell_process
+from bot.platform.runtime import get_default_shell
 from .tunnel_service import TunnelService
 from .api_service import (
     AuthContext,
@@ -489,7 +490,10 @@ class WebApiServer:
                 except json.JSONDecodeError:
                     init_data = {}
 
-            shell_type = str(init_data.get("shell") or request.query.get("shell") or "powershell").strip() or "powershell"
+            default_shell = get_default_shell()
+            shell_type = str(init_data.get("shell") or request.query.get("shell") or default_shell).strip() or default_shell
+            if shell_type == "auto":
+                shell_type = default_shell
             raw_cwd = str(init_data.get("cwd") or request.query.get("cwd") or os.getcwd()).strip() or os.getcwd()
             cwd = os.path.abspath(os.path.expanduser(raw_cwd))
             if not os.path.isdir(cwd):

@@ -5,13 +5,13 @@ import logging
 import os
 import queue
 import re
-import shutil
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
 from bot.cli_params import build_cli_args_from_config, CliParamsConfig
+from bot.platform.executables import resolve_cli_executable as _resolve_cli_executable
 
 logger = logging.getLogger(__name__)
 
@@ -23,67 +23,7 @@ CODEX_STATUS_FALLBACK_WAIT_SECONDS = 8.0
 
 def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> Optional[str]:
     """解析 CLI 可执行文件路径，兼容 Windows 下 cmd/bat 可执行项。"""
-    path = (cli_path or "").strip().strip('"').strip("'")
-    if not path:
-        return None
-
-    def _existing_file(p: str) -> Optional[str]:
-        if os.path.isfile(p):
-            return os.path.abspath(p)
-        return None
-
-    # 1) 绝对路径或显式相对路径
-    if os.path.isabs(path):
-        found = _existing_file(path)
-        if found:
-            return found
-    if any(sep in path for sep in ("/", "\\")):
-        candidates = []
-        if working_dir:
-            candidates.append(os.path.join(working_dir, path))
-        candidates.append(path)
-        for c in candidates:
-            found = _existing_file(os.path.abspath(os.path.expanduser(c)))
-            if found:
-                return found
-
-    # 2) PATH 搜索
-    found = shutil.which(path)
-    if found:
-        return found
-
-    # 3) Windows: 自动补扩展名
-    if os.name == "nt" and not os.path.splitext(path)[1]:
-        for ext in (".cmd", ".bat", ".exe", ".com"):
-            found = shutil.which(path + ext)
-            if found:
-                return found
-
-    # 4) Windows: npm 全局目录兜底（PATH 未包含时）
-    if os.name == "nt" and not any(sep in path for sep in ("/", "\\")):
-        appdata = os.getenv("APPDATA")
-        userprofile = os.getenv("USERPROFILE")
-        npm_dirs: List[str] = []
-        if appdata:
-            npm_dirs.append(os.path.join(appdata, "npm"))
-        if userprofile:
-            npm_dirs.append(os.path.join(userprofile, "AppData", "Roaming", "npm"))
-        # 去重并保持顺序
-        seen = set()
-        npm_dirs = [d for d in npm_dirs if not (d in seen or seen.add(d))]
-
-        if os.path.splitext(path)[1]:
-            names = [path]
-        else:
-            names = [path + ext for ext in (".cmd", ".bat", ".exe", ".com", ".ps1")]
-
-        for npm_dir in npm_dirs:
-            for name in names:
-                found = _existing_file(os.path.join(npm_dir, name))
-                if found:
-                    return found
-
-    return None
+    return _resolve_cli_executable(cli_path, working_dir)
 
 
 def normalize_cli_type(cli_type: str) -> str:

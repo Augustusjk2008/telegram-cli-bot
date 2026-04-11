@@ -1,12 +1,17 @@
 # Telegram CLI Bridge
 
-一个面向 Windows 的 Telegram / Web 双入口 AI CLI Bridge。
+一个支持 Windows 与 Ubuntu/Debian Linux 的 Telegram / Web 双入口 AI CLI Bridge。
 
 它可以把你在 Telegram 或 Web 页面里发出的消息，转交给本机已经安装好的 AI Coding CLI，例如：
 
 - `codex`
 - `claude`
 - `kimi`
+
+当前一等支持平台：
+
+- Windows
+- Ubuntu / Debian Linux
 
 适合这样的使用场景：
 
@@ -19,6 +24,7 @@
 - Telegram 聊天入口
 - Web 管理界面
 - 支持 `codex` / `claude` / `kimi`
+- 支持 Windows 与 Ubuntu/Debian Linux
 - 支持文件浏览、上传、下载、查看
 - Web 端支持 Git 概览与常见操作
 - 支持一个主 Bot + 多个托管子 Bot
@@ -27,7 +33,16 @@
 
 ## 安装前准备
 
-这是一个 Windows 优先项目，下面的命令示例使用 PowerShell。
+仓库当前同时支持：
+
+- Windows 本地运行
+- Ubuntu / Debian Linux 部署
+
+下面的快速开始示例仍以 Windows PowerShell 为主。
+
+如果你要在 Linux 上长期部署，请直接结合这份文档一起看：
+
+- `docs/linux-deployment.md`
 
 开始前请准备好：
 
@@ -98,6 +113,12 @@ python -m bot
 
 ```powershell
 .\start.bat
+```
+
+Linux 上可以使用：
+
+```bash
+bash start.sh
 ```
 
 ### 4. 开始使用
@@ -213,6 +234,12 @@ python -m bot
 .\start.bat web
 ```
 
+Linux 上对应命令：
+
+```bash
+bash start.sh web
+```
+
 ### 4. 打开页面
 
 在浏览器访问：
@@ -274,7 +301,13 @@ WHISPER_DEVICE=cpu
 
 ### 手机公网访问 Web
 
-如果你想在手机上通过公网打开 Web 页面，可以使用 Cloudflare Quick Tunnel。
+如果你想在手机上通过公网打开 Web 页面，可以使用 Cloudflare Tunnel。
+
+先说结论：
+
+- Quick Tunnel 只建议用于临时调试
+- 正式部署推荐 Named Tunnel
+- Linux 上的详细安装与 systemd 方式，见 `docs/linux-deployment.md`
 
 先确保：
 
@@ -292,10 +325,24 @@ WEB_TUNNEL_CLOUDFLARED_PATH=D:\Programs\cloudflared\cloudflared.exe
 
 启动后，Web 设置页会显示公网地址。
 
+但需要注意：
+
+- `WEB_TUNNEL_MODE=cloudflare_quick` 只适合临时测试
+- `trycloudflare.com` quick tunnel 不支持 SSE
+- 本项目 Web chat 的流式回复依赖 SSE，所以 quick tunnel 不适合作为正式公网入口
+
 如果你已经有自己的固定公网地址，也可以直接配置：
 
 ```env
 WEB_PUBLIC_URL=https://your-domain.example.com
+```
+
+如果你在 Linux 上使用 Cloudflare Named Tunnel 作为独立系统服务，建议应用侧配置：
+
+```env
+WEB_TUNNEL_MODE=disabled
+WEB_PUBLIC_URL=https://your-domain.example.com
+WEB_TUNNEL_CLOUDFLARED_PATH=/usr/bin/cloudflared
 ```
 
 ### 多 Bot
@@ -390,7 +437,7 @@ npm test
 
 ## 说明
 
-- 这是一个 Windows 优先项目
+- 当前一等支持平台是 Windows 与 Ubuntu/Debian Linux
 - 用户可见文本目前以中文为主
 - 仓库里即使存在 `venv/`，也不要默认假设它在你的机器上可直接使用
 - 最稳妥的方式仍然是使用你当前机器上的 Python 环境重新安装依赖

@@ -177,3 +177,15 @@ class TestCollectCliOutput:
         assert output == "hello from fake process\n"
         assert returncode == 0
         assert process.wait_calls == 1
+
+
+def test_terminate_process_tree_sync_uses_platform_helper(monkeypatch):
+    from bot.handlers import chat
+
+    fake_process = MagicMock()
+    helper = MagicMock()
+    monkeypatch.setattr(chat, "terminate_process_tree_sync", helper)
+
+    chat._terminate_process_tree_sync(fake_process)
+
+    helper.assert_called_once_with(fake_process)

@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from bot.platform.processes import build_subprocess_group_kwargs
+
 logger = logging.getLogger(__name__)
 
 _CLOUDFLARE_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
@@ -446,6 +448,7 @@ class TunnelService:
                 errors="replace",
                 bufsize=1,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                **build_subprocess_group_kwargs(),
             )
         except FileNotFoundError:
             self._set_snapshot(status="error", last_error="未找到 cloudflared 可执行文件", pid=None, public_url="")

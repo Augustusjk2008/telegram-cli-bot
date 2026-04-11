@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -13,13 +14,15 @@ from typing import Optional, Union
 
 from aiohttp import web
 import aiohttp
+from bot.platform.processes import build_subprocess_group_kwargs
+from bot.platform.runtime import get_default_shell
 
 logger = logging.getLogger(__name__)
 
 # 全局变量存储服务器实例
 _tui_server: Optional[asyncio.Task] = None
 _tui_port: int = 8081
-_default_shell: str = "powershell"  # 默认 shell 类型
+_default_shell: str = get_default_shell()  # 默认 shell 类型
 
 # 尝试导入 winpty（Windows PTY 支持）
 try:
@@ -43,9 +46,12 @@ class PtyWrapper:
         """读取输出"""
         if self.is_pty:
             try:
-                # winpty.PtyProcess.read() 只接受 size 参数，不接受 timeout 关键字参数。
-                # 之前这里一直抛 TypeError 并被吞掉，导致 Web 终端永远读不到输出。
-                return self.process.read(4096)
+                return self.process.read(timeout=timeout)
+            except TypeError:
+                try:
+                    return self.process.read(4096)
+                except Exception:
+                    return b""
             except Exception:
                 return b""
         else:
@@ -101,6 +107,40 @@ class PtyWrapper:
             return self.process.pid
         else:
             return self.process.pid
+
+
+class PosixPtyProcess:
+    """POSIX PTY 进程包装，提供与 winpty 类似的基础接口。"""
+
+    def __init__(self, process: subprocess.Popen, master_fd: int):
+        self._process = process
+        self._master_fd = master_fd
+        self.pid = process.pid
+
+    def read(self, timeout: int = 1000) -> bytes:
+        wait_seconds = max(timeout, 0) / 1000
+        readable, _, _ = select.select([self._master_fd], [], [], wait_seconds)
+        if not readable:
+            return b""
+        try:
+            return os.read(self._master_fd, 4096)
+        except OSError:
+            return b""
+
+    def write(self, data: str) -> None:
+        os.write(self._master_fd, data.encode("utf-8", errors="replace"))
+
+    def isalive(self) -> bool:
+        return self._process.poll() is None
+
+    def terminate(self) -> None:
+        self._process.terminate()
+
+    def close(self) -> None:
+        try:
+            os.close(self._master_fd)
+        except OSError:
+            pass
 
 
 def create_shell_process(shell_type: str, cwd: str, use_pty: bool = True) -> PtyWrapper:
@@ -171,23 +211,35 @@ def create_shell_process(shell_type: str, cwd: str, use_pty: bool = True) -> Pty
             bufsize=0
         )
     else:
-        # Unix: 使用 PTY
-        import pty
-        master_fd, slave_fd = pty.openpty()
+        if use_pty:
+            import pty
+
+            master_fd, slave_fd = pty.openpty()
+            cmd_parts = cmdline.split()
+            process = subprocess.Popen(
+                cmd_parts,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=cwd,
+                env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
+                **build_subprocess_group_kwargs(),
+            )
+            os.close(slave_fd)
+            return PtyWrapper(PosixPtyProcess(process, master_fd), is_pty=True)
+
         cmd_parts = cmdline.split()
         process = subprocess.Popen(
             cmd_parts,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             cwd=cwd,
             env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
-            preexec_fn=os.setsid
+            bufsize=0,
+            **build_subprocess_group_kwargs(),
         )
-        os.close(slave_fd)
-        # Unix PTY 暂时用原生方式处理
-        return PtyWrapper(process, is_pty=False)
-    
+
     return PtyWrapper(process, is_pty=False)
 
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram CLI Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=telegram-cli-bridge
+Group=telegram-cli-bridge
+WorkingDirectory=/opt/telegram-cli-bridge
+Environment=TELEGRAM_CLI_BRIDGE_SUPERVISOR=1
+ExecStart=/opt/telegram-cli-bridge/start.sh
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

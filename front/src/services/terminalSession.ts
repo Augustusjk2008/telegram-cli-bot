@@ -81,7 +81,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
 
     socket.addEventListener("open", () => {
       socket?.send(JSON.stringify({
-        shell: options.shell || "powershell",
+        shell: options.shell || "auto",
         cwd: options.cwd,
       }));
     });

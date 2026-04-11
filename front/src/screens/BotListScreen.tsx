@@ -3,7 +3,7 @@ import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { normalizeWindowsPathInput } from "../utils/windowsPath";
+import { normalizePathInput } from "../utils/pathInput";
 
 type Props = {
   client?: WebBotClient;
@@ -62,8 +62,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
         ...createDraft,
         alias: createDraft.alias.trim(),
         token: createDraft.token.trim(),
-        cliPath: normalizeWindowsPathInput(createDraft.cliPath),
-        workingDir: normalizeWindowsPathInput(createDraft.workingDir),
+        cliPath: normalizePathInput(createDraft.cliPath),
+        workingDir: normalizePathInput(createDraft.workingDir),
       });
       setCreateDraft(EMPTY_CREATE_DRAFT);
       setNotice("Bot 已创建");
@@ -230,7 +230,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             value={createDraft.workingDir}
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder="C:\\workspace\\team3"
+            placeholder="/srv/telegram-cli-bridge/team3"
           />
         </div>
         <button

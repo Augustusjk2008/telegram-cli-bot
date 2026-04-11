@@ -17,6 +17,7 @@ from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR, request_restart
 from bot.context_helpers import ensure_admin, get_manager, reply_text
 from bot.handlers.shell import strip_ansi_escape
 from bot.messages import msg
+from bot.platform.scripts import allowed_script_extensions, build_script_command
 from bot.sessions import sessions, sessions_lock
 from bot.utils import safe_edit_text
 from bot.app_settings import build_git_proxy_env
@@ -26,9 +27,12 @@ logger = logging.getLogger(__name__)
 # scripts 目录路径
 SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
 
-# 支持的脚本扩展名
-SCRIPT_EXTENSIONS = {'.bat', '.cmd', '.ps1', '.py', '.exe'}
 SCRIPT_EXEC_TIMEOUT = 60
+
+
+def _script_extensions() -> set[str]:
+    """按当前运行平台返回允许的脚本扩展名。"""
+    return allowed_script_extensions()
 
 
 def _decode_process_output(data: bytes | str | None) -> str:
@@ -84,12 +88,8 @@ def get_script_display_name(script_path: Path) -> str:
                 display_name = line[2:].strip()
             elif line.upper().startswith('REM '):
                 display_name = line[4:].strip()
-        elif ext == '.ps1':
+        elif ext in ['.ps1', '.py', '.sh']:
             # PowerShell: # 开头
-            if line.startswith('#'):
-                display_name = line[1:].strip()
-        elif ext == '.py':
-            # Python: # 开头
             if line.startswith('#'):
                 display_name = line[1:].strip()
         
@@ -127,21 +127,10 @@ def get_script_description(script_path: Path) -> str:
                 desc = line[4:].strip()
                 if desc:
                     descriptions.append(desc)
-        elif ext == '.ps1':
+        elif ext in ['.ps1', '.py', '.sh']:
             # PowerShell: # 开头
             if line.startswith('#'):
                 desc = line[1:].strip()
-                if desc:
-                    descriptions.append(desc)
-        elif ext == '.py':
-            # Python: # 开头 或 docstring
-            if line.startswith('#'):
-                desc = line[1:].strip()
-                if desc:
-                    descriptions.append(desc)
-            elif line.startswith(('"""', "'''")):
-                # 多行 docstring 简化处理，取第一行
-                desc = line.strip('"\'').strip()
                 if desc:
                     descriptions.append(desc)
         else:
@@ -171,9 +160,10 @@ def list_available_scripts() -> list[tuple[str, str, str, Path]]:
     if not SCRIPTS_DIR.exists():
         return []
     
+    script_extensions = _script_extensions()
     scripts = []
     for item in SCRIPTS_DIR.iterdir():
-        if item.is_file() and item.suffix.lower() in SCRIPT_EXTENSIONS:
+        if item.is_file() and item.suffix.lower() in script_extensions:
             # 去除扩展名的脚本名作为命令名
             script_name = item.stem
             display_name = get_script_display_name(item)
@@ -183,26 +173,6 @@ def list_available_scripts() -> list[tuple[str, str, str, Path]]:
     # 按名称排序
     scripts.sort(key=lambda x: x[0])
     return scripts
-
-
-def _build_script_command(script_path: Path) -> tuple[list[str] | str, bool]:
-    """构建脚本执行命令，返回 (命令, 是否使用 shell)。"""
-    ext = script_path.suffix.lower()
-    if ext == '.exe':
-        return [str(script_path)], False
-    if ext == '.ps1':
-        return [
-            'powershell',
-            '-NoProfile',
-            '-NonInteractive',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-File',
-            str(script_path),
-        ], False
-    if ext == '.py':
-        return ['python', str(script_path)], False
-    return str(script_path), True
 
 
 def _format_script_result(
@@ -257,7 +227,7 @@ def _terminate_script_process(process: subprocess.Popen) -> None:
 def execute_script(script_path: Path) -> tuple[bool, str]:
     """执行脚本，返回 (成功, 输出/错误信息)"""
     try:
-        command, use_shell = _build_script_command(script_path)
+        command, use_shell = build_script_command(script_path)
         result = subprocess.run(
             command,
             capture_output=True,
@@ -279,7 +249,7 @@ def stream_execute_script(script_path: Path) -> Iterator[dict[str, object]]:
     collected_output: list[str] = []
 
     try:
-        command, use_shell = _build_script_command(script_path)
+        command, use_shell = build_script_command(script_path)
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -563,7 +533,7 @@ async def system_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not scripts:
             await update.message.reply_text(
                 msg("admin", "system_no_scripts",
-                    extensions=', '.join(SCRIPT_EXTENSIONS),
+                    extensions=', '.join(sorted(_script_extensions())),
                     path=html.escape(str(SCRIPTS_DIR))),
                 parse_mode="HTML"
             )
@@ -607,7 +577,7 @@ async def system_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if target_script is None:
         # 尝试添加扩展名查找
-        for ext in SCRIPT_EXTENSIONS:
+        for ext in _script_extensions():
             candidate = SCRIPTS_DIR / f"{script_name}{ext}"
             if candidate.exists():
                 target_script = candidate

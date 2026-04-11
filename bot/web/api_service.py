@@ -157,8 +157,6 @@ def _build_capabilities(profile: BotProfile, is_main: bool) -> list[str]:
     capabilities = ["session", "history"]
     if _supports_cli_runtime(profile):
         capabilities.extend(["chat", "exec", "files"])
-    elif profile.bot_mode == "webcli":
-        capabilities.append("status")
     if is_main:
         capabilities.append("admin")
     return capabilities

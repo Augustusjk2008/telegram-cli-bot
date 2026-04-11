@@ -35,6 +35,7 @@ from bot.cli import (
 from bot.config import CLI_EXEC_TIMEOUT, CLI_PROGRESS_UPDATE_INTERVAL, CLI_TIMEOUT_CHECK_INTERVAL
 from bot.context_helpers import get_current_profile, get_current_session
 from bot.messages import msg
+from bot.platform.processes import terminate_process_tree_sync
 from bot.utils import check_auth, safe_edit_text, split_text_into_chunks
 
 logger = logging.getLogger(__name__)
@@ -62,36 +63,7 @@ def _is_stop_requested(session) -> bool:
 def _terminate_process_tree_sync(process: subprocess.Popen):
     """同步终止进程及其子进程（Windows兼容），在 executor 线程中运行"""
     try:
-        if process.poll() is not None:
-            return
-
-        process.terminate()
-        try:
-            process.wait(timeout=3)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-
-        if sys.platform == "win32" and process.pid:
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                    capture_output=True,
-                    timeout=5
-                )
-            except Exception:
-                pass
-            try:
-                process.wait(timeout=2)
-                return
-            except subprocess.TimeoutExpired:
-                pass
-
-        process.kill()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
+        terminate_process_tree_sync(process)
     except Exception as e:
         logger.warning(f"终止进程时出错: {e}")
 

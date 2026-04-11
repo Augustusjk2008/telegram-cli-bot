@@ -117,8 +117,9 @@ class TestMultiBotManagerWithAssistant:
         assert profile.alias == "test_assistant"
         assert "test_assistant" in manager.managed_profiles
 
-    def test_load_legacy_webcli_profile_falls_back_to_cli(self, temp_dir):
+    def test_load_legacy_webcli_profile_falls_back_to_cli_and_rewrites_file(self, temp_dir):
         from bot.manager import MultiBotManager
+        from bot.web.api_service import build_bot_summary
 
         config_file = temp_dir / "test_bots.json"
         config_file.write_text(
@@ -143,6 +144,13 @@ class TestMultiBotManagerWithAssistant:
             str(config_file),
         )
         assert manager.managed_profiles["legacy_web"].bot_mode == "cli"
+        saved = json.loads(config_file.read_text(encoding="utf-8"))
+        assert saved["bots"][0]["bot_mode"] == "cli"
+
+        summary = build_bot_summary(manager, "legacy_web")
+        assert summary["bot_mode"] == "cli"
+        assert "status" not in summary["capabilities"]
+        assert {"chat", "exec", "files"}.issubset(summary["capabilities"])
 
     @pytest.mark.asyncio
     async def test_add_webcli_bot_is_rejected(self, temp_dir):
@@ -161,3 +169,20 @@ class TestMultiBotManagerWithAssistant:
                 working_dir=str(temp_dir),
                 bot_mode="webcli",
             )
+
+    def test_register_handlers_assistant_and_cli_are_only_runtime_modes(self):
+        from bot.handlers import register_handlers
+
+        for mode in ("cli", "assistant"):
+            app = MagicMock()
+            app.bot_data = {"bot_mode": mode}
+            app.add_handler = MagicMock()
+
+            register_handlers(app, include_admin=False)
+
+            command_handlers = [
+                call.args[0]
+                for call in app.add_handler.call_args_list
+                if hasattr(call.args[0], "commands")
+            ]
+            assert any("kill" in handler.commands for handler in command_handlers)

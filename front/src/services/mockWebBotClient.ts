@@ -306,7 +306,7 @@ export class MockWebBotClient implements WebBotClient {
       canInit: false,
       workingDir,
       repoPath: workingDir,
-      repoName: workingDir.split("\\").filter(Boolean).pop() || "repo",
+      repoName: workingDir.split(/[\\/]+/).filter(Boolean).pop() || "repo",
       currentBranch: "main",
       isClean: true,
       aheadCount: 0,

@@ -105,10 +105,7 @@ def register_handlers(application: Application, include_admin: bool = False):
     """根据 bot_mode 注册对应的 handlers"""
     bot_mode = application.bot_data.get("bot_mode", "cli")
 
-    if bot_mode == "webcli":
-        logger.warning("Webcli 模式已被禁用，切换到 CLI 模式")
-        _register_cli_handlers(application, include_admin)
-    elif bot_mode == "assistant":
+    if bot_mode == "assistant":
         logger.info("注册 assistant 兼容模式 handlers")
         _register_assistant_handlers(application, include_admin)
     else:

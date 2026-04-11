@@ -506,22 +506,23 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             with patch("bot.web.server.create_shell_process", side_effect=fake_create_shell_process):
-                ws = await client.ws_connect("/terminal/ws?token=secret")
-                await ws.send_json({"shell": "powershell", "cwd": str(temp_dir)})
-                first_message = await ws.receive_json()
-                assert first_message == {"pty_mode": False}
-                output_message = await ws.receive()
-                assert output_message.data == b"PS C:\\demo> "
-                await ws.send_str("pwd\r")
-                for _ in range(20):
-                    if started["writes"]:
-                        break
-                    await asyncio.sleep(0.01)
-                assert started["cwd"] == str(temp_dir)
-                assert started["shell_type"] == "powershell"
-                assert started["use_pty"] is True
-                assert started["writes"] == [b"pwd\r"]
-                await ws.close()
+                with patch("bot.web.server.get_default_shell", return_value="bash"):
+                    ws = await client.ws_connect("/terminal/ws?token=secret")
+                    await ws.send_json({"cwd": str(temp_dir)})
+                    first_message = await ws.receive_json()
+                    assert first_message == {"pty_mode": False}
+                    output_message = await ws.receive()
+                    assert output_message.data == b"PS C:\\demo> "
+                    await ws.send_str("pwd\r")
+                    for _ in range(20):
+                        if started["writes"]:
+                            break
+                        await asyncio.sleep(0.01)
+                    assert started["cwd"] == str(temp_dir)
+                    assert started["shell_type"] == "bash"
+                    assert started["use_pty"] is True
+                    assert started["writes"] == [b"pwd\r"]
+                    await ws.close()
 
 
 @pytest.mark.asyncio

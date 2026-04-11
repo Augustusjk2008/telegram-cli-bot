@@ -45,6 +45,7 @@ from bot.config import (
 )
 from bot.handlers import register_handlers
 from bot.models import BotProfile
+from bot.platform.paths import truncate_path_for_display
 from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
@@ -453,6 +454,7 @@ class MultiBotManager:
             logger.warning("托管Bot配置格式无效，已忽略")
             return
 
+        migrated_legacy_mode = False
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -481,10 +483,14 @@ class MultiBotManager:
             if profile_data["bot_mode"] == "webcli":
                 logger.warning("子Bot `%s` 的 webcli 模式已弃用，自动回退为 cli", alias)
                 profile_data["bot_mode"] = "cli"
+                migrated_legacy_mode = True
             # 如果有 cli_params 配置，一并传递
             if "cli_params" in item:
                 profile_data["cli_params"] = item["cli_params"]
             self.managed_profiles[alias] = BotProfile.from_dict(profile_data)
+
+        if migrated_legacy_mode:
+            self._save_profiles()
 
     def _save_profiles(self):
         payload = {
@@ -918,57 +924,6 @@ class MultiBotManager:
             }
             return badges.get(status, status)
 
-        # 辅助函数：智能截断路径，优先保留盘符和最下级文件夹
-        def truncate_path(path: str, max_len: int = 30) -> str:
-            if len(path) <= max_len:
-                return path
-            
-            # 统一使用反斜杠处理 Windows 路径
-            normalized = path.replace("/", "\\")
-            
-            # 提取盘符（如 H:）
-            drive = ""
-            if len(normalized) >= 2 and normalized[1] == ":":
-                drive = normalized[:2]  # e.g., "H:"
-                rest = normalized[2:]   # e.g., "\WorkSpace\KimiAgent\game_agents"
-            else:
-                rest = normalized
-            
-            # 分割路径获取各级文件夹
-            parts = [p for p in rest.split("\\") if p]
-            if not parts:
-                return path[:max_len - 3] + "..."
-            
-            # 最下级文件夹
-            last_folder = parts[-1]
-            
-            # 尝试 "盘符\...\最下级文件夹" 格式
-            # 预留 5 个字符给 "\...\" 或类似的省略标记
-            # 实际使用 "..." 作为中间省略
-            middle_ellipsis = "..."
-            
-            # 计算需要的空间：盘符 + 反斜杠 + 省略号 + 反斜杠 + 最下级文件夹
-            # 如：H:\...\game_agents
-            if drive:
-                candidate = f"{drive}\\{middle_ellipsis}\\{last_folder}"
-            else:
-                candidate = f"{middle_ellipsis}\\{last_folder}"
-            
-            if len(candidate) <= max_len:
-                return candidate
-            
-            # 如果最下级文件夹本身太长，截断它
-            if len(last_folder) > max_len - len(drive) - 6:  # 预留 \...\ 的空间
-                available = max_len - len(drive) - 6
-                if available > 0:
-                    truncated_last = last_folder[:available] + "..."
-                    if drive:
-                        return f"{drive}\\...\\{truncated_last}"
-                    return f"...\\{truncated_last}"
-            
-            # 兜底：简单截断
-            return path[:max_len - 3] + "..."
-
         # 主 Bot 信息
         main_app = self.applications.get(self.main_profile.alias)
         if main_app:
@@ -985,7 +940,7 @@ class MultiBotManager:
             f"  <b>用户名:</b> @{main_username}\n"
             f"  <b>状态:</b> {status_badge(main_status)}\n"
             f"  <b>CLI:</b> <code>{self.main_profile.cli_type}</code>\n"
-            f"  <b>工作目录:</b> <code>{truncate_path(self.main_profile.working_dir, 30)}</code>\n"
+            f"  <b>工作目录:</b> <code>{truncate_path_for_display(self.main_profile.working_dir, 30)}</code>\n"
         )
 
         # 子 Bot 列表
@@ -1009,7 +964,7 @@ class MultiBotManager:
                     f"  ├ <b>运行状态:</b> {status_badge(run_status)}\n"
                     f"  ├ <b>启用状态:</b> {status_badge(enable_status)}\n"
                     f"  ├ <b>CLI:</b> <code>{profile.cli_type}</code>\n"
-                    f"  └ <b>工作目录:</b> <code>{truncate_path(profile.working_dir, 28)}</code>\n"
+                    f"  └ <b>工作目录:</b> <code>{truncate_path_for_display(profile.working_dir, 28)}</code>\n"
                 )
         else:
             lines.append("<i>💤 暂无托管 Bot</i>")

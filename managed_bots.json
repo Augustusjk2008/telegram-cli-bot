@@ -15,7 +15,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "h:\\workspace\\KimiAgent\\openEuler",
-      "enabled": false,
+      "enabled": true,
       "bot_mode": "cli"
     },
     {

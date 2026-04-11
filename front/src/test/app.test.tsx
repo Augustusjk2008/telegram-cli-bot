@@ -524,7 +524,7 @@ test("bot manager can create a web-only bot without telegram token", async () =>
   expect(await screen.findByText("web-only")).toBeInTheDocument();
 });
 
-test("bot manager normalizes repeated backslashes in new bot paths", async () => {
+test("bot manager preserves Linux-style create paths", async () => {
   const user = userEvent.setup();
   const addBotSpy = vi.spyOn(MockWebBotClient.prototype, "addBot");
 
@@ -538,14 +538,14 @@ test("bot manager normalizes repeated backslashes in new bot paths", async () =>
   await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
 
   await user.type(screen.getByLabelText("新 Bot 别名"), "team-path");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "C:\\\\tools\\\\codex.cmd");
-  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\\\workspace\\\\team-path");
+  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新 Bot 工作目录"), "/srv/telegram-cli-bridge/team3");
   await user.click(screen.getByRole("button", { name: "创建 Bot" }));
 
   expect(addBotSpy).toHaveBeenCalledWith(expect.objectContaining({
     alias: "team-path",
-    cliPath: "C:\\tools\\codex.cmd",
-    workingDir: "C:\\workspace\\team-path",
+    cliPath: "codex",
+    workingDir: "/srv/telegram-cli-bridge/team3",
   }));
 });
 

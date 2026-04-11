@@ -84,6 +84,14 @@ class TestResolveCliExecutable:
         # 不存在时应该返回 None
         assert result is None or isinstance(result, str)
 
+    def test_on_linux_does_not_append_windows_extensions(self, monkeypatch):
+        monkeypatch.setattr("bot.platform.executables.os.name", "posix")
+        monkeypatch.setattr("bot.platform.executables.shutil.which", lambda value: None)
+
+        result = resolve_cli_executable("claude.cmd", "/tmp")
+
+        assert result is None
+
 
 class TestBuildCliCommand:
     """测试 build_cli_command"""

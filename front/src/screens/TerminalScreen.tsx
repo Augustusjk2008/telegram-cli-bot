@@ -219,7 +219,7 @@ export function TerminalScreen({
       session = createTerminalSession(containerRef.current, {
         token: authToken,
         cwd: workingDir,
-        shell: "powershell",
+        shell: "auto",
         fontSize: terminalFontSize,
         themeName,
         onOpen: () => {

@@ -95,6 +95,7 @@ test("uses a smaller terminal font and a viewport that supports bidirectional dr
     expect.any(HTMLElement),
     expect.objectContaining({
       fontSize: 12,
+      shell: "auto",
       themeName: "deep-space",
     }),
   );

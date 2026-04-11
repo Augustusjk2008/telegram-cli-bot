@@ -128,7 +128,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "busy": "⏳ 当前会话正在处理上一条消息，请稍后再试。",
         "processing": "⏳ 处理中...",
         "processing_with_time": "⏳ 处理中，已等待 {elapsed} 秒...",
-        "no_cli": "❌ 未找到CLI可执行文件: {cli_path}\n请用 /bot_set_cli 配置正确路径（Windows 常见为 claude.cmd）",
+        "no_cli": "❌ 未找到CLI可执行文件: {cli_path}\n请用 /bot_set_cli 配置正确的命令名或完整路径",
         "cli_failed": "❌ CLI 进程启动失败",
         "error": "❌ 错误: {error}",
         "timeout": "⏱️ <b>任务已超时终止</b>\n执行时间超过 {timeout} 秒，进程已被强制结束。",
