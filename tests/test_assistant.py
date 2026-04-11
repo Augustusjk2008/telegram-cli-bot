@@ -117,6 +117,43 @@ class TestMultiBotManagerWithAssistant:
         assert profile.alias == "test_assistant"
         assert "test_assistant" in manager.managed_profiles
 
+    def test_load_profiles_rejects_multiple_assistant_entries(self, temp_dir):
+        from bot.manager import MultiBotManager
+
+        storage = temp_dir / "bots.json"
+        root1 = temp_dir / "a1"
+        root2 = temp_dir / "a2"
+        root1.mkdir()
+        root2.mkdir()
+        storage.write_text(
+            json.dumps(
+                {
+                    "bots": [
+                        {
+                            "alias": "assistant1",
+                            "token": "",
+                            "cli_type": "codex",
+                            "cli_path": "codex",
+                            "working_dir": str(root1),
+                            "bot_mode": "assistant",
+                        },
+                        {
+                            "alias": "assistant2",
+                            "token": "",
+                            "cli_type": "codex",
+                            "cli_path": "codex",
+                            "working_dir": str(root2),
+                            "bot_mode": "assistant",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="只允许一个 assistant"):
+            MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
     def test_load_legacy_webcli_profile_falls_back_to_cli_and_rewrites_file(self, temp_dir):
         from bot.manager import MultiBotManager
         from bot.web.api_service import build_bot_summary

@@ -168,6 +168,30 @@ class TestManagerLoadSave:
         assert session.working_dir == str(old_dir)
 
     @pytest.mark.asyncio
+    async def test_add_bot_rejects_second_assistant(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        assistant_dir = temp_dir / "assistant-root"
+        assistant_dir.mkdir()
+
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            await manager.add_bot("assistant1", "", "codex", "codex", str(assistant_dir), "assistant")
+            with pytest.raises(ValueError, match="只允许一个 assistant"):
+                await manager.add_bot("assistant2", "", "codex", "codex", str(assistant_dir), "assistant")
+
+    @pytest.mark.asyncio
+    async def test_add_bot_requires_explicit_workdir_for_assistant(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"):
+            with pytest.raises(ValueError, match="assistant.*必须显式提供工作目录"):
+                await manager.add_bot("assistant1", "", "codex", "codex", None, "assistant")
+
+    @pytest.mark.asyncio
     async def test_rename_bot_persists_to_storage_and_sessions(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")

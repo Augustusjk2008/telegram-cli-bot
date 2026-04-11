@@ -24,6 +24,7 @@ except ImportError:
 from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
+from bot.assistant_home import bootstrap_assistant_home
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import coerce_param_value
 from bot.config import (
@@ -489,6 +490,12 @@ class MultiBotManager:
                 profile_data["cli_params"] = item["cli_params"]
             self.managed_profiles[alias] = BotProfile.from_dict(profile_data)
 
+        assistant_aliases = [alias for alias, profile in self.managed_profiles.items() if profile.bot_mode == "assistant"]
+        if len(assistant_aliases) > 1:
+            raise ValueError("配置中只允许一个 assistant 型 Bot")
+        if len(assistant_aliases) == 1:
+            bootstrap_assistant_home(self.managed_profiles[assistant_aliases[0]].working_dir)
+
         if migrated_legacy_mode:
             self._save_profiles()
 
@@ -524,6 +531,9 @@ class MultiBotManager:
             raise ValueError("alias 仅允许字母/数字/_/-，长度 2-32")
         if alias in RESERVED_ALIASES:
             raise ValueError(f"alias `{alias}` 为保留名称")
+
+    def _count_assistant_profiles(self) -> int:
+        return sum(1 for profile in self.managed_profiles.values() if profile.bot_mode == "assistant")
 
     async def _send_startup_greeting(self, app: Application, profile: BotProfile):
         """向所有授权用户发送启动问候消息"""
@@ -737,7 +747,6 @@ class MultiBotManager:
 
         cli_type = validate_cli_type(cli_type or CLI_TYPE)
         cli_path = (cli_path or CLI_PATH).strip()
-        working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
         bot_mode = (bot_mode or "cli").strip().lower()
 
         if bot_mode == "webcli":
@@ -745,6 +754,13 @@ class MultiBotManager:
 
         if bot_mode not in ("cli", "assistant"):
             raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {bot_mode}")
+
+        if bot_mode == "assistant":
+            if working_dir is None or not str(working_dir).strip():
+                raise ValueError("assistant 型 Bot 必须显式提供工作目录")
+            working_dir = os.path.abspath(os.path.expanduser(str(working_dir).strip()))
+        else:
+            working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
 
         if not os.path.isdir(working_dir):
             raise ValueError(f"工作目录不存在: {working_dir}")
@@ -760,6 +776,8 @@ class MultiBotManager:
                 raise ValueError(f"alias `{alias}` 已存在")
             if token and (token == self.main_profile.token or any(p.token == token for p in self.managed_profiles.values() if p.token)):
                 raise ValueError("该 token 已被使用")
+            if bot_mode == "assistant" and self._count_assistant_profiles() >= 1:
+                raise ValueError("当前机器只允许一个 assistant 型 Bot")
 
             profile = BotProfile(
                 alias=alias,
@@ -770,6 +788,9 @@ class MultiBotManager:
                 enabled=True,
                 bot_mode=bot_mode,
             )
+
+            if bot_mode == "assistant":
+                bootstrap_assistant_home(working_dir)
 
             await self._start_profile(profile, is_main=False)
             self.managed_profiles[alias] = profile
