@@ -1,6 +1,7 @@
 python-telegram-bot>=20.0
 python-dotenv>=1.0.0
 aiohttp>=3.10.0
+PyYAML>=6.0
 
 # Process management (optional, for better /exec timeout handling)
 psutil>=5.9.0
