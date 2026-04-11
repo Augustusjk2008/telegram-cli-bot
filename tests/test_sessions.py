@@ -104,6 +104,16 @@ class TestIsBotProcessing:
 class TestSessionPersistence:
     """测试会话持久化功能"""
 
+    def test_assistant_session_does_not_write_project_session_store(self, temp_dir: Path):
+        workdir = temp_dir / "assistant-root"
+        workdir.mkdir()
+        session = get_session(1, "assistant1", 100, str(workdir))
+        session.persist_hook = lambda current: None
+        session.add_to_history("user", "hello")
+
+        store_file = temp_dir / ".session_store.json"
+        assert not store_file.exists()
+
     def test_session_restored_from_store(self, temp_dir: Path):
         """测试从持久化存储恢复会话（不检查工作目录）"""
         from unittest.mock import patch

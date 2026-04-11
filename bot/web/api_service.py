@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import attach_assistant_persist_hook, restore_assistant_runtime_state
 from bot.cli_params import get_default_params, get_params_schema
 from bot.cli import (
     build_cli_command,
@@ -104,7 +106,14 @@ def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) ->
         bot_alias=alias,
         user_id=user_id,
         default_working_dir=profile.working_dir,
+        load_persisted_state=profile.bot_mode != "assistant",
     )
+
+    if profile.bot_mode == "assistant" and session.persist_hook is None:
+        home = bootstrap_assistant_home(profile.working_dir)
+        attach_assistant_persist_hook(session, home, user_id)
+        restore_assistant_runtime_state(session, home, user_id)
+
     return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
 

@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import save_assistant_runtime_state
 from bot.context_helpers import (
     ensure_admin,
     get_bot_alias,
@@ -18,6 +20,8 @@ from bot.context_helpers import (
     is_main_application,
     reply_text,
 )
+from bot.models import BotProfile
+from bot.session_store import save_session
 
 
 class TestIsMainApplication:
@@ -94,6 +98,56 @@ class TestGetCurrentSession:
         session = get_current_session(mock_update, mock_context)
         assert session.user_id == 12345
         assert session.bot_id == 111
+
+    def test_get_assistant_session_restores_private_state(self, mock_update, mock_context, temp_dir):
+        workdir = temp_dir / "assistant-root"
+        workdir.mkdir()
+        browse_dir = temp_dir / "assistant-browse"
+        browse_dir.mkdir()
+        home = bootstrap_assistant_home(workdir)
+        save_assistant_runtime_state(
+            home,
+            12345,
+            {
+                "browse_dir": str(browse_dir),
+                "history": [
+                    {
+                        "timestamp": "2026-04-11T09:10:00",
+                        "role": "user",
+                        "content": "assistant private",
+                    }
+                ],
+                "codex_session_id": "assistant-thread",
+            },
+        )
+
+        save_session(
+            bot_id=111,
+            user_id=12345,
+            codex_session_id="project-thread",
+            browse_dir=str(temp_dir / "project-store"),
+        )
+
+        manager_mock = MagicMock()
+        manager_mock.get_profile.return_value = BotProfile(
+            alias="assistant1",
+            token="dummy-token",
+            cli_type="codex",
+            cli_path="codex",
+            working_dir=str(workdir),
+            enabled=True,
+            bot_mode="assistant",
+        )
+        mock_context.application.bot_data["manager"] = manager_mock
+        mock_context.application.bot_data["bot_alias"] = "assistant1"
+        mock_context.application.bot_data["bot_id"] = 111
+        mock_update.effective_user.id = 12345
+
+        session = get_current_session(mock_update, mock_context)
+
+        assert session.codex_session_id == "assistant-thread"
+        assert session.browse_dir == str(browse_dir)
+        assert session.history[-1]["content"] == "assistant private"
 
 
 class TestEnsureAdmin:

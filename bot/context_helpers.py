@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from telegram import Message, Update
 from telegram.ext import ContextTypes
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import attach_assistant_persist_hook, restore_assistant_runtime_state
 from bot.models import BotProfile, UserSession
 from bot.sessions import align_session_paths, get_session
 from bot.utils import check_auth
@@ -44,12 +46,20 @@ def get_current_profile(context: ContextTypes.DEFAULT_TYPE) -> BotProfile:
 
 def get_current_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> UserSession:
     profile = get_current_profile(context)
+    user_id = update.effective_user.id
     session = get_session(
         bot_id=get_bot_id(update, context),
         bot_alias=get_bot_alias(context),
-        user_id=update.effective_user.id,
+        user_id=user_id,
         default_working_dir=profile.working_dir,
+        load_persisted_state=profile.bot_mode != "assistant",
     )
+
+    if profile.bot_mode == "assistant" and session.persist_hook is None:
+        home = bootstrap_assistant_home(profile.working_dir)
+        attach_assistant_persist_hook(session, home, user_id)
+        restore_assistant_runtime_state(session, home, user_id)
+
     return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
 

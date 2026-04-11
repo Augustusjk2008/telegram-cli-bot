@@ -24,7 +24,13 @@ def _parse_stored_datetime(value) -> datetime:
     return datetime.now()
 
 
-def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_working_dir: str = None) -> UserSession:
+def get_or_create_session(
+    bot_id: int,
+    bot_alias: str,
+    user_id: int,
+    default_working_dir: str = None,
+    load_persisted_state: bool = True,
+) -> UserSession:
     key = (bot_id, user_id)
 
     with sessions_lock:
@@ -44,7 +50,7 @@ def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_wor
     with sessions_lock:
         if key not in sessions:
             # 尝试从持久化存储恢复会话
-            stored_data = load_session(bot_id, user_id)
+            stored_data = load_session(bot_id, user_id) if load_persisted_state else None
             
             codex_session_id = None
             kimi_session_id = None
@@ -190,7 +196,6 @@ def cleanup_expired_sessions():
     # 在锁外终止进程和持久化，避免持锁期间阻塞
     for key, session in expired_sessions:
         session.terminate_process()
-        _save_session_to_store(session)
         logger.info(f"已清理过期会话: bot={key[0]}, user={key[1]}")
 
 
@@ -251,5 +256,5 @@ def save_all_sessions():
     """
     with sessions_lock:
         for session in sessions.values():
-            _save_session_to_store(session)
+            session.persist()
     logger.info("已保存所有会话到持久化存储")

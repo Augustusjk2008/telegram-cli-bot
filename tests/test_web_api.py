@@ -12,8 +12,11 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.session_store import save_session
 from bot.web.api_service import (
     AuthContext,
     _stream_cli_chat,
@@ -23,6 +26,7 @@ from bot.web.api_service import (
     get_directory_listing,
     get_session_for_alias,
     get_overview,
+    resolve_session_bot_id,
     get_working_directory,
     list_bots,
     read_file_content,
@@ -155,6 +159,86 @@ def test_assistant_change_directory_only_updates_file_browser_path(web_manager: 
     content = read_file_content(web_manager, "assistant1", 1001, "note.txt", mode="head", lines=1)
     assert content["working_dir"] == str(browse_dir)
     assert content["content"] == "assistant browser"
+
+
+def test_assistant_change_directory_persists_browser_dir_in_assistant_state(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    browse_dir = temp_dir / "assistant-browse"
+    browse_dir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    result = change_working_directory(web_manager, "assistant1", 1001, str(browse_dir))
+
+    assert result["working_dir"] == str(browse_dir)
+    state_file = workdir / ".assistant" / "state" / "users" / "1001.json"
+    assert json.loads(state_file.read_text(encoding="utf-8"))["browse_dir"] == str(browse_dir)
+
+
+def test_get_session_for_alias_restores_assistant_state_from_private_store(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    browse_dir = temp_dir / "assistant-browse"
+    browse_dir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    home = bootstrap_assistant_home(workdir)
+    save_assistant_runtime_state(
+        home,
+        1001,
+        {
+            "browse_dir": str(browse_dir),
+            "history": [
+                {
+                    "timestamp": "2026-04-11T09:00:00",
+                    "role": "user",
+                    "content": "private state",
+                }
+            ],
+            "codex_session_id": "assistant-thread",
+            "message_count": 3,
+        },
+    )
+    save_session(
+        bot_id=resolve_session_bot_id(web_manager, "assistant1"),
+        user_id=1001,
+        codex_session_id="project-thread",
+        browse_dir=str(temp_dir / "project-store"),
+        history=[
+            {
+                "timestamp": "2026-04-11T08:00:00",
+                "role": "user",
+                "content": "project store",
+            }
+        ],
+    )
+
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+
+    assert session.codex_session_id == "assistant-thread"
+    assert session.browse_dir == str(browse_dir)
+    assert session.history[-1]["content"] == "private state"
+    assert session.message_count == 3
 
 
 def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):

@@ -3,6 +3,7 @@
 import logging
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+PersistHook = Callable[["UserSession"], None]
 
 
 @dataclass
@@ -96,6 +98,7 @@ class UserSession:
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
 
     def touch(self):
         with self._lock:
@@ -174,6 +177,10 @@ class UserSession:
         
         在 session_id 变化时调用，确保重启后能恢复会话。
         """
+        hook = self.persist_hook
+        if hook is not None:
+            hook(self)
+            return
         # 延迟导入避免循环依赖
         try:
             from bot.sessions import _save_session_to_store
