@@ -140,8 +140,9 @@ async def run_all_bots():
 
 def main():
     msgs = get_messages()
-    
-    if TELEGRAM_ENABLED and TELEGRAM_BOT_TOKEN == "your_bot_token_here":
+
+    normalized_token = (TELEGRAM_BOT_TOKEN or "").strip()
+    if TELEGRAM_ENABLED and normalized_token in {"", "your_bot_token_here"}:
         safe_print("错误: 请设置 TELEGRAM_BOT_TOKEN 环境变量")
         sys.exit(1)
 

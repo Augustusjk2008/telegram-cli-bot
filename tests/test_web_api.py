@@ -856,6 +856,31 @@ async def test_notify_tunnel_public_url_still_copies_when_telegram_send_fails(we
 
 
 @pytest.mark.asyncio
+async def test_notify_tunnel_public_url_skips_telegram_without_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+
+    server = WebApiServer(web_manager)
+    server._copy_text_to_clipboard = MagicMock(return_value=True)
+
+    result = await server._notify_tunnel_public_url(
+        {
+            "mode": "cloudflare_quick",
+            "status": "running",
+            "source": "quick_tunnel",
+            "public_url": "https://web-only.trycloudflare.com",
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "pid": 1234,
+        },
+        reason="web_server_start",
+    )
+
+    assert result is False
+    server._copy_text_to_clipboard.assert_called_once_with("https://web-only.trycloudflare.com")
+    assert "main" not in web_manager.applications
+
+
+@pytest.mark.asyncio
 async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
 
@@ -917,6 +942,64 @@ async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_ma
     sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
     assert "startup.trycloudflare.com" in sent_text
     server._copy_text_to_clipboard.assert_called_once_with("https://startup.trycloudflare.com")
+
+
+@pytest.mark.asyncio
+async def test_web_server_start_in_web_only_mode_does_not_push_tunnel_to_telegram(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+
+    class FakeTunnelService:
+        def should_autostart(self):
+            return True
+
+        async def start(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://web-only-start.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 4321,
+            }
+
+        async def stop(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+    class FakeRunner:
+        async def setup(self):
+            return None
+
+        async def cleanup(self):
+            return None
+
+    class FakeSite:
+        def __init__(self, runner, host, port):
+            self.runner = runner
+            self.host = host
+            self.port = port
+
+        async def start(self):
+            return None
+
+    monkeypatch.setattr("bot.web.server.web.AppRunner", lambda app: FakeRunner())
+    monkeypatch.setattr("bot.web.server.web.TCPSite", FakeSite)
+
+    server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
+    server._copy_text_to_clipboard = MagicMock(return_value=True)
+    await server.start()
+    await server.stop()
+
+    server._copy_text_to_clipboard.assert_called_once_with("https://web-only-start.trycloudflare.com")
+    assert "main" not in web_manager.applications
 
 
 def test_read_missing_file_raises(web_manager: MultiBotManager):

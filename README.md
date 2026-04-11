@@ -34,7 +34,7 @@
 1. Python
    建议使用 Python 3.10 及以上，并确保 `python` 命令可用。
 2. Telegram Bot Token
-   到 `@BotFather` 创建机器人，拿到 `TELEGRAM_BOT_TOKEN`。
+   如果你要使用 Telegram，请到 `@BotFather` 创建机器人，拿到 `TELEGRAM_BOT_TOKEN`。
 3. 至少一个本地 CLI
    例如 `codex`、`claude` 或 `kimi`。请先确认它已经安装完成，并且你可以在终端里直接运行它。
 4. Node.js
@@ -73,6 +73,8 @@ ALLOWED_USER_IDS=
 ```
 
 如果你不想用复制命令，也可以在仓库根目录手动新建 `.env`，再填同样的内容。
+
+如果你只使用 Web，并且设置了 `TELEGRAM_ENABLED=false`，可以把 `TELEGRAM_BOT_TOKEN` 留空。
 
 说明：
 
@@ -192,6 +194,12 @@ python -m bot
 TELEGRAM_ENABLED=false
 WEB_ENABLED=true
 ```
+
+在这种纯 Web 模式下：
+
+- `TELEGRAM_BOT_TOKEN` 可以留空
+- 不会启动 Telegram
+- Cloudflare Tunnel 公网地址不会再通过 Telegram 推送，只会显示在 Web 页面并复制到本机剪贴板
 
 然后可以这样启动：
 

@@ -120,6 +120,65 @@ async def test_run_all_bots_requires_at_least_one_runtime(monkeypatch):
             await main_module.run_all_bots()
 
 
+def test_main_allows_empty_telegram_token_in_web_only_mode(monkeypatch):
+    import bot.main as main_module
+
+    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
+    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
+    monkeypatch.setattr(main_module, "TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setattr(main_module, "safe_print", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, "disable_console_quick_edit", lambda: None)
+    monkeypatch.setattr(main_module, "prevent_system_sleep", lambda: None)
+    monkeypatch.setattr(main_module.time, "sleep", lambda *args, **kwargs: None)
+
+    def fake_asyncio_run(coro):
+        coro.close()
+        return None
+
+    monkeypatch.setattr(main_module.asyncio, "run", fake_asyncio_run)
+
+    main_module.main()
+
+
+def test_main_rejects_empty_telegram_token_when_telegram_enabled(monkeypatch):
+    import bot.main as main_module
+
+    printed = []
+    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", True)
+    monkeypatch.setattr(main_module, "TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
+    monkeypatch.setattr(main_module, "disable_console_quick_edit", lambda: None)
+    monkeypatch.setattr(main_module, "prevent_system_sleep", lambda: None)
+    monkeypatch.setattr(main_module.time, "sleep", lambda *args, **kwargs: None)
+
+    def fake_asyncio_run(coro):
+        coro.close()
+        return None
+
+    monkeypatch.setattr(main_module.asyncio, "run", fake_asyncio_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 1
+    assert any("TELEGRAM_BOT_TOKEN" in line for line in printed)
+
+
+def test_main_rejects_placeholder_telegram_token_when_telegram_enabled(monkeypatch):
+    import bot.main as main_module
+
+    printed = []
+    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", True)
+    monkeypatch.setattr(main_module, "TELEGRAM_BOT_TOKEN", "your_bot_token_here")
+    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 1
+    assert any("TELEGRAM_BOT_TOKEN" in line for line in printed)
+
+
 def test_safe_print_falls_back_on_gbk_console(monkeypatch):
     import bot.main as main_module
 
