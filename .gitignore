@@ -7,3 +7,4 @@ __pycache__/
 *.log
 docs/superpowers/
 .env.copy
+.env copy
