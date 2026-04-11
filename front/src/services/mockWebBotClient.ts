@@ -233,6 +233,61 @@ export class MockWebBotClient implements WebBotClient {
     return nextPath;
   }
 
+  async createDirectory(botAlias: string, name: string): Promise<void> {
+    const folderName = name.trim();
+    if (!folderName) {
+      throw new Error("文件夹名称不能为空");
+    }
+
+    const currentPath = await this.getCurrentPath(botAlias);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const currentEntries = [...(botFiles[currentPath] || [])];
+    if (currentEntries.some((entry) => entry.name === folderName)) {
+      throw new Error("目标已存在");
+    }
+
+    currentEntries.push({ name: folderName, isDir: true });
+    currentEntries.sort((left, right) => {
+      if (left.isDir !== right.isDir) {
+        return left.isDir ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, "zh-CN");
+    });
+    botFiles[currentPath] = currentEntries;
+
+    const separator = currentPath.endsWith("/") ? "" : "/";
+    const childPath = currentPath === "/" ? `/${folderName}` : `${currentPath}${separator}${folderName}`;
+    botFiles[childPath] = botFiles[childPath] || [];
+  }
+
+  async deletePath(botAlias: string, path: string): Promise<void> {
+    const targetName = path.trim();
+    if (!targetName) {
+      throw new Error("路径不能为空");
+    }
+
+    const currentPath = await this.getCurrentPath(botAlias);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const currentEntries = [...(botFiles[currentPath] || [])];
+    const target = currentEntries.find((entry) => entry.name === targetName);
+    if (!target) {
+      throw new Error("文件或文件夹不存在");
+    }
+
+    botFiles[currentPath] = currentEntries.filter((entry) => entry.name !== targetName);
+    if (!target.isDir) {
+      return;
+    }
+
+    const separator = currentPath.endsWith("/") ? "" : "/";
+    const targetPath = currentPath === "/" ? `/${targetName}` : `${currentPath}${separator}${targetName}`;
+    for (const candidate of Object.keys(botFiles)) {
+      if (candidate === targetPath || candidate.startsWith(`${targetPath}/`)) {
+        delete botFiles[candidate];
+      }
+    }
+  }
+
   async readFile(botAlias: string, filename: string): Promise<string> {
     return `Mock preview for ${filename}\n\nThis is a local preview.`;
   }

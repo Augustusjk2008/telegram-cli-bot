@@ -142,6 +142,90 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("createDirectory posts to the mkdir endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            name: "docs",
+            created_path: "C:\\workspace\\demo\\docs",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient() as RealWebBotClient & {
+      createDirectory: (botAlias: string, name: string) => Promise<void>;
+    };
+    await client.login("secret-token");
+    await client.createDirectory("main", "docs");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/files/mkdir",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ name: "docs" }),
+      }),
+    );
+  });
+
+  test("deletePath posts to the delete endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            path: "docs",
+            deleted_type: "directory",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient() as RealWebBotClient & {
+      deletePath: (botAlias: string, path: string) => Promise<void>;
+    };
+    await client.login("secret-token");
+    await client.deletePath("main", "docs");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/files/delete",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ path: "docs" }),
+      }),
+    );
+  });
+
   test("getBotOverview maps running reply snapshot", async () => {
     fetchMock
       .mockResolvedValueOnce({

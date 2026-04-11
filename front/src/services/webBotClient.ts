@@ -30,6 +30,8 @@ export interface WebBotClient {
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string): Promise<DirectoryListing>;
   changeDirectory(botAlias: string, path: string): Promise<string>;
+  createDirectory(botAlias: string, name: string): Promise<void>;
+  deletePath(botAlias: string, path: string): Promise<void>;
   readFile(botAlias: string, filename: string): Promise<string>;
   readFileFull(botAlias: string, filename: string): Promise<string>;
   uploadFile(botAlias: string, file: File): Promise<void>;

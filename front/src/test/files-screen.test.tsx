@@ -1,9 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
 import type { BotOverview, BotSummary, ChatMessage, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   const baseClient: WebBotClient = {
@@ -38,6 +42,8 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       ],
     }),
     changeDirectory: async () => "C:\\workspace",
+    createDirectory: async () => undefined,
+    deletePath: async () => undefined,
     readFile: async (_botAlias: string, filename: string) => {
       if (filename === "README.md") {
         return [
@@ -210,7 +216,7 @@ test("renders markdown files as formatted content", async () => {
   const user = userEvent.setup();
   render(<FilesScreen botAlias="main" client={createClient()} />);
 
-  await user.click(await screen.findByRole("button", { name: /README\.md/i }));
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
 
   expect(await screen.findByRole("heading", { name: "Markdown Title" })).toBeInTheDocument();
   expect(screen.getByText("item 1")).toBeInTheDocument();
@@ -222,7 +228,7 @@ test("shows markdown image paths instead of rendering images", async () => {
   const user = userEvent.setup();
   render(<FilesScreen botAlias="main" client={createClient()} />);
 
-  await user.click(await screen.findByRole("button", { name: /README\.md/i }));
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
 
   expect(await screen.findByText(/assets\/diagram\.png/)).toBeInTheDocument();
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
@@ -232,7 +238,7 @@ test("keeps non-markdown files in plain-text preview mode", async () => {
   const user = userEvent.setup();
   render(<FilesScreen botAlias="main" client={createClient()} />);
 
-  await user.click(await screen.findByRole("button", { name: /notes\.txt/i }));
+  await user.click(await screen.findByRole("button", { name: "打开 notes.txt" }));
 
   expect(await screen.findByText((content) => content.includes("# Raw Heading"))).toBeInTheDocument();
   expect(screen.getByText((content) => content.includes("- should stay literal"))).toBeInTheDocument();
@@ -247,7 +253,7 @@ test("can load full file content from preview modal", async () => {
 
   render(<FilesScreen botAlias="main" client={client} />);
 
-  await user.click(await screen.findByRole("button", { name: /notes\.txt/i }));
+  await user.click(await screen.findByRole("button", { name: "打开 notes.txt" }));
   await user.click(await screen.findByRole("button", { name: "全文读取" }));
 
   expect(readFullSpy).toHaveBeenCalledWith("main", "notes.txt");
@@ -275,5 +281,85 @@ test("home button refreshes the file view to the latest working directory", asyn
 
   expect(listFilesSpy).toHaveBeenCalledTimes(2);
   expect(await screen.findByText("main - C:\\workspace\\new-home")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /new\.txt/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开 new.txt" })).toBeInTheDocument();
+});
+
+test("can create a folder from the files screen toolbar", async () => {
+  const user = userEvent.setup();
+  const createDirectorySpy = vi.fn(async () => undefined);
+  const listFilesSpy = vi
+    .fn<() => Promise<DirectoryListing>>()
+    .mockResolvedValueOnce({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "README.md", isDir: false }],
+    })
+    .mockResolvedValueOnce({
+      workingDir: "C:\\workspace",
+      entries: [
+        { name: "docs", isDir: true },
+        { name: "README.md", isDir: false },
+      ],
+    });
+  const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("docs");
+  const client = createClient({ listFiles: listFilesSpy }) as WebBotClient & {
+    createDirectory: (botAlias: string, name: string) => Promise<void>;
+  };
+  client.createDirectory = createDirectorySpy;
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "新建文件夹" }));
+
+  expect(promptSpy).toHaveBeenCalledWith("请输入新文件夹名称", "");
+  expect(createDirectorySpy).toHaveBeenCalledWith("main", "docs");
+  expect(listFilesSpy).toHaveBeenCalledTimes(2);
+  expect(await screen.findByRole("button", { name: "进入 docs" })).toBeInTheDocument();
+});
+
+test("deleting a non-empty folder requires confirmation before recursive removal", async () => {
+  const user = userEvent.setup();
+  const deletePathSpy = vi.fn(async () => undefined);
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const listFilesSpy = vi
+    .fn<() => Promise<DirectoryListing>>()
+    .mockResolvedValueOnce({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "docs", isDir: true }],
+    })
+    .mockResolvedValueOnce({
+      workingDir: "C:\\workspace",
+      entries: [],
+    });
+  const client = createClient({ listFiles: listFilesSpy }) as WebBotClient & {
+    deletePath: (botAlias: string, path: string) => Promise<void>;
+  };
+  client.deletePath = deletePathSpy;
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "删除 docs" }));
+
+  expect(confirmSpy).toHaveBeenCalledWith("确定删除文件夹 docs 吗？此操作会递归删除其中的所有内容。");
+  expect(deletePathSpy).toHaveBeenCalledWith("main", "docs");
+  expect(listFilesSpy).toHaveBeenCalledTimes(2);
+});
+
+test("cancelled deletion does not remove the selected file", async () => {
+  const user = userEvent.setup();
+  const deletePathSpy = vi.fn(async () => undefined);
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const client = createClient({ listFiles: async () => ({
+    workingDir: "C:\\workspace",
+    entries: [{ name: "README.md", isDir: false }],
+  }) }) as WebBotClient & {
+    deletePath: (botAlias: string, path: string) => Promise<void>;
+  };
+  client.deletePath = deletePathSpy;
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "删除 README.md" }));
+
+  expect(confirmSpy).toHaveBeenCalledWith("确定删除文件 README.md 吗？");
+  expect(deletePathSpy).not.toHaveBeenCalled();
 });

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -279,6 +280,27 @@ def _resolve_safe_path(base_dir: str, filename: str) -> str:
     return os.path.abspath(os.path.join(base_dir, os.path.expanduser(candidate)))
 
 
+def _resolve_new_directory_path(base_dir: str, name: str) -> tuple[str, str]:
+    candidate = str(name or "").strip()
+    if not candidate or candidate in {".", ".."} or "\x00" in candidate:
+        _raise(400, "invalid_directory_name", "文件夹名称不合法")
+
+    path_separators = {os.path.sep}
+    if os.path.altsep:
+        path_separators.add(os.path.altsep)
+    if any(separator and separator in candidate for separator in path_separators):
+        _raise(400, "invalid_directory_name", "文件夹名称不能包含路径分隔符")
+
+    return candidate, os.path.abspath(os.path.join(base_dir, candidate))
+
+
+def _ensure_file_browser_supported(manager: MultiBotManager, alias: str) -> BotProfile:
+    profile = get_profile_or_raise(manager, alias)
+    if not _supports_cli_runtime(profile):
+        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持文件操作")
+    return profile
+
+
 def _list_directory_entries(working_dir: str) -> dict[str, Any]:
     entries = []
     for entry in sorted(os.scandir(working_dir), key=lambda item: (not item.is_dir(), item.name.lower())):
@@ -305,6 +327,57 @@ def get_directory_listing(manager: MultiBotManager, alias: str, user_id: int) ->
         _raise(404, "working_dir_not_found", f"目录不存在: {browser_dir}")
     except Exception as exc:
         _raise(500, "list_dir_failed", str(exc))
+
+
+def create_directory(manager: MultiBotManager, alias: str, user_id: int, name: str) -> dict[str, Any]:
+    _ensure_file_browser_supported(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _get_browser_directory(session)
+    directory_name, target_path = _resolve_new_directory_path(browser_dir, name)
+
+    if os.path.exists(target_path):
+        _raise(409, "path_exists", "目标已存在")
+
+    try:
+        os.mkdir(target_path)
+    except FileExistsError:
+        _raise(409, "path_exists", "目标已存在")
+    except Exception as exc:
+        _raise(500, "create_directory_failed", str(exc))
+
+    return {
+        "name": directory_name,
+        "created_path": target_path,
+        "working_dir": browser_dir,
+    }
+
+
+def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
+    _ensure_file_browser_supported(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _get_browser_directory(session)
+    target_path = _resolve_safe_path(browser_dir, path)
+
+    if os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(browser_dir)):
+        _raise(400, "cannot_delete_current_dir", "不能删除当前目录")
+    if not os.path.exists(target_path):
+        _raise(404, "path_not_found", "文件或文件夹不存在")
+
+    try:
+        if os.path.isdir(target_path):
+            shutil.rmtree(target_path)
+            deleted_type = "directory"
+        else:
+            os.remove(target_path)
+            deleted_type = "file"
+    except Exception as exc:
+        _raise(500, "delete_path_failed", str(exc))
+
+    return {
+        "path": path,
+        "deleted_type": deleted_type,
+        "working_dir": browser_dir,
+    }
 
 
 def get_working_directory(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -1020,9 +1093,7 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
 
 
 def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持上传文件")
+    _ensure_file_browser_supported(manager, alias)
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
     if len(data) > 20 * 1024 * 1024:

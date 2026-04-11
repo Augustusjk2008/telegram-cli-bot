@@ -541,6 +541,26 @@ export class RealWebBotClient implements WebBotClient {
     return data.working_dir;
   }
 
+  async createDirectory(botAlias: string, name: string): Promise<void> {
+    await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/files/mkdir`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async deletePath(botAlias: string, path: string): Promise<void> {
+    await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/files/delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+  }
+
   async readFile(botAlias: string, filename: string): Promise<string> {
     const params = new URLSearchParams({
       filename,

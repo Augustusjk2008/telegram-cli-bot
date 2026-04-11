@@ -41,6 +41,8 @@ from .api_service import (
     add_managed_bot,
     build_bot_summary,
     change_working_directory,
+    create_directory,
+    delete_path,
     execute_shell_command,
     get_directory_listing,
     get_file_metadata,
@@ -727,6 +729,20 @@ class WebApiServer:
         result = save_uploaded_file(self.manager, alias, auth.user_id, filename, data)
         return _json({"ok": True, "data": result})
 
+    async def create_directory_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = create_directory(self.manager, alias, auth.user_id, body.get("name", ""))
+        return _json({"ok": True, "data": data})
+
+    async def delete_path_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = delete_path(self.manager, alias, auth.user_id, body.get("path", ""))
+        return _json({"ok": True, "data": data})
+
     async def download_file(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -926,6 +942,8 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/git/stash", self.post_git_stash)
         app.router.add_post("/api/bots/{alias}/git/stash/pop", self.post_git_stash_pop)
         app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
+        app.router.add_post("/api/bots/{alias}/files/mkdir", self.create_directory_view)
+        app.router.add_post("/api/bots/{alias}/files/delete", self.delete_path_view)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
         app.router.add_get("/api/admin/bots", self.admin_bots)

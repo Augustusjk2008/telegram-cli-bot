@@ -31,6 +31,7 @@ from bot.web.api_service import (
     save_uploaded_file,
 )
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
+from bot.web import api_service
 from bot.web.git_service import (
     commit_git_changes,
     get_git_diff,
@@ -162,6 +163,32 @@ def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
 
     content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=1)
     assert content["content"] == "line1"
+
+
+def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = api_service.create_directory(web_manager, "main", 1001, "docs")
+
+    assert result["name"] == "docs"
+    assert result["created_path"] == str(workspace / "docs")
+    assert (workspace / "docs").is_dir()
+
+
+def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    nested = workspace / "docs" / "guides"
+    nested.mkdir(parents=True)
+    (nested / "intro.txt").write_text("hello\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = api_service.delete_path(web_manager, "main", 1001, "docs")
+
+    assert result["path"] == "docs"
+    assert result["deleted_type"] == "directory"
+    assert not (workspace / "docs").exists()
 
 
 def test_read_file_outside_workdir_by_absolute_path(web_manager: MultiBotManager, temp_dir: Path):
@@ -413,6 +440,52 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
             payload = await resp.json()
             assert payload["data"]["bot"]["alias"] == "main"
             assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
+
+
+@pytest.mark.asyncio
+async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/mkdir", json={"name": "docs"})
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["name"] == "docs"
+            assert (workspace / "docs").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_delete_path_route_recursively_removes_directory(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    target = workspace / "docs" / "guides"
+    target.mkdir(parents=True)
+    (target / "intro.txt").write_text("hello\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/delete", json={"path": "docs"})
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["deleted_type"] == "directory"
+            assert not (workspace / "docs").exists()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, House, Upload } from "lucide-react";
+import { ChevronLeft, FolderPlus, House, Upload } from "lucide-react";
 import { FileList } from "../components/FileList";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -61,6 +61,42 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
     await loadListing();
   };
 
+  const handleCreateDirectory = async () => {
+    const name = window.prompt("请输入新文件夹名称", "")?.trim();
+    if (!name) {
+      return;
+    }
+
+    setError("");
+    try {
+      await client.createDirectory(botAlias, name);
+      await loadListing();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "新建文件夹失败");
+    }
+  };
+
+  const handleDeleteEntry = async (file: FileEntry) => {
+    const message = file.isDir
+      ? `确定删除文件夹 ${file.name} 吗？此操作会递归删除其中的所有内容。`
+      : `确定删除文件 ${file.name} 吗？`;
+    if (!window.confirm(message)) {
+      return;
+    }
+
+    setError("");
+    try {
+      await client.deletePath(botAlias, file.name);
+      if (previewName === file.name) {
+        setPreviewName("");
+        setPreviewContent("");
+      }
+      await loadListing();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : file.isDir ? "删除文件夹失败" : "删除文件失败");
+    }
+  };
+
   const loadPreview = async (name: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     try {
@@ -102,6 +138,15 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
           >
             <House className="w-5 h-5" />
           </button>
+          <button
+            type="button"
+            aria-label="新建文件夹"
+            title="新建文件夹"
+            onClick={() => void handleCreateDirectory()}
+            className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+          >
+            <FolderPlus className="w-5 h-5" />
+          </button>
           <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
             <Upload className="w-5 h-5" />
             <input
@@ -128,7 +173,12 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
         {loading ? (
           <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
         ) : (
-          <FileList files={files} onDirClick={(name) => void handleDirClick(name)} onFileClick={(name) => void handleFileClick(name)} />
+          <FileList
+            files={files}
+            onDirClick={(name) => void handleDirClick(name)}
+            onFileClick={(name) => void handleFileClick(name)}
+            onDelete={(file) => void handleDeleteEntry(file)}
+          />
         )}
       </section>
 

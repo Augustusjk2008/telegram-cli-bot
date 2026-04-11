@@ -10,6 +10,15 @@
       "bot_mode": "cli"
     },
     {
+      "alias": "ming_simulation",
+      "token": "",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "H:\\WorkSpace\\KimiAgent\\game_agents",
+      "enabled": true,
+      "bot_mode": "cli"
+    },
+    {
       "alias": "rk3588_openeuler",
       "token": "",
       "cli_type": "codex",
