@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import os
 import queue
 import shutil
@@ -17,8 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from bot.assistant_context import compile_assistant_prompt
 from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_state import attach_assistant_persist_hook, restore_assistant_runtime_state
+from bot.assistant_state import (
+    attach_assistant_persist_hook,
+    record_assistant_capture,
+    restore_assistant_runtime_state,
+)
 from bot.cli_params import get_default_params, get_params_schema
 from bot.cli import (
     build_cli_command,
@@ -46,6 +52,8 @@ from bot.sessions import (
     update_bot_working_dir,
 )
 from bot.utils import is_dangerous_command
+
+logger = logging.getLogger(__name__)
 
 
 class WebApiError(Exception):
@@ -634,12 +642,18 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
         text = "/" + text[2:]
+    prompt_text = text
+    assistant_home = None
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+    if profile.bot_mode == "assistant":
+        assistant_home = bootstrap_assistant_home(profile.working_dir)
+        prompt_text = compile_assistant_prompt(assistant_home, user_id, text)
 
     with session._lock:
         if session.is_processing:
@@ -662,7 +676,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
                     resolved_cli=resolved_cli,
-                    user_text=text,
+                    user_text=prompt_text,
                     env=env,
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
@@ -695,7 +709,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             if use_stdin:
                 try:
                     assert process.stdin is not None
-                    process.stdin.write(text + "\n")
+                    process.stdin.write(prompt_text + "\n")
                     process.stdin.flush()
                     process.stdin.close()
                 except (BrokenPipeError, OSError) as exc:
@@ -861,6 +875,11 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
             session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
+            if assistant_home is not None:
+                try:
+                    record_assistant_capture(assistant_home, user_id, text, response)
+                except Exception as exc:
+                    logger.warning("记录 assistant capture 失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
             session.clear_running_reply()
@@ -891,12 +910,18 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
         text = "/" + text[2:]
+    prompt_text = text
+    assistant_home = None
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+    if profile.bot_mode == "assistant":
+        assistant_home = bootstrap_assistant_home(profile.working_dir)
+        prompt_text = compile_assistant_prompt(assistant_home, user_id, text)
 
     with session._lock:
         if session.is_processing:
@@ -918,7 +943,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
                     resolved_cli=resolved_cli,
-                    user_text=text,
+                    user_text=prompt_text,
                     env=env,
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
@@ -951,7 +976,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
             if use_stdin:
                 try:
                     assert process.stdin is not None
-                    process.stdin.write(text + "\n")
+                    process.stdin.write(prompt_text + "\n")
                     process.stdin.flush()
                     process.stdin.close()
                 except (BrokenPipeError, OSError) as exc:
@@ -1019,6 +1044,11 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
 
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
             session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
+            if assistant_home is not None:
+                try:
+                    record_assistant_capture(assistant_home, user_id, text, response)
+                except Exception as exc:
+                    logger.warning("记录 assistant capture 失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
             session.clear_running_reply()

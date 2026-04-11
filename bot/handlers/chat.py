@@ -32,6 +32,9 @@ from bot.cli import (
     should_reset_codex_session,
     should_reset_kimi_session,
 )
+from bot.assistant_context import compile_assistant_prompt
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import record_assistant_capture
 from bot.config import CLI_EXEC_TIMEOUT, CLI_PROGRESS_UPDATE_INTERVAL, CLI_TIMEOUT_CHECK_INTERVAL
 from bot.context_helpers import get_current_profile, get_current_session
 from bot.messages import msg
@@ -573,6 +576,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_text = text_override if text_override is not None else update.message.text
     if user_text.startswith("//"):
         user_text = "/" + user_text[2:]
+    assistant_home = None
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -627,6 +631,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.touch()
 
         full_prompt = user_text
+        if profile.bot_mode == "assistant":
+            assistant_home = bootstrap_assistant_home(profile.working_dir)
+            full_prompt = compile_assistant_prompt(assistant_home, user_id, user_text)
 
         try:
             cmd, use_stdin = build_cli_command(
@@ -717,6 +724,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             if session_id_changed:
                 session.persist()
             session.add_to_history("assistant", response)
+            if assistant_home is not None:
+                try:
+                    record_assistant_capture(assistant_home, user_id, user_text, response)
+                except Exception as exc:
+                    logger.warning("记录 assistant capture 失败 user=%s error=%s", user_id, exc)
         except FileNotFoundError:
             await update.message.reply_text(msg("chat", "no_cli", cli_path=cli_path))
         except Exception as e:

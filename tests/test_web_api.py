@@ -1236,6 +1236,37 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
 
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+         ) as compiler, \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0, False)):
+        await run_cli_chat(web_manager, "assistant1", 1001, "hello")
+
+    compiler.assert_called_once()
+    assert build_mock.call_args.kwargs["user_text"].startswith("[LOCAL_ASSISTANT_CONTEXT]")
+
+
+@pytest.mark.asyncio
 async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotManager, temp_dir: Path):
     workdir = temp_dir / "assistant-cli"
     workdir.mkdir()

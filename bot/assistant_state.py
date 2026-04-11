@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -115,3 +116,19 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
         session.running_preview_text = state.get("running_preview_text") or ""
         session.running_started_at = _normalize_optional_str(state.get("running_started_at"))
         session.running_updated_at = _normalize_optional_str(state.get("running_updated_at"))
+
+
+def record_assistant_capture(home: AssistantHome, user_id: int, user_text: str, assistant_text: str) -> None:
+    capture = {
+        "id": f"cap_{uuid.uuid4().hex[:12]}",
+        "source": "chat",
+        "user_id": user_id,
+        "created_at": datetime.now(UTC).isoformat(),
+        "user_text": user_text,
+        "assistant_text": assistant_text,
+    }
+    path = home.root / "inbox" / "captures" / f"{capture['id']}.json"
+    path.write_text(
+        json.dumps(capture, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

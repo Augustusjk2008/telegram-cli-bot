@@ -4,6 +4,7 @@
 导入真实的 chat handler 进行测试（主要测试 handle_text_message 的分支逻辑）
 """
 
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,7 +47,6 @@ class TestHandleTextMessageAuth:
     async def test_busy_session(self, mock_update, mock_context, temp_dir):
         """测试会话正忙"""
         from bot.handlers.chat import handle_text_message
-        import threading
         profile_mock = MagicMock()
         profile_mock.cli_type = "kimi"
         profile_mock.cli_path = "kimi"
@@ -61,6 +61,49 @@ class TestHandleTextMessageAuth:
             await handle_text_message(mock_update, mock_context)
         call_text = mock_update.message.reply_text.call_args[0][0]
         assert "正在处理" in call_text or "稍后" in call_text
+
+    @pytest.mark.asyncio
+    async def test_assistant_mode_compiles_local_prompt_before_cli_call(self, mock_update, mock_context, temp_dir):
+        from bot.handlers.chat import handle_text_message
+
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "assistant"
+        profile_mock.cli_type = "codex"
+        profile_mock.cli_path = "codex"
+        profile_mock.cli_params = MagicMock()
+
+        session_mock = MagicMock()
+        session_mock.working_dir = str(temp_dir)
+        session_mock.is_processing = False
+        session_mock.codex_session_id = None
+        session_mock.kimi_session_id = None
+        session_mock.claude_session_id = None
+        session_mock.claude_session_initialized = False
+        session_mock._lock = threading.Lock()
+
+        fake_process = MagicMock()
+
+        with patch("bot.handlers.chat.check_auth", return_value=True), \
+             patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
+             patch("bot.handlers.chat.resolve_cli_executable", return_value="codex"), \
+             patch(
+                 "bot.handlers.chat.compile_assistant_prompt",
+                 return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+             ) as compiler, \
+             patch("bot.handlers.chat.record_assistant_capture") as capture_mock, \
+             patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)) as build_mock, \
+             patch("bot.handlers.chat.subprocess.Popen", return_value=fake_process), \
+             patch(
+                 "bot.handlers.chat.stream_codex_json_output",
+                 new_callable=AsyncMock,
+                 return_value=("ok", "thread-1", 0, False),
+             ):
+            await handle_text_message(mock_update, mock_context)
+
+        compiler.assert_called_once()
+        capture_mock.assert_called_once()
+        assert build_mock.call_args.kwargs["user_text"].startswith("[LOCAL_ASSISTANT_CONTEXT]")
 
 
 class TestCollectCliOutput:
