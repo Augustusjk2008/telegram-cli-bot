@@ -10,6 +10,9 @@ from .file import upload_help, handle_document, download_file, cat_file, head_fi
 from .file_browser import show_file_browser, handle_file_browser_callback
 from .chat import handle_text_message, handle_stop_callback
 from .admin import (
+    assistant_approve,
+    assistant_proposals,
+    assistant_reject,
     bot_help,
     bot_list,
     restart_main,
@@ -74,6 +77,9 @@ def _register_cli_handlers(application: Application, include_admin: bool):
         application.add_handler(CommandHandler("bot_params_set", bot_params_set))
         application.add_handler(CommandHandler("bot_params_reset", bot_params_reset))
         application.add_handler(CommandHandler("bot_params_help", bot_params_help))
+        application.add_handler(CommandHandler("assistant_proposals", assistant_proposals))
+        application.add_handler(CommandHandler("assistant_approve", assistant_approve))
+        application.add_handler(CommandHandler("assistant_reject", assistant_reject))
         application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
         application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
     application.add_handler(CallbackQueryHandler(handle_file_browser_callback, pattern="^fb:"))

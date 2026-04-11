@@ -62,7 +62,10 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "admin_cmd_params": "   /bot_params <alias> [cli_type] - 查看 CLI 参数配置",
         "admin_cmd_params_set": "   /bot_params_set <alias> <cli_type> <key> <value> - 设置 CLI 参数",
         "admin_cmd_params_reset": "   /bot_params_reset <alias> [cli_type] - 重置 CLI 参数",
-        "admin_cmd_params_help": "   /bot_params_help [cli_type] - 显示 CLI 参数帮助"
+        "admin_cmd_params_help": "   /bot_params_help [cli_type] - 显示 CLI 参数帮助",
+        "admin_cmd_assistant_proposals": "   /assistant_proposals <alias> [status] - 查看 assistant proposal",
+        "admin_cmd_assistant_approve": "   /assistant_approve <alias> <proposal_id> - 批准 proposal",
+        "admin_cmd_assistant_reject": "   /assistant_reject <alias> <proposal_id> - 拒绝 proposal"
     },
     "auth": {
         "unauthorized": "⛔ 未授权的用户"
@@ -139,7 +142,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
     },
     "admin": {
         "unauthorized": "⛔ 需要管理员权限",
-        "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc cli codex codex C:/work/project\n   例: /bot_add helper 456:def assistant claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)\n\n8) CLI 参数配置:\n   /bot_params <alias> [cli_type]     - 查看当前参数\n   /bot_params_set <alias> <type> <key> <value>  - 设置参数\n   /bot_params_reset <alias> [cli_type] - 重置参数\n   /bot_params_help [cli_type]        - 显示参数帮助",
+        "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc cli codex codex C:/work/project\n   例: /bot_add helper 456:def assistant claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)\n\n8) CLI 参数配置:\n   /bot_params <alias> [cli_type]     - 查看当前参数\n   /bot_params_set <alias> <type> <key> <value>  - 设置参数\n   /bot_params_reset <alias> [cli_type] - 重置参数\n   /bot_params_help [cli_type]        - 显示参数帮助\n\n9) Assistant proposal 审批:\n   /assistant_proposals <alias> [status]\n   /assistant_approve <alias> <proposal_id>\n   /assistant_reject <alias> <proposal_id>",
         "restart": "🔄 正在重启整个程序并重载代码...",
         "bot_add_usage": "用法: /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\nbot_mode: cli(默认) | assistant\nassistant: 最多一个，且必须显式提供 workdir",
         "bot_add_success": "✅ 子Bot已启动\nalias: <code>{alias}</code>\nusername: @{username}\nmode: <code>{bot_mode}</code>\ncli: <code>{cli_type}</code> / <code>{cli_path}</code>\nworkdir: <code>{workdir}</code>",
@@ -183,7 +186,13 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "bot_params_reset_usage": "用法: /bot_params_reset <alias> [cli_type]\n\n示例:\n  /bot_params_reset team1         # 重置 team1 的所有参数\n  /bot_params_reset team1 claude  # 只重置 team1 的 claude 参数",
         "bot_params_reset_success": "✅ 已重置 <code>{alias}</code> 的所有 CLI 参数为默认值",
         "bot_params_reset_partial_success": "✅ 已重置 <code>{alias}</code> 的 <code>{cli_type}</code> 参数为默认值",
-        "bot_params_reset_failed": "❌ 重置参数失败: {error}"
+        "bot_params_reset_failed": "❌ 重置参数失败: {error}",
+        "assistant_proposals_usage": "用法: /assistant_proposals <alias> [status]",
+        "assistant_review_usage": "用法: /assistant_approve <alias> <proposal_id>\n或: /assistant_reject <alias> <proposal_id>",
+        "assistant_proposals_header": "🧾 <code>{alias}</code> 的 assistant proposals:",
+        "assistant_proposals_empty": "📭 <code>{alias}</code> 暂无 assistant proposal",
+        "assistant_review_success": "✅ Proposal <code>{proposal_id}</code> 已更新为 <code>{status}</code>",
+        "assistant_proposals_failed": "❌ assistant proposal 操作失败: {error}"
     },
     "voice": {
         "disabled": "❌ 语音识别功能未启用\n\n请在 .env 中设置:\nWHISPER_ENABLED=true\n\n并安装依赖:\npip install openai-whisper pydub",

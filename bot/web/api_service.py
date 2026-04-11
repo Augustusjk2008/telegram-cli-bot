@@ -20,6 +20,7 @@ from typing import Any, AsyncIterator, Optional
 
 from bot.assistant_context import compile_assistant_prompt
 from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_proposals import list_proposals, set_proposal_status
 from bot.assistant_state import (
     attach_assistant_persist_hook,
     record_assistant_capture,
@@ -86,6 +87,13 @@ class CliAttemptState:
 
 def _raise(status: int, code: str, message: str):
     raise WebApiError(status=status, code=code, message=message)
+
+
+def _assistant_home_or_raise(manager: MultiBotManager, alias: str):
+    profile = get_profile_or_raise(manager, alias)
+    if profile.bot_mode != "assistant":
+        _raise(409, "unsupported_bot_mode", "仅 assistant Bot 支持 proposal 审批")
+    return bootstrap_assistant_home(profile.working_dir)
 
 
 def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
@@ -235,6 +243,44 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
         "bot": build_bot_summary(manager, alias, user_id),
         "session": build_session_snapshot(profile, session),
     }
+
+
+def list_assistant_proposals(
+    manager: MultiBotManager,
+    alias: str,
+    *,
+    status: str | None = None,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    return {"items": list_proposals(home, status=status)}
+
+
+async def approve_assistant_proposal(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+    *,
+    reviewer: str,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    try:
+        return set_proposal_status(home, proposal_id, "approved", reviewer=reviewer)
+    except FileNotFoundError as exc:
+        _raise(404, "proposal_not_found", str(exc))
+
+
+async def reject_assistant_proposal(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+    *,
+    reviewer: str,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    try:
+        return set_proposal_status(home, proposal_id, "rejected", reviewer=reviewer)
+    except FileNotFoundError as exc:
+        _raise(404, "proposal_not_found", str(exc))
 
 
 def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:

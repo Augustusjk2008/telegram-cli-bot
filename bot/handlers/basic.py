@@ -146,7 +146,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{msg('greeting', 'admin_cmd_params')}\n"
             f"{msg('greeting', 'admin_cmd_params_set')}\n"
             f"{msg('greeting', 'admin_cmd_params_reset')}\n"
-            f"{msg('greeting', 'admin_cmd_params_help')}"
+            f"{msg('greeting', 'admin_cmd_params_help')}\n"
+            f"{msg('greeting', 'admin_cmd_assistant_proposals')}\n"
+            f"{msg('greeting', 'admin_cmd_assistant_approve')}\n"
+            f"{msg('greeting', 'admin_cmd_assistant_reject')}"
         )
 
     native_session_block = ""

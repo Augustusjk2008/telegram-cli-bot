@@ -36,6 +36,7 @@ from bot.handlers.tui_server import create_shell_process
 from bot.platform.runtime import get_default_shell
 from .tunnel_service import TunnelService
 from .api_service import (
+    approve_assistant_proposal,
     AuthContext,
     WebApiError,
     add_managed_bot,
@@ -48,6 +49,7 @@ from .api_service import (
     get_file_metadata,
     get_history,
     get_overview,
+    list_assistant_proposals,
     get_cli_params_payload,
     get_processing_sessions,
     get_working_directory,
@@ -56,6 +58,7 @@ from .api_service import (
     list_system_scripts,
     read_file_content,
     remove_managed_bot,
+    reject_assistant_proposal,
     reset_user_session,
     reset_cli_params,
     run_chat,
@@ -911,6 +914,36 @@ class WebApiServer:
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": {"bot": build_bot_summary(self.manager, alias)}})
 
+    async def admin_assistant_proposals(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        status = request.query.get("status") or None
+        return _json({"ok": True, "data": list_assistant_proposals(self.manager, alias, status=status)})
+
+    async def admin_assistant_proposal_approve(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        data = await approve_assistant_proposal(
+            self.manager,
+            alias,
+            proposal_id,
+            reviewer=str(auth.user_id),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_proposal_reject(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        data = await reject_assistant_proposal(
+            self.manager,
+            alias,
+            proposal_id,
+            reviewer=str(auth.user_id),
+        )
+        return _json({"ok": True, "data": data})
+
     def _build_app(self) -> web.Application:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
         app.router.add_get("/api/health", self.health)
@@ -959,6 +992,15 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
         app.router.add_patch("/api/admin/bots/{alias}/alias", self.admin_rename_bot)
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
+        app.router.add_get("/api/admin/bots/{alias}/assistant/proposals", self.admin_assistant_proposals)
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/approve",
+            self.admin_assistant_proposal_approve,
+        )
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/reject",
+            self.admin_assistant_proposal_reject,
+        )
         app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
         app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)
         app.router.add_post("/api/admin/restart", self.admin_restart)

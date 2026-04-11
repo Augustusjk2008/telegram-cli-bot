@@ -13,6 +13,8 @@ from typing import Iterator
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_proposals import list_proposals, set_proposal_status
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR, request_restart
 from bot.context_helpers import ensure_admin, get_manager, reply_text
 from bot.handlers.shell import strip_ansi_escape
@@ -324,6 +326,100 @@ async def bot_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(msg("admin", "help_text"))
+
+
+def _assistant_profile_or_error(manager, alias: str):
+    profile = manager.get_profile(alias)
+    if profile.bot_mode != "assistant":
+        raise ValueError("仅 assistant Bot 支持 proposal 审批")
+    return profile
+
+
+async def assistant_proposals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_admin(update, context):
+        return
+
+    if not context.args:
+        await reply_text(update, msg("admin", "assistant_proposals_usage"))
+        return
+
+    alias = context.args[0].strip().lower()
+    status = context.args[1].strip().lower() if len(context.args) >= 2 else None
+    manager = get_manager(context)
+
+    try:
+        profile = _assistant_profile_or_error(manager, alias)
+        home = bootstrap_assistant_home(profile.working_dir)
+        items = list_proposals(home, status=status)
+    except Exception as exc:
+        await reply_text(update, msg("admin", "assistant_proposals_failed", error=str(exc)))
+        return
+
+    if not items:
+        await reply_text(
+            update,
+            msg("admin", "assistant_proposals_empty", alias=html.escape(alias)),
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [msg("admin", "assistant_proposals_header", alias=html.escape(alias))]
+    for item in items[:20]:
+        proposal_id = html.escape(str(item.get("id", "")))
+        title = html.escape(str(item.get("title", "")))
+        proposal_status = html.escape(str(item.get("status", "")))
+        lines.append(f"- <code>{proposal_id}</code> [{proposal_status}] {title}")
+    await reply_text(update, "\n".join(lines), parse_mode="HTML")
+
+
+async def assistant_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_admin(update, context):
+        return
+
+    if len(context.args) < 2:
+        await reply_text(update, msg("admin", "assistant_review_usage"))
+        return
+
+    alias = context.args[0].strip().lower()
+    proposal_id = context.args[1].strip()
+    manager = get_manager(context)
+
+    try:
+        profile = _assistant_profile_or_error(manager, alias)
+        home = bootstrap_assistant_home(profile.working_dir)
+        data = set_proposal_status(home, proposal_id, "approved", reviewer=str(update.effective_user.id))
+        await reply_text(
+            update,
+            msg("admin", "assistant_review_success", proposal_id=html.escape(data["id"]), status="approved"),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        await reply_text(update, msg("admin", "assistant_proposals_failed", error=str(exc)))
+
+
+async def assistant_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_admin(update, context):
+        return
+
+    if len(context.args) < 2:
+        await reply_text(update, msg("admin", "assistant_review_usage"))
+        return
+
+    alias = context.args[0].strip().lower()
+    proposal_id = context.args[1].strip()
+    manager = get_manager(context)
+
+    try:
+        profile = _assistant_profile_or_error(manager, alias)
+        home = bootstrap_assistant_home(profile.working_dir)
+        data = set_proposal_status(home, proposal_id, "rejected", reviewer=str(update.effective_user.id))
+        await reply_text(
+            update,
+            msg("admin", "assistant_review_success", proposal_id=html.escape(data["id"]), status="rejected"),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        await reply_text(update, msg("admin", "assistant_proposals_failed", error=str(exc)))
 
 
 async def bot_list(update: Update, context: ContextTypes.DEFAULT_TYPE):

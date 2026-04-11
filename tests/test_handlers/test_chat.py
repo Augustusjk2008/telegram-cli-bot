@@ -70,6 +70,7 @@ class TestHandleTextMessageAuth:
         profile_mock.bot_mode = "assistant"
         profile_mock.cli_type = "codex"
         profile_mock.cli_path = "codex"
+        profile_mock.working_dir = str(temp_dir)
         profile_mock.cli_params = MagicMock()
 
         session_mock = MagicMock()

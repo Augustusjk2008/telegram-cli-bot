@@ -42,7 +42,10 @@
     "admin_cmd_start_stop": "   /bot_start <alias> / /bot_stop <alias>",
     "admin_cmd_set_cli": "   /bot_set_cli <alias> <cli_type> <cli_path>",
     "admin_cmd_set_workdir": "   /bot_set_workdir <alias> <workdir>",
-    "admin_cmd_kill": "   /bot_kill <alias> [user_id] - 强制终止任务"
+    "admin_cmd_kill": "   /bot_kill <alias> [user_id] - 强制终止任务",
+    "admin_cmd_assistant_proposals": "   /assistant_proposals <alias> [status] - 查看 assistant proposal",
+    "admin_cmd_assistant_approve": "   /assistant_approve <alias> <proposal_id> - 批准 proposal",
+    "admin_cmd_assistant_reject": "   /assistant_reject <alias> <proposal_id> - 拒绝 proposal"
   },
   "auth": {
     "unauthorized": "⛔ 未授权的用户"
@@ -117,7 +120,7 @@
   },
   "admin": {
     "unauthorized": "⛔ 需要管理员权限",
-    "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc cli codex codex C:/work/project\n   例: /bot_add helper 456:def assistant claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)",
+    "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc cli codex codex C:/work/project\n   例: /bot_add helper 456:def assistant claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)\n\n8) Assistant proposal 审批:\n   /assistant_proposals <alias> [status]\n   /assistant_approve <alias> <proposal_id>\n   /assistant_reject <alias> <proposal_id>",
     "restart": "🔄 正在重启整个程序并重载代码...",
     "bot_add_usage": "用法: /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\nbot_mode: cli(默认) | assistant\nassistant: 最多一个，且必须显式提供 workdir",
     "bot_add_success": "✅ 子Bot已启动\nalias: <code>{alias}</code>\nusername: @{username}\nmode: <code>{bot_mode}</code>\ncli: <code>{cli_type}</code> / <code>{cli_path}</code>\nworkdir: <code>{workdir}</code>",
@@ -150,7 +153,13 @@
     "system_script_not_found": "❌ 未找到脚本: <code>{script_name}</code>\n\n可用脚本: <code>{available}</code>",
     "system_executing": "🖥️ 正在执行脚本: <code>{script_name}</code>...",
     "system_exec_success": "✅ <code>{script_name}</code> 执行成功:\n\n<pre>{output}</pre>",
-    "system_exec_failed": "❌ <code>{script_name}</code> 执行失败:\n\n<pre>{output}</pre>"
+    "system_exec_failed": "❌ <code>{script_name}</code> 执行失败:\n\n<pre>{output}</pre>",
+    "assistant_proposals_usage": "用法: /assistant_proposals <alias> [status]",
+    "assistant_review_usage": "用法: /assistant_approve <alias> <proposal_id>\n或: /assistant_reject <alias> <proposal_id>",
+    "assistant_proposals_header": "🧾 <code>{alias}</code> 的 assistant proposals:",
+    "assistant_proposals_empty": "📭 <code>{alias}</code> 暂无 assistant proposal",
+    "assistant_review_success": "✅ Proposal <code>{proposal_id}</code> 已更新为 <code>{status}</code>",
+    "assistant_proposals_failed": "❌ assistant proposal 操作失败: {error}"
   },
   "startup": {
     "banner": "═══════════════════════════════════════════════════",

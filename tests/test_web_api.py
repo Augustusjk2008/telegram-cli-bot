@@ -17,6 +17,7 @@ from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.session_store import save_session
+from bot.web.server import WebApiServer
 from bot.web.api_service import (
     AuthContext,
     _stream_cli_chat,
@@ -43,7 +44,7 @@ from bot.web.git_service import (
     init_git_repository,
     stage_git_paths,
 )
-from bot.web.server import WebApiServer
+from bot.assistant_proposals import create_proposal
 
 
 @pytest.fixture
@@ -1289,6 +1290,42 @@ async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotM
 
     cli_mock.assert_awaited_once_with(web_manager, "assistant1", 1001, "hello")
     assert data["output"] == "cli result"
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_proposal_routes_list_and_approve(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    home = bootstrap_assistant_home(workdir)
+    proposal = create_proposal(home, kind="knowledge", title="scope", body="assistant 单例")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/bots/assistant1/assistant/proposals")
+            assert resp.status == 200
+            listing = await resp.json()
+            assert listing["data"]["items"][0]["id"] == proposal["id"]
+
+            resp = await client.post(
+                f"/api/admin/bots/assistant1/assistant/proposals/{proposal['id']}/approve"
+            )
+            assert resp.status == 200
 
 
 @pytest.mark.asyncio

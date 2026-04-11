@@ -6,11 +6,14 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
 from bot.handlers.admin import (
+    assistant_approve,
+    assistant_proposals,
+    assistant_reject,
     bot_add,
     bot_goto_callback,
     bot_help,
@@ -45,6 +48,50 @@ class TestBotHelp:
         with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=False):
             await bot_help(mock_update, mock_context)
         mock_update.message.reply_text.assert_not_called()
+
+
+class TestAssistantProposalCommands:
+    @pytest.mark.asyncio
+    async def test_assistant_proposals_lists_items(self, mock_update, mock_context, temp_dir):
+        mock_context.args = ["assistant1"]
+        manager_mock = MagicMock()
+        manager_mock.get_profile.return_value = MagicMock(bot_mode="assistant", working_dir=str(temp_dir))
+
+        with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
+             patch(
+                 "bot.handlers.admin.list_proposals",
+                 return_value=[{"id": "pr_1", "title": "scope", "status": "proposed"}],
+             ):
+            await assistant_proposals(mock_update, mock_context)
+
+        reply_text = mock_update.message.reply_text.call_args[0][0]
+        assert "pr_1" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_assistant_approve_and_reject_update_status(self, mock_update, mock_context, temp_dir):
+        manager_mock = MagicMock()
+        manager_mock.get_profile.return_value = MagicMock(bot_mode="assistant", working_dir=str(temp_dir))
+
+        with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
+             patch(
+                 "bot.handlers.admin.set_proposal_status",
+                 return_value={"id": "pr_1", "status": "approved"},
+             ) as set_mock:
+            mock_context.args = ["assistant1", "pr_1"]
+            await assistant_approve(mock_update, mock_context)
+            set_mock.assert_called_with(ANY, "pr_1", "approved", reviewer=str(mock_update.effective_user.id))
+
+        with patch("bot.handlers.admin.ensure_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.handlers.admin.get_manager", return_value=manager_mock), \
+             patch(
+                 "bot.handlers.admin.set_proposal_status",
+                 return_value={"id": "pr_1", "status": "rejected"},
+             ) as set_mock:
+            mock_context.args = ["assistant1", "pr_1"]
+            await assistant_reject(mock_update, mock_context)
+            set_mock.assert_called_with(ANY, "pr_1", "rejected", reviewer=str(mock_update.effective_user.id))
 
 
 class TestBotList:
