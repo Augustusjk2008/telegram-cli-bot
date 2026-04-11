@@ -71,6 +71,21 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(localStorage.getItem("web-api-token")).toBeNull();
 });
 
+test("app shell is no longer constrained to a fixed mobile width", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  const shell = container.firstElementChild;
+  expect(shell).not.toBeNull();
+  expect(shell?.className).toContain("w-full");
+  expect(shell?.className).not.toContain("max-w-md");
+  expect(shell?.className).not.toContain("mx-auto");
+});
+
 test("initial login only mounts the active chat tab", async () => {
   const user = userEvent.setup();
   const getBotOverviewSpy = vi.spyOn(MockWebBotClient.prototype, "getBotOverview");
@@ -507,6 +522,31 @@ test("bot manager can create a web-only bot without telegram token", async () =>
   await user.click(screen.getByRole("button", { name: "创建 Bot" }));
 
   expect(await screen.findByText("web-only")).toBeInTheDocument();
+});
+
+test("bot manager normalizes repeated backslashes in new bot paths", async () => {
+  const user = userEvent.setup();
+  const addBotSpy = vi.spyOn(MockWebBotClient.prototype, "addBot");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  await user.type(screen.getByLabelText("新 Bot 别名"), "team-path");
+  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "C:\\\\tools\\\\codex.cmd");
+  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\\\workspace\\\\team-path");
+  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+
+  expect(addBotSpy).toHaveBeenCalledWith(expect.objectContaining({
+    alias: "team-path",
+    cliPath: "C:\\tools\\codex.cmd",
+    workingDir: "C:\\workspace\\team-path",
+  }));
 });
 
 test("bot manager stays open even when a stored bot alias exists", async () => {

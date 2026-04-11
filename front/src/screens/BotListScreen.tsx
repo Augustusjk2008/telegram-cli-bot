@@ -3,6 +3,7 @@ import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { normalizeWindowsPathInput } from "../utils/windowsPath";
 
 type Props = {
   client?: WebBotClient;
@@ -61,8 +62,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
         ...createDraft,
         alias: createDraft.alias.trim(),
         token: createDraft.token.trim(),
-        cliPath: createDraft.cliPath.trim(),
-        workingDir: createDraft.workingDir.trim(),
+        cliPath: normalizeWindowsPathInput(createDraft.cliPath),
+        workingDir: normalizeWindowsPathInput(createDraft.workingDir),
       });
       setCreateDraft(EMPTY_CREATE_DRAFT);
       setNotice("Bot 已创建");
