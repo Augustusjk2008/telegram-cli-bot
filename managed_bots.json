@@ -6,7 +6,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "h:\\workspace\\KimiAgent\\helm_simu",
-      "enabled": true,
+      "enabled": false,
       "bot_mode": "cli"
     },
     {
@@ -15,7 +15,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "H:\\WorkSpace\\KimiAgent\\game_agents",
-      "enabled": true,
+      "enabled": false,
       "bot_mode": "cli"
     },
     {
@@ -24,7 +24,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "h:\\workspace\\KimiAgent\\openEuler",
-      "enabled": true,
+      "enabled": false,
       "bot_mode": "cli"
     },
     {

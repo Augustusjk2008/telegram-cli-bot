@@ -299,9 +299,18 @@ WHISPER_DEVICE=cpu
 
 如果这些依赖没有装，语音功能会被跳过，文字消息功能不受影响。
 
-### 手机公网访问 Web
+### 异地访问 Web
 
-如果你想在手机上通过公网打开 Web 页面，可以使用 Cloudflare Tunnel。
+如果你想在异地设备上打开 Web 页面，推荐先看：
+
+- [docs/web-remote-access.md](docs/web-remote-access.md)
+
+当前建议是：
+
+- 长期个人自用：`Tailscale Personal + Tailscale Serve`
+- 临时调试：`Cloudflare Quick Tunnel`
+
+如果你想在手机上通过公网打开 Web 页面，也可以继续使用 Cloudflare Tunnel。
 
 先说结论：
 
