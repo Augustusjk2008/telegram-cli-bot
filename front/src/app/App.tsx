@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
 import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
@@ -17,7 +17,6 @@ import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
-import { TerminalScreen } from "../screens/TerminalScreen";
 import { APP_NAME, applyUiTheme, persistUiTheme, readStoredUiTheme, type UiThemeName } from "../theme";
 import "../styles/tokens.css";
 import "../styles/global.css";
@@ -25,6 +24,9 @@ import "../styles/global.css";
 const TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
 const UNREAD_STORAGE_KEY = "web-unread-bots";
+const TerminalScreen = lazy(() =>
+  import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
+);
 
 function readStoredToken() {
   return sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() || "";
@@ -315,16 +317,18 @@ export function App() {
   } else if (currentTab === "terminal") {
     activeScreen = (
       <div className="absolute inset-0">
-        <TerminalScreen
-          authToken={readStoredToken()}
-          botAlias={currentBot}
-          client={client}
-          isVisible
-          preferredWorkingDir={currentBotSummary?.workingDir || ""}
-          themeName={themeName}
-          isImmersive={isTerminalImmersive}
-          onToggleImmersive={() => setIsTerminalImmersive((prev) => !prev)}
-        />
+        <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
+          <TerminalScreen
+            authToken={readStoredToken()}
+            botAlias={currentBot}
+            client={client}
+            isVisible
+            preferredWorkingDir={currentBotSummary?.workingDir || ""}
+            themeName={themeName}
+            isImmersive={isTerminalImmersive}
+            onToggleImmersive={() => setIsTerminalImmersive((prev) => !prev)}
+          />
+        </Suspense>
       </div>
     );
   } else if (currentTab === "git") {

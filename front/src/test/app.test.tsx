@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "../app/App";
@@ -661,19 +661,27 @@ test("terminal tab keeps one shared session alive and rebuilds from the current 
   await user.click(screen.getByRole("button", { name: "终端" }));
 
   expect(await screen.findByTestId("terminal-screen-root")).toBeInTheDocument();
-  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+  await waitFor(() => {
+    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+  });
 
   await user.click(screen.getByRole("button", { name: "Git" }));
   await user.click(screen.getByRole("button", { name: "终端" }));
-  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+  await waitFor(() => {
+    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+  });
 
   await user.click(screen.getByRole("button", { name: "main" }));
   await user.click(await screen.findByRole("button", { name: /team2/i }));
   await user.click(screen.getByRole("button", { name: "终端" }));
-  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+  await waitFor(() => {
+    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
+  });
 
   await user.click(screen.getByRole("button", { name: "重建终端" }));
-  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("2");
+  await waitFor(() => {
+    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("2");
+  });
 });
 
 test("terminal immersive mode hides outer app chrome but keeps the terminal visible", async () => {

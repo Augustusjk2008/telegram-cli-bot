@@ -24,7 +24,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "h:\\Resources\\RTLinux\\Demos\\MB_DDF",
-      "enabled": false,
+      "enabled": true,
       "bot_mode": "cli"
     }
   ]

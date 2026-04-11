@@ -19,6 +19,11 @@ import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
+import {
+  DEMO_MAIN_WORKDIR,
+  DEMO_SYSTEM_SCRIPTS,
+  DEMO_TEAM_WORKDIR,
+} from "../mocks/demoEnvironment";
 
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
@@ -41,8 +46,8 @@ export class MockWebBotClient implements WebBotClient {
       {
         repoFound: true,
         canInit: false,
-        workingDir: "C:\\workspace\\demo",
-        repoPath: "C:\\workspace\\demo",
+        workingDir: DEMO_MAIN_WORKDIR,
+        repoPath: DEMO_MAIN_WORKDIR,
         repoName: "demo",
         currentBranch: "main",
         isClean: false,
@@ -80,8 +85,8 @@ export class MockWebBotClient implements WebBotClient {
       {
         repoFound: true,
         canInit: false,
-        workingDir: "C:\\workspace\\plans",
-        repoPath: "C:\\workspace\\plans",
+        workingDir: DEMO_TEAM_WORKDIR,
+        repoPath: DEMO_TEAM_WORKDIR,
         repoName: "plans",
         currentBranch: "feature/git-panel",
         isClean: true,
@@ -100,14 +105,7 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   ]);
-  private readonly scripts: SystemScript[] = [
-    {
-      scriptName: "network_traffic",
-      displayName: "网络流量",
-      description: "查看网络状态",
-      path: "C:\\scripts\\network_traffic.ps1",
-    },
-  ];
+  private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
@@ -127,7 +125,7 @@ export class MockWebBotClient implements WebBotClient {
         alias: botAlias,
         cliType: "codex",
         status: "running",
-        workingDir: "C:\\workspace",
+        workingDir: DEMO_MAIN_WORKDIR,
         lastActiveText: "运行中",
         cliPath: "codex",
         botMode: "cli",
@@ -616,7 +614,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
     const logs = [
-      "cd /d front",
+      "cd front",
       "npm run build",
       "Web 前端构建完成",
     ];
