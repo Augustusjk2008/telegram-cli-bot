@@ -23,9 +23,10 @@ from bot.web.api_service import (
     get_directory_listing,
     get_session_for_alias,
     get_overview,
+    get_working_directory,
     list_bots,
     read_file_content,
-    run_assistant_chat,
+    run_chat,
     run_cli_chat,
     save_uploaded_file,
 )
@@ -115,6 +116,44 @@ def test_change_working_directory_clears_session_ids(web_manager: MultiBotManage
     assert session.kimi_session_id is None
     assert session.claude_session_id is None
     assert session.claude_session_initialized is False
+
+
+def test_assistant_change_directory_only_updates_file_browser_path(web_manager: MultiBotManager, temp_dir: Path):
+    workdir = temp_dir / "assistant-workdir"
+    workdir.mkdir()
+    browse_dir = temp_dir / "assistant-browse"
+    browse_dir.mkdir()
+    (browse_dir / "note.txt").write_text("assistant browser\n", encoding="utf-8")
+
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+
+    result = change_working_directory(web_manager, "assistant1", 1001, str(browse_dir))
+
+    assert result["working_dir"] == str(browse_dir)
+    assert session.working_dir == str(workdir)
+    assert session.browse_dir == str(browse_dir)
+    assert web_manager.managed_profiles["assistant1"].working_dir == str(workdir)
+
+    pwd = get_working_directory(web_manager, "assistant1", 1001)
+    assert pwd["working_dir"] == str(workdir)
+
+    listing = get_directory_listing(web_manager, "assistant1", 1001)
+    assert listing["working_dir"] == str(browse_dir)
+    assert any(item["name"] == "note.txt" for item in listing["entries"])
+
+    content = read_file_content(web_manager, "assistant1", 1001, "note.txt", mode="head", lines=1)
+    assert content["working_dir"] == str(browse_dir)
+    assert content["content"] == "assistant browser"
 
 
 def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
@@ -956,6 +995,31 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
 
 
 @pytest.mark.asyncio
+async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotManager, temp_dir: Path):
+    workdir = temp_dir / "assistant-cli"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    with patch(
+        "bot.web.api_service.run_cli_chat",
+        new_callable=AsyncMock,
+        return_value={"output": "cli result", "elapsed_seconds": 1},
+    ) as cli_mock:
+        data = await run_chat(web_manager, "assistant1", 1001, "hello")
+
+    cli_mock.assert_awaited_once_with(web_manager, "assistant1", 1001, "hello")
+    assert data["output"] == "cli result"
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: MultiBotManager):
     fake_stdout = MagicMock()
     fake_stdout.readline.return_value = ""
@@ -975,28 +1039,6 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     assert done_event["output"] == "（无输出）" or isinstance(done_event["output"], str)
     assert isinstance(done_event["elapsed_seconds"], int)
     assert done_event["elapsed_seconds"] >= 0
-
-
-@pytest.mark.asyncio
-async def test_run_assistant_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
-    web_manager.main_profile.bot_mode = "assistant"
-    session = get_session_for_alias(web_manager, "main", 1001)
-
-    async def fake_stream(*args, **kwargs):
-        yield {"type": "text", "text": "你好"}
-
-    with patch("bot.web.api_service.ANTHROPIC_AVAILABLE", True), \
-         patch("bot.web.api_service._build_system_prompt_with_memory", return_value="system"), \
-         patch("bot.web.api_service.call_claude_with_memory_tools_stream", fake_stream):
-        data = await run_assistant_chat(web_manager, "main", 1001, "hello")
-
-    assert data["output"] == "你好"
-    assert isinstance(data["elapsed_seconds"], int)
-    assert data["elapsed_seconds"] >= 0
-    assert session.history[-1]["role"] == "assistant"
-    assert session.history[-1]["content"] == "你好"
-    assert session.history[-1]["elapsed_seconds"] == data["elapsed_seconds"]
-
 
 def test_codex_status_event_skips_json_meta_preview():
     event = _build_stream_status_event(

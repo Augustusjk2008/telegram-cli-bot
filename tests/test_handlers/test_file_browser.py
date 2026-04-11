@@ -155,6 +155,30 @@ class TestNavigationCallbacks:
 
         assert session.working_dir == str(temp_dir)
 
+    @pytest.mark.asyncio
+    async def test_open_directory_for_assistant_updates_browser_dir_only(self, mock_update, mock_context, temp_dir):
+        browser = _load_file_browser_module()
+        subdir = temp_dir / "nested"
+        subdir.mkdir()
+
+        session = MagicMock()
+        session.working_dir = str(temp_dir)
+        session.browse_dir = str(temp_dir)
+
+        profile = MagicMock()
+        profile.bot_mode = "assistant"
+
+        callback_update, _, _ = _build_callback_update(mock_update, "fb:open:nested")
+
+        with patch("bot.handlers.file_browser.check_auth", return_value=True), patch(
+            "bot.handlers.file_browser.get_current_session", return_value=session
+        ), patch("bot.handlers.basic.get_current_profile", return_value=profile):
+            await browser.handle_file_browser_callback(callback_update, mock_context)
+
+        assert session.working_dir == str(temp_dir)
+        assert session.browse_dir == str(subdir)
+        session.clear_session_ids.assert_not_called()
+
 
 class TestFileActions:
     @pytest.mark.asyncio

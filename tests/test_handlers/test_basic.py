@@ -153,6 +153,25 @@ class TestChangeDirectory:
         # 验证 clear_session_ids 被调用
         session_mock.clear_session_ids.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_cd_assistant_mode_rejects_workdir_change(self, mock_update, mock_context, temp_dir):
+        mock_context.args = [str(temp_dir)]
+        session_mock = MagicMock()
+        session_mock.working_dir = "C:/locked"
+
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "assistant"
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_session", return_value=session_mock), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock):
+            await change_directory(mock_update, mock_context)
+
+        reply_text = mock_update.message.reply_text.call_args[0][0]
+        assert "不允许修改工作目录" in reply_text
+        assert session_mock.working_dir == "C:/locked"
+        session_mock.clear_session_ids.assert_not_called()
+
 
 class TestPrintWorkingDirectory:
     """测试 /pwd"""

@@ -257,7 +257,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                 key={bot.alias}
                 className={
                   isOffline
-                    ? "space-y-3 rounded-2xl border border-red-300 bg-red-50/80 p-4 shadow-[0_0_0_1px_rgba(252,165,165,0.32)]"
+                    ? "space-y-3 rounded-2xl border border-red-200 bg-[var(--surface)] p-4"
                     : "space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4"
                 }
               >
@@ -268,18 +268,11 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                       {isMain ? (
                         <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
                       ) : null}
-                      <StatusPill status={bot.status} className={isOffline ? "px-3 py-1 text-sm" : ""} />
+                      <StatusPill status={bot.status} />
                     </div>
                     <p className="text-sm text-[var(--muted)]">CLI: {bot.cliType}{bot.cliPath ? ` / ${bot.cliPath}` : ""}</p>
                     <p className="break-all text-sm text-[var(--muted)]">目录: {bot.workingDir}</p>
-                    <p className={isOffline ? "text-sm text-red-700" : "text-sm text-[var(--muted)]"}>
-                      状态: {bot.lastActiveText}
-                    </p>
-                    {isOffline ? (
-                      <div className="rounded-xl border border-red-200 bg-white/85 px-3 py-2 text-sm text-red-700">
-                        该 Bot 当前离线，需先启动后才能进入。
-                      </div>
-                    ) : null}
+                    <p className="text-sm text-[var(--muted)]">状态: {bot.lastActiveText}</p>
                   </div>
                   <button
                     type="button"
@@ -293,11 +286,11 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                     disabled={isOffline}
                     className={
                       isOffline
-                        ? "cursor-not-allowed rounded-lg border border-red-200 bg-white/70 px-3 py-2 text-sm text-red-600 opacity-100"
+                        ? "cursor-not-allowed rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 opacity-100"
                         : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
                     }
                   >
-                    {isOffline ? "离线不可进入" : "进入"}
+                    {isOffline ? "不可进入" : "进入"}
                   </button>
                 </div>
 

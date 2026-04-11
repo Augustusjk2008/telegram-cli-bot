@@ -3,6 +3,7 @@
 按 (bot_id, user_id) 将会话相关状态保存到 JSON 文件，程序重启后可以恢复：
 - 各 CLI 的 session_id
 - 用户工作目录
+- 文件浏览目录
 - 有限聊天历史
 - 运行中回复的最近快照
 """
@@ -78,6 +79,7 @@ def save_session(
     kimi_session_id: Optional[str] = None,
     claude_session_id: Optional[str] = None,
     working_dir: Optional[str] = None,
+    browse_dir: Optional[str] = None,
     history: Optional[list[dict]] = None,
     message_count: Optional[int] = None,
     last_activity: Optional[str] = None,
@@ -98,6 +100,8 @@ def save_session(
         session_data["claude_session_id"] = claude_session_id
     if isinstance(working_dir, str) and working_dir:
         session_data["working_dir"] = working_dir
+    if isinstance(browse_dir, str) and browse_dir:
+        session_data["browse_dir"] = browse_dir
     if history:
         session_data["history"] = history
     if isinstance(message_count, int):

@@ -51,6 +51,7 @@ def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_wor
             claude_session_id = None
             claude_session_initialized = False
             working_dir = default_working_dir
+            browse_dir = None
             history = []
             message_count = 0
             last_activity = datetime.now()
@@ -64,6 +65,7 @@ def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_wor
                 kimi_session_id = stored_data.get("kimi_session_id")
                 claude_session_id = stored_data.get("claude_session_id")
                 working_dir = stored_data.get("working_dir") or default_working_dir
+                browse_dir = stored_data.get("browse_dir") or None
                 history_data = stored_data.get("history")
                 if isinstance(history_data, list):
                     history = [item for item in history_data if isinstance(item, dict)]
@@ -98,6 +100,7 @@ def get_or_create_session(bot_id: int, bot_alias: str, user_id: int, default_wor
                 bot_alias=bot_alias,
                 user_id=user_id,
                 working_dir=working_dir,
+                browse_dir=browse_dir,
                 history=history,
                 codex_session_id=codex_session_id,
                 kimi_session_id=kimi_session_id,
@@ -127,6 +130,7 @@ def _save_session_to_store(session: UserSession):
             kimi_session_id=session.kimi_session_id,
             claude_session_id=session.claude_session_id,
             working_dir=session.working_dir,
+            browse_dir=session.browse_dir,
             history=[dict(item) for item in session.history],
             message_count=session.message_count,
             last_activity=session.last_activity.isoformat(),
@@ -200,9 +204,32 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
         for session in sessions.values():
             if session.bot_alias == bot_alias:
                 session.working_dir = working_dir
+                session.browse_dir = working_dir
                 session.persist()
                 updated_count += 1
     return updated_count
+
+
+def align_session_paths(session: UserSession, default_working_dir: str, bot_mode: str) -> UserSession:
+    """按 bot_mode 统一修正真实工作目录与文件浏览目录。"""
+    changed = False
+    with session._lock:
+        current_browse_dir = (
+            session.browse_dir
+            if isinstance(session.browse_dir, str) and session.browse_dir
+            else session.working_dir or default_working_dir
+        )
+        if session.browse_dir != current_browse_dir:
+            session.browse_dir = current_browse_dir
+            changed = True
+
+        if bot_mode == "assistant" and default_working_dir and session.working_dir != default_working_dir:
+            session.working_dir = default_working_dir
+            changed = True
+
+    if changed:
+        session.persist()
+    return session
 
 
 def update_bot_alias(old_alias: str, new_alias: str) -> int:

@@ -285,6 +285,68 @@ export function App() {
 
   const hideOuterChrome = (currentTab === "chat" && isChatImmersive)
     || (currentTab === "terminal" && isTerminalImmersive);
+  let activeScreen: JSX.Element | null = null;
+
+  if (currentTab === "chat") {
+    activeScreen = (
+      <div className="absolute inset-0">
+        {mountedChatBots.map((alias) => (
+          <div key={`chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
+            <ChatScreen
+              botAlias={alias}
+              client={client}
+              isVisible={alias === currentBot}
+              isImmersive={alias === currentBot ? isChatImmersive : false}
+              onToggleImmersive={alias === currentBot
+                ? () => setIsChatImmersive((prev) => !prev)
+                : undefined}
+              onUnreadResult={markBotUnread}
+            />
+          </div>
+        ))}
+      </div>
+    );
+  } else if (currentTab === "files") {
+    activeScreen = (
+      <div className="absolute inset-0">
+        <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} />
+      </div>
+    );
+  } else if (currentTab === "terminal") {
+    activeScreen = (
+      <div className="absolute inset-0">
+        <TerminalScreen
+          authToken={readStoredToken()}
+          botAlias={currentBot}
+          client={client}
+          isVisible
+          preferredWorkingDir={currentBotSummary?.workingDir || ""}
+          themeName={themeName}
+          isImmersive={isTerminalImmersive}
+          onToggleImmersive={() => setIsTerminalImmersive((prev) => !prev)}
+        />
+      </div>
+    );
+  } else if (currentTab === "git") {
+    activeScreen = (
+      <div className="absolute inset-0">
+        <GitScreen key={`git-${currentBot}`} botAlias={currentBot} client={client} />
+      </div>
+    );
+  } else if (currentTab === "settings") {
+    activeScreen = (
+      <div className="absolute inset-0">
+        <SettingsScreen
+          key={`settings-${currentBot}`}
+          botAlias={currentBot}
+          client={client}
+          onLogout={handleLogout}
+          themeName={themeName}
+          onThemeChange={handleThemeChange}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-[var(--bg)] shadow-xl overflow-hidden relative">
@@ -303,52 +365,7 @@ export function App() {
       ) : null}
 
       <div className="flex-1 overflow-hidden relative">
-        <div className={clsx("absolute inset-0", currentTab === "chat" ? "block" : "hidden")}>
-          {mountedChatBots.map((alias) => (
-            <div key={`chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
-              <ChatScreen
-                botAlias={alias}
-                client={client}
-                isVisible={currentTab === "chat" && alias === currentBot}
-                isImmersive={currentTab === "chat" && alias === currentBot ? isChatImmersive : false}
-                onToggleImmersive={currentTab === "chat" && alias === currentBot
-                  ? () => setIsChatImmersive((prev) => !prev)
-                  : undefined}
-                onUnreadResult={markBotUnread}
-              />
-            </div>
-          ))}
-        </div>
-        <div className={clsx("absolute inset-0", currentTab === "files" ? "block" : "hidden")}>
-          <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} />
-        </div>
-        <div className={clsx("absolute inset-0", currentTab === "terminal" ? "block" : "hidden")}>
-          <TerminalScreen
-            authToken={readStoredToken()}
-            botAlias={currentBot}
-            client={client}
-            isVisible={currentTab === "terminal"}
-            preferredWorkingDir={currentBotSummary?.workingDir || ""}
-            themeName={themeName}
-            isImmersive={currentTab === "terminal" ? isTerminalImmersive : false}
-            onToggleImmersive={currentTab === "terminal"
-              ? () => setIsTerminalImmersive((prev) => !prev)
-              : undefined}
-          />
-        </div>
-        <div className={clsx("absolute inset-0", currentTab === "git" ? "block" : "hidden")}>
-          <GitScreen key={`git-${currentBot}`} botAlias={currentBot} client={client} />
-        </div>
-        <div className={clsx("absolute inset-0", currentTab === "settings" ? "block" : "hidden")}>
-          <SettingsScreen
-            key={`settings-${currentBot}`}
-            botAlias={currentBot}
-            client={client}
-            onLogout={handleLogout}
-            themeName={themeName}
-            onThemeChange={handleThemeChange}
-          />
-        </div>
+        {activeScreen}
       </div>
 
       {!hideOuterChrome ? (

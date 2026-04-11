@@ -16,12 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from bot.assistant.llm import (
-    ANTHROPIC_AVAILABLE,
-    call_claude_with_memory_tools_stream,
-    get_tool_usage_stats,
-)
-from bot.assistant.memory import get_memory_store
 from bot.cli_params import get_default_params, get_params_schema
 from bot.cli import (
     build_cli_command,
@@ -36,12 +30,18 @@ from bot.cli import (
 )
 from bot.config import CLI_EXEC_TIMEOUT
 from bot.handlers.admin import execute_script, list_available_scripts, stream_execute_script
-from bot.handlers.assistant import _build_system_prompt_with_memory
 from bot.handlers.shell import strip_ansi_escape
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
-from bot.sessions import get_or_create_session, reset_session, sessions, sessions_lock, update_bot_working_dir
+from bot.sessions import (
+    align_session_paths,
+    get_or_create_session,
+    reset_session,
+    sessions,
+    sessions_lock,
+    update_bot_working_dir,
+)
 from bot.utils import is_dangerous_command
 
 
@@ -98,12 +98,23 @@ def resolve_session_bot_id(manager: MultiBotManager, alias: str) -> int:
 
 def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) -> UserSession:
     profile = get_profile_or_raise(manager, alias)
-    return get_or_create_session(
+    session = get_or_create_session(
         bot_id=resolve_session_bot_id(manager, alias),
         bot_alias=alias,
         user_id=user_id,
         default_working_dir=profile.working_dir,
     )
+    return align_session_paths(session, profile.working_dir, profile.bot_mode)
+
+
+def _supports_cli_runtime(profile: BotProfile) -> bool:
+    return profile.bot_mode in ("cli", "assistant")
+
+
+def _get_browser_directory(session: UserSession) -> str:
+    if isinstance(session.browse_dir, str) and session.browse_dir.strip():
+        return session.browse_dir
+    return session.working_dir
 
 
 def _build_session_ids(session: UserSession) -> dict[str, Any]:
@@ -144,10 +155,8 @@ def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[st
 
 def _build_capabilities(profile: BotProfile, is_main: bool) -> list[str]:
     capabilities = ["session", "history"]
-    if profile.bot_mode == "cli":
+    if _supports_cli_runtime(profile):
         capabilities.extend(["chat", "exec", "files"])
-    elif profile.bot_mode == "assistant":
-        capabilities.extend(["chat", "memory"])
     elif profile.bot_mode == "webcli":
         capabilities.append("status")
     if is_main:
@@ -263,13 +272,13 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
     return get_cli_params_payload(manager, alias, resolved_cli_type)
 
 
-def _resolve_safe_path(session: UserSession, filename: str) -> str:
+def _resolve_safe_path(base_dir: str, filename: str) -> str:
     candidate = str(filename or "").strip()
     if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_path", "文件路径不安全")
     if os.path.isabs(candidate):
         return os.path.abspath(os.path.expanduser(candidate))
-    return os.path.abspath(os.path.join(session.working_dir, os.path.expanduser(candidate)))
+    return os.path.abspath(os.path.join(base_dir, os.path.expanduser(candidate)))
 
 
 def _list_directory_entries(working_dir: str) -> dict[str, Any]:
@@ -289,11 +298,13 @@ def _list_directory_entries(working_dir: str) -> dict[str, Any]:
 
 
 def get_directory_listing(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _get_browser_directory(session)
     try:
-        return _list_directory_entries(session.working_dir)
+        return _list_directory_entries(browser_dir)
     except FileNotFoundError:
-        _raise(404, "working_dir_not_found", f"工作目录不存在: {session.working_dir}")
+        _raise(404, "working_dir_not_found", f"目录不存在: {browser_dir}")
     except Exception as exc:
         _raise(500, "list_dir_failed", str(exc))
 
@@ -308,12 +319,18 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
         _raise(400, "missing_path", "路径不能为空")
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
+    current_dir = _get_browser_directory(session) if profile.bot_mode == "assistant" else session.working_dir
     path = new_path.strip()
     if not os.path.isabs(path):
-        path = os.path.join(session.working_dir, path)
+        path = os.path.join(current_dir, path)
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isdir(path):
         _raise(404, "dir_not_found", f"目录不存在: {path}")
+
+    if profile.bot_mode == "assistant":
+        session.browse_dir = path
+        session.persist()
+        return {"working_dir": session.browse_dir}
 
     if alias != manager.main_profile.alias:
         try:
@@ -325,6 +342,7 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
 
     session.clear_session_ids()
     session.working_dir = path
+    session.browse_dir = path
     session.persist()
     return {"working_dir": session.working_dir}
 
@@ -527,7 +545,7 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
 
 async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
     profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "cli":
+    if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
     session = get_session_for_alias(manager, alias, user_id)
@@ -782,31 +800,9 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         session.clear_running_reply()
 
 
-async def _stream_assistant_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
-    profile = get_profile_or_raise(manager, alias)
-    yield {
-        "type": "meta",
-        "alias": alias,
-        "cli_type": profile.cli_type,
-        "working_dir": profile.working_dir,
-        "resume_session": False,
-    }
-    data = await run_assistant_chat(manager, alias, user_id, user_text)
-    for chunk in _chunk_text(data["output"]):
-        yield {"type": "delta", "text": chunk}
-    yield {
-        "type": "done",
-        "output": data["output"],
-        "elapsed_seconds": data.get("elapsed_seconds"),
-        "returncode": 0,
-        "timed_out": False,
-        "session": data["session"],
-    }
-
-
 async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "cli":
+    if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
     session = get_session_for_alias(manager, alias, user_id)
@@ -960,92 +956,18 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         session.clear_running_reply()
 
 
-async def run_assistant_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "assistant":
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持助手对话")
-    if not ANTHROPIC_AVAILABLE:
-        _raise(503, "assistant_unavailable", "助手模式不可用：anthropic SDK 未安装")
-
-    text = (user_text or "").strip()
-    if not text:
-        _raise(400, "empty_message", "消息不能为空")
-
-    session = get_session_for_alias(manager, alias, user_id)
-    with session._lock:
-        if session.is_processing:
-            _raise(409, "session_busy", msg("chat", "busy"))
-        session.is_processing = True
-    loop = asyncio.get_running_loop()
-    started_at = loop.time()
-    session.touch()
-    session.start_running_reply(text)
-    try:
-        messages = []
-        for item in session.history[-10:]:
-            if item["role"] in ("user", "assistant"):
-                messages.append({"role": item["role"], "content": item["content"]})
-        messages.append({"role": "user", "content": text})
-
-        system_prompt = _build_system_prompt_with_memory(user_id, len(session.history) == 0)
-        response_text = ""
-        usage: dict[str, Any] = {}
-
-        async for event in call_claude_with_memory_tools_stream(
-            messages=messages,
-            system_prompt=system_prompt,
-            user_id=user_id,
-        ):
-            if event["type"] == "text":
-                response_text += event["text"]
-                session.update_running_reply(response_text)
-            elif event["type"] == "usage":
-                usage = event
-
-        final_text = response_text
-        if usage:
-            final_text += (
-                f"\n\n💰 Token 使用: {usage.get('input_tokens', 0)} 输入 + "
-                f"{usage.get('output_tokens', 0)} 输出 = "
-                f"{usage.get('input_tokens', 0) + usage.get('output_tokens', 0)} 总计"
-            )
-
-        elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
-        session.add_to_history("user", text)
-        session.add_to_history("assistant", response_text, elapsed_seconds=elapsed_seconds)
-        with session._lock:
-            session.is_processing = False
-        session.clear_running_reply()
-        return {
-            "output": final_text,
-            "elapsed_seconds": elapsed_seconds,
-            "usage": usage,
-            "session": build_session_snapshot(profile, session),
-        }
-    finally:
-        with session._lock:
-            session.is_processing = False
-        session.clear_running_reply()
-
-
 async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode == "cli":
+    if _supports_cli_runtime(profile):
         return await run_cli_chat(manager, alias, user_id, user_text)
-    if profile.bot_mode == "assistant":
-        return await run_assistant_chat(manager, alias, user_id, user_text)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
 
 async def stream_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
-        if profile.bot_mode == "cli":
+        if _supports_cli_runtime(profile):
             async for event in _stream_cli_chat(manager, alias, user_id, user_text):
-                yield event
-            return
-        if profile.bot_mode == "assistant":
-            async for event in _stream_assistant_chat(manager, alias, user_id, user_text):
                 yield event
             return
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
@@ -1057,7 +979,7 @@ async def stream_chat(manager: MultiBotManager, alias: str, user_id: int, user_t
 
 async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: int, command: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "cli":
+    if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持执行 Shell 命令")
 
     cmd = (command or "").strip()
@@ -1101,7 +1023,7 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
 
 def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "cli":
+    if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持上传文件")
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
@@ -1109,7 +1031,8 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
         _raise(400, "file_too_large", msg("upload", "file_too_large"))
 
     session = get_session_for_alias(manager, alias, user_id)
-    file_path = _resolve_safe_path(session, filename)
+    browser_dir = _get_browser_directory(session)
+    file_path = _resolve_safe_path(browser_dir, filename)
     with open(file_path, "wb") as handle:
         handle.write(data)
     return {
@@ -1121,7 +1044,8 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
 
 def get_file_metadata(manager: MultiBotManager, alias: str, user_id: int, filename: str) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
-    file_path = _resolve_safe_path(session, filename)
+    browser_dir = _get_browser_directory(session)
+    file_path = _resolve_safe_path(browser_dir, filename)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
     return {
@@ -1141,7 +1065,8 @@ def read_file_content(
     lines: int = 20,
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
-    file_path = _resolve_safe_path(session, filename)
+    browser_dir = _get_browser_directory(session)
+    file_path = _resolve_safe_path(browser_dir, filename)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
 
@@ -1169,46 +1094,8 @@ def read_file_content(
         "filename": filename,
         "mode": mode,
         "content": content,
-        "working_dir": session.working_dir,
+        "working_dir": browser_dir,
     }
-
-
-def list_memories(user_id: int) -> dict[str, Any]:
-    store = get_memory_store()
-    return {"items": [memory.to_dict() for memory in store.get_user_memories(user_id)]}
-
-
-def add_memory(user_id: int, content: str, category: str = "other", tags: Optional[list[str]] = None) -> dict[str, Any]:
-    if not content or not content.strip():
-        _raise(400, "empty_memory", "记忆内容不能为空")
-    store = get_memory_store()
-    memory = store.add_memory(user_id=user_id, content=content, category=category, tags=tags or [])
-    return {"item": memory.to_dict()}
-
-
-def search_memories(user_id: int, keyword: str, category: Optional[str] = None, limit: int = 10) -> dict[str, Any]:
-    if not keyword or not keyword.strip():
-        _raise(400, "empty_keyword", "搜索关键词不能为空")
-    store = get_memory_store()
-    memories = store.search_memories(user_id=user_id, keyword=keyword, category=category, limit=limit)
-    return {"items": [memory.to_dict() for memory in memories]}
-
-
-def delete_memory(memory_id: str) -> dict[str, Any]:
-    store = get_memory_store()
-    deleted = store.delete_memory(memory_id)
-    if not deleted:
-        _raise(404, "memory_not_found", f"未找到记忆: {memory_id}")
-    return {"deleted": True}
-
-
-def clear_memories(user_id: int) -> dict[str, Any]:
-    store = get_memory_store()
-    return {"deleted_count": store.clear_user_memories(user_id)}
-
-
-def get_memory_tool_stats() -> dict[str, Any]:
-    return {"items": get_tool_usage_stats()}
 
 
 def list_system_scripts() -> dict[str, Any]:

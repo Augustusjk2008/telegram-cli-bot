@@ -24,13 +24,17 @@ class FilePathError(ValueError):
         self.code = code
 
 
-def resolve_session_path(session, filename: str) -> str:
+def resolve_session_path(session, filename: str, *, use_browser_dir: bool = False) -> str:
     """将用户输入文件名解析到当前工作目录，并做路径安全校验。"""
     if not is_safe_filename(filename):
         raise FilePathError("unsafe_filename")
 
-    real_working = os.path.abspath(session.working_dir)
-    real_path = os.path.abspath(os.path.join(session.working_dir, filename))
+    base_dir = getattr(session, "browse_dir", None) if use_browser_dir else None
+    if not isinstance(base_dir, str) or not base_dir.strip():
+        base_dir = session.working_dir
+    base_dir = os.path.abspath(base_dir)
+    real_working = base_dir
+    real_path = os.path.abspath(os.path.join(base_dir, filename))
     try:
         common = os.path.commonpath([real_working, real_path])
     except ValueError as exc:

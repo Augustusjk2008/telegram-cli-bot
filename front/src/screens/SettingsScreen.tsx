@@ -95,6 +95,7 @@ export function SettingsScreen({
   const [buildLogStatus, setBuildLogStatus] = useState<BuildLogStatus>("idle");
   const [buildLogSummary, setBuildLogSummary] = useState("");
   const buildLogViewportRef = useRef<HTMLDivElement | null>(null);
+  const workdirLocked = overview?.botMode === "assistant";
 
   useEffect(() => {
     let cancelled = false;
@@ -458,7 +459,7 @@ export function SettingsScreen({
                       />
                     </div>
                     <div
-                      className="mt-3 flex items-center justify-between rounded-xl border px-3 py-2 text-[11px]"
+                      className="mt-3 rounded-xl border px-3 py-2 text-[11px]"
                       style={{
                         backgroundColor: themeOption.preview.surface,
                         borderColor: themeOption.preview.border,
@@ -466,11 +467,9 @@ export function SettingsScreen({
                       }}
                     >
                       <span>{themeOption.label}</span>
-                      <span style={{ color: themeOption.preview.muted }}>Preview</span>
                     </div>
                   </div>
                   <div className="font-medium text-[var(--text)]">{themeOption.label}</div>
-                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{themeOption.description}</p>
                 </button>
               );
             })}
@@ -533,7 +532,9 @@ export function SettingsScreen({
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
               <div>
                 <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
-                <p className="text-xs text-[var(--muted)] mt-1">保存后会更新当前 Bot 的默认工作目录</p>
+                <p className="text-xs text-[var(--muted)] mt-1">
+                  {workdirLocked ? "assistant 型 Bot 的默认工作目录已锁定" : "保存后会更新当前 Bot 的默认工作目录"}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <input
@@ -542,17 +543,20 @@ export function SettingsScreen({
                   type="text"
                   value={workdirDraft}
                   onChange={(event) => setWorkdirDraft(event.target.value)}
+                  readOnly={workdirLocked}
                   className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                 />
-                <button
-                  type="button"
-                  onClick={() => void saveWorkdir()}
-                  disabled={savingWorkdir}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
-                >
-                  <Save className="h-4 w-4" />
-                  {savingWorkdir ? "保存中..." : "保存工作目录"}
-                </button>
+                {workdirLocked ? null : (
+                  <button
+                    type="button"
+                    onClick={() => void saveWorkdir()}
+                    disabled={savingWorkdir}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                  >
+                    <Save className="h-4 w-4" />
+                    {savingWorkdir ? "保存中..." : "保存工作目录"}
+                  </button>
+                )}
               </div>
             </div>
           </div>

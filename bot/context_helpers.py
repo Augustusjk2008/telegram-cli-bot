@@ -7,7 +7,7 @@ from telegram import Message, Update
 from telegram.ext import ContextTypes
 
 from bot.models import BotProfile, UserSession
-from bot.sessions import get_session
+from bot.sessions import align_session_paths, get_session
 from bot.utils import check_auth
 
 if TYPE_CHECKING:
@@ -44,12 +44,13 @@ def get_current_profile(context: ContextTypes.DEFAULT_TYPE) -> BotProfile:
 
 def get_current_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> UserSession:
     profile = get_current_profile(context)
-    return get_session(
+    session = get_session(
         bot_id=get_bot_id(update, context),
         bot_alias=get_bot_alias(context),
         user_id=update.effective_user.id,
         default_working_dir=profile.working_dir,
     )
+    return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
 
 def get_reply_target(update: Update) -> Message | None:

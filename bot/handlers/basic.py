@@ -68,12 +68,23 @@ def resolve_working_directory(current_dir: str, new_path: str) -> str:
     return os.path.abspath(os.path.expanduser(target))
 
 
+def get_session_browser_directory(session) -> str:
+    browse_dir = getattr(session, "browse_dir", None)
+    if isinstance(browse_dir, str) and browse_dir.strip():
+        return browse_dir
+    return session.working_dir
+
+
 async def update_session_working_directory(
     context: ContextTypes.DEFAULT_TYPE,
     session,
     new_path: str,
 ) -> str:
     """复用 /cd 语义更新当前会话工作目录。"""
+    profile = get_current_profile(context)
+    if profile.bot_mode == "assistant":
+        raise PermissionError("assistant_workdir_locked")
+
     resolved_path = resolve_working_directory(session.working_dir, new_path)
     if not os.path.isdir(resolved_path):
         raise FileNotFoundError(resolved_path)
@@ -83,8 +94,29 @@ async def update_session_working_directory(
 
     session.clear_session_ids()
     session.working_dir = resolved_path
+    session.browse_dir = resolved_path
     session.persist()
     return resolved_path
+
+
+async def update_session_browser_directory(
+    context: ContextTypes.DEFAULT_TYPE,
+    session,
+    new_path: str,
+) -> str:
+    """更新文件浏览目录；assistant 模式不改真实工作目录。"""
+    profile = get_current_profile(context)
+    current_dir = get_session_browser_directory(session)
+    resolved_path = resolve_working_directory(current_dir, new_path)
+    if not os.path.isdir(resolved_path):
+        raise FileNotFoundError(resolved_path)
+
+    if profile.bot_mode == "assistant":
+        session.browse_dir = resolved_path
+        session.persist()
+        return resolved_path
+
+    return await update_session_working_directory(context, session, new_path)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,6 +259,9 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update_session_working_directory(context, session, new_path)
+    except PermissionError:
+        await update.message.reply_text("assistant 型 Bot 不允许修改工作目录")
+        return
     except FileNotFoundError:
         await update.message.reply_text(msg("cd", "not_exist", path=html.escape(resolved_path)), parse_mode="HTML")
         return

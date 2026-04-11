@@ -71,6 +71,31 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(localStorage.getItem("web-api-token")).toBeNull();
 });
 
+test("initial login only mounts the active chat tab", async () => {
+  const user = userEvent.setup();
+  const getBotOverviewSpy = vi.spyOn(MockWebBotClient.prototype, "getBotOverview");
+  const listFilesSpy = vi.spyOn(MockWebBotClient.prototype, "listFiles");
+  const getGitOverviewSpy = vi.spyOn(MockWebBotClient.prototype, "getGitOverview");
+  const getCliParamsSpy = vi.spyOn(MockWebBotClient.prototype, "getCliParams");
+  const getTunnelStatusSpy = vi.spyOn(MockWebBotClient.prototype, "getTunnelStatus");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(getBotOverviewSpy).toHaveBeenCalledTimes(1);
+  expect(listFilesSpy).not.toHaveBeenCalled();
+  expect(getGitOverviewSpy).not.toHaveBeenCalled();
+  expect(getCliParamsSpy).not.toHaveBeenCalled();
+  expect(getTunnelStatusSpy).not.toHaveBeenCalled();
+});
+
 test("re-login after tab close restores the last selected bot", async () => {
   const user = userEvent.setup();
   const { unmount } = render(<App />);
@@ -534,7 +559,7 @@ test("bot manager highlights offline bots and blocks entering them", async () =>
   await user.click(screen.getByRole("button", { name: "main" }));
   await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
 
-  expect(await screen.findByText("该 Bot 当前离线，需先启动后才能进入。")).toBeInTheDocument();
+  expect(await screen.findByText("离线")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "team2 当前离线，不可进入" })).toBeDisabled();
 });
 

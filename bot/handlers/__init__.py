@@ -39,22 +39,6 @@ except ImportError as e:
     logger.warning(f"语音处理器不可用（缺少依赖）: {e}")
     VOICE_HANDLER_AVAILABLE = False
 
-# 尝试导入助手处理器（如果依赖未安装则跳过）
-try:
-    from .assistant import (
-        handle_assistant_message,
-        cmd_memory,
-        cmd_memory_add,
-        cmd_memory_search,
-        cmd_memory_delete,
-        cmd_memory_clear,
-        cmd_tool_stats
-    )
-    ASSISTANT_HANDLER_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"助手处理器不可用（缺少依赖）: {e}")
-    ASSISTANT_HANDLER_AVAILABLE = False
-
 def _register_cli_handlers(application: Application, include_admin: bool):
     """注册 CLI 模式的 handlers"""
     application.add_handler(CommandHandler("start", start))
@@ -110,56 +94,11 @@ def _register_cli_handlers(application: Application, include_admin: bool):
 
 
 def _register_assistant_handlers(application: Application, include_admin: bool):
-    """注册助手模式的 handlers"""
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("reset", reset))
-    application.add_handler(CommandHandler("files", show_file_browser))
-    application.add_handler(CommandHandler("history", show_history))
+    """注册 assistant 模式 handlers。
 
-    # 记忆管理命令
-    if ASSISTANT_HANDLER_AVAILABLE:
-        application.add_handler(CommandHandler("memory", cmd_memory))
-        application.add_handler(CommandHandler("memory_add", cmd_memory_add))
-        application.add_handler(CommandHandler("memory_search", cmd_memory_search))
-        application.add_handler(CommandHandler("memory_delete", cmd_memory_delete))
-        application.add_handler(CommandHandler("memory_clear", cmd_memory_clear))
-        application.add_handler(CommandHandler("tool_stats", cmd_tool_stats))
-
-    if include_admin:
-        application.add_handler(CommandHandler("restart", restart_main))
-        application.add_handler(CommandHandler("bot_help", bot_help))
-        application.add_handler(CommandHandler("bot_list", bot_list))
-        application.add_handler(CommandHandler("bot_add", bot_add))
-        application.add_handler(CommandHandler("bot_remove", bot_remove))
-        application.add_handler(CommandHandler("bot_start", bot_start))
-        application.add_handler(CommandHandler("bot_stop", bot_stop))
-        application.add_handler(CommandHandler("bot_set_cli", bot_set_cli))
-        application.add_handler(CommandHandler("bot_set_workdir", bot_set_workdir))
-        application.add_handler(CommandHandler("bot_kill", bot_kill))
-        application.add_handler(CommandHandler("system", system_command))
-        # CLI 参数配置命令
-        application.add_handler(CommandHandler("bot_params", bot_params))
-        application.add_handler(CommandHandler("bot_params_set", bot_params_set))
-        application.add_handler(CommandHandler("bot_params_reset", bot_params_reset))
-        application.add_handler(CommandHandler("bot_params_help", bot_params_help))
-        application.add_handler(CallbackQueryHandler(system_button_callback, pattern="^sys:"))
-        application.add_handler(CallbackQueryHandler(bot_goto_callback, pattern="^goto:"))
-    application.add_handler(CallbackQueryHandler(handle_file_browser_callback, pattern="^fb:"))
-
-    # 语音和音频处理（优先级高于文字）
-    if VOICE_HANDLER_AVAILABLE:
-        application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
-        application.add_handler(MessageHandler(filters.AUDIO, handle_audio_message))
-        logger.info("语音处理器已注册")
-
-    # 助手模式的文本消息处理
-    if ASSISTANT_HANDLER_AVAILABLE:
-        # 助手模式也支持键盘命令
-        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(文件浏览|查看目录|当前路径|重置会话|系统脚本|历史记录|机器人列表|重启系统|/(files|ls|pwd|reset|history|bot_list|restart|system))'), handle_keyboard_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_assistant_message))
-        logger.info("助手处理器已注册")
-    else:
-        logger.warning("助手处理器不可用，文本消息将无法处理")
+    assistant 已收敛为 CLI 的受限变体，命令面保持一致。
+    """
+    _register_cli_handlers(application, include_admin)
 
 
 def register_handlers(application: Application, include_admin: bool = False):
@@ -170,7 +109,7 @@ def register_handlers(application: Application, include_admin: bool = False):
         logger.warning("Webcli 模式已被禁用，切换到 CLI 模式")
         _register_cli_handlers(application, include_admin)
     elif bot_mode == "assistant":
-        logger.info("注册助手模式 handlers")
+        logger.info("注册 assistant 兼容模式 handlers")
         _register_assistant_handlers(application, include_admin)
     else:
         logger.info("注册 CLI 模式 handlers")

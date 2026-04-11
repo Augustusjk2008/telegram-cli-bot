@@ -80,6 +80,7 @@ class UserSession:
     bot_alias: str
     user_id: int
     working_dir: str
+    browse_dir: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
     kimi_session_id: Optional[str] = None

@@ -9,7 +9,11 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.context_helpers import get_current_session
-from bot.handlers.basic import resolve_working_directory, update_session_working_directory
+from bot.handlers.basic import (
+    get_session_browser_directory,
+    resolve_working_directory,
+    update_session_browser_directory,
+)
 from bot.handlers.file import (
     FilePathError,
     IMAGE_EXTENSIONS,
@@ -207,19 +211,21 @@ def _build_text_preview_markup(file_name: str, page: int, offset: int, preview: 
 
 
 async def _edit_directory_message(message, session, state: dict, page: int):
-    entries = _list_directory_entries(session.working_dir)
+    browser_dir = get_session_browser_directory(session)
+    entries = _list_directory_entries(browser_dir)
     visible_entries, current_page, total_pages = _paginate_entries(entries, page)
     state["page"] = current_page
-    text = _build_directory_text(session.working_dir, visible_entries, current_page, total_pages)
+    text = _build_directory_text(browser_dir, visible_entries, current_page, total_pages)
     reply_markup = _build_directory_markup(visible_entries, current_page, total_pages)
     await safe_edit_text(message, text, parse_mode="HTML", reply_markup=reply_markup)
 
 
 async def _send_directory_message(message, session, state: dict, page: int):
-    entries = _list_directory_entries(session.working_dir)
+    browser_dir = get_session_browser_directory(session)
+    entries = _list_directory_entries(browser_dir)
     visible_entries, current_page, total_pages = _paginate_entries(entries, page)
     state["page"] = current_page
-    text = _build_directory_text(session.working_dir, visible_entries, current_page, total_pages)
+    text = _build_directory_text(browser_dir, visible_entries, current_page, total_pages)
     reply_markup = _build_directory_markup(visible_entries, current_page, total_pages)
     await message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
@@ -291,7 +297,7 @@ async def show_file_browser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await _send_directory_message(update.message, session, state, 0)
     except Exception as exc:
-        logger.warning("显示文件浏览器失败 dir=%s error=%s", session.working_dir, exc)
+        logger.warning("显示文件浏览器失败 dir=%s error=%s", get_session_browser_directory(session), exc)
         await update.message.reply_text(msg("ls", "error", error=str(exc)))
 
 
@@ -312,9 +318,10 @@ async def handle_file_browser_callback(update: Update, context: ContextTypes.DEF
 
     try:
         if data == "fb:nav:up":
-            parent_dir = resolve_working_directory(session.working_dir, "..")
-            if parent_dir != session.working_dir:
-                await update_session_working_directory(context, session, "..")
+            current_dir = get_session_browser_directory(session)
+            parent_dir = resolve_working_directory(current_dir, "..")
+            if parent_dir != current_dir:
+                await update_session_browser_directory(context, session, "..")
             state["page"] = 0
             _reset_preview_state(state)
             await _edit_directory_message(query.message, session, state, 0)
@@ -328,9 +335,9 @@ async def handle_file_browser_callback(update: Update, context: ContextTypes.DEF
 
         if data.startswith("fb:open:"):
             name = data[len("fb:open:") :]
-            target_path = resolve_session_path(session, name)
+            target_path = resolve_session_path(session, name, use_browser_dir=True)
             if os.path.isdir(target_path):
-                await update_session_working_directory(context, session, name)
+                await update_session_browser_directory(context, session, name)
                 state["page"] = 0
                 _reset_preview_state(state)
                 await _edit_directory_message(query.message, session, state, 0)
@@ -344,7 +351,7 @@ async def handle_file_browser_callback(update: Update, context: ContextTypes.DEF
 
         if data.startswith("fb:act:preview:"):
             name = data[len("fb:act:preview:") :]
-            file_path = resolve_session_path(session, name)
+            file_path = resolve_session_path(session, name, use_browser_dir=True)
             if not os.path.isfile(file_path):
                 await _show_error(query.message, state, f"❌ 文件不存在:\n<code>{html.escape(name)}</code>")
                 return
@@ -353,7 +360,7 @@ async def handle_file_browser_callback(update: Update, context: ContextTypes.DEF
 
         if data.startswith("fb:act:download:"):
             name = data[len("fb:act:download:") :]
-            file_path = resolve_session_path(session, name)
+            file_path = resolve_session_path(session, name, use_browser_dir=True)
             if not os.path.isfile(file_path):
                 await _show_error(query.message, state, f"❌ 文件不存在:\n<code>{html.escape(name)}</code>")
                 return
@@ -366,7 +373,7 @@ async def handle_file_browser_callback(update: Update, context: ContextTypes.DEF
                 await _show_error(query.message, state, "❌ 当前没有可继续翻页的文本预览")
                 return
             offset = int(data.rsplit(":", 1)[1])
-            file_path = resolve_session_path(session, preview_file)
+            file_path = resolve_session_path(session, preview_file, use_browser_dir=True)
             if not os.path.isfile(file_path):
                 await _show_error(query.message, state, f"❌ 文件不存在:\n<code>{html.escape(preview_file)}</code>")
                 return

@@ -743,13 +743,11 @@ class MultiBotManager:
         if not os.path.isdir(working_dir):
             raise ValueError(f"工作目录不存在: {working_dir}")
 
-        # 只有 CLI 模式需要验证 CLI 可执行文件
-        if bot_mode == "cli":
-            if resolve_cli_executable(cli_path, working_dir) is None:
-                raise ValueError(
-                    f"未找到CLI可执行文件: {cli_path} "
-                    f"(请使用可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
-                )
+        if resolve_cli_executable(cli_path, working_dir) is None:
+            raise ValueError(
+                f"未找到CLI可执行文件: {cli_path} "
+                f"(请使用可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
+            )
 
         async with self._lock:
             if alias in self.managed_profiles:
@@ -868,6 +866,8 @@ class MultiBotManager:
 
         async with self._lock:
             profile = self._get_profile_for_update(alias)
+            if profile.bot_mode == "assistant":
+                raise ValueError("assistant 型 Bot 不允许修改默认工作目录")
             profile.working_dir = working_dir
             self._save_profiles()
             # 同时更新所有已存在的会话的工作目录

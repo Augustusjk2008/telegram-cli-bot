@@ -141,6 +141,33 @@ class TestManagerLoadSave:
         assert data["bots"][0]["working_dir"] == str(new_dir)
 
     @pytest.mark.asyncio
+    async def test_set_bot_workdir_rejects_assistant_mode(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        profile = BotProfile(alias="main", token="main_tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
+
+        old_dir = temp_dir / "assistant-old"
+        new_dir = temp_dir / "assistant-new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        m.managed_profiles["assistant1"] = BotProfile(
+            alias="assistant1",
+            token="tok1",
+            cli_type="codex",
+            cli_path="codex",
+            working_dir=str(old_dir),
+            bot_mode="assistant",
+        )
+        session = get_or_create_session(123, "assistant1", 456, default_working_dir=str(old_dir))
+
+        with pytest.raises(ValueError, match="assistant.*工作目录"):
+            await m.set_bot_workdir("assistant1", str(new_dir))
+
+        assert m.managed_profiles["assistant1"].working_dir == str(old_dir)
+        assert session.working_dir == str(old_dir)
+
+    @pytest.mark.asyncio
     async def test_rename_bot_persists_to_storage_and_sessions(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")

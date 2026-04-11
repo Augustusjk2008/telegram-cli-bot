@@ -135,7 +135,7 @@ export class MockWebBotClient implements WebBotClient {
         isMain: false,
       };
     }
-    const workingDir = this.workdirOverrides.get(base.alias) || this.currentPaths.get(base.alias) || base.workingDir;
+    const workingDir = this.workdirOverrides.get(base.alias) || base.workingDir;
     return {
       ...base,
       workingDir,
@@ -199,7 +199,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getCurrentPath(botAlias: string): Promise<string> {
-    return this.currentPaths.get(botAlias) || "/";
+    return this.currentPaths.get(botAlias) || this.workdirOverrides.get(botAlias) || this.getBotSummary(botAlias).workingDir;
   }
 
   async listFiles(botAlias: string): Promise<DirectoryListing> {
@@ -213,6 +213,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async changeDirectory(botAlias: string, path: string): Promise<string> {
     const currentPath = await this.getCurrentPath(botAlias);
+    const bot = this.getBotSummary(botAlias);
     let nextPath = currentPath;
     if (path === "..") {
       if (currentPath !== "/") {
@@ -224,6 +225,13 @@ export class MockWebBotClient implements WebBotClient {
       nextPath = currentPath === "/" ? `/${path}` : `${currentPath}/${path}`;
     }
     this.currentPaths.set(botAlias, nextPath);
+    if (bot.botMode !== "assistant") {
+      this.workdirOverrides.set(botAlias, nextPath);
+      this.bots.set(botAlias, {
+        ...bot,
+        workingDir: nextPath,
+      });
+    }
     return nextPath;
   }
 
@@ -267,7 +275,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {
-    const workingDir = this.workdirOverrides.get(botAlias) || this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+    const workingDir = this.workdirOverrides.get(botAlias) || this.getBotSummary(botAlias).workingDir;
     const overview = this.gitOverviews.get(botAlias);
     if (!overview) {
       return {
@@ -292,7 +300,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async initGitRepository(botAlias: string): Promise<GitOverview> {
-    const workingDir = this.workdirOverrides.get(botAlias) || this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+    const workingDir = this.workdirOverrides.get(botAlias) || this.getBotSummary(botAlias).workingDir;
     const next: GitOverview = {
       repoFound: true,
       canInit: false,
@@ -418,10 +426,13 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    if (current.botMode === "assistant") {
+      throw new Error("assistant 型 Bot 不允许修改默认工作目录");
+    }
     const nextDir = workingDir.trim();
     this.workdirOverrides.set(botAlias, nextDir);
     this.currentPaths.set(botAlias, nextDir);
-    const current = this.getBotSummary(botAlias);
     this.bots.set(botAlias, {
       ...current,
       workingDir: nextDir,

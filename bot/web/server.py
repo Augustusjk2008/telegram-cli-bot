@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from aiohttp import WSMsgType, web
+from aiohttp import WSMsgType, WSCloseCode, web
 from aiohttp.client_exceptions import ClientConnectionResetError
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
@@ -38,23 +38,18 @@ from .api_service import (
     AuthContext,
     WebApiError,
     add_managed_bot,
-    add_memory,
     build_bot_summary,
     change_working_directory,
-    clear_memories,
-    delete_memory,
     execute_shell_command,
     get_directory_listing,
     get_file_metadata,
     get_history,
-    get_memory_tool_stats,
     get_overview,
     get_cli_params_payload,
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
     list_bots,
-    list_memories,
     list_system_scripts,
     read_file_content,
     remove_managed_bot,
@@ -63,7 +58,6 @@ from .api_service import (
     run_chat,
     run_system_script,
     save_uploaded_file,
-    search_memories,
     start_managed_bot,
     stop_managed_bot,
     stream_system_script,
@@ -236,6 +230,8 @@ class WebApiServer:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._restart_task: asyncio.Task[None] | None = None
+        self._terminal_sockets: set[web.WebSocketResponse] = set()
+        self._terminal_tasks: set[asyncio.Task[Any]] = set()
         self._tunnel_service = tunnel_service or TunnelService(
             host=WEB_HOST,
             port=WEB_PORT,
@@ -474,6 +470,10 @@ class WebApiServer:
         await self._with_auth(request)
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
+        self._terminal_sockets.add(ws)
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._terminal_tasks.add(current_task)
 
         process = None
         output_pump: _TerminalOutputPump | None = None
@@ -511,7 +511,13 @@ class WebApiServer:
 
             async def forward_input() -> None:
                 while not ws.closed:
-                    message = await ws.receive()
+                    transport = request.transport
+                    if transport is None or transport.is_closing():
+                        break
+                    try:
+                        message = await asyncio.wait_for(ws.receive(), timeout=0.25)
+                    except asyncio.TimeoutError:
+                        continue
                     if message.type == WSMsgType.BINARY:
                         process.write(message.data)
                         continue
@@ -536,12 +542,18 @@ class WebApiServer:
                 asyncio.create_task(forward_output()),
                 asyncio.create_task(forward_input()),
             ]
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            for task in done:
-                task.result()
+            output_task, input_task = tasks
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+            if output_task in done and output_task.exception() is not None:
+                input_task.cancel()
+                await asyncio.gather(input_task, return_exceptions=True)
+                output_task.result()
+            else:
+                await input_task
+                if not output_task.done():
+                    output_task.cancel()
+                await asyncio.gather(output_task, return_exceptions=True)
         except Exception as exc:
             logger.exception("终端 WebSocket 处理失败: %s", exc)
             if not ws.closed:
@@ -550,6 +562,9 @@ class WebApiServer:
                 except Exception:
                     pass
         finally:
+            self._terminal_sockets.discard(ws)
+            if current_task is not None:
+                self._terminal_tasks.discard(current_task)
             if output_pump is not None:
                 output_pump.stop()
             for task in tasks:
@@ -726,42 +741,6 @@ class WebApiServer:
         lines = int(request.query.get("lines", "20"))
         data = read_file_content(self.manager, alias, auth.user_id, filename, mode=mode, lines=lines)
         return _json({"ok": True, "data": data})
-
-    async def get_memories(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
-        return _json({"ok": True, "data": list_memories(auth.user_id)})
-
-    async def post_memory(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
-        body = await self._parse_json(request)
-        data = add_memory(
-            auth.user_id,
-            body.get("content", ""),
-            category=body.get("category", "other"),
-            tags=body.get("tags", []),
-        )
-        return _json({"ok": True, "data": data})
-
-    async def search_memory_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
-        keyword = request.query.get("keyword", "")
-        category = request.query.get("category") or None
-        limit = int(request.query.get("limit", "10"))
-        data = search_memories(auth.user_id, keyword=keyword, category=category, limit=limit)
-        return _json({"ok": True, "data": data})
-
-    async def delete_memory_view(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
-        memory_id = request.match_info.get("memory_id", "")
-        return _json({"ok": True, "data": delete_memory(memory_id)})
-
-    async def clear_memory_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
-        return _json({"ok": True, "data": clear_memories(auth.user_id)})
-
-    async def tool_stats(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
-        return _json({"ok": True, "data": get_memory_tool_stats()})
 
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -945,12 +924,6 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
-        app.router.add_get("/api/memory", self.get_memories)
-        app.router.add_post("/api/memory", self.post_memory)
-        app.router.add_get("/api/memory/search", self.search_memory_view)
-        app.router.add_delete("/api/memory/{memory_id}", self.delete_memory_view)
-        app.router.add_delete("/api/memory", self.clear_memory_view)
-        app.router.add_get("/api/tool-stats", self.tool_stats)
         app.router.add_get("/api/admin/bots", self.admin_bots)
         app.router.add_get("/api/admin/scripts", self.admin_scripts)
         app.router.add_post("/api/admin/scripts/run/stream", self.admin_run_script_stream)
@@ -1022,6 +995,19 @@ class WebApiServer:
         if self._restart_task is not None:
             await asyncio.gather(self._restart_task, return_exceptions=True)
             self._restart_task = None
+        terminal_tasks = list(self._terminal_tasks)
+        self._terminal_tasks.clear()
+        for task in terminal_tasks:
+            task.cancel()
+        if terminal_tasks:
+            await asyncio.gather(*terminal_tasks, return_exceptions=True)
+        terminal_sockets = list(self._terminal_sockets)
+        self._terminal_sockets.clear()
+        for ws in terminal_sockets:
+            try:
+                await ws.close(code=WSCloseCode.GOING_AWAY, message=b"server shutdown")
+            except Exception:
+                pass
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:
