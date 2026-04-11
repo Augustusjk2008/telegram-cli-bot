@@ -26,3 +26,18 @@ def test_load_assistant_home_reads_existing_manifest(tmp_path: Path):
 
     assert loaded.assistant_id == created.assistant_id
     assert loaded.schema_version == ASSISTANT_SCHEMA_VERSION
+
+
+def test_bootstrap_assistant_home_migrates_old_schema(tmp_path: Path):
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    root = workdir / ".assistant"
+    root.mkdir()
+    (root / "manifest.yaml").write_text(
+        "assistant_id: a1\nschema_version: 0\nmin_host_version: 0.0.0\n",
+        encoding="utf-8",
+    )
+
+    home = bootstrap_assistant_home(workdir)
+
+    assert home.schema_version == ASSISTANT_SCHEMA_VERSION

@@ -1329,6 +1329,39 @@ async def test_admin_assistant_proposal_routes_list_and_approve(
 
 
 @pytest.mark.asyncio
+async def test_admin_assistant_upgrade_apply_route(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch(
+                "bot.web.server.apply_assistant_upgrade",
+                new_callable=AsyncMock,
+                return_value={"id": "pr_1", "status": "applied"},
+            ) as apply_mock:
+                resp = await client.post("/api/admin/bots/assistant1/assistant/upgrades/pr_1/apply")
+
+            assert resp.status == 200
+            apply_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: MultiBotManager):
     fake_stdout = MagicMock()
     fake_stdout.readline.return_value = ""

@@ -21,6 +21,7 @@ from typing import Any, AsyncIterator, Optional
 from bot.assistant_context import compile_assistant_prompt
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_proposals import list_proposals, set_proposal_status
+from bot.assistant_upgrade import apply_approved_upgrade
 from bot.assistant_state import (
     attach_assistant_persist_hook,
     record_assistant_capture,
@@ -281,6 +282,20 @@ async def reject_assistant_proposal(
         return set_proposal_status(home, proposal_id, "rejected", reviewer=reviewer)
     except FileNotFoundError as exc:
         _raise(404, "proposal_not_found", str(exc))
+
+
+async def apply_assistant_upgrade(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        return apply_approved_upgrade(home, proposal_id, repo_root=repo_root)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        _raise(500, "assistant_upgrade_failed", detail or "应用 upgrade 失败")
 
 
 def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:

@@ -31,6 +31,12 @@
 - 可选语音转文字
 - 可选 Cloudflare Quick Tunnel 手机公网访问
 
+## Assistant 约束
+
+- `assistant` 是本机唯一长期助手；本项目内最多只能创建一个 `assistant` bot
+- `assistant` 的工作目录创建后不可修改；如需换路径，只能删除 bot 后重建
+- `assistant` 的历史、记忆、proposal、upgrade 全部存放在 `<assistant_workdir>/.assistant/`
+
 ## 安装前准备
 
 仓库当前同时支持：

@@ -37,6 +37,7 @@ from bot.platform.runtime import get_default_shell
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
+    apply_assistant_upgrade,
     AuthContext,
     WebApiError,
     add_managed_bot,
@@ -944,6 +945,13 @@ class WebApiServer:
         )
         return _json({"ok": True, "data": data})
 
+    async def admin_assistant_upgrade_apply(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
+        return _json({"ok": True, "data": data})
+
     def _build_app(self) -> web.Application:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
         app.router.add_get("/api/health", self.health)
@@ -1000,6 +1008,10 @@ class WebApiServer:
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/reject",
             self.admin_assistant_proposal_reject,
+        )
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/upgrades/{proposal_id}/apply",
+            self.admin_assistant_upgrade_apply,
         )
         app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
         app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)
