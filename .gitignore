@@ -10,3 +10,5 @@ docs/superpowers/
 .worktrees/
 .env.copy
 .env copy
+.venv/
+.web_tunnel_state.json
