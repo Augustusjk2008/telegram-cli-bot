@@ -97,7 +97,9 @@ class UserSession:
     stop_requested: bool = False
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
+    managed_prompt_hash_seen: Optional[str] = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
 
     def touch(self):
@@ -177,6 +179,8 @@ class UserSession:
         
         在 session_id 变化时调用，确保重启后能恢复会话。
         """
+        if not self._persist_enabled:
+            return
         hook = self.persist_hook
         if hook is not None:
             hook(self)
@@ -187,6 +191,12 @@ class UserSession:
             _save_session_to_store(self)
         except ImportError:
             logger.warning("无法导入 session_store，会话将不会被持久化")
+
+    def disable_persistence(self):
+        """禁用后续持久化，用于 reset 后阻止陈旧会话对象回写状态。"""
+        with self._lock:
+            self._persist_enabled = False
+            self.persist_hook = None
 
     def clear_session_ids(self):
         """清除所有 session_id 并持久化"""

@@ -4,11 +4,14 @@ import asyncio
 import html
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import clear_assistant_runtime_state
 from bot.cli import normalize_cli_type, read_codex_status_from_terminal
 from bot.context_helpers import (
     get_bot_alias,
@@ -205,6 +208,12 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     removed = reset_session(get_bot_id(update, context), user_id)
+    profile = get_current_profile(context)
+    if profile.bot_mode == "assistant":
+        state_path = Path(profile.working_dir) / ".assistant" / "state" / "users" / f"{user_id}.json"
+        if state_path.exists():
+            home = bootstrap_assistant_home(profile.working_dir)
+            removed = clear_assistant_runtime_state(home, user_id) or removed
     if removed:
         await update.message.reply_text(msg("reset", "success"))
     else:

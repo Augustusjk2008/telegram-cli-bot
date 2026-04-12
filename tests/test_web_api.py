@@ -242,6 +242,84 @@ def test_get_session_for_alias_restores_assistant_state_from_private_store(
     assert session.message_count == 3
 
 
+def test_reset_user_session_clears_assistant_private_state(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    home = bootstrap_assistant_home(workdir)
+    save_assistant_runtime_state(home, 1001, {"history": [{"role": "user", "content": "hello"}]})
+
+    result = api_service.reset_user_session(web_manager, "assistant1", 1001)
+
+    assert result["reset"] is True
+    assert not (home.root / "state" / "users" / "1001.json").exists()
+
+
+def test_reset_user_session_with_live_assistant_session_does_not_recreate_private_state(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    home = bootstrap_assistant_home(workdir)
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+    session.add_to_history("user", "hello")
+    state_file = home.root / "state" / "users" / "1001.json"
+    assert state_file.exists()
+
+    result = api_service.reset_user_session(web_manager, "assistant1", 1001)
+
+    assert result["reset"] is True
+    assert not state_file.exists()
+    session.clear_running_reply()
+    assert not state_file.exists()
+
+
+def test_reset_user_session_assistant_noop_does_not_bootstrap_home(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    with patch("bot.web.api_service.reset_session", return_value=False), \
+         patch("bot.web.api_service.bootstrap_assistant_home") as bootstrap_mock, \
+         patch("bot.web.api_service.clear_assistant_runtime_state") as clear_mock:
+        result = api_service.reset_user_session(web_manager, "assistant1", 1001)
+
+    assert result["reset"] is False
+    bootstrap_mock.assert_not_called()
+    clear_mock.assert_not_called()
+
+
 def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
     result = save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
     assert result["filename"] == "notes.txt"

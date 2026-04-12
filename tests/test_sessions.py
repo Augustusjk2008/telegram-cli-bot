@@ -68,6 +68,21 @@ class TestResetSession:
         result = reset_session(999, 999)
         assert result is False
 
+    def test_reset_clears_persisted_store_without_in_memory_session(self, temp_dir: Path):
+        from unittest.mock import patch
+        from bot.session_store import load_session, save_session
+
+        store_file = temp_dir / ".session_store.json"
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(bot_id=7, user_id=8, codex_session_id="thread-only-store")
+            with sessions_lock:
+                sessions.pop((7, 8), None)
+
+            result = reset_session(7, 8)
+
+            assert result is True
+            assert load_session(7, 8) is None
+
 
 class TestClearBotSessions:
     """测试 clear_bot_sessions"""

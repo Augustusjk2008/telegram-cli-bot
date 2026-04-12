@@ -24,6 +24,7 @@ from bot.assistant_proposals import list_proposals, set_proposal_status
 from bot.assistant_upgrade import apply_approved_upgrade
 from bot.assistant_state import (
     attach_assistant_persist_hook,
+    clear_assistant_runtime_state,
     record_assistant_capture,
     restore_assistant_runtime_state,
 )
@@ -503,6 +504,12 @@ def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int =
 
 def reset_user_session(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
     removed = reset_session(resolve_session_bot_id(manager, alias), user_id)
+    profile = get_profile_or_raise(manager, alias)
+    if profile.bot_mode == "assistant":
+        state_path = Path(profile.working_dir) / ".assistant" / "state" / "users" / f"{user_id}.json"
+        if state_path.exists():
+            home = bootstrap_assistant_home(profile.working_dir)
+            removed = clear_assistant_runtime_state(home, user_id) or removed
     return {"reset": removed}
 
 

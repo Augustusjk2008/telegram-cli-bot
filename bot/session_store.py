@@ -144,20 +144,20 @@ def save_session(
     logger.debug(f"已保存会话: bot={bot_id}, user={user_id}")
 
 
-def remove_session(bot_id: int, user_id: int):
+def remove_session(bot_id: int, user_id: int) -> bool:
     """删除指定会话的持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id)
 
     with _store_lock:
         if not STORE_FILE.exists():
-            return
+            return False
         try:
             with open(STORE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict) or key not in data:
-                return
+                return False
         except (json.JSONDecodeError, IOError):
-            return
+            return False
 
         del data[key]
         try:
@@ -165,9 +165,10 @@ def remove_session(bot_id: int, user_id: int):
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
             logger.error(f"保存会话存储文件失败: {e}")
-            return
+            return False
 
     logger.debug(f"已删除会话: bot={bot_id}, user={user_id}")
+    return True
 
 
 def remove_all_sessions_for_bot(bot_id: int):

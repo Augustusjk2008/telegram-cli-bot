@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_state import attach_assistant_persist_hook
 from bot.handlers.basic import (
     change_directory,
     codex_status,
@@ -20,6 +22,7 @@ from bot.handlers.basic import (
     show_history,
     start,
 )
+from bot.sessions import get_or_create_session
 
 
 class TestStartHandler:
@@ -73,6 +76,90 @@ class TestResetHandler:
              patch("bot.handlers.basic.reset_session", return_value=False):
             await reset(mock_update, mock_context)
         mock_update.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reset_assistant_clears_private_runtime_state(self, mock_update, mock_context, temp_dir):
+        workdir = temp_dir / "assistant-root"
+        workdir.mkdir()
+        state_file = workdir / ".assistant" / "state" / "users" / f"{mock_update.effective_user.id}.json"
+        state_file.parent.mkdir(parents=True)
+        state_file.write_text("{}", encoding="utf-8")
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "assistant"
+        profile_mock.working_dir = str(workdir)
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_bot_id", return_value=111), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.basic.reset_session", return_value=False) as reset_mock, \
+             patch("bot.handlers.basic.bootstrap_assistant_home") as bootstrap_mock, \
+             patch("bot.handlers.basic.clear_assistant_runtime_state", return_value=True) as clear_mock:
+            home = MagicMock()
+            bootstrap_mock.return_value = home
+            await reset(mock_update, mock_context)
+
+        bootstrap_mock.assert_called_once_with(str(workdir))
+        clear_mock.assert_called_once_with(home, mock_update.effective_user.id)
+        reset_mock.assert_called_once_with(111, mock_update.effective_user.id)
+        mock_update.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reset_assistant_noop_does_not_bootstrap_home(self, mock_update, mock_context, temp_dir):
+        workdir = temp_dir / "assistant-root"
+        workdir.mkdir()
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "assistant"
+        profile_mock.working_dir = str(workdir)
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_bot_id", return_value=111), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.basic.reset_session", return_value=False), \
+             patch("bot.handlers.basic.bootstrap_assistant_home") as bootstrap_mock, \
+             patch("bot.handlers.basic.clear_assistant_runtime_state") as clear_mock:
+            await reset(mock_update, mock_context)
+
+        bootstrap_mock.assert_not_called()
+        clear_mock.assert_not_called()
+        mock_update.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reset_assistant_with_live_session_does_not_recreate_state_file(
+        self,
+        mock_update,
+        mock_context,
+        temp_dir,
+    ):
+        workdir = temp_dir / "assistant-root"
+        workdir.mkdir()
+        user_id = mock_update.effective_user.id
+        bot_id = 111
+
+        home = bootstrap_assistant_home(workdir)
+        session = get_or_create_session(
+            bot_id=bot_id,
+            bot_alias="main",
+            user_id=user_id,
+            default_working_dir=str(workdir),
+            load_persisted_state=False,
+        )
+        attach_assistant_persist_hook(session, home, user_id)
+        session.add_to_history("user", "hello")
+        state_file = home.root / "state" / "users" / f"{user_id}.json"
+        assert state_file.exists()
+
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "assistant"
+        profile_mock.working_dir = str(workdir)
+
+        with patch("bot.handlers.basic.check_auth", return_value=True), \
+             patch("bot.handlers.basic.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.basic.get_bot_id", return_value=bot_id):
+            await reset(mock_update, mock_context)
+
+        assert not state_file.exists()
+        session.clear_running_reply()
+        assert not state_file.exists()
 
 
 class TestChangeDirectory:

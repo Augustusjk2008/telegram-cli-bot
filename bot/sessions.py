@@ -149,14 +149,20 @@ def _save_session_to_store(session: UserSession):
 
 def reset_session(bot_id: int, user_id: int) -> bool:
     key = (bot_id, user_id)
+    removed_in_memory = False
     with sessions_lock:
-        if key in sessions:
-            sessions[key].terminate_process()
-            del sessions[key]
-            # 清除持久化存储
-            remove_session(bot_id, user_id)
-            return True
-    return False
+        session = sessions.pop(key, None)
+        removed_in_memory = session is not None
+
+    if session is not None:
+        session.disable_persistence()
+        try:
+            session.terminate_process()
+        except Exception as exc:
+            logger.warning("终止会话进程失败 bot=%s user=%s error=%s", bot_id, user_id, exc)
+
+    removed_from_store = remove_session(bot_id, user_id)
+    return removed_in_memory or removed_from_store
 
 
 def clear_bot_sessions(bot_id: int):

@@ -41,6 +41,14 @@ def save_assistant_runtime_state(home: AssistantHome, user_id: int, payload: dic
     )
 
 
+def clear_assistant_runtime_state(home: AssistantHome, user_id: int) -> bool:
+    path = _user_state_path(home, user_id)
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
 def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) -> None:
     def _persist(current) -> None:
         save_assistant_runtime_state(
@@ -55,6 +63,7 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
                 "claude_session_id": current.claude_session_id,
                 "claude_session_initialized": current.claude_session_initialized,
                 "message_count": current.message_count,
+                "managed_prompt_hash_seen": current.managed_prompt_hash_seen,
                 "last_activity": current.last_activity.isoformat(),
                 "running_user_text": current.running_user_text,
                 "running_preview_text": current.running_preview_text,
@@ -116,6 +125,7 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
         session.running_preview_text = state.get("running_preview_text") or ""
         session.running_started_at = _normalize_optional_str(state.get("running_started_at"))
         session.running_updated_at = _normalize_optional_str(state.get("running_updated_at"))
+        session.managed_prompt_hash_seen = _normalize_optional_str(state.get("managed_prompt_hash_seen"))
 
 
 def record_assistant_capture(home: AssistantHome, user_id: int, user_text: str, assistant_text: str) -> None:
