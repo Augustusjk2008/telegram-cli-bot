@@ -18,10 +18,6 @@ class ManagedPromptSyncResult:
     managed_prompt_hash: str
 
 
-def resolve_host_prompt_repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
 def resolve_assistant_managed_template_path() -> Path:
     return Path(__file__).resolve().parent / "data" / "assistant" / "managed_prompt_template.md"
 
@@ -75,17 +71,20 @@ def _write_if_changed(path: Path, expected_text: str) -> bool:
 def sync_managed_prompt_files(
     home: AssistantHome,
     *,
-    repo_root: str | Path | None = None,
+    template_path: str | Path | None = None,
 ) -> ManagedPromptSyncResult:
-    repo_root_path = Path(repo_root).resolve() if repo_root is not None else resolve_host_prompt_repo_root()
+    resolved_template_path = (
+        Path(template_path).resolve()
+        if template_path is not None
+        else resolve_assistant_managed_template_path()
+    )
     memory_block = _build_memory_block(home)
-    agents_text = _compose_managed_prompt(_load_template(repo_root_path / "AGENTS.md"), memory_block)
-    claude_text = _compose_managed_prompt(_load_template(repo_root_path / "CLAUDE.md"), memory_block)
+    managed_text = _compose_managed_prompt(_load_template(resolved_template_path), memory_block)
 
-    managed_prompt_hash = compute_managed_prompt_hash(agents_text, claude_text)
+    managed_prompt_hash = compute_managed_prompt_hash(managed_text, managed_text)
 
     return ManagedPromptSyncResult(
-        agents_changed=_write_if_changed(home.agents_path, agents_text),
-        claude_changed=_write_if_changed(home.claude_path, claude_text),
+        agents_changed=_write_if_changed(home.agents_path, managed_text),
+        claude_changed=_write_if_changed(home.claude_path, managed_text),
         managed_prompt_hash=managed_prompt_hash,
     )
