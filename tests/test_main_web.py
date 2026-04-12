@@ -44,6 +44,72 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_all_bots_prints_web_access_url_for_specific_host(monkeypatch):
+    import bot.main as main_module
+
+    fake_manager = MagicMock()
+    fake_manager.start_all = AsyncMock()
+    fake_manager.start_watchdog = AsyncMock()
+    fake_manager.shutdown_all = AsyncMock()
+
+    fake_web_server = MagicMock()
+    fake_web_server.start = AsyncMock()
+    fake_web_server.stop = AsyncMock()
+
+    fake_event = MagicMock()
+    fake_event.wait = AsyncMock()
+
+    printed: list[str] = []
+    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
+    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
+    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
+    monkeypatch.setattr(main_module.config, "WEB_HOST", "127.0.0.1")
+    monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
+
+    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
+         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
+         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
+        await main_module.run_all_bots()
+
+    assert "可访问地址:" in printed
+    assert "   http://127.0.0.1:8765" in printed
+
+
+@pytest.mark.asyncio
+async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(monkeypatch):
+    import bot.main as main_module
+
+    fake_manager = MagicMock()
+    fake_manager.start_all = AsyncMock()
+    fake_manager.start_watchdog = AsyncMock()
+    fake_manager.shutdown_all = AsyncMock()
+
+    fake_web_server = MagicMock()
+    fake_web_server.start = AsyncMock()
+    fake_web_server.stop = AsyncMock()
+
+    fake_event = MagicMock()
+    fake_event.wait = AsyncMock()
+
+    printed: list[str] = []
+    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
+    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
+    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
+    monkeypatch.setattr(main_module.config, "WEB_HOST", "0.0.0.0")
+    monkeypatch.setattr(main_module.config, "WEB_PORT", 9000)
+    monkeypatch.setattr(main_module, "_detect_lan_ipv4", lambda: "192.168.31.5", raising=False)
+
+    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
+         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
+         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
+        await main_module.run_all_bots()
+
+    assert "可访问地址:" in printed
+    assert "   本机: http://127.0.0.1:9000" in printed
+    assert "   局域网 IP: http://192.168.31.5:9000" in printed
+
+
+@pytest.mark.asyncio
 async def test_run_all_bots_supports_web_only_mode(monkeypatch):
     import bot.main as main_module
 

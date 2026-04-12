@@ -4,6 +4,7 @@ import asyncio
 import ctypes
 import logging
 import os
+import socket
 import sys
 import time
 
@@ -50,6 +51,57 @@ def safe_print(text: str = ""):
         encoding = getattr(stream, "encoding", None) or "utf-8"
         sanitized = text.encode(encoding, errors="replace").decode(encoding, errors="ignore")
         stream.write(f"{sanitized}\n")
+
+
+def _detect_lan_ipv4():
+    """探测当前主机最适合展示给局域网访问的 IPv4 地址。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            # UDP connect 不会真正发包，但能让系统选择默认出口网卡。
+            probe.connect(("192.0.2.1", 80))
+            candidate = probe.getsockname()[0]
+            if candidate and not candidate.startswith("127."):
+                return candidate
+    except OSError:
+        pass
+
+    try:
+        for family, socktype, proto, canonname, sockaddr in socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        ):
+            candidate = sockaddr[0]
+            if candidate and not candidate.startswith("127."):
+                return candidate
+    except OSError:
+        pass
+    return None
+
+
+def _get_web_access_lines():
+    """生成启动成功后展示给用户的 Web 访问地址。"""
+    host = str(getattr(config, "WEB_HOST", "") or "").strip() or "127.0.0.1"
+    port = int(getattr(config, "WEB_PORT", 8765))
+
+    if host == "0.0.0.0":
+        lines = [f"   本机: http://127.0.0.1:{port}"]
+        lan_ip = _detect_lan_ipv4()
+        if lan_ip:
+            lines.append(f"   局域网 IP: http://{lan_ip}:{port}")
+        return lines
+
+    return [f"   http://{host}:{port}"]
+
+
+def _print_web_access_lines():
+    lines = _get_web_access_lines()
+    if not lines:
+        return
+    safe_print("可访问地址:")
+    for line in lines:
+        safe_print(line)
 
 
 def disable_console_quick_edit():
@@ -121,6 +173,7 @@ async def run_all_bots():
     if web_server is not None:
         await web_server.start()
         logger.info("Web API 已附加到主进程")
+        _print_web_access_lines()
 
     try:
         await config.RESTART_EVENT.wait()
