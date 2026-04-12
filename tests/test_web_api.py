@@ -1095,11 +1095,16 @@ async def test_notify_tunnel_public_url_still_copies_when_telegram_send_fails(we
 
 
 @pytest.mark.asyncio
-async def test_notify_tunnel_public_url_skips_telegram_without_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+async def test_notify_tunnel_public_url_uses_main_profile_token_without_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
 
     server = WebApiServer(web_manager)
     server._copy_text_to_clipboard = MagicMock(return_value=True)
+    fake_notification_bot = MagicMock()
+    fake_notification_bot.initialize = AsyncMock()
+    fake_notification_bot.send_message = AsyncMock()
+    fake_notification_bot.shutdown = AsyncMock()
+    server._build_notification_bot = MagicMock(return_value=fake_notification_bot)
 
     result = await server._notify_tunnel_public_url(
         {
@@ -1114,8 +1119,11 @@ async def test_notify_tunnel_public_url_skips_telegram_without_main_application(
         reason="web_server_start",
     )
 
-    assert result is False
+    assert result is True
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only.trycloudflare.com")
+    fake_notification_bot.initialize.assert_awaited_once()
+    fake_notification_bot.send_message.assert_awaited_once()
+    fake_notification_bot.shutdown.assert_awaited_once()
     assert "main" not in web_manager.applications
 
 
@@ -1184,7 +1192,7 @@ async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_ma
 
 
 @pytest.mark.asyncio
-async def test_web_server_start_in_web_only_mode_does_not_push_tunnel_to_telegram(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+async def test_web_server_start_in_web_only_mode_pushes_tunnel_to_telegram_via_profile_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
 
     class FakeTunnelService:
@@ -1234,10 +1242,44 @@ async def test_web_server_start_in_web_only_mode_does_not_push_tunnel_to_telegra
 
     server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
     server._copy_text_to_clipboard = MagicMock(return_value=True)
+    fake_notification_bot = MagicMock()
+    fake_notification_bot.initialize = AsyncMock()
+    fake_notification_bot.send_message = AsyncMock()
+    fake_notification_bot.shutdown = AsyncMock()
+    server._build_notification_bot = MagicMock(return_value=fake_notification_bot)
     await server.start()
     await server.stop()
 
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only-start.trycloudflare.com")
+    fake_notification_bot.initialize.assert_awaited_once()
+    fake_notification_bot.send_message.assert_awaited_once()
+    fake_notification_bot.shutdown.assert_awaited_once()
+    assert "main" not in web_manager.applications
+
+
+@pytest.mark.asyncio
+async def test_notify_tunnel_public_url_skips_telegram_without_token_or_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+    web_manager.main_profile.token = ""
+
+    server = WebApiServer(web_manager)
+    server._copy_text_to_clipboard = MagicMock(return_value=True)
+
+    result = await server._notify_tunnel_public_url(
+        {
+            "mode": "cloudflare_quick",
+            "status": "running",
+            "source": "quick_tunnel",
+            "public_url": "https://no-token.trycloudflare.com",
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "pid": 1234,
+        },
+        reason="web_server_start",
+    )
+
+    assert result is False
+    server._copy_text_to_clipboard.assert_called_once_with("https://no-token.trycloudflare.com")
     assert "main" not in web_manager.applications
 
 

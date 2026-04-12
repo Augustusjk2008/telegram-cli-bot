@@ -22,8 +22,10 @@ if [[ "$MODE" == "web" ]]; then
 fi
 
 while true; do
+  set +e
   "$PYTHON_BIN" -m bot
   exit_code=$?
+  set -e
   if [[ "$exit_code" -ne 75 ]]; then
     exit "$exit_code"
   fi

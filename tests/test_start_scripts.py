@@ -21,6 +21,8 @@ def test_start_sh_runs_python_module_and_sets_supervisor_env():
 
     assert "TELEGRAM_CLI_BRIDGE_SUPERVISOR=1" in content
     assert "python -m bot" in content
+    assert "set +e" in content
+    assert 'if [[ "$exit_code" -ne 75 ]]' in content
 
 
 def test_start_sh_supports_web_mode():

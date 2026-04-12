@@ -15,6 +15,8 @@ from typing import Any
 
 from aiohttp import WSMsgType, WSCloseCode, web
 from aiohttp.client_exceptions import ClientConnectionResetError
+from telegram import Bot
+from telegram.request import HTTPXRequest
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.config import (
@@ -29,6 +31,7 @@ from bot.config import (
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
     WEB_TUNNEL_STATE_FILE,
+    get_proxy_kwargs,
     request_restart,
 )
 from bot.manager import MultiBotManager
@@ -360,8 +363,12 @@ class WebApiServer:
 
         self._copy_text_to_clipboard(public_url)
 
+        if not ALLOWED_USER_IDS:
+            return False
+
         main_app = self.manager.applications.get(self.manager.main_profile.alias)
-        if main_app is None or not ALLOWED_USER_IDS:
+        bot: Bot | Any | None = main_app.bot if main_app is not None else self._build_notification_bot()
+        if bot is None:
             return False
 
         text = (
@@ -372,18 +379,49 @@ class WebApiServer:
         )
 
         sent_any = False
-        for user_id in ALLOWED_USER_IDS:
-            try:
-                await main_app.bot.send_message(
-                    chat_id=user_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
-                sent_any = True
-            except Exception as exc:
-                logger.info("发送 Web 公网地址通知失败(已忽略) user_id=%s: %s", user_id, exc)
+        should_shutdown = main_app is None
+        initialized = False
+        try:
+            if should_shutdown:
+                await bot.initialize()
+                initialized = True
+
+            for user_id in ALLOWED_USER_IDS:
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
+                    sent_any = True
+                except Exception as exc:
+                    logger.info("发送 Web 公网地址通知失败(已忽略) user_id=%s: %s", user_id, exc)
+        except Exception as exc:
+            logger.info("初始化 Web 公网地址通知 bot 失败(已忽略): %s", exc)
+        finally:
+            if should_shutdown and initialized:
+                try:
+                    await bot.shutdown()
+                except Exception as exc:
+                    logger.info("关闭 Web 公网地址通知 bot 失败(已忽略): %s", exc)
 
         return sent_any
+
+    def _build_notification_bot(self) -> Bot | None:
+        token = str(getattr(self.manager.main_profile, "token", "") or "").strip()
+        if not token or token == "your_bot_token_here":
+            return None
+
+        proxy_kwargs = get_proxy_kwargs()
+        request = HTTPXRequest(
+            connection_pool_size=8,
+            read_timeout=60,
+            write_timeout=60,
+            connect_timeout=30,
+            pool_timeout=30,
+            **({"proxy": proxy_kwargs["proxy_url"]} if proxy_kwargs else {}),
+        )
+        return Bot(token=token, request=request)
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
