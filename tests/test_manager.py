@@ -182,6 +182,30 @@ class TestManagerLoadSave:
                 await manager.add_bot("assistant2", "", "codex", "codex", str(assistant_dir), "assistant")
 
     @pytest.mark.asyncio
+    async def test_add_bot_syncs_assistant_prompt_files(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        repo_root = temp_dir / "repo-root"
+        repo_root.mkdir()
+        (repo_root / "AGENTS.md").write_text("agents template", encoding="utf-8")
+        (repo_root / "CLAUDE.md").write_text("claude template", encoding="utf-8")
+
+        assistant_dir = temp_dir / "assistant-root"
+        assistant_dir.mkdir()
+
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)), \
+             patch("bot.assistant_docs.resolve_host_prompt_repo_root", return_value=repo_root):
+            await manager.add_bot("assistant1", "", "codex", "codex", str(assistant_dir), "assistant")
+
+        assert (assistant_dir / "AGENTS.md").is_file()
+        assert (assistant_dir / "CLAUDE.md").is_file()
+        assert "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->" in (assistant_dir / "AGENTS.md").read_text(encoding="utf-8")
+        assert "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->" in (assistant_dir / "CLAUDE.md").read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
     async def test_add_bot_requires_explicit_workdir_for_assistant(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
@@ -225,6 +249,41 @@ class TestManagerLoadSave:
 
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert data["bots"][0]["alias"] == "team1"
+
+    def test_load_assistant_profile_syncs_prompt_files(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        assistant_dir = temp_dir / "assistant-root"
+        assistant_dir.mkdir()
+        storage.write_text(
+            json.dumps(
+                {
+                    "bots": [
+                        {
+                            "alias": "assistant1",
+                            "token": "",
+                            "cli_type": "codex",
+                            "cli_path": "codex",
+                            "working_dir": str(assistant_dir),
+                            "enabled": True,
+                            "bot_mode": "assistant",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        repo_root = temp_dir / "repo-root"
+        repo_root.mkdir()
+        (repo_root / "AGENTS.md").write_text("agents template", encoding="utf-8")
+        (repo_root / "CLAUDE.md").write_text("claude template", encoding="utf-8")
+
+        with patch("bot.assistant_docs.resolve_host_prompt_repo_root", return_value=repo_root):
+            manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        assert "assistant1" in manager.managed_profiles
+        assert (assistant_dir / "AGENTS.md").is_file()
+        assert (assistant_dir / "CLAUDE.md").is_file()
 
 
 class TestManagerValidation:

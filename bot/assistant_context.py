@@ -93,6 +93,43 @@ def _render_section(name: str, items: list[str]) -> str:
     return "\n".join(lines)
 
 
+def build_managed_memory_prompt(home: AssistantHome) -> str:
+    sections: list[str] = []
+
+    current_goal = _parse_working_goal(
+        _read_working_file(home, "current_goal"),
+        max_chars=160,
+    )
+    if current_goal:
+        sections.append(_render_section("current_goal", [current_goal]))
+
+    open_loops = _parse_working_list(
+        _read_working_file(home, "open_loops"),
+        max_items=5,
+        max_chars=140,
+    )
+    if open_loops:
+        sections.append(_render_section("open_loops", open_loops))
+
+    user_preferences = _parse_working_list(
+        _read_working_file(home, "user_prefs"),
+        max_items=8,
+        max_chars=140,
+    )
+    if user_preferences:
+        sections.append(_render_section("user_preferences", user_preferences))
+
+    recent_summary = _parse_working_list(
+        _read_working_file(home, "recent_summary"),
+        max_items=5,
+        max_chars=140,
+    )
+    if recent_summary:
+        sections.append(_render_section("recent_summary", recent_summary))
+
+    return "\n\n".join(section for section in sections if section)
+
+
 def _load_retrieved_knowledge(home: AssistantHome, user_text: str) -> list[str]:
     db_path = home.root / "indexes" / "chunks.sqlite"
     if not db_path.exists():

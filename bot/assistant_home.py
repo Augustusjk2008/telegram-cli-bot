@@ -29,6 +29,8 @@ class AssistantHome:
     workdir: Path
     root: Path
     manifest_path: Path
+    agents_path: Path
+    claude_path: Path
     assistant_id: str
     schema_version: int
 
@@ -92,6 +94,8 @@ def bootstrap_assistant_home(workdir: str | Path) -> AssistantHome:
         workdir=workdir_path,
         root=root,
         manifest_path=manifest_path,
+        agents_path=workdir_path / "AGENTS.md",
+        claude_path=workdir_path / "CLAUDE.md",
         assistant_id=str(data["assistant_id"]),
         schema_version=int(data["schema_version"]),
     )

@@ -24,6 +24,7 @@ except ImportError:
 from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
+from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import coerce_param_value
@@ -438,6 +439,11 @@ class MultiBotManager:
             except asyncio.CancelledError:
                 pass
 
+    @staticmethod
+    def _bootstrap_and_sync_assistant_home(working_dir: str) -> None:
+        home = bootstrap_assistant_home(working_dir)
+        sync_managed_prompt_files(home)
+
     def _load_profiles(self):
         self.managed_profiles = {}
         if not self.storage_file.exists():
@@ -494,7 +500,7 @@ class MultiBotManager:
         if len(assistant_aliases) > 1:
             raise ValueError("配置中只允许一个 assistant 型 Bot")
         if len(assistant_aliases) == 1:
-            bootstrap_assistant_home(self.managed_profiles[assistant_aliases[0]].working_dir)
+            self._bootstrap_and_sync_assistant_home(self.managed_profiles[assistant_aliases[0]].working_dir)
 
         if migrated_legacy_mode:
             self._save_profiles()
@@ -790,7 +796,7 @@ class MultiBotManager:
             )
 
             if bot_mode == "assistant":
-                bootstrap_assistant_home(working_dir)
+                self._bootstrap_and_sync_assistant_home(working_dir)
 
             await self._start_profile(profile, is_main=False)
             self.managed_profiles[alias] = profile
