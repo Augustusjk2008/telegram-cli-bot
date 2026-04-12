@@ -205,6 +205,312 @@ assistant 结构仍分为两层。
 - 运行时本地 prompt 只补充短期 working memory、approved knowledge、当前请求。
 - 这样可以减少与 Codex / Claude 原生系统提示、会话历史的重复。
 
+## 记忆读取设计
+
+### 目标
+
+不仅要定义 assistant 怎么写记忆，还要定义 assistant 平时怎么读记忆。
+
+读取侧必须解决四个问题：
+
+1. 哪些内容每轮都读，哪些只按需读
+2. 哪些内容只在没有 native session 时读
+3. 哪些内容绝不能默认读，避免上下文爆炸
+4. assistant 被用户问到“你记得什么、刚才压缩了什么”时，应该读哪一层数据回答
+
+### 读取分层
+
+assistant 的读取分为五层，自上而下优先级递减：
+
+1. 当前用户请求与实时文件 / 命令结果
+2. 宿主管理的身份边界
+3. working memory
+4. approved knowledge
+5. 当前用户 runtime state 的最小摘要回退
+
+说明：
+
+- `captures`、`audit`、`pending proposals` 不进入默认主读取链。
+- 这些内容只在明确需要时按需读取。
+
+### 各层职责
+
+#### 第 1 层：当前请求与实时结果
+
+最高优先级，包含：
+
+- 当前用户输入
+- 当前轮命令输出
+- 当前轮文件读取结果
+- 当前轮错误信息
+
+这层永远覆盖其它记忆层。
+
+#### 第 2 层：宿主管理的身份边界
+
+来源：
+
+- `<assistant_workdir>/AGENTS.md`
+- `<assistant_workdir>/CLAUDE.md`
+
+职责：
+
+- 告诉 assistant 自己是谁
+- 告诉 assistant 自己的数据根在哪里
+- 告诉 assistant 哪些内容能改，哪些不能改
+
+读取策略：
+
+- 不把这两个文件全文在每轮 prompt 中重复展开。
+- 宿主维护一个 `identity_digest`，从这两个文件提取最小稳定摘要。
+- 只在以下情况注入 `identity_digest`：
+  - 当前 native session 尚未建立
+  - 或宿主管理文件内容发生版本变化
+
+这样既保证 assistant 知道自己的身份，又避免每轮重复塞入整份身份说明。
+
+#### 第 3 层：working memory
+
+来源：
+
+- `.assistant/memory/working/current_goal.md`
+- `.assistant/memory/working/open_loops.md`
+- `.assistant/memory/working/user_prefs.md`
+- `.assistant/memory/working/recent_summary.md`
+
+职责：
+
+- 提供短期跨 session 的最小上下文
+- 承接 capture 压缩结果
+
+读取策略：
+
+- `current_goal` 默认每轮都读
+- `user_prefs` 默认每轮都读，但只取与当前请求最相关的少量条目
+- `open_loops` 默认每轮都读，但只取与当前请求相关或最近的少量条目
+- `recent_summary` 只在需要时读，不默认每轮读满
+
+#### 第 4 层：approved knowledge
+
+来源：
+
+- `.assistant/memory/knowledge/*.md`
+- `.assistant/indexes/chunks.sqlite`
+
+职责：
+
+- 提供已审批、可长期复用的知识和规则
+
+读取策略：
+
+- 只做按需检索，不全量注入
+- 检索 query 由 `当前用户请求 + current_goal` 组成
+- 默认只取少量 top chunks
+- 未审批 proposal 不参与这层检索
+
+#### 第 5 层：runtime state 最小回退
+
+来源：
+
+- `.assistant/state/users/<user_id>.json`
+
+职责：
+
+- 当 native CLI session 不存在时，补一层轻量的当前用户会话摘要
+
+读取策略：
+
+- 有 native session 时，不从 runtime `history` 再推导近期摘要
+- 无 native session 时，才允许从当前用户 history 推导一个极短的 `current_goal` / `recent_summary`
+
+这样避免和 Codex / Claude / Kimi 原生会话历史重复。
+
+## 按场景读取
+
+### 普通任务模式
+
+适用于绝大多数正常对话。
+
+默认读取：
+
+- 当前用户请求
+- 实时文件 / 命令结果
+- `identity_digest`（仅首次 session 或身份版本变化时）
+- `current_goal`
+- 少量相关 `user_prefs`
+- 少量相关 `open_loops`
+- 少量 approved knowledge chunks
+
+条件读取：
+
+- `recent_summary`
+  - 当前 native session 不存在时读取
+  - 任务明显切换时读取
+
+默认不读：
+
+- 原始 captures
+- compaction audit
+- pending proposals
+- 全量 history
+
+### 记忆解释模式
+
+适用于用户问这类问题时：
+
+- “你记得什么”
+- “你刚才压缩了什么”
+- “你现在的记忆文件里有什么”
+- “你为什么这么理解我”
+
+读取：
+
+- 四个 working memory 文件
+- `.assistant/audit/compactions.jsonl`
+- 必要时读取最近少量 captures 作为佐证
+
+仍然默认不读：
+
+- 全量 capture 历史
+- 全量 proposal 历史
+
+### proposal / 升级模式
+
+适用于用户问这类问题时：
+
+- “有哪些待审批 proposal”
+- “这次升级建议是什么”
+- “为什么生成这个 proposal”
+
+读取：
+
+- 相关 proposal 文件
+- 当前 working memory
+- 相关 approved knowledge
+- 必要时读取少量最近 capture 解释 proposal 来源
+
+### 精确追溯模式
+
+只在用户明确要求“找原话、找原始记录”时启用。
+
+读取：
+
+- 指定时间范围或最近少量 `captures`
+
+限制：
+
+- 不允许默认把大量原始 capture 回灌进主上下文
+- 只返回与问题直接相关的少量原始片段
+
+## Prompt 编译设计
+
+### 编译目标
+
+将读取到的多层信息编译成一个很小的本地上下文块，交给 CLI 主对话使用。
+
+编译后的 prompt 只保留“完成当前请求所需的最小上下文”，不是把 assistant 全部记忆倒进去。
+
+### 编译结构
+
+建议保持如下结构：
+
+```text
+[LOCAL_ASSISTANT_CONTEXT]
+assistant_identity:
+- ...
+
+current_goal:
+- ...
+
+open_loops:
+- ...
+
+user_preferences:
+- ...
+
+recent_summary:
+- ...
+
+retrieved_knowledge:
+- ...
+
+meta_context:
+- ...
+
+[USER_REQUEST]
+...
+```
+
+说明：
+
+- `assistant_identity` 只在首次 session 或身份版本变化时出现
+- `meta_context` 只在“记忆解释模式”或“proposal / 升级模式”出现
+- 普通任务模式下通常不会出现 `meta_context`
+
+### 编译预算
+
+为了控制体积，读取后还要做二次裁剪。
+
+建议预算：
+
+- `assistant_identity`: 最多 3 条
+- `current_goal`: 1 条
+- `open_loops`: 最多 3 条
+- `user_preferences`: 最多 4 条
+- `recent_summary`: 最多 3 条
+- `retrieved_knowledge`: 最多 3 条
+- `meta_context`: 只在特殊模式下开启，且最多 3 条
+
+这意味着：
+
+- working memory 可以比最终注入的上下文略多一点
+- 但真正送进 prompt 的内容永远比存储层更小
+
+### 相关性选择
+
+对 `open_loops`、`user_prefs`、`retrieved_knowledge`，宿主需要做一层相关性筛选。
+
+第一版可采用简单策略：
+
+- 使用 `当前用户请求 + current_goal` 做关键词匹配
+- 先选命中的条目
+- 若命中不足，再用最近条目补齐
+
+这层是“读取裁剪”，不是“写入压缩”。
+
+## 默认不读取的内容
+
+以下内容不进入默认主 prompt：
+
+- 全量 `captures`
+- 全量 `history`
+- 全量 `audit`
+- 未审批 proposals
+- `AGENTS.md` / `CLAUDE.md` 全文
+
+原因：
+
+- 这些内容过长
+- 大多数轮次并不需要
+- 容易和 native session、自带系统提示词产生重复
+
+## 读取冲突优先级
+
+当多层信息冲突时，优先级固定为：
+
+1. 当前用户显式要求
+2. 当前轮实时文件 / 命令结果
+3. 宿主管理的身份边界
+4. approved knowledge
+5. working memory
+6. runtime state 的 history 回退
+7. 原始 captures / audit / proposals 的按需解释内容
+
+解释：
+
+- 低层内容只能补充，不能覆盖高层明确要求。
+- 如果用户当前要求和历史偏好冲突，按当前要求执行。
+
 ## Reset 语义
 
 ### 目标
@@ -444,6 +750,12 @@ proposal 首期覆盖：
 - assistant reset 不会删除 `memory/working`、`captures`、`proposals`
 - `bootstrap/load assistant home` 会生成并同步 `<assistant_workdir>/AGENTS.md` 与 `<assistant_workdir>/CLAUDE.md`
 - 若 workdir 根的 `AGENTS.md` / `CLAUDE.md` 被修改，宿主同步会覆盖回宿主版本
+- `identity_digest` 只在首次 native session 或身份版本变化时注入
+- 有 native session 时，不再从 runtime `history` 推导 `recent_summary`
+- 无 native session 时，允许从 runtime `history` 做最小回退
+- 普通任务模式不会读取 `audit`、原始 `captures`、pending proposals
+- 记忆解释模式会读取 working memory 与 compaction audit
+- approved knowledge 检索只返回少量 top chunks，且不混入未审批 proposal
 - 压缩调度器只在达到阈值时标记压缩
 - 压缩后 working memory 文件被限长写回
 - proposal 候选会生成到 `.assistant/proposals/`
@@ -453,6 +765,8 @@ proposal 首期覆盖：
 - Telegram assistant 对话后能写 capture
 - 达到阈值后的下一次对话会执行同轮压缩
 - 压缩不改变用户可见回复格式
+- assistant 普通对话的本地 prompt 只包含裁剪后的 working memory / knowledge，而不包含全量 capture
+- 用户主动询问“你记得什么”时，assistant 能基于 working memory 和 audit 给出说明
 - Web assistant reset 与 Telegram reset 语义一致
 
 ## 风险与取舍
