@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from bot.assistant_home import AssistantHome
+from bot.assistant_compaction import build_compaction_memory_block
 
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)")
 _REREAD_NOTICE = "AGENTS.md 和 CLAUDE.md 已更新，请重新读取。"
@@ -115,6 +116,14 @@ def build_managed_memory_prompt(home: AssistantHome) -> str:
     if recent_summary:
         sections.append(_render_section("recent_summary", recent_summary))
 
+    return "\n\n".join(section for section in sections if section)
+
+
+def build_managed_memory_tail(home: AssistantHome) -> str:
+    sections = [
+        build_managed_memory_prompt(home).strip(),
+        build_compaction_memory_block(home).strip(),
+    ]
     return "\n\n".join(section for section in sections if section)
 
 

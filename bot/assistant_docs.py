@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 
-from bot.assistant_context import build_managed_memory_prompt
+from bot.assistant_context import build_managed_memory_tail
 from bot.assistant_home import AssistantHome
 
 BEGIN_HOST_MANAGED_MEMORY_PROMPT = "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->"
@@ -27,7 +27,7 @@ def _load_template(path: Path) -> str:
 
 
 def _build_memory_block(home: AssistantHome) -> str:
-    body = build_managed_memory_prompt(home).rstrip("\n")
+    body = build_managed_memory_tail(home).rstrip("\n")
     if body:
         return (
             f"{BEGIN_HOST_MANAGED_MEMORY_PROMPT}\n"

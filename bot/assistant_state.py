@@ -128,7 +128,7 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
         session.managed_prompt_hash_seen = _normalize_optional_str(state.get("managed_prompt_hash_seen"))
 
 
-def record_assistant_capture(home: AssistantHome, user_id: int, user_text: str, assistant_text: str) -> None:
+def record_assistant_capture(home: AssistantHome, user_id: int, user_text: str, assistant_text: str) -> dict[str, Any]:
     capture = {
         "id": f"cap_{uuid.uuid4().hex[:12]}",
         "source": "chat",
@@ -142,3 +142,4 @@ def record_assistant_capture(home: AssistantHome, user_id: int, user_text: str, 
         json.dumps(capture, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    return capture
