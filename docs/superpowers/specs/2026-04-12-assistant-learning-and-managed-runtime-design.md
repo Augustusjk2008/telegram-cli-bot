@@ -202,314 +202,267 @@ assistant 结构仍分为两层。
 ### 与运行时 prompt 的关系
 
 - `AGENTS.md` / `CLAUDE.md` 承担稳定、不常变的身份约束。
-- 运行时本地 prompt 只补充短期 working memory、approved knowledge、当前请求。
+- 运行时本地 prompt 不再承载记忆正文，记忆正文改挂在 `AGENTS.md` / `CLAUDE.md` 尾部。
+- 运行时只在必要时补一条“请重新读取 AGENTS.md / CLAUDE.md”的变更通知。
 - 这样可以减少与 Codex / Claude 原生系统提示、会话历史的重复。
 
 ## 记忆读取设计
 
 ### 目标
 
-不仅要定义 assistant 怎么写记忆，还要定义 assistant 平时怎么读记忆。
+assistant 的“读记忆”不再设计成每轮把本地结构化上下文直接注入 prompt。
 
-读取侧必须解决四个问题：
+改为：
 
-1. 哪些内容每轮都读，哪些只按需读
-2. 哪些内容只在没有 native session 时读
-3. 哪些内容绝不能默认读，避免上下文爆炸
-4. assistant 被用户问到“你记得什么、刚才压缩了什么”时，应该读哪一层数据回答
+- 宿主把“可长期挂载的记忆 prompt”追加写入 `<assistant_workdir>/AGENTS.md` 和 `<assistant_workdir>/CLAUDE.md` 末尾
+- assistant 平时主要通过重新读取这两个文件获得记忆
+- 只有当记忆部分发生变化，而当前 native session 还在继续时，宿主才直接注入一句提示：
+  `AGENTS.md 和 CLAUDE.md 已更新，请重新读取。`
 
-### 读取分层
+这意味着：
 
-assistant 的读取分为五层，自上而下优先级递减：
+- 平时不再向主对话额外注入一大段 `[LOCAL_ASSISTANT_CONTEXT]`
+- 记忆读取的主载体改成宿主管理文件本身
+- 直接注入退化为“变更通知”而不是“记忆正文”
 
-1. 当前用户请求与实时文件 / 命令结果
-2. 宿主管理的身份边界
-3. working memory
-4. approved knowledge
-5. 当前用户 runtime state 的最小摘要回退
+### 记忆读取的两条通道
 
-说明：
+#### 通道 A：通过 AGENTS.md / CLAUDE.md 读取
 
-- `captures`、`audit`、`pending proposals` 不进入默认主读取链。
-- 这些内容只在明确需要时按需读取。
+这是主通道。
 
-### 各层职责
+宿主会把以下两部分拼成最终文件内容：
 
-#### 第 1 层：当前请求与实时结果
+1. 静态模板内容
+2. 宿主生成的 `memory prompt` 尾块
 
-最高优先级，包含：
+因此 assistant 实际看到的 `AGENTS.md` / `CLAUDE.md` 是：
 
-- 当前用户输入
-- 当前轮命令输出
-- 当前轮文件读取结果
-- 当前轮错误信息
+`模板内容 + 记忆 prompt`
 
-这层永远覆盖其它记忆层。
+#### 通道 B：通过直接文件读取按需读取
 
-#### 第 2 层：宿主管理的身份边界
+这是次通道，只在特殊问题下启用。
 
-来源：
+例如用户问：
+
+- “你现在记得什么”
+- “你刚才压缩了什么”
+- “proposal 是怎么来的”
+- “找原始记录”
+
+这时 assistant 可以自己去读：
+
+- `.assistant/memory/working/*.md`
+- `.assistant/audit/compactions.jsonl`
+- 相关 `proposal`
+- 少量最近 `captures`
+
+但这些内容不再由宿主默认拼进每轮 prompt。
+
+## AGENTS / CLAUDE 尾部记忆块
+
+### 文件形态
+
+宿主维护：
 
 - `<assistant_workdir>/AGENTS.md`
 - `<assistant_workdir>/CLAUDE.md`
 
-职责：
+这两个文件的前半部分是静态模板，后半部分是宿主自动生成的记忆块。
 
-- 告诉 assistant 自己是谁
-- 告诉 assistant 自己的数据根在哪里
-- 告诉 assistant 哪些内容能改，哪些不能改
-
-读取策略：
-
-- 不把这两个文件全文在每轮 prompt 中重复展开。
-- 宿主维护一个 `identity_digest`，从这两个文件提取最小稳定摘要。
-- 只在以下情况注入 `identity_digest`：
-  - 当前 native session 尚未建立
-  - 或宿主管理文件内容发生版本变化
-
-这样既保证 assistant 知道自己的身份，又避免每轮重复塞入整份身份说明。
-
-#### 第 3 层：working memory
-
-来源：
-
-- `.assistant/memory/working/current_goal.md`
-- `.assistant/memory/working/open_loops.md`
-- `.assistant/memory/working/user_prefs.md`
-- `.assistant/memory/working/recent_summary.md`
-
-职责：
-
-- 提供短期跨 session 的最小上下文
-- 承接 capture 压缩结果
-
-读取策略：
-
-- `current_goal` 默认每轮都读
-- `user_prefs` 默认每轮都读，但只取与当前请求最相关的少量条目
-- `open_loops` 默认每轮都读，但只取与当前请求相关或最近的少量条目
-- `recent_summary` 只在需要时读，不默认每轮读满
-
-#### 第 4 层：approved knowledge
-
-来源：
-
-- `.assistant/memory/knowledge/*.md`
-- `.assistant/indexes/chunks.sqlite`
-
-职责：
-
-- 提供已审批、可长期复用的知识和规则
-
-读取策略：
-
-- 只做按需检索，不全量注入
-- 检索 query 由 `当前用户请求 + current_goal` 组成
-- 默认只取少量 top chunks
-- 未审批 proposal 不参与这层检索
-
-#### 第 5 层：runtime state 最小回退
-
-来源：
-
-- `.assistant/state/users/<user_id>.json`
-
-职责：
-
-- 当 native CLI session 不存在时，补一层轻量的当前用户会话摘要
-
-读取策略：
-
-- 有 native session 时，不从 runtime `history` 再推导近期摘要
-- 无 native session 时，才允许从当前用户 history 推导一个极短的 `current_goal` / `recent_summary`
-
-这样避免和 Codex / Claude / Kimi 原生会话历史重复。
-
-## 按场景读取
-
-### 普通任务模式
-
-适用于绝大多数正常对话。
-
-默认读取：
-
-- 当前用户请求
-- 实时文件 / 命令结果
-- `identity_digest`（仅首次 session 或身份版本变化时）
-- `current_goal`
-- 少量相关 `user_prefs`
-- 少量相关 `open_loops`
-- 少量 approved knowledge chunks
-
-条件读取：
-
-- `recent_summary`
-  - 当前 native session 不存在时读取
-  - 任务明显切换时读取
-
-默认不读：
-
-- 原始 captures
-- compaction audit
-- pending proposals
-- 全量 history
-
-### 记忆解释模式
-
-适用于用户问这类问题时：
-
-- “你记得什么”
-- “你刚才压缩了什么”
-- “你现在的记忆文件里有什么”
-- “你为什么这么理解我”
-
-读取：
-
-- 四个 working memory 文件
-- `.assistant/audit/compactions.jsonl`
-- 必要时读取最近少量 captures 作为佐证
-
-仍然默认不读：
-
-- 全量 capture 历史
-- 全量 proposal 历史
-
-### proposal / 升级模式
-
-适用于用户问这类问题时：
-
-- “有哪些待审批 proposal”
-- “这次升级建议是什么”
-- “为什么生成这个 proposal”
-
-读取：
-
-- 相关 proposal 文件
-- 当前 working memory
-- 相关 approved knowledge
-- 必要时读取少量最近 capture 解释 proposal 来源
-
-### 精确追溯模式
-
-只在用户明确要求“找原话、找原始记录”时启用。
-
-读取：
-
-- 指定时间范围或最近少量 `captures`
-
-限制：
-
-- 不允许默认把大量原始 capture 回灌进主上下文
-- 只返回与问题直接相关的少量原始片段
-
-## Prompt 编译设计
-
-### 编译目标
-
-将读取到的多层信息编译成一个很小的本地上下文块，交给 CLI 主对话使用。
-
-编译后的 prompt 只保留“完成当前请求所需的最小上下文”，不是把 assistant 全部记忆倒进去。
-
-### 编译结构
-
-建议保持如下结构：
+建议用明确边界包裹：
 
 ```text
-[LOCAL_ASSISTANT_CONTEXT]
-assistant_identity:
-- ...
-
-current_goal:
-- ...
-
-open_loops:
-- ...
-
-user_preferences:
-- ...
-
-recent_summary:
-- ...
-
-retrieved_knowledge:
-- ...
-
-meta_context:
-- ...
-
-[USER_REQUEST]
+<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->
 ...
+<!-- END HOST_MANAGED_MEMORY_PROMPT -->
 ```
+
+这样宿主可以稳定重写尾块，而不影响模板主体。
+
+### 尾块包含什么
+
+尾块只放“跨轮次、跨 session 仍然值得挂在系统侧”的压缩记忆，不放当前轮请求。
+
+第一版建议只包含：
+
+- `current_goal`
+- `open_loops`
+- `user_preferences`
+- `recent_summary`
+- `approved_knowledge_digest`
 
 说明：
 
-- `assistant_identity` 只在首次 session 或身份版本变化时出现
-- `meta_context` 只在“记忆解释模式”或“proposal / 升级模式”出现
-- 普通任务模式下通常不会出现 `meta_context`
+- `current_goal / open_loops / user_preferences / recent_summary` 来自 working memory
+- `approved_knowledge_digest` 不是全量 knowledge，而是少量、稳定、长期有效的已批准知识摘要
+- 当前轮用户请求、当前轮命令输出、当前轮文件内容不进入尾块
 
-### 编译预算
+### 为什么不把所有记忆都放进去
 
-为了控制体积，读取后还要做二次裁剪。
+因为 `AGENTS.md` / `CLAUDE.md` 也会被长期读取。
 
-建议预算：
+如果把全量 knowledge、capture、audit、proposal 都塞进尾块，会导致：
 
-- `assistant_identity`: 最多 3 条
+- 文件越来越大
+- 与 native session 历史重复
+- 每次重读成本过高
+
+所以尾块必须是“压缩后的长期挂载记忆”，不是“所有记忆文件的镜像”。
+
+## 记忆块重建规则
+
+### 何时重建
+
+满足以下任一情况时，宿主重建 `AGENTS.md` / `CLAUDE.md` 的记忆尾块：
+
+- working memory 发生变化
+- approved knowledge 的摘要发生变化
+- assistant 身份模板发生变化
+
+### 重建来源
+
+记忆尾块由宿主从以下源生成：
+
+- `memory/working/*.md`
+- approved knowledge 的紧凑摘要
+- 宿主定义的固定模板
+
+注意：
+
+- 原始 captures 不直接进入尾块
+- compaction audit 不直接进入尾块
+- pending proposals 不直接进入尾块
+
+### 长度约束
+
+即使改成写入 `AGENTS.md` / `CLAUDE.md` 尾部，仍然需要严格限长。
+
+建议保留如下上限：
+
 - `current_goal`: 1 条
-- `open_loops`: 最多 3 条
-- `user_preferences`: 最多 4 条
-- `recent_summary`: 最多 3 条
-- `retrieved_knowledge`: 最多 3 条
-- `meta_context`: 只在特殊模式下开启，且最多 3 条
+- `open_loops`: 最多 5 条
+- `user_preferences`: 最多 8 条
+- `recent_summary`: 最多 4 条
+- `approved_knowledge_digest`: 最多 5 条
 
-这意味着：
+并要求每条都保持很短。
 
-- working memory 可以比最终注入的上下文略多一点
-- 但真正送进 prompt 的内容永远比存储层更小
+## 直接注入的唯一场景
 
-### 相关性选择
+### 变更通知注入
 
-对 `open_loops`、`user_prefs`、`retrieved_knowledge`，宿主需要做一层相关性筛选。
+唯一默认直接注入主对话的本地提示词是：
 
-第一版可采用简单策略：
+`AGENTS.md 和 CLAUDE.md 已更新，请重新读取。`
 
-- 使用 `当前用户请求 + current_goal` 做关键词匹配
-- 先选命中的条目
-- 若命中不足，再用最近条目补齐
+这个提示只在以下条件同时满足时出现：
 
-这层是“读取裁剪”，不是“写入压缩”。
+1. 当前 assistant 正在续接 native session
+2. 宿主检测到 `AGENTS.md` 或 `CLAUDE.md` 的记忆尾块发生了变化
 
-## 默认不读取的内容
+目的：
 
-以下内容不进入默认主 prompt：
+- 告诉当前会话中的模型：系统侧记忆已经更新
+- 让它主动重新读取宿主管理文件
 
+### 不需要注入的场景
+
+- 新建 native session 时，不需要额外注入
+  - 因为新 session 会自然读取当前工作目录下的 `AGENTS.md` / `CLAUDE.md`
+- 同一 native session 中，如果记忆尾块没变，也不需要注入
+
+## 按场景介绍最终会发生什么
+
+### 情况 1：首次进入 assistant，尚未建立 native session
+
+实际效果：
+
+- assistant 通过当前 workdir 下的 `AGENTS.md` / `CLAUDE.md` 读取模板和记忆尾块
+- 不额外注入记忆正文
+- 用户消息正常发送
+
+### 情况 2：已在同一 native session 中继续聊天，记忆没变
+
+实际效果：
+
+- 不注入任何本地记忆提示
+- 只发送用户当前消息
+- assistant 继续依赖已经读过的 `AGENTS.md` / `CLAUDE.md` 和 native session 历史
+
+### 情况 3：已在同一 native session 中继续聊天，但记忆尾块变了
+
+实际效果：
+
+- 宿主不把新记忆正文塞进 prompt
+- 只额外加一句：
+  `AGENTS.md 和 CLAUDE.md 已更新，请重新读取。`
+- assistant 看到后应重新读取这两个文件，再继续回答
+
+### 情况 4：用户问“你记得什么”
+
+实际效果：
+
+- assistant 可以读取：
+  - `AGENTS.md` / `CLAUDE.md` 当前尾块
+  - `memory/working/*.md`
+- 必要时再读取 `.assistant/audit/compactions.jsonl`
+- 这是 assistant 自己按需读文件，不是宿主默认注入大段提示
+
+### 情况 5：用户问“你刚才压缩了什么”
+
+实际效果：
+
+- assistant 读取最近 compaction audit
+- 必要时对照 working memory 当前内容
+- 用自然语言回答
+
+### 情况 6：用户问 proposal / upgrade 来源
+
+实际效果：
+
+- assistant 读取相关 proposal
+- 必要时读取少量最近 capture 和 working memory
+- 用于解释 proposal 由来
+
+### 情况 7：用户要求找原始记录
+
+实际效果：
+
+- assistant 按需读取少量最近 capture 或指定范围 capture
+- 但这些原始记录不进入默认系统侧记忆块
+
+## 默认不直接注入的内容
+
+以下内容不再作为每轮默认本地 prompt 注入：
+
+- `current_goal`
+- `open_loops`
+- `user_preferences`
+- `recent_summary`
+- approved knowledge 正文
 - 全量 `captures`
 - 全量 `history`
 - 全量 `audit`
-- 未审批 proposals
-- `AGENTS.md` / `CLAUDE.md` 全文
+- 未审批 `proposals`
 
-原因：
-
-- 这些内容过长
-- 大多数轮次并不需要
-- 容易和 native session、自带系统提示词产生重复
+这些内容要么已经体现在 `AGENTS.md` / `CLAUDE.md` 的记忆尾块里，要么只在特殊问题下由 assistant 自己按需读取。
 
 ## 读取冲突优先级
 
-当多层信息冲突时，优先级固定为：
+即使改成“记忆挂在 AGENTS / CLAUDE 尾部”，冲突优先级仍固定为：
 
 1. 当前用户显式要求
 2. 当前轮实时文件 / 命令结果
-3. 宿主管理的身份边界
-4. approved knowledge
-5. working memory
-6. runtime state 的 history 回退
-7. 原始 captures / audit / proposals 的按需解释内容
+3. `AGENTS.md` / `CLAUDE.md` 的静态模板规则
+4. `AGENTS.md` / `CLAUDE.md` 的记忆尾块
+5. assistant 按需读取到的补充文件内容
 
 解释：
 
-- 低层内容只能补充，不能覆盖高层明确要求。
-- 如果用户当前要求和历史偏好冲突，按当前要求执行。
+- 用户当前要求始终最高。
+- 记忆尾块只能提供背景，不能覆盖当前明确指令。
 
 ## Reset 语义
 
@@ -750,12 +703,14 @@ proposal 首期覆盖：
 - assistant reset 不会删除 `memory/working`、`captures`、`proposals`
 - `bootstrap/load assistant home` 会生成并同步 `<assistant_workdir>/AGENTS.md` 与 `<assistant_workdir>/CLAUDE.md`
 - 若 workdir 根的 `AGENTS.md` / `CLAUDE.md` 被修改，宿主同步会覆盖回宿主版本
-- `identity_digest` 只在首次 native session 或身份版本变化时注入
-- 有 native session 时，不再从 runtime `history` 推导 `recent_summary`
-- 无 native session 时，允许从 runtime `history` 做最小回退
-- 普通任务模式不会读取 `audit`、原始 `captures`、pending proposals
-- 记忆解释模式会读取 working memory 与 compaction audit
-- approved knowledge 检索只返回少量 top chunks，且不混入未审批 proposal
+- 宿主会把模板内容与记忆尾块拼成最终 `AGENTS.md` / `CLAUDE.md`
+- working memory 变化时，宿主会重建两个文件的记忆尾块
+- approved knowledge 摘要变化时，宿主会重建两个文件的记忆尾块
+- native session 未建立时，不额外注入记忆正文
+- native session 已存在且记忆尾块未变时，不注入任何本地记忆提示
+- native session 已存在且记忆尾块变更时，只注入一条“请重新读取 AGENTS.md / CLAUDE.md”的通知
+- 普通任务模式不会默认把 `captures`、`audit`、pending proposals 直接注入 prompt
+- 用户询问记忆/压缩/proposal 来源时，assistant 可按需读取 working memory、audit、proposal、少量 capture
 - 压缩调度器只在达到阈值时标记压缩
 - 压缩后 working memory 文件被限长写回
 - proposal 候选会生成到 `.assistant/proposals/`
@@ -765,8 +720,9 @@ proposal 首期覆盖：
 - Telegram assistant 对话后能写 capture
 - 达到阈值后的下一次对话会执行同轮压缩
 - 压缩不改变用户可见回复格式
-- assistant 普通对话的本地 prompt 只包含裁剪后的 working memory / knowledge，而不包含全量 capture
-- 用户主动询问“你记得什么”时，assistant 能基于 working memory 和 audit 给出说明
+- assistant 普通对话不会再拼接一大段本地记忆 prompt，而是依赖 `AGENTS.md` / `CLAUDE.md` 尾部记忆块
+- 记忆尾块变化后的同一 native session 中，宿主只追加一条“请重新读取”通知
+- 用户主动询问“你记得什么”时，assistant 能基于 `AGENTS.md` / `CLAUDE.md` 尾块、working memory 和 audit 给出说明
 - Web assistant reset 与 Telegram reset 语义一致
 
 ## 风险与取舍
