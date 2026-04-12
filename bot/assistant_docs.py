@@ -22,6 +22,10 @@ def resolve_host_prompt_repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def resolve_assistant_managed_template_path() -> Path:
+    return Path(__file__).resolve().parent / "data" / "assistant" / "managed_prompt_template.md"
+
+
 def _load_template(path: Path) -> str:
     return path.read_text(encoding="utf-8").rstrip("\n")
 

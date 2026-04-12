@@ -3,10 +3,24 @@ from pathlib import Path
 from bot.assistant_docs import (
     compute_managed_prompt_hash,
     read_current_managed_prompt_hash,
+    resolve_assistant_managed_template_path,
     sync_managed_prompt_files,
 )
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_compaction import save_compaction_state
+
+
+def test_resolve_assistant_managed_template_path_points_to_repo_asset():
+    path = resolve_assistant_managed_template_path()
+
+    assert path.name == "managed_prompt_template.md"
+    assert path.is_file()
+
+    text = path.read_text(encoding="utf-8")
+    assert "你是宿主管理的本地长期 assistant" in text
+    assert ".assistant/proposals" in text
+    assert "AGENTS.md" in text
+    assert "CLAUDE.md" in text
 
 
 def test_sync_managed_prompt_files_creates_agents_and_claude_with_memory_block(tmp_path: Path):
