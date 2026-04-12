@@ -8,6 +8,7 @@ import threading
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from bot.assistant_context import AssistantPromptPayload
 
 
 class TestHandleTextMessageAuth:
@@ -80,6 +81,7 @@ class TestHandleTextMessageAuth:
         session_mock.kimi_session_id = None
         session_mock.claude_session_id = None
         session_mock.claude_session_initialized = False
+        session_mock.managed_prompt_hash_seen = "hash-seen"
         session_mock._lock = threading.Lock()
 
         fake_process = MagicMock()
@@ -88,9 +90,13 @@ class TestHandleTextMessageAuth:
              patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
              patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
              patch("bot.handlers.chat.resolve_cli_executable", return_value="codex"), \
+             patch("bot.handlers.chat.read_current_managed_prompt_hash", return_value="hash-current"), \
              patch(
                  "bot.handlers.chat.compile_assistant_prompt",
-                 return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+                 return_value=AssistantPromptPayload(
+                     prompt_text="hello from payload",
+                     managed_prompt_hash_seen="hash-updated",
+                 ),
              ) as compiler, \
              patch("bot.handlers.chat.record_assistant_capture") as capture_mock, \
              patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)) as build_mock, \
@@ -102,9 +108,17 @@ class TestHandleTextMessageAuth:
              ):
             await handle_text_message(mock_update, mock_context)
 
-        compiler.assert_called_once_with(ANY, mock_update.effective_user.id, mock_update.message.text, has_native_session=False)
+        compiler.assert_called_once_with(
+            ANY,
+            mock_update.effective_user.id,
+            mock_update.message.text,
+            has_native_session=False,
+            managed_prompt_hash="hash-current",
+            seen_managed_prompt_hash="hash-seen",
+        )
         capture_mock.assert_called_once()
-        assert build_mock.call_args.kwargs["user_text"].startswith("[LOCAL_ASSISTANT_CONTEXT]")
+        assert session_mock.managed_prompt_hash_seen == "hash-updated"
+        assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
 
     @pytest.mark.asyncio
     async def test_assistant_mode_marks_native_session_when_codex_thread_exists(
@@ -126,6 +140,7 @@ class TestHandleTextMessageAuth:
         session_mock.kimi_session_id = None
         session_mock.claude_session_id = None
         session_mock.claude_session_initialized = False
+        session_mock.managed_prompt_hash_seen = "hash-seen"
         session_mock._lock = threading.Lock()
 
         fake_process = MagicMock()
@@ -134,9 +149,13 @@ class TestHandleTextMessageAuth:
              patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
              patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
              patch("bot.handlers.chat.resolve_cli_executable", return_value="codex"), \
+             patch("bot.handlers.chat.read_current_managed_prompt_hash", return_value="hash-current"), \
              patch(
                  "bot.handlers.chat.compile_assistant_prompt",
-                 return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+                 return_value=AssistantPromptPayload(
+                     prompt_text="resume payload",
+                     managed_prompt_hash_seen="hash-updated",
+                 ),
              ) as compiler, \
              patch("bot.handlers.chat.record_assistant_capture"), \
              patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)), \
@@ -148,7 +167,15 @@ class TestHandleTextMessageAuth:
              ):
             await handle_text_message(mock_update, mock_context)
 
-        compiler.assert_called_once_with(ANY, mock_update.effective_user.id, mock_update.message.text, has_native_session=True)
+        compiler.assert_called_once_with(
+            ANY,
+            mock_update.effective_user.id,
+            mock_update.message.text,
+            has_native_session=True,
+            managed_prompt_hash="hash-current",
+            seen_managed_prompt_hash="hash-seen",
+        )
+        assert session_mock.managed_prompt_hash_seen == "hash-updated"
 
 
 class TestCollectCliOutput:

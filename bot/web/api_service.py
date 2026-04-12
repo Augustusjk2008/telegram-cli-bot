@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from bot.assistant_context import compile_assistant_prompt
+from bot.assistant_docs import read_current_managed_prompt_hash
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_proposals import list_proposals, set_proposal_status
 from bot.assistant_upgrade import apply_approved_upgrade
@@ -732,12 +733,18 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
     if profile.bot_mode == "assistant":
         assistant_home = bootstrap_assistant_home(profile.working_dir)
-        prompt_text = compile_assistant_prompt(
+        managed_prompt_hash = read_current_managed_prompt_hash(assistant_home)
+        compiled_prompt = compile_assistant_prompt(
             assistant_home,
             user_id,
             text,
             has_native_session=_has_native_session(session, cli_type),
+            managed_prompt_hash=managed_prompt_hash,
+            seen_managed_prompt_hash=session.managed_prompt_hash_seen,
         )
+        prompt_text = compiled_prompt.prompt_text
+        if compiled_prompt.managed_prompt_hash_seen is not None:
+            session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
 
     with session._lock:
         if session.is_processing:
@@ -1005,12 +1012,18 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
 
     if profile.bot_mode == "assistant":
         assistant_home = bootstrap_assistant_home(profile.working_dir)
-        prompt_text = compile_assistant_prompt(
+        managed_prompt_hash = read_current_managed_prompt_hash(assistant_home)
+        compiled_prompt = compile_assistant_prompt(
             assistant_home,
             user_id,
             text,
             has_native_session=_has_native_session(session, cli_type),
+            managed_prompt_hash=managed_prompt_hash,
+            seen_managed_prompt_hash=session.managed_prompt_hash_seen,
         )
+        prompt_text = compiled_prompt.prompt_text
+        if compiled_prompt.managed_prompt_hash_seen is not None:
+            session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
 
     with session._lock:
         if session.is_processing:

@@ -12,6 +12,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
+from bot.assistant_context import AssistantPromptPayload
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
@@ -1330,19 +1331,33 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
         bot_mode="assistant",
     )
     fake_process = MagicMock()
+    expected_hash = "hash-current"
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.read_current_managed_prompt_hash", return_value=expected_hash), \
          patch(
              "bot.web.api_service.compile_assistant_prompt",
-             return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+             return_value=AssistantPromptPayload(
+                 prompt_text="hello from payload",
+                 managed_prompt_hash_seen="hash-updated",
+             ),
          ) as compiler, \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
          patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0, False)):
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
-    compiler.assert_called_once_with(ANY, 1001, "hello", has_native_session=False)
-    assert build_mock.call_args.kwargs["user_text"].startswith("[LOCAL_ASSISTANT_CONTEXT]")
+    compiler.assert_called_once_with(
+        ANY,
+        1001,
+        "hello",
+        has_native_session=False,
+        managed_prompt_hash=expected_hash,
+        seen_managed_prompt_hash=None,
+    )
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+    assert session.managed_prompt_hash_seen == "hash-updated"
+    assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
 
 
 @pytest.mark.asyncio
@@ -1362,19 +1377,32 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
     )
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     session.codex_session_id = "thread-existing"
+    session.managed_prompt_hash_seen = "hash-seen"
     fake_process = MagicMock()
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.read_current_managed_prompt_hash", return_value="hash-current"), \
          patch(
              "bot.web.api_service.compile_assistant_prompt",
-             return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+             return_value=AssistantPromptPayload(
+                 prompt_text="resume payload",
+                 managed_prompt_hash_seen="hash-updated",
+             ),
          ) as compiler, \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
          patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-existing", 0, False)):
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
-    compiler.assert_called_once_with(ANY, 1001, "hello", has_native_session=True)
+    compiler.assert_called_once_with(
+        ANY,
+        1001,
+        "hello",
+        has_native_session=True,
+        managed_prompt_hash="hash-current",
+        seen_managed_prompt_hash="hash-seen",
+    )
+    assert session.managed_prompt_hash_seen == "hash-updated"
 
 
 @pytest.mark.asyncio
