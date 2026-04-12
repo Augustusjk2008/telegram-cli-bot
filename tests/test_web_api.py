@@ -1347,6 +1347,7 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
          ) as compiler, \
          patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}) as capture_mock, \
          patch("bot.web.api_service.refresh_compaction_state") as refresh_mock, \
+         patch("bot.web.api_service.list_pending_capture_ids", return_value=["cap_0", "cap_1"]) as pending_mock, \
          patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]) as surface_mock, \
          patch("bot.web.api_service.finalize_compaction", return_value=False) as finalize_mock, \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
@@ -1365,12 +1366,13 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
     assert sync_mock.call_count == 2
     capture_mock.assert_called_once()
     refresh_mock.assert_called_once_with(ANY, latest_capture={"id": "cap_1"})
+    pending_mock.assert_called_once()
     assert surface_mock.call_count == 2
     finalize_mock.assert_called_once_with(
         ANY,
         before={"a": "1"},
         after={"a": "1"},
-        consumed_capture_ids=["cap_1"],
+        consumed_capture_ids=["cap_0", "cap_1"],
     )
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     assert session.managed_prompt_hash_seen == "hash-updated"
@@ -1411,6 +1413,7 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
          ) as compiler, \
          patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
          patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.list_pending_capture_ids", return_value=["cap_1"]), \
          patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
          patch("bot.web.api_service.finalize_compaction", return_value=False), \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
@@ -1470,6 +1473,7 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
          ) as compiler, \
          patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
          patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.list_pending_capture_ids", return_value=["cap_1"]), \
          patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
          patch("bot.web.api_service.finalize_compaction", return_value=False), \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \

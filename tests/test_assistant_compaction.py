@@ -5,6 +5,7 @@ from bot.assistant_compaction import (
     finalize_compaction,
     load_compaction_state,
     refresh_compaction_state,
+    list_pending_capture_ids,
     snapshot_managed_surface,
 )
 from bot.assistant_home import bootstrap_assistant_home
@@ -115,6 +116,70 @@ def test_finalize_compaction_writes_audit_when_working_files_change(tmp_path):
     assert state["pending_capture_count"] == 0
     assert state["cursor_capture_id"] == capture["id"]
     assert state["last_compacted_at"]
+
+
+def test_list_pending_capture_ids_returns_full_cursor_range(tmp_path):
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+
+    first = record_assistant_capture(home, 1001, "user 1", "assistant 1")
+    second = record_assistant_capture(home, 1001, "user 2", "assistant 2")
+    save_state = load_compaction_state(home)
+    save_state["cursor_capture_id"] = first["id"]
+    from bot.assistant_compaction import save_compaction_state
+    save_compaction_state(home, save_state)
+
+    assert list_pending_capture_ids(home) == [second["id"]]
+
+
+def test_finalize_compaction_writes_real_consumed_capture_range_to_audit(tmp_path):
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+
+    old_capture = record_assistant_capture(home, 1001, "old", "done")
+    state = load_compaction_state(home)
+    from bot.assistant_compaction import save_compaction_state
+    save_compaction_state(
+        home,
+        {
+            **state,
+            "cursor_capture_id": old_capture["id"],
+            "last_compacted_at": old_capture["created_at"],
+        },
+    )
+
+    capture_a = record_assistant_capture(home, 1001, "user a", "assistant a")
+    capture_b = record_assistant_capture(home, 1001, "user b", "assistant b")
+    refresh_compaction_state(home, latest_capture=capture_b)
+
+    before = snapshot_managed_surface(home)
+    (home.root / "memory" / "working" / "current_goal.md").write_text(
+        "- Updated working memory\n",
+        encoding="utf-8",
+    )
+    after = snapshot_managed_surface(home)
+
+    consumed_capture_ids = list_pending_capture_ids(home)
+    changed = finalize_compaction(
+        home,
+        before=before,
+        after=after,
+        consumed_capture_ids=consumed_capture_ids,
+    )
+
+    audit_path = home.root / "audit" / "compactions.jsonl"
+    payload = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])
+    state = load_compaction_state(home)
+
+    assert changed is True
+    assert consumed_capture_ids == [capture_a["id"], capture_b["id"]]
+    assert payload["from_cursor_capture_id"] == old_capture["id"]
+    assert payload["to_cursor_capture_id"] == capture_b["id"]
+    assert payload["consumed_capture_count"] == 2
+    assert payload["consumed_capture_ids"] == [capture_a["id"], capture_b["id"]]
+    assert state["cursor_capture_id"] == capture_b["id"]
 
 
 def test_finalize_compaction_keeps_pending_when_surface_is_unchanged(tmp_path):

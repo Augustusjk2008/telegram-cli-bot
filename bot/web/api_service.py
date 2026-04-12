@@ -20,6 +20,7 @@ from typing import Any, AsyncIterator, Optional
 
 from bot.assistant_compaction import (
     finalize_compaction,
+    list_pending_capture_ids,
     refresh_compaction_state,
     snapshot_managed_surface,
 )
@@ -599,13 +600,14 @@ def _finalize_assistant_chat_turn(
 ) -> None:
     capture = record_assistant_capture(assistant_home, user_id, user_text, response)
     refresh_compaction_state(assistant_home, latest_capture=capture)
+    consumed_capture_ids = list_pending_capture_ids(assistant_home) or [capture["id"]]
     sync_managed_prompt_files(assistant_home)
     assistant_post_surface = snapshot_managed_surface(assistant_home)
     changed = finalize_compaction(
         assistant_home,
         before=assistant_pre_surface,
         after=assistant_post_surface,
-        consumed_capture_ids=[capture["id"]],
+        consumed_capture_ids=consumed_capture_ids,
     )
     if changed:
         sync_managed_prompt_files(assistant_home)

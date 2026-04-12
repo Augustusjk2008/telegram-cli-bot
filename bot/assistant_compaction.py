@@ -104,6 +104,12 @@ def _get_unseen_capture_records(home: AssistantHome, cursor_capture_id: str | No
     return records
 
 
+def list_pending_capture_ids(home: AssistantHome) -> list[str]:
+    state = load_compaction_state(home)
+    unseen_records = _get_unseen_capture_records(home, state.get("cursor_capture_id"))
+    return [record["id"] for record in unseen_records if record.get("id")]
+
+
 def _has_strong_signal(latest_capture: dict[str, Any] | None) -> bool:
     if not isinstance(latest_capture, dict):
         return False
@@ -179,11 +185,17 @@ def finalize_compaction(
     if before == after:
         return False
 
+    state = load_compaction_state(home)
     timestamp = datetime.now(UTC).isoformat()
     audit_path = home.root / "audit" / "compactions.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
+    from_cursor_capture_id = state.get("cursor_capture_id")
+    to_cursor_capture_id = consumed_capture_ids[-1] if consumed_capture_ids else from_cursor_capture_id
     event = {
         "created_at": timestamp,
+        "from_cursor_capture_id": from_cursor_capture_id,
+        "to_cursor_capture_id": to_cursor_capture_id,
+        "consumed_capture_count": len(consumed_capture_ids),
         "consumed_capture_ids": list(consumed_capture_ids),
         "before": before,
         "after": after,
@@ -191,7 +203,6 @@ def finalize_compaction(
     with audit_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-    state = load_compaction_state(home)
     save_compaction_state(
         home,
         {

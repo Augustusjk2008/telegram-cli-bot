@@ -104,6 +104,7 @@ class TestHandleTextMessageAuth:
              ) as compiler, \
              patch("bot.handlers.chat.record_assistant_capture", return_value={"id": "cap_1"}) as capture_mock, \
              patch("bot.handlers.chat.refresh_compaction_state") as refresh_mock, \
+             patch("bot.handlers.chat.list_pending_capture_ids", return_value=["cap_0", "cap_1"]) as pending_mock, \
              patch("bot.handlers.chat.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]) as surface_mock, \
              patch("bot.handlers.chat.finalize_compaction", return_value=False) as finalize_mock, \
              patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)) as build_mock, \
@@ -126,12 +127,13 @@ class TestHandleTextMessageAuth:
         assert sync_mock.call_count == 2
         capture_mock.assert_called_once()
         refresh_mock.assert_called_once_with(ANY, latest_capture={"id": "cap_1"})
+        pending_mock.assert_called_once()
         assert surface_mock.call_count == 2
         finalize_mock.assert_called_once_with(
             ANY,
             before={"a": "1"},
             after={"a": "1"},
-            consumed_capture_ids=["cap_1"],
+            consumed_capture_ids=["cap_0", "cap_1"],
         )
         assert session_mock.managed_prompt_hash_seen == "hash-updated"
         assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
@@ -178,6 +180,7 @@ class TestHandleTextMessageAuth:
              ) as compiler, \
              patch("bot.handlers.chat.record_assistant_capture", return_value={"id": "cap_1"}), \
              patch("bot.handlers.chat.refresh_compaction_state"), \
+             patch("bot.handlers.chat.list_pending_capture_ids", return_value=["cap_1"]), \
              patch("bot.handlers.chat.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
              patch("bot.handlers.chat.finalize_compaction", return_value=False), \
              patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)), \
