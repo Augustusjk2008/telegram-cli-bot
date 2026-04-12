@@ -67,8 +67,14 @@
 
 在仓库根目录执行：
 
-```powershell
-python -m pip install -r requirements.txt
+```bash
+pip install -r requirements.txt
+```
+
+如需语音转写功能，再额外安装：
+
+```bash
+pip install -r requirements-voice.txt
 ```
 
 ### 2. 从模板生成 `.env`

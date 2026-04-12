@@ -6,11 +6,6 @@ PyYAML>=6.0
 # Process management (optional, for better /exec timeout handling)
 psutil>=5.9.0
 
-# Voice recognition (optional, for voice message support)
-openai-whisper>=20230314
-pydub>=0.25.1
-audioop-lts>=0.2.2  # Required for Python 3.13+
-
 # Test dependencies (optional)
 pytest>=7.0
 pytest-asyncio>=0.21.0
