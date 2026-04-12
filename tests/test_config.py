@@ -79,8 +79,11 @@ class TestConfigConstants:
         monkeypatch.setenv("WEB_ALLOWED_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
 
         import importlib
+        import dotenv
         import bot.config as config
 
+        monkeypatch.setattr(dotenv, "dotenv_values", lambda *args, **kwargs: {})
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
         importlib.reload(config)
 
         assert config.WEB_ENABLED is True
@@ -88,6 +91,25 @@ class TestConfigConstants:
         assert config.WEB_PORT == 8765
         assert config.WEB_API_TOKEN == "secret"
         assert config.WEB_ALLOWED_ORIGINS == ["http://127.0.0.1:3000", "http://localhost:3000"]
+
+    def test_web_config_prefers_project_dotenv_for_host_and_port(self, monkeypatch):
+        monkeypatch.setenv("WEB_HOST", "127.0.0.1")
+        monkeypatch.setenv("WEB_PORT", "9999")
+
+        import importlib
+        import dotenv
+        import bot.config as config
+
+        monkeypatch.setattr(
+            dotenv,
+            "dotenv_values",
+            lambda *args, **kwargs: {"WEB_HOST": "0.0.0.0", "WEB_PORT": "8765"},
+        )
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
+        importlib.reload(config)
+
+        assert config.WEB_HOST == "0.0.0.0"
+        assert config.WEB_PORT == 8765
 
 
 class TestRestartMechanism:
