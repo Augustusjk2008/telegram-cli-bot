@@ -58,11 +58,20 @@ class TunnelService:
         self._snapshot = self._build_initial_snapshot()
 
     @staticmethod
+    def _format_http_host(host: str) -> str:
+        normalized = host.strip()
+        if normalized.startswith("[") and normalized.endswith("]"):
+            return normalized
+        if ":" in normalized:
+            return f"[{normalized}]"
+        return normalized
+
+    @staticmethod
     def _build_local_url(host: str, port: int) -> str:
         tunnel_host = host.strip() or "127.0.0.1"
-        if tunnel_host in {"0.0.0.0", "::"}:
+        if tunnel_host in {"0.0.0.0", "::", "[::]"}:
             tunnel_host = "127.0.0.1"
-        return f"http://{tunnel_host}:{port}"
+        return f"http://{TunnelService._format_http_host(tunnel_host)}:{port}"
 
     def _build_initial_snapshot(self) -> dict[str, Any]:
         if self._manual_public_url:

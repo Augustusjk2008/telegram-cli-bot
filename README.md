@@ -232,7 +232,7 @@ WEB_ENABLED=true
 
 - `TELEGRAM_BOT_TOKEN` 可以留空
 - 不会启动 Telegram
-- Cloudflare Tunnel 公网地址不会再通过 Telegram 推送，只会显示在 Web 页面并复制到本机剪贴板
+- Cloudflare Tunnel 公网地址仍会显示在 Web 页面并复制到本机剪贴板；如果同时配置了有效的主 Bot Token 和 `ALLOWED_USER_IDS`，也会尝试通过 Telegram 推送快捷隧道地址
 
 然后可以这样启动：
 

@@ -1144,6 +1144,34 @@ async def test_notify_tunnel_public_url_uses_main_profile_token_without_main_app
     assert "https://web-only.trycloudflare.com" in sent_text
 
 
+def test_build_notification_bot_falls_back_to_proxy_url_for_older_ptb(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch
+):
+    server = WebApiServer(web_manager)
+    fake_request = object()
+    calls: list[dict[str, object]] = []
+
+    def fake_httpx_request(**kwargs):
+        calls.append(dict(kwargs))
+        if "proxy" in kwargs:
+            raise TypeError("unexpected keyword argument 'proxy'")
+        return fake_request
+
+    monkeypatch.setattr("bot.web.server.get_proxy_kwargs", lambda: {"proxy_url": "http://127.0.0.1:7897"})
+
+    with patch("bot.web.server.HTTPXRequest", side_effect=fake_httpx_request) as httpx_request_cls, patch(
+        "bot.web.server.Bot", return_value=MagicMock()
+    ) as bot_cls:
+        bot = server._build_notification_bot()
+
+    assert bot is bot_cls.return_value
+    assert len(calls) == 2
+    assert calls[0]["proxy"] == "http://127.0.0.1:7897"
+    assert calls[1]["proxy_url"] == "http://127.0.0.1:7897"
+    bot_cls.assert_called_once_with(token="dummy-token", request=fake_request)
+    assert httpx_request_cls.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
@@ -1206,6 +1234,54 @@ async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_ma
     sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
     assert "startup.trycloudflare.com" in sent_text
     server._copy_text_to_clipboard.assert_called_once_with("https://startup.trycloudflare.com")
+
+
+@pytest.mark.asyncio
+async def test_web_server_start_logs_bracketed_ipv6_url(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("bot.web.server.WEB_HOST", "::1")
+    monkeypatch.setattr("bot.web.server.WEB_PORT", 8765)
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_ALLOWED_ORIGINS", [])
+
+    class FakeTunnelService:
+        def should_autostart(self):
+            return False
+
+        async def stop(self):
+            return None
+
+    class FakeRunner:
+        async def setup(self):
+            return None
+
+        async def cleanup(self):
+            return None
+
+    class FakeSite:
+        def __init__(self, runner, host, port):
+            self.runner = runner
+            self.host = host
+            self.port = port
+
+        async def start(self):
+            return None
+
+    log_lines: list[str] = []
+
+    def fake_info(message, *args):
+        log_lines.append(message % args if args else message)
+
+    monkeypatch.setattr("bot.web.server.web.AppRunner", lambda app: FakeRunner())
+    monkeypatch.setattr("bot.web.server.web.TCPSite", FakeSite)
+    monkeypatch.setattr("bot.web.server.logger.info", fake_info)
+
+    server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
+    await server.start()
+    await server.stop()
+
+    assert any("http://[::1]:8765" in line for line in log_lines)
 
 
 @pytest.mark.asyncio

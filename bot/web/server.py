@@ -413,15 +413,24 @@ class WebApiServer:
             return None
 
         proxy_kwargs = get_proxy_kwargs()
-        request = HTTPXRequest(
-            connection_pool_size=8,
-            read_timeout=60,
-            write_timeout=60,
-            connect_timeout=30,
-            pool_timeout=30,
-            **({"proxy": proxy_kwargs["proxy_url"]} if proxy_kwargs else {}),
-        )
+        proxy_url = str(proxy_kwargs.get("proxy_url") or "").strip() if proxy_kwargs else ""
+        request = self._build_notification_request(proxy_url=proxy_url)
         return Bot(token=token, request=request)
+
+    def _build_notification_request(self, proxy_url: str = "") -> HTTPXRequest:
+        request_kwargs = {
+            "connection_pool_size": 8,
+            "read_timeout": 60,
+            "write_timeout": 60,
+            "connect_timeout": 30,
+            "pool_timeout": 30,
+        }
+        if not proxy_url:
+            return HTTPXRequest(**request_kwargs)
+        try:
+            return HTTPXRequest(**request_kwargs, proxy=proxy_url)
+        except TypeError:
+            return HTTPXRequest(**request_kwargs, proxy_url=proxy_url)
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -1093,10 +1102,10 @@ class WebApiServer:
             tunnel_snapshot = await self._tunnel_service.start()
             await self._notify_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
             logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
+        local_url = TunnelService._build_local_url(WEB_HOST, WEB_PORT)
         logger.info(
-            "Web API 已启动: http://%s:%s (token=%s, allowed_origins=%s)",
-            WEB_HOST,
-            WEB_PORT,
+            "Web API 已启动: %s (token=%s, allowed_origins=%s)",
+            local_url,
             "已配置" if WEB_API_TOKEN else "未配置",
             ",".join(WEB_ALLOWED_ORIGINS),
         )
