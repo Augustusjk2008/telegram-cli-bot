@@ -182,28 +182,27 @@ class TestManagerLoadSave:
                 await manager.add_bot("assistant2", "", "codex", "codex", str(assistant_dir), "assistant")
 
     @pytest.mark.asyncio
-    async def test_add_bot_syncs_assistant_prompt_files(self, temp_dir: Path):
+    async def test_add_bot_syncs_assistant_prompt_files_from_dedicated_template(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
-        repo_root = temp_dir / "repo-root"
-        repo_root.mkdir()
-        (repo_root / "AGENTS.md").write_text("agents template", encoding="utf-8")
-        (repo_root / "CLAUDE.md").write_text("claude template", encoding="utf-8")
+        template_path = temp_dir / "managed_prompt_template.md"
+        template_path.write_text("assistant template", encoding="utf-8")
 
         assistant_dir = temp_dir / "assistant-root"
         assistant_dir.mkdir()
 
         with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
              patch.object(manager, "_start_profile", AsyncMock(return_value=None)), \
-             patch("bot.assistant_docs.resolve_host_prompt_repo_root", return_value=repo_root):
+             patch("bot.assistant_docs.resolve_assistant_managed_template_path", return_value=template_path):
             await manager.add_bot("assistant1", "", "codex", "codex", str(assistant_dir), "assistant")
 
-        assert (assistant_dir / "AGENTS.md").is_file()
-        assert (assistant_dir / "CLAUDE.md").is_file()
-        assert "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->" in (assistant_dir / "AGENTS.md").read_text(encoding="utf-8")
-        assert "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->" in (assistant_dir / "CLAUDE.md").read_text(encoding="utf-8")
+        agents_text = (assistant_dir / "AGENTS.md").read_text(encoding="utf-8")
+        claude_text = (assistant_dir / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->" in agents_text
+        assert agents_text == claude_text
+        assert agents_text.startswith("assistant template\n\n")
 
     @pytest.mark.asyncio
     async def test_add_bot_requires_explicit_workdir_for_assistant(self, temp_dir: Path):
@@ -250,7 +249,7 @@ class TestManagerLoadSave:
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert data["bots"][0]["alias"] == "team1"
 
-    def test_load_assistant_profile_syncs_prompt_files(self, temp_dir: Path):
+    def test_load_assistant_profile_syncs_prompt_files_from_dedicated_template(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         assistant_dir = temp_dir / "assistant-root"
         assistant_dir.mkdir()
@@ -273,17 +272,16 @@ class TestManagerLoadSave:
             encoding="utf-8",
         )
 
-        repo_root = temp_dir / "repo-root"
-        repo_root.mkdir()
-        (repo_root / "AGENTS.md").write_text("agents template", encoding="utf-8")
-        (repo_root / "CLAUDE.md").write_text("claude template", encoding="utf-8")
+        template_path = temp_dir / "managed_prompt_template.md"
+        template_path.write_text("assistant template", encoding="utf-8")
 
-        with patch("bot.assistant_docs.resolve_host_prompt_repo_root", return_value=repo_root):
+        with patch("bot.assistant_docs.resolve_assistant_managed_template_path", return_value=template_path):
             manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
         assert "assistant1" in manager.managed_profiles
-        assert (assistant_dir / "AGENTS.md").is_file()
-        assert (assistant_dir / "CLAUDE.md").is_file()
+        assert (assistant_dir / "AGENTS.md").read_text(encoding="utf-8") == (
+            assistant_dir / "CLAUDE.md"
+        ).read_text(encoding="utf-8")
 
 
 class TestManagerValidation:
