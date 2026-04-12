@@ -7,14 +7,25 @@ cd "$SCRIPT_DIR"
 export TELEGRAM_CLI_BRIDGE_SUPERVISOR=1
 MODE="${1:-default}"
 
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "错误: 未找到 python3 或 python，请先安装 Python 并加入 PATH" >&2
+  exit 127
+fi
+
 if [[ "$MODE" == "web" ]]; then
   export TELEGRAM_ENABLED="false"
   export WEB_ENABLED="true"
 fi
 
 while true; do
-  python -m bot
+  set +e
+  "$PYTHON_BIN" -m bot
   exit_code=$?
+  set -e
   if [[ "$exit_code" -ne 75 ]]; then
     exit "$exit_code"
   fi
