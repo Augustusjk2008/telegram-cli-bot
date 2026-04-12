@@ -4,6 +4,7 @@ import asyncio
 import ctypes
 import logging
 import os
+import socket
 import sys
 import time
 
@@ -50,6 +51,47 @@ def safe_print(text: str = ""):
         encoding = getattr(stream, "encoding", None) or "utf-8"
         sanitized = text.encode(encoding, errors="replace").decode(encoding, errors="ignore")
         stream.write(f"{sanitized}\n")
+
+
+def _get_primary_lan_ipv4() -> str | None:
+    """尽量获取当前主机首选的局域网 IPv4 地址。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("192.0.2.1", 80))
+            ip = sock.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                return ip
+    except OSError:
+        pass
+
+    try:
+        _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
+    except OSError:
+        return None
+
+    for ip in addresses:
+        if ip and not ip.startswith("127."):
+            return ip
+    return None
+
+
+def _print_web_access_urls() -> None:
+    """在控制台输出当前 Web 服务可访问地址。"""
+    host = (config.WEB_HOST or "").strip()
+    port = config.WEB_PORT
+
+    if host in {"", "0.0.0.0", "::", "[::]"}:
+        safe_print(f"   Web 本机地址: http://127.0.0.1:{port}")
+        lan_ip = _get_primary_lan_ipv4()
+        if lan_ip:
+            safe_print(f"   Web 局域网地址: http://{lan_ip}:{port}")
+        return
+
+    if host in {"localhost", "127.0.0.1", "::1", "[::1]"}:
+        safe_print(f"   Web 本机地址: http://{host}:{port}")
+        return
+
+    safe_print(f"   Web 访问地址: http://{host}:{port}")
 
 
 def disable_console_quick_edit():
@@ -121,6 +163,7 @@ async def run_all_bots():
     if web_server is not None:
         await web_server.start()
         logger.info("Web API 已附加到主进程")
+        _print_web_access_urls()
 
     try:
         await config.RESTART_EVENT.wait()
