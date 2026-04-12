@@ -68,13 +68,13 @@
 在仓库根目录执行：
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 如需语音转写功能，再额外安装：
 
 ```bash
-pip install -r requirements-voice.txt
+python -m pip install -r requirements-voice.txt
 ```
 
 ### 2. 从模板生成 `.env`
@@ -294,10 +294,20 @@ WEB_API_TOKEN=change-this-password
 
 项目支持 Telegram 语音消息转文字，但这是可选功能。
 
-如果你要启用它，还需要额外准备：
+如果你要启用它，Python 依赖请额外安装：
+
+```bash
+python -m pip install -r requirements-voice.txt
+```
+
+这个文件包含语音转写所需的可选 Python 依赖：
 
 - `openai-whisper`
 - `pydub`
+- `audioop-lts`（仅在 Python 3.13 及以上按条件安装）
+
+除此之外，还需要单独准备系统级依赖：
+
 - FFmpeg
 
 相关配置项：
