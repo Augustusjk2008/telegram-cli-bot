@@ -80,19 +80,31 @@ def _detect_lan_ipv4():
     return None
 
 
+def _format_http_host(host: str) -> str:
+    normalized = (host or "").strip()
+    if normalized.startswith("[") and normalized.endswith("]"):
+        return normalized
+    if ":" in normalized:
+        return f"[{normalized}]"
+    return normalized
+
+
 def _get_web_access_lines():
     """生成启动成功后展示给用户的 Web 访问地址。"""
     host = str(getattr(config, "WEB_HOST", "") or "").strip() or "127.0.0.1"
     port = int(getattr(config, "WEB_PORT", 8765))
 
-    if host == "0.0.0.0":
+    if host in {"0.0.0.0", "::", "[::]"}:
         lines = [f"   本机: http://127.0.0.1:{port}"]
         lan_ip = _detect_lan_ipv4()
         if lan_ip:
             lines.append(f"   局域网 IP: http://{lan_ip}:{port}")
         return lines
 
-    return [f"   http://{host}:{port}"]
+    if host in {"::1", "[::1]"}:
+        return [f"   http://[::1]:{port}"]
+
+    return [f"   http://{_format_http_host(host)}:{port}"]
 
 
 def _print_web_access_lines():
