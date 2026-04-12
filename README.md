@@ -362,7 +362,9 @@ WEB_TUNNEL_CLOUDFLARED_PATH=/usr/bin/cloudflared
 
 ### 多 Bot
 
-仓库支持一个主 Bot 加多个托管子 Bot，配置文件是根目录的 `managed_bots.json`。
+仓库支持一个主 Bot 加多个托管子 Bot。
+
+`managed_bots.json` 是本地运行时配置文件，默认放在仓库根目录，但不再纳入 Git；首次添加/修改托管 Bot 时会自动写入本地文件。
 
 如果你只是自己单人使用，可以先忽略这部分，先把主 Bot 跑起来。
 

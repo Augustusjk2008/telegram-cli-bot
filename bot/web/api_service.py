@@ -540,6 +540,17 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     return env
 
 
+def _has_native_session(session: UserSession, cli_type: str) -> bool:
+    with session._lock:
+        if cli_type == "codex":
+            return bool(session.codex_session_id)
+        if cli_type == "claude":
+            return bool(session.claude_session_initialized)
+        if cli_type == "kimi":
+            return bool(session.kimi_session_id)
+    return False
+
+
 def _chunk_text(text: str, size: int = 160) -> list[str]:
     cleaned = text or ""
     if not cleaned:
@@ -714,7 +725,12 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
     if profile.bot_mode == "assistant":
         assistant_home = bootstrap_assistant_home(profile.working_dir)
-        prompt_text = compile_assistant_prompt(assistant_home, user_id, text)
+        prompt_text = compile_assistant_prompt(
+            assistant_home,
+            user_id,
+            text,
+            has_native_session=_has_native_session(session, cli_type),
+        )
 
     with session._lock:
         if session.is_processing:
@@ -982,7 +998,12 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
 
     if profile.bot_mode == "assistant":
         assistant_home = bootstrap_assistant_home(profile.working_dir)
-        prompt_text = compile_assistant_prompt(assistant_home, user_id, text)
+        prompt_text = compile_assistant_prompt(
+            assistant_home,
+            user_id,
+            text,
+            has_native_session=_has_native_session(session, cli_type),
+        )
 
     with session._lock:
         if session.is_processing:

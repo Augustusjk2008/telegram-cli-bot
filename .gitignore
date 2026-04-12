@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .session_store.json
 .web_admin_settings.json
+managed_bots.json
 .env
 *.log
 docs/superpowers/

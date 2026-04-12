@@ -5,7 +5,7 @@
 """
 
 import threading
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -102,9 +102,53 @@ class TestHandleTextMessageAuth:
              ):
             await handle_text_message(mock_update, mock_context)
 
-        compiler.assert_called_once()
+        compiler.assert_called_once_with(ANY, mock_update.effective_user.id, mock_update.message.text, has_native_session=False)
         capture_mock.assert_called_once()
         assert build_mock.call_args.kwargs["user_text"].startswith("[LOCAL_ASSISTANT_CONTEXT]")
+
+    @pytest.mark.asyncio
+    async def test_assistant_mode_marks_native_session_when_codex_thread_exists(
+        self, mock_update, mock_context, temp_dir
+    ):
+        from bot.handlers.chat import handle_text_message
+
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "assistant"
+        profile_mock.cli_type = "codex"
+        profile_mock.cli_path = "codex"
+        profile_mock.working_dir = str(temp_dir)
+        profile_mock.cli_params = MagicMock()
+
+        session_mock = MagicMock()
+        session_mock.working_dir = str(temp_dir)
+        session_mock.is_processing = False
+        session_mock.codex_session_id = "thread-existing"
+        session_mock.kimi_session_id = None
+        session_mock.claude_session_id = None
+        session_mock.claude_session_initialized = False
+        session_mock._lock = threading.Lock()
+
+        fake_process = MagicMock()
+
+        with patch("bot.handlers.chat.check_auth", return_value=True), \
+             patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
+             patch("bot.handlers.chat.resolve_cli_executable", return_value="codex"), \
+             patch(
+                 "bot.handlers.chat.compile_assistant_prompt",
+                 return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+             ) as compiler, \
+             patch("bot.handlers.chat.record_assistant_capture"), \
+             patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)), \
+             patch("bot.handlers.chat.subprocess.Popen", return_value=fake_process), \
+             patch(
+                 "bot.handlers.chat.stream_codex_json_output",
+                 new_callable=AsyncMock,
+                 return_value=("ok", "thread-existing", 0, False),
+             ):
+            await handle_text_message(mock_update, mock_context)
+
+        compiler.assert_called_once_with(ANY, mock_update.effective_user.id, mock_update.message.text, has_native_session=True)
 
 
 class TestCollectCliOutput:

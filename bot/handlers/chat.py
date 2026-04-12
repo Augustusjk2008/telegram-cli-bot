@@ -633,7 +633,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         full_prompt = user_text
         if profile.bot_mode == "assistant":
             assistant_home = bootstrap_assistant_home(profile.working_dir)
-            full_prompt = compile_assistant_prompt(assistant_home, user_id, user_text)
+            full_prompt = compile_assistant_prompt(
+                assistant_home,
+                user_id,
+                user_text,
+                has_native_session=resume_session,
+            )
 
         try:
             cmd, use_stdin = build_cli_command(

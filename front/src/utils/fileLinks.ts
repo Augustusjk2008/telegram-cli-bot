@@ -14,7 +14,8 @@ function cleanHref(href: string) {
 }
 
 function normalizePath(path: string) {
-  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
+  const normalized = path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
+  return normalized.replace(/^\/([A-Za-z]:\/)/, "$1");
 }
 
 export function isExternalHref(href: string) {

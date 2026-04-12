@@ -6,7 +6,7 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -1263,8 +1263,40 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
          patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0, False)):
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
-    compiler.assert_called_once()
+    compiler.assert_called_once_with(ANY, 1001, "hello", has_native_session=False)
     assert build_mock.call_args.kwargs["user_text"].startswith("[LOCAL_ASSISTANT_CONTEXT]")
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exists(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+    session.codex_session_id = "thread-existing"
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value="[LOCAL_ASSISTANT_CONTEXT]\n[USER_REQUEST]\nhello",
+         ) as compiler, \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-existing", 0, False)):
+        await run_cli_chat(web_manager, "assistant1", 1001, "hello")
+
+    compiler.assert_called_once_with(ANY, 1001, "hello", has_native_session=True)
 
 
 @pytest.mark.asyncio
