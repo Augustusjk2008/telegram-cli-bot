@@ -1097,6 +1097,7 @@ async def test_notify_tunnel_public_url_still_copies_when_telegram_send_fails(we
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_uses_main_profile_token_without_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+    monkeypatch.setattr("bot.web.server.get_proxy_kwargs", lambda: {})
 
     server = WebApiServer(web_manager)
     server._copy_text_to_clipboard = MagicMock(return_value=True)
@@ -1104,26 +1105,43 @@ async def test_notify_tunnel_public_url_uses_main_profile_token_without_main_app
     fake_notification_bot.initialize = AsyncMock()
     fake_notification_bot.send_message = AsyncMock()
     fake_notification_bot.shutdown = AsyncMock()
-    server._build_notification_bot = MagicMock(return_value=fake_notification_bot)
+    fake_request = object()
 
-    result = await server._notify_tunnel_public_url(
-        {
-            "mode": "cloudflare_quick",
-            "status": "running",
-            "source": "quick_tunnel",
-            "public_url": "https://web-only.trycloudflare.com",
-            "local_url": "http://127.0.0.1:8765",
-            "last_error": "",
-            "pid": 1234,
-        },
-        reason="web_server_start",
-    )
+    with patch("bot.web.server.HTTPXRequest", return_value=fake_request) as httpx_request_cls, patch(
+        "bot.web.server.Bot", return_value=fake_notification_bot
+    ) as bot_cls:
+        result = await server._notify_tunnel_public_url(
+            {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://web-only.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            },
+            reason="web_server_start",
+        )
 
     assert result is True
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only.trycloudflare.com")
+    httpx_request_cls.assert_called_once_with(
+        connection_pool_size=8,
+        read_timeout=60,
+        write_timeout=60,
+        connect_timeout=30,
+        pool_timeout=30,
+    )
+    bot_cls.assert_called_once_with(token="dummy-token", request=fake_request)
     fake_notification_bot.initialize.assert_awaited_once()
-    fake_notification_bot.send_message.assert_awaited_once()
+    fake_notification_bot.send_message.assert_awaited_once_with(
+        chat_id=1001,
+        text=ANY,
+        parse_mode="HTML",
+    )
     fake_notification_bot.shutdown.assert_awaited_once()
+    sent_text = fake_notification_bot.send_message.await_args.kwargs["text"]
+    assert "https://web-only.trycloudflare.com" in sent_text
 
 
 @pytest.mark.asyncio
@@ -1193,6 +1211,7 @@ async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_ma
 @pytest.mark.asyncio
 async def test_web_server_start_in_web_only_mode_pushes_tunnel_to_telegram_via_profile_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
+    monkeypatch.setattr("bot.web.server.get_proxy_kwargs", lambda: {})
 
     class FakeTunnelService:
         def should_autostart(self):
@@ -1245,15 +1264,32 @@ async def test_web_server_start_in_web_only_mode_pushes_tunnel_to_telegram_via_p
     fake_notification_bot.initialize = AsyncMock()
     fake_notification_bot.send_message = AsyncMock()
     fake_notification_bot.shutdown = AsyncMock()
-    server._build_notification_bot = MagicMock(return_value=fake_notification_bot)
+    fake_request = object()
 
-    await server.start()
-    await server.stop()
+    with patch("bot.web.server.HTTPXRequest", return_value=fake_request) as httpx_request_cls, patch(
+        "bot.web.server.Bot", return_value=fake_notification_bot
+    ) as bot_cls:
+        await server.start()
+        await server.stop()
 
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only-start.trycloudflare.com")
+    httpx_request_cls.assert_called_once_with(
+        connection_pool_size=8,
+        read_timeout=60,
+        write_timeout=60,
+        connect_timeout=30,
+        pool_timeout=30,
+    )
+    bot_cls.assert_called_once_with(token="dummy-token", request=fake_request)
     fake_notification_bot.initialize.assert_awaited_once()
-    fake_notification_bot.send_message.assert_awaited_once()
+    fake_notification_bot.send_message.assert_awaited_once_with(
+        chat_id=1001,
+        text=ANY,
+        parse_mode="HTML",
+    )
     fake_notification_bot.shutdown.assert_awaited_once()
+    sent_text = fake_notification_bot.send_message.await_args.kwargs["text"]
+    assert "https://web-only-start.trycloudflare.com" in sent_text
 
 
 @pytest.mark.asyncio
