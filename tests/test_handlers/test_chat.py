@@ -9,6 +9,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from bot.assistant_context import AssistantPromptPayload
+from bot.assistant_docs import ManagedPromptSyncResult
 
 
 class TestHandleTextMessageAuth:
@@ -90,7 +91,10 @@ class TestHandleTextMessageAuth:
              patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
              patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
              patch("bot.handlers.chat.resolve_cli_executable", return_value="codex"), \
-             patch("bot.handlers.chat.read_current_managed_prompt_hash", return_value="hash-current"), \
+             patch(
+                 "bot.handlers.chat.sync_managed_prompt_files",
+                 return_value=ManagedPromptSyncResult(False, False, "hash-current"),
+             ) as sync_mock, \
              patch(
                  "bot.handlers.chat.compile_assistant_prompt",
                  return_value=AssistantPromptPayload(
@@ -98,7 +102,10 @@ class TestHandleTextMessageAuth:
                      managed_prompt_hash_seen="hash-updated",
                  ),
              ) as compiler, \
-             patch("bot.handlers.chat.record_assistant_capture") as capture_mock, \
+             patch("bot.handlers.chat.record_assistant_capture", return_value={"id": "cap_1"}) as capture_mock, \
+             patch("bot.handlers.chat.refresh_compaction_state") as refresh_mock, \
+             patch("bot.handlers.chat.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]) as surface_mock, \
+             patch("bot.handlers.chat.finalize_compaction", return_value=False) as finalize_mock, \
              patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)) as build_mock, \
              patch("bot.handlers.chat.subprocess.Popen", return_value=fake_process), \
              patch(
@@ -116,7 +123,16 @@ class TestHandleTextMessageAuth:
             managed_prompt_hash="hash-current",
             seen_managed_prompt_hash="hash-seen",
         )
+        assert sync_mock.call_count == 2
         capture_mock.assert_called_once()
+        refresh_mock.assert_called_once_with(ANY, latest_capture={"id": "cap_1"})
+        assert surface_mock.call_count == 2
+        finalize_mock.assert_called_once_with(
+            ANY,
+            before={"a": "1"},
+            after={"a": "1"},
+            consumed_capture_ids=["cap_1"],
+        )
         assert session_mock.managed_prompt_hash_seen == "hash-updated"
         assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
 
@@ -149,7 +165,10 @@ class TestHandleTextMessageAuth:
              patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
              patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
              patch("bot.handlers.chat.resolve_cli_executable", return_value="codex"), \
-             patch("bot.handlers.chat.read_current_managed_prompt_hash", return_value="hash-current"), \
+             patch(
+                 "bot.handlers.chat.sync_managed_prompt_files",
+                 return_value=ManagedPromptSyncResult(True, True, "hash-current"),
+             ) as sync_mock, \
              patch(
                  "bot.handlers.chat.compile_assistant_prompt",
                  return_value=AssistantPromptPayload(
@@ -157,7 +176,10 @@ class TestHandleTextMessageAuth:
                      managed_prompt_hash_seen="hash-updated",
                  ),
              ) as compiler, \
-             patch("bot.handlers.chat.record_assistant_capture"), \
+             patch("bot.handlers.chat.record_assistant_capture", return_value={"id": "cap_1"}), \
+             patch("bot.handlers.chat.refresh_compaction_state"), \
+             patch("bot.handlers.chat.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
+             patch("bot.handlers.chat.finalize_compaction", return_value=False), \
              patch("bot.handlers.chat.build_cli_command", return_value=(["codex"], False)), \
              patch("bot.handlers.chat.subprocess.Popen", return_value=fake_process), \
              patch(
@@ -175,6 +197,7 @@ class TestHandleTextMessageAuth:
             managed_prompt_hash="hash-current",
             seen_managed_prompt_hash="hash-seen",
         )
+        assert sync_mock.call_count == 2
         assert session_mock.managed_prompt_hash_seen == "hash-updated"
 
 

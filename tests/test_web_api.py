@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
 from bot.assistant_context import AssistantPromptPayload
+from bot.assistant_docs import ManagedPromptSyncResult
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
@@ -1331,10 +1332,12 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
         bot_mode="assistant",
     )
     fake_process = MagicMock()
-    expected_hash = "hash-current"
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
-         patch("bot.web.api_service.read_current_managed_prompt_hash", return_value=expected_hash), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(False, False, "hash-current"),
+         ) as sync_mock, \
          patch(
              "bot.web.api_service.compile_assistant_prompt",
              return_value=AssistantPromptPayload(
@@ -1342,6 +1345,10 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
                  managed_prompt_hash_seen="hash-updated",
              ),
          ) as compiler, \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}) as capture_mock, \
+         patch("bot.web.api_service.refresh_compaction_state") as refresh_mock, \
+         patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]) as surface_mock, \
+         patch("bot.web.api_service.finalize_compaction", return_value=False) as finalize_mock, \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
          patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0, False)):
@@ -1352,8 +1359,18 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
         1001,
         "hello",
         has_native_session=False,
-        managed_prompt_hash=expected_hash,
+        managed_prompt_hash="hash-current",
         seen_managed_prompt_hash=None,
+    )
+    assert sync_mock.call_count == 2
+    capture_mock.assert_called_once()
+    refresh_mock.assert_called_once_with(ANY, latest_capture={"id": "cap_1"})
+    assert surface_mock.call_count == 2
+    finalize_mock.assert_called_once_with(
+        ANY,
+        before={"a": "1"},
+        after={"a": "1"},
+        consumed_capture_ids=["cap_1"],
     )
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     assert session.managed_prompt_hash_seen == "hash-updated"
@@ -1381,7 +1398,10 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
     fake_process = MagicMock()
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
-         patch("bot.web.api_service.read_current_managed_prompt_hash", return_value="hash-current"), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(True, True, "hash-current"),
+         ) as sync_mock, \
          patch(
              "bot.web.api_service.compile_assistant_prompt",
              return_value=AssistantPromptPayload(
@@ -1389,6 +1409,10 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
                  managed_prompt_hash_seen="hash-updated",
              ),
          ) as compiler, \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
+         patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
+         patch("bot.web.api_service.finalize_compaction", return_value=False), \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
          patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-existing", 0, False)):
@@ -1402,7 +1426,68 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
         managed_prompt_hash="hash-current",
         seen_managed_prompt_hash="hash-seen",
     )
+    assert sync_mock.call_count == 2
     assert session.managed_prompt_hash_seen == "hash-updated"
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manager: MultiBotManager, temp_dir: Path):
+    workdir = temp_dir / "assistant-root-stream"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+    session.codex_session_id = "thread-existing"
+    session.managed_prompt_hash_seen = "hash-old"
+
+    fake_stdout = MagicMock()
+    fake_stdout.readline.return_value = ""
+    fake_stdout.read.return_value = ""
+
+    fake_process = MagicMock()
+    fake_process.stdout = fake_stdout
+    fake_process.poll.return_value = 0
+    fake_process.wait.return_value = 0
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(True, True, "hash-new"),
+         ) as sync_mock, \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value=AssistantPromptPayload(
+                 prompt_text="AGENTS.md 和 CLAUDE.md 已更新，请重新读取。\n\n继续。",
+                 managed_prompt_hash_seen="hash-new",
+             ),
+         ) as compiler, \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
+         patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
+         patch("bot.web.api_service.finalize_compaction", return_value=False), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "assistant1", 1001, "继续。")]
+
+    compiler.assert_called_once_with(
+        ANY,
+        1001,
+        "继续。",
+        has_native_session=True,
+        managed_prompt_hash="hash-new",
+        seen_managed_prompt_hash="hash-old",
+    )
+    assert sync_mock.call_count == 2
+    assert build_mock.call_args.kwargs["user_text"].startswith("AGENTS.md 和 CLAUDE.md 已更新")
+    assert any(event["type"] == "done" for event in events)
+    assert session.managed_prompt_hash_seen == "hash-new"
 
 
 @pytest.mark.asyncio

@@ -18,8 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from bot.assistant_compaction import (
+    finalize_compaction,
+    refresh_compaction_state,
+    snapshot_managed_surface,
+)
 from bot.assistant_context import compile_assistant_prompt
-from bot.assistant_docs import read_current_managed_prompt_hash
+from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_proposals import list_proposals, set_proposal_status
 from bot.assistant_upgrade import apply_approved_upgrade
@@ -559,6 +564,53 @@ def _has_native_session(session: UserSession, cli_type: str) -> bool:
     return False
 
 
+def _prepare_assistant_prompt(
+    profile: BotProfile,
+    session: UserSession,
+    *,
+    user_id: int,
+    user_text: str,
+    cli_type: str,
+) -> tuple[Any, dict[str, str], str]:
+    assistant_home = bootstrap_assistant_home(profile.working_dir)
+    assistant_pre_surface = snapshot_managed_surface(assistant_home)
+    sync_result = sync_managed_prompt_files(assistant_home)
+    compiled_prompt = compile_assistant_prompt(
+        assistant_home,
+        user_id,
+        user_text,
+        has_native_session=_has_native_session(session, cli_type),
+        managed_prompt_hash=sync_result.managed_prompt_hash,
+        seen_managed_prompt_hash=session.managed_prompt_hash_seen,
+    )
+    if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
+        session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
+        session.persist()
+    return assistant_home, assistant_pre_surface, compiled_prompt.prompt_text
+
+
+def _finalize_assistant_chat_turn(
+    assistant_home,
+    *,
+    user_id: int,
+    user_text: str,
+    response: str,
+    assistant_pre_surface: dict[str, str],
+) -> None:
+    capture = record_assistant_capture(assistant_home, user_id, user_text, response)
+    refresh_compaction_state(assistant_home, latest_capture=capture)
+    sync_managed_prompt_files(assistant_home)
+    assistant_post_surface = snapshot_managed_surface(assistant_home)
+    changed = finalize_compaction(
+        assistant_home,
+        before=assistant_pre_surface,
+        after=assistant_post_surface,
+        consumed_capture_ids=[capture["id"]],
+    )
+    if changed:
+        sync_managed_prompt_files(assistant_home)
+
+
 def _chunk_text(text: str, size: int = 160) -> list[str]:
     cleaned = text or ""
     if not cleaned:
@@ -724,6 +776,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         text = "/" + text[2:]
     prompt_text = text
     assistant_home = None
+    assistant_pre_surface: dict[str, str] = {}
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -732,19 +785,13 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
-        assistant_home = bootstrap_assistant_home(profile.working_dir)
-        managed_prompt_hash = read_current_managed_prompt_hash(assistant_home)
-        compiled_prompt = compile_assistant_prompt(
-            assistant_home,
-            user_id,
-            text,
-            has_native_session=_has_native_session(session, cli_type),
-            managed_prompt_hash=managed_prompt_hash,
-            seen_managed_prompt_hash=session.managed_prompt_hash_seen,
+        assistant_home, assistant_pre_surface, prompt_text = _prepare_assistant_prompt(
+            profile,
+            session,
+            user_id=user_id,
+            user_text=text,
+            cli_type=cli_type,
         )
-        prompt_text = compiled_prompt.prompt_text
-        if compiled_prompt.managed_prompt_hash_seen is not None:
-            session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
 
     with session._lock:
         if session.is_processing:
@@ -968,9 +1015,15 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
             if assistant_home is not None:
                 try:
-                    record_assistant_capture(assistant_home, user_id, text, response)
+                    _finalize_assistant_chat_turn(
+                        assistant_home,
+                        user_id=user_id,
+                        user_text=text,
+                        response=response,
+                        assistant_pre_surface=assistant_pre_surface,
+                    )
                 except Exception as exc:
-                    logger.warning("记录 assistant capture 失败 user=%s error=%s", user_id, exc)
+                    logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
             session.clear_running_reply()
@@ -1003,6 +1056,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         text = "/" + text[2:]
     prompt_text = text
     assistant_home = None
+    assistant_pre_surface: dict[str, str] = {}
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -1011,19 +1065,13 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
-        assistant_home = bootstrap_assistant_home(profile.working_dir)
-        managed_prompt_hash = read_current_managed_prompt_hash(assistant_home)
-        compiled_prompt = compile_assistant_prompt(
-            assistant_home,
-            user_id,
-            text,
-            has_native_session=_has_native_session(session, cli_type),
-            managed_prompt_hash=managed_prompt_hash,
-            seen_managed_prompt_hash=session.managed_prompt_hash_seen,
+        assistant_home, assistant_pre_surface, prompt_text = _prepare_assistant_prompt(
+            profile,
+            session,
+            user_id=user_id,
+            user_text=text,
+            cli_type=cli_type,
         )
-        prompt_text = compiled_prompt.prompt_text
-        if compiled_prompt.managed_prompt_hash_seen is not None:
-            session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
 
     with session._lock:
         if session.is_processing:
@@ -1148,9 +1196,15 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
             session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
             if assistant_home is not None:
                 try:
-                    record_assistant_capture(assistant_home, user_id, text, response)
+                    _finalize_assistant_chat_turn(
+                        assistant_home,
+                        user_id=user_id,
+                        user_text=text,
+                        response=response,
+                        assistant_pre_surface=assistant_pre_surface,
+                    )
                 except Exception as exc:
-                    logger.warning("记录 assistant capture 失败 user=%s error=%s", user_id, exc)
+                    logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
             session.clear_running_reply()
