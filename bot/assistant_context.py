@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+import yaml
 
 from bot.assistant_home import AssistantHome
 from bot.assistant_compaction import build_compaction_memory_block
@@ -32,6 +33,22 @@ def _extract_status_and_content(text: str) -> tuple[str, str]:
             return status, content
     status = "approved" if "status: approved" in text else "proposed"
     return status, text
+
+
+def _extract_frontmatter_payload(text: str) -> dict:
+    if not text.startswith("---"):
+        return {}
+
+    parts = text.split("---", 2)
+    if len(parts) != 3:
+        return {}
+
+    try:
+        payload = yaml.safe_load(parts[1]) or {}
+    except yaml.YAMLError:
+        return {}
+
+    return payload if isinstance(payload, dict) else {}
 
 
 def _normalize_text(text: str, max_chars: int) -> str:
@@ -82,6 +99,26 @@ def _render_section(name: str, items: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _list_skill_description_lines(home: AssistantHome) -> list[str]:
+    items: list[str] = []
+    skills_root = home.root / "memory" / "skills"
+    for path in sorted(skills_root.rglob("SKILL.md")):
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        payload = _extract_frontmatter_payload(raw_text)
+        description = " ".join(str(payload.get("description") or "").split())
+        if not description:
+            continue
+
+        name = str(payload.get("name") or "").strip() or path.parent.name
+        items.append(f"{name}: {description}")
+
+    return items
+
+
 def build_managed_memory_prompt(home: AssistantHome) -> str:
     sections: list[str] = []
 
@@ -115,6 +152,15 @@ def build_managed_memory_prompt(home: AssistantHome) -> str:
     )
     if recent_summary:
         sections.append(_render_section("recent_summary", recent_summary))
+
+    skill_descriptions = _list_skill_description_lines(home)
+    if skill_descriptions:
+        sections.append(
+            _render_section(
+                "assistant_skills",
+                ["source_dir: .assistant/memory/skills", *skill_descriptions],
+            )
+        )
 
     return "\n\n".join(section for section in sections if section)
 

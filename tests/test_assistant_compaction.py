@@ -77,6 +77,11 @@ def test_build_compaction_memory_block_includes_quiet_maintenance_and_proposals_
     block = build_compaction_memory_block(home)
 
     assert "后台维护" in block
+    assert "current_goal.md" in block
+    assert "open_loops.md" in block
+    assert "user_prefs.md" in block
+    assert "recent_summary.md" in block
+    assert "不要创建任意新的 working 记忆文件" in block
     assert "不要在回复中主动提及" in block
     assert ".assistant/proposals" in block
 

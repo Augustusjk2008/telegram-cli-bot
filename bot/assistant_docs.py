@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 
-from bot.assistant_context import build_managed_memory_tail
+from bot.assistant_context import build_managed_memory_prompt, build_managed_memory_tail
 from bot.assistant_home import AssistantHome
 
 BEGIN_HOST_MANAGED_MEMORY_PROMPT = "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->"
@@ -28,6 +28,20 @@ def _load_template(path: Path) -> str:
 
 def _build_memory_block(home: AssistantHome) -> str:
     body = build_managed_memory_tail(home).rstrip("\n")
+    if body:
+        return (
+            f"{BEGIN_HOST_MANAGED_MEMORY_PROMPT}\n"
+            f"{body}\n"
+            f"{END_HOST_MANAGED_MEMORY_PROMPT}"
+        )
+    return (
+        f"{BEGIN_HOST_MANAGED_MEMORY_PROMPT}\n"
+        f"{END_HOST_MANAGED_MEMORY_PROMPT}"
+    )
+
+
+def _build_hash_memory_block(home: AssistantHome) -> str:
+    body = build_managed_memory_prompt(home).rstrip("\n")
     if body:
         return (
             f"{BEGIN_HOST_MANAGED_MEMORY_PROMPT}\n"
@@ -78,10 +92,13 @@ def sync_managed_prompt_files(
         if template_path is not None
         else resolve_assistant_managed_template_path()
     )
+    template_text = _load_template(resolved_template_path)
     memory_block = _build_memory_block(home)
-    managed_text = _compose_managed_prompt(_load_template(resolved_template_path), memory_block)
+    managed_text = _compose_managed_prompt(template_text, memory_block)
+    hash_memory_block = _build_hash_memory_block(home)
+    managed_hash_text = _compose_managed_prompt(template_text, hash_memory_block)
 
-    managed_prompt_hash = compute_managed_prompt_hash(managed_text, managed_text)
+    managed_prompt_hash = compute_managed_prompt_hash(managed_hash_text, managed_hash_text)
 
     return ManagedPromptSyncResult(
         agents_changed=_write_if_changed(home.agents_path, managed_text),
