@@ -122,3 +122,8 @@
 - 不根据 token 是否为空自动改写 `TELEGRAM_ENABLED`
 - 不改多 Bot 的持久化格式
 - 不改变已有 Telegram 正常模式下的启动与告警行为
+
+## 后续演进说明
+
+- 即便在纯 Web 模式下，只要主 profile 配置了 Telegram token 且 `ALLOWED_USER_IDS` 可用，Quick Tunnel 仍可能通过临时 bot 推送公网地址。
+- 若主 profile token 为空，则继续保持“不触碰 Telegram”的边界，Quick Tunnel 只做本地剪贴板与 Web 页面展示。

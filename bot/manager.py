@@ -110,6 +110,30 @@ class MultiBotManager:
     def _profile_uses_telegram(profile: BotProfile) -> bool:
         return bool((profile.token or "").strip())
 
+    @staticmethod
+    def _apply_builder_proxy(builder, proxy_url: str):
+        if not proxy_url:
+            return builder
+        proxy_method = getattr(builder, "proxy", None)
+        if callable(proxy_method):
+            try:
+                return proxy_method(proxy_url)
+            except TypeError:
+                pass
+        proxy_url_method = getattr(builder, "proxy_url", None)
+        if callable(proxy_url_method):
+            return proxy_url_method(proxy_url)
+        return builder
+
+    @staticmethod
+    def _build_httpx_request(proxy_url: str = "", **kwargs) -> HTTPXRequest:
+        if not proxy_url:
+            return HTTPXRequest(**kwargs)
+        try:
+            return HTTPXRequest(**kwargs, proxy=proxy_url)
+        except TypeError:
+            return HTTPXRequest(**kwargs, proxy_url=proxy_url)
+
     def _enqueue_manager_alert(self, record: logging.LogRecord) -> None:
         if not self._manager_alerts_enabled or not ALLOWED_USER_IDS:
             return
@@ -602,27 +626,28 @@ class MultiBotManager:
         builder = Application.builder().token(profile.token)
         # 应用代理配置
         proxy_kwargs = get_proxy_kwargs()
-        if proxy_kwargs:
-            builder = builder.proxy_url(proxy_kwargs["proxy_url"])
+        proxy_url = str(proxy_kwargs.get("proxy_url") or "").strip() if proxy_kwargs else ""
+        if proxy_url:
+            builder = self._apply_builder_proxy(builder, proxy_url)
         # 增加连接池大小和超时时间以适应多bot并发请求
-        request = HTTPXRequest(
+        request = self._build_httpx_request(
+            proxy_url=proxy_url,
             connection_pool_size=32,
             read_timeout=60,
             write_timeout=60,
             connect_timeout=30,
             pool_timeout=30,
-            **({"proxy": proxy_kwargs["proxy_url"]} if proxy_kwargs else {}),
         )
         app = (
             builder
             .request(request)
-            .get_updates_request(HTTPXRequest(
+            .get_updates_request(self._build_httpx_request(
+                proxy_url=proxy_url,
                 connection_pool_size=8,
                 read_timeout=60,
                 write_timeout=60,
                 connect_timeout=30,
                 pool_timeout=30,
-                **({"proxy": proxy_kwargs["proxy_url"]} if proxy_kwargs else {}),
             ))
             .build()
         )

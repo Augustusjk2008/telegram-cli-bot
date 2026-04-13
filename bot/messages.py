@@ -195,7 +195,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "assistant_proposals_failed": "❌ assistant proposal 操作失败: {error}"
     },
     "voice": {
-        "disabled": "❌ 语音识别功能未启用\n\n请在 .env 中设置:\nWHISPER_ENABLED=true\n\n并安装依赖:\npip install openai-whisper pydub",
+        "disabled": "❌ 语音识别功能未启用\n\n请在 .env 中设置:\nWHISPER_ENABLED=true\n\n并安装依赖:\npython -m pip install -r requirements-voice.txt",
         "too_long": "❌ 语音时长超过限制（最大 {max_duration} 秒）",
         "downloading": "🎤 正在接收语音消息（{duration}秒）...",
         "converting": "🔄 正在转换音频格式...",
