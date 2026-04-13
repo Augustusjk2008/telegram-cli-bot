@@ -109,30 +109,46 @@ export function readStoredChatBodyFontFamily(): ChatBodyFontFamilyName {
   if (typeof window === "undefined") {
     return DEFAULT_CHAT_BODY_FONT_FAMILY;
   }
-  const raw = window.localStorage.getItem(CHAT_BODY_FONT_FAMILY_STORAGE_KEY)?.trim() || "";
-  return isChatBodyFontFamilyName(raw) ? raw : DEFAULT_CHAT_BODY_FONT_FAMILY;
+  try {
+    const raw = window.localStorage.getItem(CHAT_BODY_FONT_FAMILY_STORAGE_KEY)?.trim() || "";
+    return isChatBodyFontFamilyName(raw) ? raw : DEFAULT_CHAT_BODY_FONT_FAMILY;
+  } catch {
+    return DEFAULT_CHAT_BODY_FONT_FAMILY;
+  }
 }
 
 export function persistChatBodyFontFamily(fontFamily: ChatBodyFontFamilyName) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(CHAT_BODY_FONT_FAMILY_STORAGE_KEY, fontFamily);
+  try {
+    window.localStorage.setItem(CHAT_BODY_FONT_FAMILY_STORAGE_KEY, fontFamily);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }
 
 export function readStoredChatBodyFontSize(): ChatBodyFontSizeName {
   if (typeof window === "undefined") {
     return DEFAULT_CHAT_BODY_FONT_SIZE;
   }
-  const raw = window.localStorage.getItem(CHAT_BODY_FONT_SIZE_STORAGE_KEY)?.trim() || "";
-  return isChatBodyFontSizeName(raw) ? raw : DEFAULT_CHAT_BODY_FONT_SIZE;
+  try {
+    const raw = window.localStorage.getItem(CHAT_BODY_FONT_SIZE_STORAGE_KEY)?.trim() || "";
+    return isChatBodyFontSizeName(raw) ? raw : DEFAULT_CHAT_BODY_FONT_SIZE;
+  } catch {
+    return DEFAULT_CHAT_BODY_FONT_SIZE;
+  }
 }
 
 export function persistChatBodyFontSize(fontSize: ChatBodyFontSizeName) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(CHAT_BODY_FONT_SIZE_STORAGE_KEY, fontSize);
+  try {
+    window.localStorage.setItem(CHAT_BODY_FONT_SIZE_STORAGE_KEY, fontSize);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }
 
 export function getChatBodyFontFamilyValue(fontFamily: ChatBodyFontFamilyName) {

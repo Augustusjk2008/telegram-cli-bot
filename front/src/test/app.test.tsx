@@ -254,6 +254,7 @@ test("team2 settings hide the main appearance module", async () => {
   expect(screen.queryByLabelText("聊天正文字号")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "深空轨道" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "经典暖色" })).not.toBeInTheDocument();
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
 });
 
 test("re-mounting app restores persisted appearance preferences", async () => {
@@ -275,7 +276,15 @@ test("re-mounting app restores persisted appearance preferences", async () => {
   expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("24px");
 
   unmount();
+  sessionStorage.clear();
   render(<App />);
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+  await user.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(screen.getByLabelText("聊天正文字体")).toHaveValue("serif");
+  expect(screen.getByLabelText("聊天正文字号")).toHaveValue("small");
 
   expect(document.documentElement.dataset.theme).toBe("classic");
   expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"SimSun", "Songti SC", "STSong", serif');
