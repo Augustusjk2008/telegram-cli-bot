@@ -4,6 +4,7 @@
 直接导入 bot.sessions 中的真实函数进行测试
 """
 
+import json
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -231,17 +232,31 @@ class TestSessionPersistence:
             # 应该恢复之前的 session_id
             assert s.kimi_session_id == "kimi_prev_session"
 
-    def test_persist_saves_history_workdir_and_running_reply(self, temp_dir: Path):
-        """测试会话快照会自动持久化"""
+    def test_persist_saves_overlay_workdir_and_running_reply_without_history(self, temp_dir: Path):
+        """测试会话快照会自动持久化 overlay，但不保存聊天历史"""
         from unittest.mock import patch
         from bot.session_store import load_session
 
         store_file = temp_dir / ".session_store.json"
+        overlay = {
+            "provider": "claude",
+            "native_session_id": "claude-session-1",
+            "user_text": "继续",
+            "started_at": "2026-04-14T10:00:00",
+            "updated_at": "2026-04-14T10:00:04",
+            "summary_text": "已终止，未返回可显示内容",
+            "summary_kind": "partial_preview",
+            "completion_state": "cancelled",
+            "trace": [{"kind": "cancelled", "summary": "用户终止输出"}],
+            "locator_hint": {"cwd": "/srv/demo/repo"},
+        }
         with patch("bot.session_store.STORE_FILE", store_file):
             session = get_session(1, "main", 100, str(temp_dir))
             session.working_dir = str(temp_dir / "workspace")
             session.touch()
             session.add_to_history("user", "hello")
+            session.web_turn_overlays = [overlay]
+            session.persist()
             session.start_running_reply("continue")
             session.update_running_reply("partial")
 
@@ -249,15 +264,16 @@ class TestSessionPersistence:
             assert data is not None
             assert data["working_dir"] == str(temp_dir / "workspace")
             assert data["message_count"] == 1
-            assert data["history"][0]["content"] == "hello"
+            assert "history" not in data
+            assert data.get("web_turn_overlays") == [overlay]
             assert data["running_user_text"] == "continue"
             assert data["running_preview_text"] == "partial"
             assert "last_activity" in data
 
-    def test_session_restored_with_history_workdir_and_running_reply(self, temp_dir: Path):
-        """测试从持久化存储恢复完整会话快照"""
+    def test_session_restored_with_overlay_workdir_and_running_reply_but_not_history(self, temp_dir: Path):
+        """测试从持久化存储恢复 overlay 快照，但不恢复 history"""
         from unittest.mock import patch
-        from bot.session_store import save_session
+        from bot.session_store import _make_key
 
         store_file = temp_dir / ".session_store.json"
         restored_dir = temp_dir / "restored"
@@ -274,20 +290,29 @@ class TestSessionPersistence:
                 "content": "partial result",
             },
         ]
+        overlay = {"provider": "codex", "summary_text": "部分预览"}
 
         with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=100,
-                codex_session_id="thread_restored_123",
-                working_dir=str(restored_dir),
-                history=history,
-                message_count=7,
-                last_activity="2026-04-09T10:00:03",
-                running_user_text="continue",
-                running_preview_text="still running",
-                running_started_at="2026-04-09T10:00:01",
-                running_updated_at="2026-04-09T10:00:04",
+            store_file.write_text(
+                json.dumps(
+                    {
+                        _make_key(1, 100): {
+                            "codex_session_id": "thread_restored_123",
+                            "working_dir": str(restored_dir),
+                            "history": history,
+                            "web_turn_overlays": [overlay],
+                            "message_count": 7,
+                            "last_activity": "2026-04-09T10:00:03",
+                            "running_user_text": "continue",
+                            "running_preview_text": "still running",
+                            "running_started_at": "2026-04-09T10:00:01",
+                            "running_updated_at": "2026-04-09T10:00:04",
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
             )
 
             with sessions_lock:
@@ -297,7 +322,8 @@ class TestSessionPersistence:
 
             assert session.codex_session_id == "thread_restored_123"
             assert session.working_dir == str(restored_dir)
-            assert session.history == history
+            assert session.history == []
+            assert getattr(session, "web_turn_overlays", []) == [overlay]
             assert session.message_count == 7
             assert session.running_user_text == "continue"
             assert session.running_preview_text == "still running"

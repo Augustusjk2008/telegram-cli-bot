@@ -59,6 +59,7 @@ def get_or_create_session(
             working_dir = default_working_dir
             browse_dir = None
             history = []
+            web_turn_overlays = []
             message_count = 0
             last_activity = datetime.now()
             running_user_text = None
@@ -72,9 +73,13 @@ def get_or_create_session(
                 claude_session_id = stored_data.get("claude_session_id")
                 working_dir = stored_data.get("working_dir") or default_working_dir
                 browse_dir = stored_data.get("browse_dir") or None
-                history_data = stored_data.get("history")
-                if isinstance(history_data, list):
-                    history = [item for item in history_data if isinstance(item, dict)]
+                overlays = stored_data.get("web_turn_overlays")
+                if isinstance(overlays, list):
+                    web_turn_overlays = [
+                        dict(item)
+                        for item in overlays
+                        if isinstance(item, dict)
+                    ][-20:]
                 try:
                     message_count = max(0, int(stored_data.get("message_count", 0) or 0))
                 except (TypeError, ValueError):
@@ -90,7 +95,7 @@ def get_or_create_session(
                     codex_session_id
                     or kimi_session_id
                     or claude_session_id
-                    or history
+                    or web_turn_overlays
                     or running_started_at
                     or working_dir != default_working_dir
                 ):
@@ -98,7 +103,7 @@ def get_or_create_session(
                               f"codex={codex_session_id is not None}, "
                               f"kimi={kimi_session_id is not None}, "
                               f"claude={claude_session_id is not None}, "
-                              f"history={len(history)}, "
+                              f"overlays={len(web_turn_overlays)}, "
                               f"running={running_started_at is not None}")
             
             sessions[key] = UserSession(
@@ -107,11 +112,12 @@ def get_or_create_session(
                 user_id=user_id,
                 working_dir=working_dir,
                 browse_dir=browse_dir,
-                history=history,
+                history=[],
                 codex_session_id=codex_session_id,
                 kimi_session_id=kimi_session_id,
                 claude_session_id=claude_session_id,
                 claude_session_initialized=claude_session_initialized,
+                web_turn_overlays=web_turn_overlays,
                 running_user_text=running_user_text,
                 running_preview_text=running_preview_text,
                 running_started_at=running_started_at,
@@ -137,7 +143,7 @@ def _save_session_to_store(session: UserSession):
             claude_session_id=session.claude_session_id,
             working_dir=session.working_dir,
             browse_dir=session.browse_dir,
-            history=[dict(item) for item in session.history],
+            web_turn_overlays=[dict(item) for item in session.web_turn_overlays[-20:]],
             message_count=session.message_count,
             last_activity=session.last_activity.isoformat(),
             running_user_text=session.running_user_text,

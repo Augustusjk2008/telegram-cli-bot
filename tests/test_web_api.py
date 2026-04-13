@@ -225,7 +225,7 @@ def test_assistant_change_directory_persists_browser_dir_in_assistant_state(
     assert json.loads(state_file.read_text(encoding="utf-8"))["browse_dir"] == str(browse_dir)
 
 
-def test_get_session_for_alias_restores_assistant_state_from_private_store(
+def test_get_session_for_alias_restores_assistant_overlay_but_not_private_history(
     web_manager: MultiBotManager, temp_dir: Path
 ):
     workdir = temp_dir / "assistant-root"
@@ -248,14 +248,9 @@ def test_get_session_for_alias_restores_assistant_state_from_private_store(
         1001,
         {
             "browse_dir": str(browse_dir),
-            "history": [
-                {
-                    "timestamp": "2026-04-11T09:00:00",
-                    "role": "user",
-                    "content": "private state",
-                }
-            ],
+            "history": [{"timestamp": "2026-04-11T09:00:00", "role": "user", "content": "private state"}],
             "codex_session_id": "assistant-thread",
+            "web_turn_overlays": [{"provider": "codex", "summary_text": "synthetic"}],
             "message_count": 3,
         },
     )
@@ -264,20 +259,15 @@ def test_get_session_for_alias_restores_assistant_state_from_private_store(
         user_id=1001,
         codex_session_id="project-thread",
         browse_dir=str(temp_dir / "project-store"),
-        history=[
-            {
-                "timestamp": "2026-04-11T08:00:00",
-                "role": "user",
-                "content": "project store",
-            }
-        ],
+        history=[{"timestamp": "2026-04-11T08:00:00", "role": "user", "content": "project store"}],
     )
 
     session = get_session_for_alias(web_manager, "assistant1", 1001)
 
     assert session.codex_session_id == "assistant-thread"
     assert session.browse_dir == str(browse_dir)
-    assert session.history[-1]["content"] == "private state"
+    assert session.history == []
+    assert getattr(session, "web_turn_overlays", []) == [{"provider": "codex", "summary_text": "synthetic"}]
     assert session.message_count == 3
 
 

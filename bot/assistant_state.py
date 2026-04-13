@@ -57,7 +57,6 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
             {
                 "working_dir": current.working_dir,
                 "browse_dir": current.browse_dir or "",
-                "history": [dict(item) for item in current.history],
                 "codex_session_id": current.codex_session_id,
                 "kimi_session_id": current.kimi_session_id,
                 "claude_session_id": current.claude_session_id,
@@ -69,6 +68,7 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
                 "running_preview_text": current.running_preview_text,
                 "running_started_at": current.running_started_at,
                 "running_updated_at": current.running_updated_at,
+                "web_turn_overlays": [dict(item) for item in current.web_turn_overlays[-20:]],
             },
         )
 
@@ -96,9 +96,15 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
         return
 
     with session._lock:
-        history = state.get("history")
-        if isinstance(history, list):
-            session.history = [dict(item) for item in history if isinstance(item, dict)][-100:]
+        overlays = state.get("web_turn_overlays")
+        if isinstance(overlays, list):
+            session.web_turn_overlays = [
+                dict(item)
+                for item in overlays
+                if isinstance(item, dict)
+            ][-20:]
+        else:
+            session.web_turn_overlays = []
 
         browse_dir = state.get("browse_dir")
         if isinstance(browse_dir, str) and browse_dir.strip():

@@ -89,8 +89,8 @@ class TestSaveAndLoadSession:
             assert "kimi_session_id" not in data
             assert "claude_session_id" not in data
 
-    def test_save_and_load_session_snapshot_fields(self, temp_dir: Path):
-        """测试保存和加载会话快照字段"""
+    def test_save_session_omits_legacy_history_snapshot_fields(self, temp_dir: Path):
+        """测试保存会话快照时不再持久化聊天历史"""
         store_file = temp_dir / ".session_store.json"
         history = [
             {
@@ -118,7 +118,7 @@ class TestSaveAndLoadSession:
             data = load_session(1, 100)
             assert data is not None
             assert data["working_dir"] == "C:\\workspace\\saved"
-            assert data["history"] == history
+            assert "history" not in data
             assert data["message_count"] == 3
             assert data["last_activity"] == "2026-04-09T12:00:01"
             assert data["running_user_text"] == "continue"

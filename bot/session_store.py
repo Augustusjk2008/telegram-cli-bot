@@ -4,7 +4,7 @@
 - 各 CLI 的 session_id
 - 用户工作目录
 - 文件浏览目录
-- 有限聊天历史
+- Web 端最小 overlay 快照
 - 运行中回复的最近快照
 """
 
@@ -81,6 +81,7 @@ def save_session(
     working_dir: Optional[str] = None,
     browse_dir: Optional[str] = None,
     history: Optional[list[dict]] = None,
+    web_turn_overlays: Optional[list[dict]] = None,
     message_count: Optional[int] = None,
     last_activity: Optional[str] = None,
     running_user_text: Optional[str] = None,
@@ -102,8 +103,12 @@ def save_session(
         session_data["working_dir"] = working_dir
     if isinstance(browse_dir, str) and browse_dir:
         session_data["browse_dir"] = browse_dir
-    if history:
-        session_data["history"] = history
+    if web_turn_overlays:
+        session_data["web_turn_overlays"] = [
+            dict(item)
+            for item in web_turn_overlays
+            if isinstance(item, dict)
+        ][-20:]
     if isinstance(message_count, int):
         session_data["message_count"] = max(0, message_count)
     if last_activity:
@@ -116,6 +121,7 @@ def save_session(
         session_data["running_started_at"] = running_started_at
     if running_updated_at:
         session_data["running_updated_at"] = running_updated_at
+    # legacy history is intentionally no longer persisted
 
     with _store_lock:
         try:

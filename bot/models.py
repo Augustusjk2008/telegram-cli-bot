@@ -98,6 +98,7 @@ class UserSession:
     running_started_at: Optional[str] = None
     running_updated_at: Optional[str] = None
     stop_requested: bool = False
+    web_turn_overlays: List[dict] = field(default_factory=list)
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     managed_prompt_hash_seen: Optional[str] = None
@@ -154,6 +155,26 @@ class UserSession:
             self.running_preview_text = ""
             self.running_started_at = None
             self.running_updated_at = None
+        self.persist()
+
+    def upsert_web_turn_overlay(self, overlay: dict, *, limit: int = 20):
+        key = (
+            str(overlay.get("provider") or ""),
+            str(overlay.get("native_session_id") or ""),
+            str(overlay.get("started_at") or ""),
+        )
+        with self._lock:
+            kept = [
+                dict(item)
+                for item in self.web_turn_overlays
+                if (
+                    str(item.get("provider") or ""),
+                    str(item.get("native_session_id") or ""),
+                    str(item.get("started_at") or ""),
+                ) != key
+            ]
+            kept.append(dict(overlay))
+            self.web_turn_overlays = kept[-limit:]
         self.persist()
 
     def terminate_process(self):
