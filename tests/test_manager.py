@@ -22,6 +22,19 @@ from bot.sessions import get_or_create_session
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 
+    def test_bot_profile_round_trips_avatar_name(self):
+        profile = BotProfile(
+            alias="team2",
+            token="tok2",
+            cli_type="claude",
+            cli_path="claude",
+            avatar_name="claude-blue.png",
+        )
+
+        restored = BotProfile.from_dict(profile.to_dict())
+
+        assert restored.avatar_name == "claude-blue.png"
+
     def test_load_empty(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         profile = BotProfile(alias="main", token="main_tok")
@@ -335,6 +348,46 @@ class TestManagerValidation:
         assert m.managed_profiles["web_only"].token == ""
         assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["token"] == ""
         start_profile.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_add_bot_persists_avatar_name_to_storage(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value="claude"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            created = await manager.add_bot(
+                alias="team2",
+                token="",
+                cli_type="claude",
+                cli_path="claude",
+                working_dir=str(temp_dir),
+                bot_mode="cli",
+                avatar_name="claude-blue.png",
+            )
+
+        assert created.avatar_name == "claude-blue.png"
+        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["avatar_name"] == "claude-blue.png"
+
+    @pytest.mark.asyncio
+    async def test_set_bot_avatar_updates_profile_and_storage(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        manager.managed_profiles["team2"] = BotProfile(
+            alias="team2",
+            token="",
+            cli_type="claude",
+            cli_path="claude",
+            working_dir=str(temp_dir),
+            avatar_name="bot-default.png",
+        )
+
+        await manager.set_bot_avatar("team2", "kimi-teal.png")
+
+        assert manager.managed_profiles["team2"].avatar_name == "kimi-teal.png"
+        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["avatar_name"] == "kimi-teal.png"
 
     @pytest.mark.asyncio
     async def test_start_profile_skips_telegram_when_token_missing(self, temp_dir: Path):

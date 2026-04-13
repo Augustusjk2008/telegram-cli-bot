@@ -734,3 +734,109 @@ test("shows persisted elapsed badge from loaded history", async () => {
   expect(await screen.findByText("历史结果")).toBeInTheDocument();
   expect(screen.getByText("用时 8 秒")).toBeInTheDocument();
 });
+
+test("renders sender names timestamps avatars and copies completed assistant replies", async () => {
+  const user = userEvent.setup();
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText,
+    },
+  });
+
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      avatarName: "claude-blue.png",
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "你好",
+        createdAt: "2026-04-13T09:08:00",
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "世界",
+        createdAt: "2026-04-13T09:09:00",
+        elapsedSeconds: 5,
+        state: "done",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("你好")).toBeInTheDocument();
+  expect(screen.getByText("你")).toBeInTheDocument();
+  expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+  expect(screen.getByText("09:08")).toBeInTheDocument();
+  expect(screen.getByText("09:09")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "你 头像" })).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "main 头像" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "复制" }));
+
+  expect(writeText).toHaveBeenCalledWith("世界");
+  expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
+});
+
+test("shows a continue action for restored replies and sends the assistant resume prompt", async () => {
+  const user = userEvent.setup();
+  const sendSpy = vi.fn(
+    async (_botAlias: string, _text: string, _onChunk: (chunk: string) => void) => ({
+      id: "assistant-resumed",
+      role: "assistant" as const,
+      text: "继续完成",
+      createdAt: new Date().toISOString(),
+      state: "done" as const,
+    }),
+  );
+
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+      runningReply: {
+        userText: "继续执行",
+        previewText: `${"前文".repeat(30)}最后结论还没发完`,
+        startedAt: "2026-04-13T09:08:00",
+        updatedAt: "2026-04-13T09:09:00",
+      },
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "user-1",
+      role: "user",
+      text: "继续执行",
+      createdAt: "2026-04-13T09:08:00",
+      state: "done",
+    }],
+    sendMessage: sendSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "继续" }));
+
+  await waitFor(() => {
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  const prompt = sendSpy.mock.calls[0]?.[1] as string;
+  expect(prompt).toContain("上次异常中断了");
+  expect(prompt).toContain("最后结论还没发完");
+  expect(prompt).toContain("assistant 历史记录");
+  expect(prompt).toContain("assistant 相关保存记录");
+});

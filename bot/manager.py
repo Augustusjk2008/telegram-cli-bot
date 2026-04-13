@@ -754,6 +754,7 @@ class MultiBotManager:
         cli_path: Optional[str] = None,
         working_dir: Optional[str] = None,
         bot_mode: Optional[str] = None,
+        avatar_name: Optional[str] = None,
     ) -> BotProfile:
         alias = alias.strip().lower()
         token = token.strip()
@@ -801,6 +802,7 @@ class MultiBotManager:
                 working_dir=working_dir,
                 enabled=True,
                 bot_mode=bot_mode,
+                avatar_name=(avatar_name or "bot-default.png").strip() or "bot-default.png",
             )
 
             if bot_mode == "assistant":
@@ -810,6 +812,15 @@ class MultiBotManager:
             self.managed_profiles[alias] = profile
             self._save_profiles()
             return profile
+
+    async def set_bot_avatar(self, alias: str, avatar_name: str):
+        alias = alias.strip().lower()
+        avatar_name = (avatar_name or "").strip() or "bot-default.png"
+
+        async with self._lock:
+            profile = self._get_profile_for_update(alias)
+            profile.avatar_name = avatar_name
+            self._save_profiles()
 
     async def remove_bot(self, alias: str):
         alias = alias.strip().lower()

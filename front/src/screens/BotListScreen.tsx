@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { AvatarPicker } from "../components/AvatarPicker";
+import { ChatAvatar } from "../components/ChatAvatar";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotSummary, CliType, CreateBotInput } from "../services/types";
+import type { AvatarAsset, BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { normalizePathInput } from "../utils/pathInput";
 
@@ -19,10 +21,19 @@ const EMPTY_CREATE_DRAFT: CreateDraft = {
   cliType: "codex",
   cliPath: "",
   workingDir: "",
+  avatarName: "bot-default.png",
 };
+
+const DEFAULT_AVATAR_ASSETS: AvatarAsset[] = [
+  { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
+  { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
+  { name: "kimi-teal.png", url: "/assets/avatars/kimi-teal.png" },
+  { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
+];
 
 export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Props) {
   const [bots, setBots] = useState<BotSummary[]>([]);
+  const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -30,13 +41,25 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
   const [savingAction, setSavingAction] = useState("");
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
+  const [avatarDrafts, setAvatarDrafts] = useState<Record<string, string>>({});
 
   async function loadBots() {
     setLoading(true);
     setError("");
     try {
-      const data = await client.listBots();
+      const [data, assets] = await Promise.all([
+        client.listBots(),
+        client.listAvatarAssets().catch(() => DEFAULT_AVATAR_ASSETS),
+      ]);
       setBots(data);
+      setAvatarAssets(assets.length > 0 ? assets : DEFAULT_AVATAR_ASSETS);
+      setAvatarDrafts((prev) => {
+        const next = { ...prev };
+        for (const bot of data) {
+          next[bot.alias] = next[bot.alias] || bot.avatarName || "bot-default.png";
+        }
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载 Bot 失败");
     } finally {
@@ -64,6 +87,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
         token: createDraft.token.trim(),
         cliPath: normalizePathInput(createDraft.cliPath),
         workingDir: normalizePathInput(createDraft.workingDir),
+        avatarName: createDraft.avatarName,
       });
       setCreateDraft(EMPTY_CREATE_DRAFT);
       setNotice("Bot 已创建");
@@ -143,6 +167,22 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
       await loadBots();
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除 Bot 失败");
+    } finally {
+      setSavingAction("");
+    }
+  }
+
+  async function saveAvatar(bot: BotSummary) {
+    const avatarName = avatarDrafts[bot.alias] || bot.avatarName || "bot-default.png";
+    setSavingAction(`${bot.alias}:avatar`);
+    setError("");
+    setNotice("");
+    try {
+      await client.updateBotAvatar(bot.alias, avatarName);
+      setNotice(`已更新 ${bot.alias} 的头像`);
+      await loadBots();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新头像失败");
     } finally {
       setSavingAction("");
     }
@@ -232,6 +272,12 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder="/srv/telegram-cli-bridge/team3"
           />
+          <AvatarPicker
+            assets={avatarAssets}
+            selectedName={createDraft.avatarName}
+            previewAlt="新 Bot 头像预览"
+            onSelect={(avatarName) => setCreateDraft((prev) => ({ ...prev, avatarName }))}
+          />
         </div>
         <button
           type="button"
@@ -263,17 +309,20 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                 }
               >
                 <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-lg font-semibold">{bot.alias}</h3>
-                      {isMain ? (
-                        <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
-                      ) : null}
-                      <StatusPill status={bot.status} />
+                  <div className="flex min-w-0 items-start gap-3">
+                    <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={36} />
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-semibold">{bot.alias}</h3>
+                        {isMain ? (
+                          <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
+                        ) : null}
+                        <StatusPill status={bot.status} />
+                      </div>
+                      <p className="text-sm text-[var(--muted)]">CLI: {bot.cliType}{bot.cliPath ? ` / ${bot.cliPath}` : ""}</p>
+                      <p className="break-all text-sm text-[var(--muted)]">目录: {bot.workingDir}</p>
+                      <p className="text-sm text-[var(--muted)]">状态: {bot.lastActiveText}</p>
                     </div>
-                    <p className="text-sm text-[var(--muted)]">CLI: {bot.cliType}{bot.cliPath ? ` / ${bot.cliPath}` : ""}</p>
-                    <p className="break-all text-sm text-[var(--muted)]">目录: {bot.workingDir}</p>
-                    <p className="text-sm text-[var(--muted)]">状态: {bot.lastActiveText}</p>
                   </div>
                   <button
                     type="button"
@@ -292,6 +341,25 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                     }
                   >
                     {isOffline ? "不可进入" : "进入"}
+                  </button>
+                </div>
+
+                <AvatarPicker
+                  assets={avatarAssets}
+                  selectedName={avatarDrafts[bot.alias] || bot.avatarName || "bot-default.png"}
+                  previewAlt={`${bot.alias} 头像预览`}
+                  onSelect={(avatarName) => setAvatarDrafts((prev) => ({ ...prev, [bot.alias]: avatarName }))}
+                />
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    aria-label={`保存头像 ${bot.alias}`}
+                    onClick={() => void saveAvatar(bot)}
+                    disabled={savingAction !== ""}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    {savingAction === `${bot.alias}:avatar` ? "保存中..." : "保存头像"}
                   </button>
                 </div>
 

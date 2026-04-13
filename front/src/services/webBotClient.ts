@@ -6,6 +6,7 @@ import type {
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
+  AvatarAsset,
   GitActionResult,
   GitDiffPayload,
   GitProxySettings,
@@ -54,11 +55,13 @@ export interface WebBotClient {
   popGitStash(botAlias: string): Promise<GitActionResult>;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary>;
+  updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;
   removeBot(botAlias: string): Promise<void>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
+  listAvatarAssets(): Promise<AvatarAsset[]>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;

@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
+import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
+import { ChatMessageActions } from "../components/ChatMessageActions";
+import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
+import { RestoredReplyNotice } from "../components/RestoredReplyNotice";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { ChatMessage, RunningReply, SystemScript } from "../services/types";
+import type { BotOverview, ChatMessage, RunningReply, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { buildResumePrompt } from "../utils/chatResume";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 
 type Props = {
@@ -153,6 +158,9 @@ export function ChatScreen({
   const [previewContent, setPreviewContent] = useState("");
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
+  const [restoredReply, setRestoredReply] = useState<RunningReply | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState("");
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -187,21 +195,28 @@ export function ChatScreen({
     setStreamStartedAtMs(null);
     setPreviewName("");
     setPreviewContent("");
+    setBotOverview(null);
+    setRestoredReply(null);
+    setCopiedMessageId("");
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
 
     Promise.all([client.listMessages(botAlias), client.getBotOverview(botAlias)])
       .then(([messages, overview]) => {
         if (cancelled) return;
+        setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         if (overview.isProcessing) {
+          setRestoredReply(null);
           setItems(mergeRunningReply(messages, botAlias, overview.runningReply));
           setIsStreaming(true);
           setStreamMode("poll");
           setStreamStartedAtMs(resolveStreamStartMs(overview.runningReply));
         } else if (overview.runningReply) {
+          setRestoredReply(overview.runningReply);
           setItems(mergeRestoredReply(messages, botAlias, overview.runningReply));
         } else {
+          setRestoredReply(null);
           setItems(messages);
         }
         setLoading(false);
@@ -246,10 +261,12 @@ export function ChatScreen({
       try {
         const overview = await client.getBotOverview(botAlias);
         if (cancelled) return;
+        setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
 
         if (overview.isProcessing) {
           setIsStreaming(true);
+          setRestoredReply(null);
           setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(overview.runningReply));
           setItems((prev) => mergeRunningReply(prev, botAlias, overview.runningReply));
           return;
@@ -258,6 +275,7 @@ export function ChatScreen({
         const messages = await client.listMessages(botAlias);
         if (cancelled) return;
         setItems(messages);
+        setRestoredReply(null);
         setIsStreaming(false);
         setStreamMode("");
         setStreamStartedAtMs(null);
@@ -350,6 +368,7 @@ export function ChatScreen({
     };
 
     setError("");
+    setRestoredReply(null);
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
@@ -481,8 +500,32 @@ export function ChatScreen({
     }
   }
 
+  async function handleCopyMessage(item: ChatMessage) {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("当前环境不支持复制");
+      }
+      await navigator.clipboard.writeText(item.text);
+      setCopiedMessageId(item.id);
+      window.setTimeout(() => {
+        setCopiedMessageId((prev) => (prev === item.id ? "" : prev));
+      }, 1200);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "复制失败");
+    }
+  }
+
+  async function handleResumeContinue() {
+    if (!restoredReply || isStreaming) {
+      return;
+    }
+    await handleSend(buildResumePrompt(botOverview?.botMode, restoredReply.previewText));
+  }
+
   const killTaskActive = isStreaming || actionLoading === "kill";
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
+  const assistantName = botAlias;
+  const assistantAvatarName = botOverview?.avatarName;
 
   return (
     <main className="relative flex flex-col h-full">
@@ -553,55 +596,66 @@ export function ChatScreen({
             暂无消息，开始聊天吧
           </div>
         ) : null}
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className={
-              item.role === "user"
-                ? "flex justify-end"
-                : item.role === "system"
-                  ? "flex justify-center"
-                  : "flex justify-start"
-            }
-          >
-            <div
-              className={
-                item.role === "user"
-                  ? "flex max-w-[80%] min-w-0 flex-col items-end gap-1"
-                  : item.role === "system"
-                    ? "flex max-w-[90%] min-w-0 flex-col items-center gap-1"
-                    : "flex max-w-[80%] min-w-0 flex-col items-start gap-1"
-              }
-            >
-              <div
-                className={
-                  item.role === "user"
-                    ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white whitespace-pre-wrap break-all"
-                    : item.role === "system"
-                      ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2 text-slate-700 whitespace-pre-wrap break-all"
-                      : item.state === "error"
-                        ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700 whitespace-pre-wrap break-all"
-                        : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
-                }
-              >
-                {item.role === "assistant" && item.state !== "streaming" && item.state !== "error"
-                  ? <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
-                  : item.text || (item.state === "streaming" ? "正在输出..." : "")}
+        {items.map((item) => {
+          if (item.role === "system") {
+            return (
+              <div key={item.id} className="flex justify-center">
+                <div className="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2 text-slate-700 whitespace-pre-wrap break-all">
+                  {item.text}
+                </div>
               </div>
-              {item.role === "assistant" && item.state === "streaming" ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
-                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                  <span>正在输出</span>
+            );
+          }
+
+          const isUser = item.role === "user";
+          const messageName = isUser ? "你" : assistantName;
+          const isRestoredAssistant = item.id === restoredAssistantId(botAlias) && Boolean(restoredReply);
+
+          return (
+            <div key={item.id} className={isUser ? "flex justify-end" : "flex justify-start"}>
+              <div className={`flex max-w-[88%] gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+                <ChatAvatar
+                  alt={`${messageName} 头像`}
+                  avatarName={isUser ? undefined : assistantAvatarName}
+                  kind={isUser ? "user" : "bot"}
+                  size={32}
+                />
+                <div className="min-w-0">
+                  <ChatMessageMeta name={messageName} createdAt={item.createdAt} align={isUser ? "right" : "left"} />
+                  <div
+                    className={
+                      isUser
+                        ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white whitespace-pre-wrap break-all"
+                        : item.state === "error"
+                          ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700 whitespace-pre-wrap break-all"
+                          : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
+                    }
+                  >
+                    {item.role === "assistant" && item.state !== "streaming" && item.state !== "error"
+                      ? <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
+                      : item.text || (item.state === "streaming" ? "正在输出..." : "")}
+                  </div>
+                  {item.role === "assistant" && item.state === "streaming" ? (
+                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+                      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                      <span>正在输出</span>
+                    </div>
+                  ) : null}
+                  {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+                    <ChatMessageActions
+                      elapsedSeconds={item.elapsedSeconds}
+                      copyLabel={copiedMessageId === item.id ? "已复制" : "复制"}
+                      onCopy={() => void handleCopyMessage(item)}
+                    />
+                  ) : null}
+                  {isRestoredAssistant ? (
+                    <RestoredReplyNotice disabled={isStreaming} onContinue={() => void handleResumeContinue()} />
+                  ) : null}
                 </div>
-              ) : null}
-              {item.role === "assistant" && item.state !== "streaming" && typeof item.elapsedSeconds === "number" ? (
-                <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
-                  用时 {item.elapsedSeconds} 秒
-                </div>
-              ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div ref={bottomAnchorRef} aria-hidden="true" />
       </section>
       {isVisible && onToggleImmersive ? (

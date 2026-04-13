@@ -13,6 +13,7 @@ import type {
   CliType,
   CreateBotInput,
   DirectoryListing,
+  AvatarAsset,
   FileEntry,
   RunningReply,
   SessionState,
@@ -38,9 +39,15 @@ type RawBotSummary = {
   status: string;
   is_processing?: boolean;
   working_dir: string;
+  avatar_name?: string;
   bot_mode?: string;
   enabled?: boolean;
   is_main?: boolean;
+};
+
+type RawAvatarAsset = {
+  name: string;
+  url: string;
 };
 
 type RawHistoryItem = {
@@ -178,6 +185,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     status,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
+    avatarName: raw.avatar_name || "bot-default.png",
   };
   if (raw.cli_path) {
     summary.cliPath = raw.cli_path;
@@ -242,6 +250,13 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
     localUrl: raw.local_url || "",
     lastError: raw.last_error || "",
     pid: raw.pid ?? null,
+  };
+}
+
+function mapAvatarAsset(raw: RawAvatarAsset): AvatarAsset {
+  return {
+    name: raw.name,
+    url: raw.url,
   };
 }
 
@@ -782,6 +797,17 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
+  async updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/avatar`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ avatar_name: avatarName }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
   async addBot(input: CreateBotInput): Promise<BotSummary> {
     const data = await this.requestJson<{ bot: RawBotSummary }>("/api/admin/bots", {
       method: "POST",
@@ -795,6 +821,7 @@ export class RealWebBotClient implements WebBotClient {
         cli_type: input.cliType,
         cli_path: input.cliPath,
         working_dir: input.workingDir,
+        avatar_name: input.avatarName,
       }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
@@ -829,6 +856,11 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async listAvatarAssets(): Promise<AvatarAsset[]> {
+    const data = await this.requestJson<{ items: RawAvatarAsset[] }>("/api/admin/assets/avatars");
+    return (data.items || []).map(mapAvatarAsset);
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {

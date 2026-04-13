@@ -8,6 +8,7 @@ export const mockBots: BotSummary[] = [
     status: "running",
     workingDir: DEMO_MAIN_WORKDIR,
     lastActiveText: "刚刚活跃",
+    avatarName: "bot-default.png",
   },
   {
     alias: "team2",
@@ -15,5 +16,6 @@ export const mockBots: BotSummary[] = [
     status: "busy",
     workingDir: DEMO_TEAM_WORKDIR,
     lastActiveText: "处理中",
+    avatarName: "claude-blue.png",
   },
 ];

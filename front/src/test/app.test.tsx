@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "../app/App";
@@ -547,6 +547,44 @@ test("bot manager preserves Linux-style create paths", async () => {
     cliPath: "codex",
     workingDir: "/srv/telegram-cli-bridge/team3",
   }));
+});
+
+test("bot manager shows avatar filenames with preview and sends the selected avatar on create", async () => {
+  const user = userEvent.setup();
+  const addBotSpy = vi.spyOn(MockWebBotClient.prototype, "addBot");
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  const createSection = screen.getByRole("heading", { name: "新增 Bot" }).closest("section");
+  expect(createSection).not.toBeNull();
+  const createScope = within(createSection as HTMLElement);
+  expect(createScope.getAllByText("claude-blue.png").length).toBeGreaterThan(0);
+  expect(createScope.getAllByText("bot-default.png").length).toBeGreaterThan(0);
+  expect(createScope.getByText("规格固定为 64x64，建议使用 PNG/JPG/WebP。")).toBeInTheDocument();
+  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/bot-default.png");
+
+  await user.click(createScope.getByRole("button", { name: "选择头像 claude-blue.png" }));
+
+  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
+
+  await user.type(screen.getByLabelText("新 Bot 别名"), "team-avatar");
+  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team-avatar");
+  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+
+  expect(addBotSpy).toHaveBeenCalledWith(expect.objectContaining({
+    alias: "team-avatar",
+    avatarName: "claude-blue.png",
+  }));
+  expect(await screen.findByRole("img", { name: "team-avatar 头像" })).toBeInTheDocument();
 });
 
 test("bot manager stays open even when a stored bot alias exists", async () => {

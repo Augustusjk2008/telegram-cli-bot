@@ -7,6 +7,7 @@ import copy
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,9 @@ from bot.sessions import (
 from bot.utils import is_dangerous_command
 
 logger = logging.getLogger(__name__)
+DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
+_ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+_AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class WebApiError(Exception):
@@ -99,6 +103,59 @@ class CliAttemptState:
 
 def _raise(status: int, code: str, message: str):
     raise WebApiError(status=status, code=code, message=message)
+
+
+def _avatar_asset_dirs() -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    return [
+        repo_root / "front" / "public" / "assets" / "avatars",
+        repo_root / "front" / "dist" / "assets" / "avatars",
+    ]
+
+
+def _is_safe_avatar_name(name: str) -> bool:
+    candidate = str(name or "").strip()
+    if not candidate:
+        return False
+    if Path(candidate).name != candidate:
+        return False
+    if not _AVATAR_NAME_RE.fullmatch(candidate):
+        return False
+    return Path(candidate).suffix.lower() in _ALLOWED_AVATAR_EXTENSIONS
+
+
+def list_avatar_assets() -> dict[str, Any]:
+    items_by_name: dict[str, dict[str, str]] = {}
+    for directory in _avatar_asset_dirs():
+        if not directory.exists():
+            continue
+        for path in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
+            if not path.is_file():
+                continue
+            if not _is_safe_avatar_name(path.name):
+                continue
+            items_by_name.setdefault(
+                path.name,
+                {
+                    "name": path.name,
+                    "url": f"/assets/avatars/{path.name}",
+                },
+            )
+
+    return {"items": [items_by_name[name] for name in sorted(items_by_name.keys())]}
+
+
+def _normalize_avatar_name(value: Any, *, require_existing: bool) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return DEFAULT_BOT_AVATAR_NAME
+    if not _is_safe_avatar_name(candidate):
+        _raise(400, "invalid_avatar_name", "头像文件名不合法")
+    if require_existing:
+        available_names = {item["name"] for item in list_avatar_assets()["items"]}
+        if available_names and candidate not in available_names:
+            _raise(400, "invalid_avatar_name", "头像文件不存在")
+    return candidate
 
 
 def _assistant_home_or_raise(manager: MultiBotManager, alias: str):
@@ -235,6 +292,7 @@ def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[in
         "cli_type": profile.cli_type,
         "cli_path": profile.cli_path,
         "working_dir": working_dir,
+        "avatar_name": profile.avatar_name or DEFAULT_BOT_AVATAR_NAME,
         "is_main": alias == manager.main_profile.alias,
         "status": _build_run_status(manager, alias, profile),
         "is_processing": is_processing,
@@ -1636,9 +1694,19 @@ async def add_managed_bot(
     cli_type: Optional[str],
     cli_path: Optional[str],
     working_dir: Optional[str],
+    avatar_name: Optional[str] = None,
 ) -> dict[str, Any]:
+    resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=bool(str(avatar_name or "").strip()))
     try:
-        profile = await manager.add_bot(alias, token, cli_type, cli_path, working_dir, bot_mode)
+        profile = await manager.add_bot(
+            alias,
+            token,
+            cli_type,
+            cli_path,
+            working_dir,
+            bot_mode,
+            resolved_avatar_name,
+        )
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))
     return {"bot": build_bot_summary(manager, profile.alias)}
@@ -1676,6 +1744,17 @@ async def update_bot_workdir(
     user_id: Optional[int] = None,
 ) -> dict[str, Any]:
     await manager.set_bot_workdir(alias, working_dir)
+    return {"bot": build_bot_summary(manager, alias, user_id)}
+
+
+async def update_bot_avatar(
+    manager: MultiBotManager,
+    alias: str,
+    avatar_name: Any,
+    user_id: Optional[int] = None,
+) -> dict[str, Any]:
+    resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=True)
+    await manager.set_bot_avatar(alias, resolved_avatar_name)
     return {"bot": build_bot_summary(manager, alias, user_id)}
 
 

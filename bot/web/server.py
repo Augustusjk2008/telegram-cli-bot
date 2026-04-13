@@ -53,6 +53,7 @@ from .api_service import (
     get_file_metadata,
     get_history,
     get_overview,
+    list_avatar_assets,
     list_assistant_proposals,
     get_cli_params_payload,
     get_processing_sessions,
@@ -73,6 +74,7 @@ from .api_service import (
     stream_system_script,
     stream_chat,
     update_cli_params,
+    update_bot_avatar,
     update_bot_cli,
     rename_managed_bot,
     update_bot_workdir,
@@ -875,8 +877,13 @@ class WebApiServer:
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
             working_dir=body.get("working_dir"),
+            avatar_name=body.get("avatar_name"),
         )
         return _json({"ok": True, "data": data})
+
+    async def admin_list_avatar_assets(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": list_avatar_assets()})
 
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
@@ -917,6 +924,13 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_workdir(self.manager, alias, body.get("working_dir", ""), auth.user_id)
+        return _json({"ok": True, "data": data})
+
+    async def admin_update_avatar(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await update_bot_avatar(self.manager, alias, body.get("avatar_name"), auth.user_id)
         return _json({"ok": True, "data": data})
 
     async def admin_get_git_proxy(self, request: web.Request) -> web.Response:
@@ -1035,6 +1049,7 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
         app.router.add_get("/api/admin/bots", self.admin_bots)
+        app.router.add_get("/api/admin/assets/avatars", self.admin_list_avatar_assets)
         app.router.add_get("/api/admin/scripts", self.admin_scripts)
         app.router.add_post("/api/admin/scripts/run/stream", self.admin_run_script_stream)
         app.router.add_post("/api/admin/scripts/run", self.admin_run_script)
@@ -1047,6 +1062,7 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
         app.router.add_patch("/api/admin/bots/{alias}/alias", self.admin_rename_bot)
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
+        app.router.add_patch("/api/admin/bots/{alias}/avatar", self.admin_update_avatar)
         app.router.add_get("/api/admin/bots/{alias}/assistant/proposals", self.admin_assistant_proposals)
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/approve",

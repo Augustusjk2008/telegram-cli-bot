@@ -7,6 +7,7 @@ export type BotSummary = {
   status: BotStatus;
   workingDir: string;
   lastActiveText: string;
+  avatarName?: string;
   cliPath?: string;
   botMode?: string;
   enabled?: boolean;
@@ -25,6 +26,7 @@ export type BotOverview = {
   cliType: CliType;
   status: BotStatus;
   workingDir: string;
+  avatarName?: string;
   cliPath?: string;
   botMode?: string;
   enabled?: boolean;
@@ -104,6 +106,12 @@ export type CreateBotInput = {
   cliType: CliType;
   cliPath: string;
   workingDir: string;
+  avatarName: string;
+};
+
+export type AvatarAsset = {
+  name: string;
+  url: string;
 };
 
 export type TunnelSnapshot = {

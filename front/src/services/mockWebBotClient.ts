@@ -6,6 +6,7 @@ import type {
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
+  AvatarAsset,
   GitActionResult,
   GitDiffPayload,
   GitProxySettings,
@@ -107,6 +108,13 @@ export class MockWebBotClient implements WebBotClient {
   ]);
   private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
+  private readonly avatarAssets: AvatarAsset[] = [
+    { name: "user-default.png", url: "/assets/avatars/user-default.png" },
+    { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
+    { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
+    { name: "kimi-teal.png", url: "/assets/avatars/kimi-teal.png" },
+    { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
+  ];
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -127,6 +135,7 @@ export class MockWebBotClient implements WebBotClient {
         status: "running",
         workingDir: DEMO_MAIN_WORKDIR,
         lastActiveText: "运行中",
+        avatarName: "bot-default.png",
         cliPath: "codex",
         botMode: "cli",
         enabled: true,
@@ -493,6 +502,15 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
+  async updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      avatarName: avatarName.trim() || "bot-default.png",
+    });
+    return this.getBotSummary(botAlias);
+  }
+
   async addBot(input: CreateBotInput): Promise<BotSummary> {
     const alias = input.alias.trim().toLowerCase();
     const bot: BotSummary = {
@@ -503,6 +521,7 @@ export class MockWebBotClient implements WebBotClient {
       status: "running",
       workingDir: input.workingDir.trim(),
       lastActiveText: "运行中",
+      avatarName: input.avatarName || "bot-default.png",
       enabled: true,
       isMain: false,
     };
@@ -556,6 +575,10 @@ export class MockWebBotClient implements WebBotClient {
       enabled: false,
     });
     return this.getBotSummary(botAlias);
+  }
+
+  async listAvatarAssets(): Promise<AvatarAsset[]> {
+    return [...this.avatarAssets];
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {

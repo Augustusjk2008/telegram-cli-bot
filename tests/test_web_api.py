@@ -106,6 +106,24 @@ def test_list_bots_includes_processing_state_for_current_user(web_manager: Multi
     assert items[0]["is_processing"] is True
 
 
+def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: Path):
+    web_manager.managed_profiles["team2"] = BotProfile(
+        alias="team2",
+        token="",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir=str(temp_dir),
+        enabled=True,
+        avatar_name="claude-blue.png",
+    )
+
+    items = list_bots(web_manager, 1001)
+
+    assert items[0]["alias"] == "main"
+    assert items[0]["avatar_name"] == "bot-default.png"
+    assert next(item for item in items if item["alias"] == "team2")["avatar_name"] == "claude-blue.png"
+
+
 def test_change_working_directory_clears_session_ids(web_manager: MultiBotManager, temp_dir: Path):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-old"
@@ -841,6 +859,146 @@ async def test_admin_add_bot_route_accepts_empty_token_for_web_only_bot(
     assert payload["data"]["bot"]["alias"] == "web_only"
     assert web_manager.managed_profiles["web_only"].token == ""
     start_profile.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_admin_avatar_assets_route_lists_available_files(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    avatar_dir = temp_dir / "assets" / "avatars"
+    avatar_dir.mkdir(parents=True)
+    (avatar_dir / "bot-default.png").write_bytes(b"png")
+    (avatar_dir / "claude-blue.png").write_bytes(b"png")
+    monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/assets/avatars")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["items"] == [
+        {"name": "bot-default.png", "url": "/assets/avatars/bot-default.png"},
+        {"name": "claude-blue.png", "url": "/assets/avatars/claude-blue.png"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admin_add_bot_route_accepts_avatar_name(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    avatar_dir = temp_dir / "assets" / "avatars"
+    avatar_dir.mkdir(parents=True)
+    (avatar_dir / "claude-blue.png").write_bytes(b"png")
+    monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+                 patch.object(web_manager, "_start_profile", AsyncMock(return_value=None)):
+                resp = await client.post(
+                    "/api/admin/bots",
+                    json={
+                        "alias": "team2",
+                        "token": "",
+                        "bot_mode": "cli",
+                        "cli_type": "codex",
+                        "cli_path": "codex",
+                        "working_dir": str(temp_dir),
+                        "avatar_name": "claude-blue.png",
+                    },
+                )
+                assert resp.status == 200
+                payload = await resp.json()
+
+    assert payload["data"]["bot"]["avatar_name"] == "claude-blue.png"
+    assert web_manager.managed_profiles["team2"].avatar_name == "claude-blue.png"
+
+
+@pytest.mark.asyncio
+async def test_admin_update_avatar_route_persists_avatar_selection(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    avatar_dir = temp_dir / "assets" / "avatars"
+    avatar_dir.mkdir(parents=True)
+    (avatar_dir / "kimi-teal.png").write_bytes(b"png")
+    monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
+
+    web_manager.managed_profiles["team2"] = BotProfile(
+        alias="team2",
+        token="",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir=str(temp_dir),
+        enabled=True,
+        avatar_name="bot-default.png",
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch(
+                "/api/admin/bots/team2/avatar",
+                json={"avatar_name": "kimi-teal.png"},
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["bot"]["avatar_name"] == "kimi-teal.png"
+    assert web_manager.managed_profiles["team2"].avatar_name == "kimi-teal.png"
+
+
+@pytest.mark.asyncio
+async def test_admin_update_avatar_route_rejects_invalid_filename(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    web_manager.managed_profiles["team2"] = BotProfile(
+        alias="team2",
+        token="",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir=str(temp_dir),
+        enabled=True,
+        avatar_name="bot-default.png",
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch(
+                "/api/admin/bots/team2/avatar",
+                json={"avatar_name": "../evil.png"},
+            )
+            assert resp.status == 400
+            payload = await resp.json()
+
+    assert payload["error"]["code"] == "invalid_avatar_name"
 
 
 @pytest.mark.asyncio
