@@ -31,6 +31,7 @@ DEFAULT_CLAUDE_PARAMS = {
     "yolo": True,                    # --dangerously-skip-permissions
     "effort": "max",                 # --effort: max/high/medium/low
     "disable_prompts": True,         # CLAUDE_CODE_DISABLE_PROMPTS=1
+    "stream_json": True,             # --output-format stream-json --verbose --include-partial-messages
     # 可选参数
     "session_id": None,              # --session-id / -r: 会话ID
     "model": None,                   # --model: 模型选择
@@ -78,6 +79,7 @@ PARAM_SCHEMA_MAP = {
             "enum": ["max", "high", "medium", "low"],
         },
         "disable_prompts": {"type": "boolean", "description": "禁用交互式提示"},
+        "stream_json": {"type": "boolean", "description": "启用 stream-json 流式输出"},
         "session_id": {"type": "string", "description": "会话 ID", "nullable": True},
         "model": {"type": "string", "description": "模型选择", "nullable": True},
         "extra_args": {"type": "string_list", "description": "额外参数"},
@@ -357,7 +359,10 @@ def _build_claude_args(
     effort = params.get("effort")
     if effort:
         cmd.extend(["--effort", str(effort)])
-    
+
+    if params.get("stream_json"):
+        cmd.extend(["--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+
     # 模型参数
     if params.get("model"):
         cmd.extend(["--model", str(params["model"])])
@@ -495,8 +500,12 @@ def get_params_help(cli_type: str) -> str:
   默认: True
   对应环境变量: CLAUDE_CODE_DISABLE_PROMPTS=1
 
+<code>stream_json</code> - 启用 stream-json 流式输出 (布尔值)
+  默认: True
+  对应参数: --output-format stream-json --verbose --include-partial-messages
+
 <code>model</code> - 模型选择 (字符串)
-  默认: "gpt-5.4"
+  默认: None
   对应参数: --model
 
 <code>extra_args</code> - 额外参数 (字符串列表)

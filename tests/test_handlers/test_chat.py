@@ -320,6 +320,71 @@ class TestCollectCliOutput:
         assert process.wait_calls == 1
 
 
+class TestStreamClaudeJsonOutput:
+    """测试 Claude stream-json 输出解析与渲染"""
+
+    @pytest.mark.asyncio
+    async def test_parses_partial_preview_and_final_text(self, mock_update):
+        import threading
+
+        from bot.handlers import chat
+
+        progress_message = MagicMock()
+        progress_message.delete = AsyncMock()
+        progress_message.edit_text = AsyncMock()
+        final_message = MagicMock()
+        mock_update.message.reply_text = AsyncMock(side_effect=[progress_message, final_message])
+
+        session_mock = MagicMock()
+        session_mock.stop_requested = False
+        session_mock._lock = threading.Lock()
+
+        class FakeStdout:
+            def __init__(self):
+                self._lines = [
+                    '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}}\n',
+                    '{"type":"result","subtype":"success","session_id":"sess-1","result":"你好，世界"}\n',
+                ]
+
+            def readline(self):
+                return self._lines.pop(0) if self._lines else ""
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.returncode = None
+                self.stdin = None
+
+            def poll(self):
+                if self.returncode is None and not self.stdout._lines:
+                    self.returncode = 0
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+
+            def terminate(self):
+                self.returncode = 0
+
+        process = FakeProcess()
+
+        with patch.object(chat, "CLI_TIMEOUT_CHECK_INTERVAL", 0.01), \
+             patch.object(chat, "CLI_PROGRESS_UPDATE_INTERVAL", 60), \
+             patch.object(chat, "CLI_EXEC_TIMEOUT", 5):
+            output, session_id, returncode, timed_out = await chat.stream_claude_json_output(
+                process,
+                mock_update,
+                session_mock,
+            )
+
+        assert timed_out is False
+        assert returncode == 0
+        assert session_id == "sess-1"
+        assert output == "你好，世界"
+        assert "你好，世界" in mock_update.message.reply_text.await_args_list[1].args[0]
+
+
 def test_terminate_process_tree_sync_uses_platform_helper(monkeypatch):
     from bot.handlers import chat
 

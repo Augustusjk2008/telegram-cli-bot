@@ -39,6 +39,8 @@ from bot.cli_params import get_default_params, get_params_schema
 from bot.cli import (
     build_cli_command,
     normalize_cli_type,
+    parse_claude_stream_json_line,
+    parse_claude_stream_json_output,
     parse_codex_json_line,
     parse_codex_json_output,
     resolve_cli_executable,
@@ -694,6 +696,34 @@ def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
     return fallback_text or None
 
 
+def _extract_claude_stream_preview(raw_output: str) -> Optional[str]:
+    preview_parts: list[str] = []
+    fallback_parts: list[str] = []
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_claude_stream_json_line(stripped)
+        if parsed["delta_text"]:
+            preview_parts.append(parsed["delta_text"])
+            continue
+        if parsed["completed_text"]:
+            fallback_parts.append(parsed["completed_text"])
+            continue
+        if parsed["error_text"]:
+            fallback_parts.append(parsed["error_text"])
+            continue
+        if not stripped.startswith("{"):
+            fallback_parts.append(stripped)
+
+    preview_text = "".join(preview_parts).strip()
+    if preview_text:
+        return preview_text
+
+    fallback_text = "\n".join(part for part in fallback_parts if part).strip()
+    return fallback_text or None
+
+
 def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: str) -> dict[str, Any]:
     event: dict[str, Any] = {
         "type": "status",
@@ -701,6 +731,10 @@ def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: 
     }
     if cli_type == "codex":
         preview_text = _extract_codex_stream_preview(raw_output)
+        if preview_text:
+            event["preview_text"] = preview_text[-800:]
+    elif cli_type == "claude":
+        preview_text = _extract_claude_stream_preview(raw_output)
         if preview_text:
             event["preview_text"] = preview_text[-800:]
     return event
@@ -765,6 +799,16 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
     return final_text, thread_id, returncode, timed_out
 
 
+async def _communicate_claude_process(process: subprocess.Popen) -> tuple[str, Optional[str], int, bool]:
+    raw_output, returncode, timed_out = await _communicate_process(process)
+    final_text, session_id = parse_claude_stream_json_output(raw_output)
+    if timed_out and not final_text:
+        final_text = msg("chat", "timeout_no_output")
+    elif not final_text:
+        final_text = msg("chat", "no_output")
+    return final_text, session_id, returncode, timed_out
+
+
 async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
     profile = get_profile_or_raise(manager, alias)
     if not _supports_cli_runtime(profile):
@@ -820,7 +864,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                     env=env,
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
-                    json_output=(cli_type == "codex"),
+                    json_output=(cli_type in ("codex", "claude")),
                     params_config=profile.cli_params,
                 )
             except ValueError as exc:
@@ -958,6 +1002,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             if cli_type == "codex":
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id
+            elif cli_type == "claude":
+                response, _ = parse_claude_stream_json_output(raw_output)
             else:
                 response = raw_output.strip()
 
@@ -1099,7 +1145,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                     env=env,
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
-                    json_output=(cli_type == "codex"),
+                    json_output=(cli_type in ("codex", "claude")),
                     params_config=profile.cli_params,
                 )
             except ValueError as exc:
@@ -1141,6 +1187,8 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
             try:
                 if cli_type == "codex":
                     response, thread_id, returncode, timed_out = await _communicate_codex_process(process)
+                elif cli_type == "claude":
+                    response, _, returncode, timed_out = await _communicate_claude_process(process)
                 else:
                     response, returncode, timed_out = await _communicate_process(process)
                     response = response.strip() or (msg("chat", "timeout_no_output") if timed_out else msg("chat", "no_output"))

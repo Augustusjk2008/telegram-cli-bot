@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
@@ -25,6 +25,7 @@ except ImportError:
 from bot.cli import (
     build_cli_command,
     normalize_cli_type,
+    parse_claude_stream_json_output,
     parse_codex_json_output,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
@@ -312,17 +313,18 @@ async def collect_cli_output(
         return "", -1, False
 
 
-async def stream_codex_json_output(
-    process: subprocess.Popen, update: Update, session=None
+async def _stream_json_cli_output(
+    process: subprocess.Popen,
+    update: Update,
+    session,
+    *,
+    cli_name: str,
+    parse_output: Callable[[str], Tuple[str, Optional[str]]],
 ) -> Tuple[str, Optional[str], int, bool]:
-    """流式读取 codex --json 输出，定期刷新等待提示和已输出内容。
-    
-    Returns:
-        Tuple[str, Optional[str], int, bool]: (输出文本, thread_id, 返回码, 是否因超时而终止)
-    """
+    """流式读取 JSON 事件输出，定期刷新等待提示和已输出内容。"""
     loop = asyncio.get_running_loop()
     message = await update.message.reply_text(
-        msg("chat", "processing").replace("处理中", "Codex处理中"),
+        msg("chat", "processing").replace("处理中", f"{cli_name}处理中"),
         reply_markup=get_stop_keyboard()
     )
     start_time = loop.time()
@@ -366,7 +368,6 @@ async def stream_codex_json_output(
 
     # 状态跟踪
     last_update_time = 0
-    displayed_output_len = 0
     progress_message = message
 
     try:
@@ -381,7 +382,7 @@ async def stream_codex_json_output(
                 try:
                     await safe_edit_text(
                         progress_message,
-                        f"⏱️ Codex已超时（{elapsed}秒），正在收集剩余输出...",
+                        f"⏱️ {cli_name}已超时（{elapsed}秒），正在收集剩余输出...",
                         reply_markup=get_stop_keyboard()
                     )
                 except Exception:
@@ -421,15 +422,15 @@ async def stream_codex_json_output(
                 full_output = ''.join(output_lines)
                 
                 # 尝试解析已收集的输出获取有效文本
-                preview_text, _ = parse_codex_json_output(full_output)
-                if preview_text == msg("chat", "no_output"):
+                preview_text, _ = parse_output(full_output)
+                if preview_text in {msg("chat", "no_output"), "(无输出)"}:
                     preview_text = full_output
                 
                 # 超时后显示收集进度
                 if timed_out:
                     status_text = f"⏱️ 已超时（{elapsed}秒），正在收集剩余输出...\n已收集 {len(full_output)} 字符\n\n"
                 else:
-                    status_text = msg("chat", "processing_with_time", elapsed=elapsed).replace("处理中", "Codex处理中") + "\n\n"
+                    status_text = msg("chat", "processing_with_time", elapsed=elapsed).replace("处理中", f"{cli_name}处理中") + "\n\n"
                 
                 # 只显示最后一部分（避免消息太长）
                 preview = preview_text[-800:] if len(preview_text) > 800 else preview_text
@@ -441,7 +442,6 @@ async def stream_codex_json_output(
                     status_text += f"<pre>{escaped}</pre>"
                 
                 await safe_edit_text(progress_message, status_text, reply_markup=get_stop_keyboard())
-                displayed_output_len = len(full_output)
 
         # 等待读取线程结束
         stop_reading.set()
@@ -460,10 +460,10 @@ async def stream_codex_json_output(
         returncode = await _resolve_process_returncode(process, returncode_container[0])
         was_stopped = _is_stop_requested(session)
 
-        final_text, thread_id = parse_codex_json_output(raw_output)
+        final_text, native_session_id = parse_output(raw_output)
 
         if timed_out:
-            if not final_text or final_text == msg("chat", "no_output"):
+            if not final_text or final_text in {msg("chat", "no_output"), "(无输出)"}:
                 final_text = msg("chat", "timeout_no_output")
             
             chunks = split_text_into_chunks(final_text, max_len=900)
@@ -488,9 +488,9 @@ async def stream_codex_json_output(
                 sent_messages.append(new_msg)
                 await asyncio.sleep(0.3)
 
-            return final_text, thread_id, returncode, True
+            return final_text, native_session_id, returncode, True
         else:
-            if not final_text:
+            if not final_text or final_text == "(无输出)":
                 final_text = msg("chat", "no_output")
 
             chunks = split_text_into_chunks(final_text, max_len=900)
@@ -510,13 +510,13 @@ async def stream_codex_json_output(
                 sent_messages.append(new_msg)
                 await asyncio.sleep(0.3)
 
-            return final_text, thread_id, returncode, False
+            return final_text, native_session_id, returncode, False
     except Exception as e:
         # 区分网络错误和真正的流式处理错误
         if HTTPX_ERRORS and isinstance(e, HTTPX_ERRORS):
             logger.error(f"Telegram 网络连接错误: {e}")
         else:
-            logger.error(f"Codex JSON 流式处理错误: {e}")
+            logger.error(f"{cli_name} JSON 流式处理错误: {e}")
 
         # 无论什么错误，先停止读取线程
         stop_reading.set()
@@ -535,7 +535,7 @@ async def stream_codex_json_output(
         returncode = await _resolve_process_returncode(process, returncode_container[0])
 
         if raw_output.strip():
-            final_text, thread_id = parse_codex_json_output(raw_output)
+            final_text, native_session_id = parse_output(raw_output)
             logger.info(f"流式处理出错但已恢复 {len(raw_output)} 字符的输出")
 
             # 删除进度消息，发送已收集的结果
@@ -546,7 +546,7 @@ async def stream_codex_json_output(
 
             # 先发送错误提示，告知用户出了什么问题
             error_type = "网络连接错误" if (HTTPX_ERRORS and isinstance(e, HTTPX_ERRORS)) else "流式处理错误"
-            error_notice = f"⚠️ Codex {error_type}: <code>{html.escape(str(e))}</code>\n已恢复已收集的输出："
+            error_notice = f"⚠️ {cli_name} {error_type}: <code>{html.escape(str(e))}</code>\n已恢复已收集的输出："
             try:
                 await update.message.reply_text(error_notice, parse_mode="HTML")
             except Exception:
@@ -562,7 +562,7 @@ async def stream_codex_json_output(
                     pass
                 await asyncio.sleep(0.3)
 
-            return final_text, thread_id, returncode, False
+            return final_text, native_session_id, returncode, False
         else:
             # 真的没有输出，才报错
             try:
@@ -570,6 +570,32 @@ async def stream_codex_json_output(
             except Exception:
                 pass
             return "", None, returncode, False
+
+
+async def stream_codex_json_output(
+    process: subprocess.Popen, update: Update, session=None
+) -> Tuple[str, Optional[str], int, bool]:
+    """流式读取 codex --json 输出。"""
+    return await _stream_json_cli_output(
+        process,
+        update,
+        session,
+        cli_name="Codex",
+        parse_output=parse_codex_json_output,
+    )
+
+
+async def stream_claude_json_output(
+    process: subprocess.Popen, update: Update, session=None
+) -> Tuple[str, Optional[str], int, bool]:
+    """流式读取 Claude stream-json 输出。"""
+    return await _stream_json_cli_output(
+        process,
+        update,
+        session,
+        cli_name="Claude",
+        parse_output=parse_claude_stream_json_output,
+    )
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text_override: str = None):
@@ -664,7 +690,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 env=env,
                 session_id=cli_session_id,
                 resume_session=resume_session,
-                json_output=(cli_type == "codex"),
+                json_output=(cli_type in ("codex", "claude")),
                 params_config=profile.cli_params,
             )
         except ValueError as e:
@@ -719,23 +745,23 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         if session.codex_session_id is not None:
                             session.codex_session_id = None
                             session_id_changed = True
+            elif cli_type == "claude":
+                response, _, returncode, timed_out = await stream_claude_json_output(process, update, session)
+                with session._lock:
+                    if timed_out:
+                        pass
+                    elif should_mark_claude_session_initialized(response, returncode):
+                        if not session.claude_session_initialized:
+                            session.claude_session_initialized = True
+                            session_id_changed = True
+                    elif should_reset_claude_session(response, returncode):
+                        if session.claude_session_id is not None:
+                            session.claude_session_id = None
+                            session.claude_session_initialized = False
+                            session_id_changed = True
             else:
                 response, returncode, timed_out = await collect_cli_output(process, update, session)
-                if cli_type == "claude":
-                    with session._lock:
-                        if timed_out:
-                            # 超时后保留会话，让用户决定是否继续
-                            pass
-                        elif should_mark_claude_session_initialized(response, returncode):
-                            if not session.claude_session_initialized:
-                                session.claude_session_initialized = True
-                                session_id_changed = True
-                        elif should_reset_claude_session(response, returncode):
-                            if session.claude_session_id is not None:
-                                session.claude_session_id = None
-                                session.claude_session_initialized = False
-                                session_id_changed = True
-                elif cli_type == "kimi":
+                if cli_type == "kimi":
                     with session._lock:
                         if not timed_out and should_reset_kimi_session(response, returncode):
                             if session.kimi_session_id is not None:

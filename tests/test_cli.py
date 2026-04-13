@@ -15,6 +15,8 @@ from bot.cli import (
     build_cli_command,
     extract_codex_status,
     normalize_cli_type,
+    parse_claude_stream_json_line,
+    parse_claude_stream_json_output,
     parse_codex_json_line,
     parse_codex_json_output,
     read_codex_status_from_terminal,
@@ -120,6 +122,21 @@ class TestBuildCliCommand:
         )
         assert "claude" in cmd
 
+    def test_claude_stream_json_defaults_include_partial_messages(self):
+        env = {}
+        cmd, use_stdin = build_cli_command(
+            cli_type="claude",
+            resolved_cli="claude",
+            user_text="hello",
+            env=env,
+            params_config=CliParamsConfig(),
+        )
+        assert "--output-format" in cmd
+        output_index = cmd.index("--output-format")
+        assert cmd[output_index + 1] == "stream-json"
+        assert "--verbose" in cmd
+        assert "--include-partial-messages" in cmd
+
     def test_claude_with_session(self):
         env = {}
         cmd, use_stdin = build_cli_command(
@@ -196,6 +213,49 @@ class TestParseCodexJsonOutput:
     def test_simple_output(self):
         text, thread_id = parse_codex_json_output("plain text output")
         assert isinstance(text, str)
+
+
+class TestParseClaudeStreamJsonLine:
+    """测试 Claude stream-json 单行解析"""
+
+    def test_text_delta(self):
+        result = parse_claude_stream_json_line(
+            '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}'
+        )
+        assert result["session_id"] == "sess-1"
+        assert result["delta_text"] == "Hi"
+
+    def test_result_frame(self):
+        result = parse_claude_stream_json_line(
+            '{"type":"result","subtype":"success","session_id":"sess-1","result":"Hi there"}'
+        )
+        assert result["session_id"] == "sess-1"
+        assert result["completed_text"] == "Hi there"
+
+
+class TestParseClaudeStreamJsonOutput:
+    """测试 Claude stream-json 完整输出解析"""
+
+    def test_prefers_result_text(self):
+        text, session_id = parse_claude_stream_json_output(
+            "\n".join(
+                [
+                    '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}',
+                    '{"type":"result","subtype":"success","session_id":"sess-1","result":"Hi there"}',
+                ]
+            )
+        )
+
+        assert text == "Hi there"
+        assert session_id == "sess-1"
+
+    def test_falls_back_to_errors_when_result_is_empty(self):
+        text, session_id = parse_claude_stream_json_output(
+            '{"type":"result","subtype":"error_max_turns","session_id":"sess-1","result":"","errors":["Error: Session ID not found"]}'
+        )
+
+        assert text == "Error: Session ID not found"
+        assert session_id == "sess-1"
 
 
 class TestExtractCodexStatus:

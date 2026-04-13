@@ -1774,6 +1774,20 @@ def test_codex_status_event_skips_json_meta_preview():
     }
 
 
+def test_claude_status_event_extracts_text_delta_preview():
+    event = _build_stream_status_event(
+        cli_type="claude",
+        elapsed_seconds=2,
+        raw_output='{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}}\n',
+    )
+
+    assert event == {
+        "type": "status",
+        "elapsed_seconds": 2,
+        "preview_text": "你好",
+    }
+
+
 @pytest.mark.asyncio
 async def test_post_chat_stream_continues_processing_after_client_disconnect(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)

@@ -218,6 +218,191 @@ def parse_codex_json_output(raw_output: str) -> Tuple[str, Optional[str]]:
     return final_text, thread_id
 
 
+def _extract_claude_session_id(event: Dict[str, Any]) -> Optional[str]:
+    candidate_paths = (
+        ("session_id",),
+        ("session", "id"),
+        ("data", "session_id"),
+    )
+    for path in candidate_paths:
+        value = _extract_nested_nonempty_str(event, *path)
+        if value:
+            return value
+    return None
+
+
+def _extract_claude_message_text(message: Any) -> Optional[str]:
+    if not isinstance(message, dict):
+        return None
+
+    content = message.get("content")
+    if not isinstance(content, list):
+        return None
+
+    text_parts: List[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("type", "")).strip() != "text":
+            continue
+        text_value = block.get("text")
+        if isinstance(text_value, str) and text_value:
+            text_parts.append(text_value)
+
+    combined = "".join(text_parts).strip()
+    return combined or None
+
+
+def _extract_claude_error_text(event: Dict[str, Any]) -> Optional[str]:
+    collected: List[str] = []
+
+    errors = event.get("errors")
+    if isinstance(errors, list):
+        for item in errors:
+            if isinstance(item, str) and item.strip():
+                collected.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                nested = _extract_nested_nonempty_str(item, "message")
+                if nested:
+                    collected.append(nested)
+                    continue
+                nested = _extract_nested_nonempty_str(item, "detail")
+                if nested:
+                    collected.append(nested)
+                    continue
+                nested = _extract_nested_nonempty_str(item, "error")
+                if nested:
+                    collected.append(nested)
+
+    for key in ("message", "error", "detail"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            collected.append(value.strip())
+            continue
+        if isinstance(value, dict):
+            nested = _extract_nested_nonempty_str(value, "message")
+            if nested:
+                collected.append(nested)
+                continue
+            nested = _extract_nested_nonempty_str(value, "detail")
+            if nested:
+                collected.append(nested)
+                continue
+            nested = _extract_nested_nonempty_str(value, "error")
+            if nested:
+                collected.append(nested)
+
+    if not collected:
+        return None
+
+    # 保留顺序去重，避免 result/errors 与 message 文本重复显示。
+    unique: List[str] = []
+    for item in collected:
+        if item not in unique:
+            unique.append(item)
+    return "\n".join(unique)
+
+
+def parse_claude_stream_json_line(line: str) -> Dict[str, Optional[str]]:
+    """解析 Claude stream-json 的单行事件。"""
+    result: Dict[str, Optional[str]] = {
+        "session_id": None,
+        "completed_text": None,
+        "delta_text": None,
+        "error_text": None,
+    }
+    try:
+        event: Any = json.loads(line)
+    except json.JSONDecodeError:
+        return result
+
+    if not isinstance(event, dict):
+        return result
+
+    result["session_id"] = _extract_claude_session_id(event)
+    event_type = str(event.get("type", "")).strip()
+
+    if event_type == "stream_event":
+        inner_event = event.get("event")
+        if not isinstance(inner_event, dict):
+            return result
+        if str(inner_event.get("type", "")).strip() != "content_block_delta":
+            return result
+
+        delta = inner_event.get("delta")
+        if not isinstance(delta, dict):
+            return result
+        if str(delta.get("type", "")).strip() != "text_delta":
+            return result
+
+        text_value = delta.get("text")
+        if isinstance(text_value, str) and text_value:
+            result["delta_text"] = text_value
+        return result
+
+    if event_type == "assistant":
+        completed_text = _extract_claude_message_text(event.get("message"))
+        if completed_text:
+            result["completed_text"] = completed_text
+        return result
+
+    if event_type == "result":
+        result_text = event.get("result")
+        if isinstance(result_text, str) and result_text.strip():
+            result["completed_text"] = result_text.strip()
+        error_text = _extract_claude_error_text(event)
+        if error_text:
+            result["error_text"] = error_text
+        return result
+
+    if event_type == "system":
+        error_text = _extract_claude_error_text(event)
+        if error_text:
+            result["error_text"] = error_text
+        return result
+
+    return result
+
+
+def parse_claude_stream_json_output(raw_output: str) -> Tuple[str, Optional[str]]:
+    """解析 Claude stream-json 的完整输出文本，提取 assistant 文本和 session_id。"""
+    raw_lines: List[str] = []
+    completed_parts: List[str] = []
+    delta_parts: List[str] = []
+    error_parts: List[str] = []
+    session_id: Optional[str] = None
+
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        raw_lines.append(stripped)
+        parsed = parse_claude_stream_json_line(stripped)
+        if parsed["session_id"]:
+            session_id = parsed["session_id"]
+        if parsed["completed_text"]:
+            completed_parts.append(parsed["completed_text"])
+        if parsed["delta_text"]:
+            delta_parts.append(parsed["delta_text"])
+        if parsed["error_text"]:
+            error_parts.append(parsed["error_text"])
+
+    if completed_parts:
+        final_text = completed_parts[-1].strip()
+    else:
+        final_text = "".join(delta_parts).strip()
+
+    if not final_text and error_parts:
+        final_text = "\n".join(part for part in error_parts if part.strip()).strip()
+    if not final_text:
+        final_text = "\n".join(raw_lines).strip()
+    if not final_text:
+        final_text = "(无输出)"
+
+    return final_text, session_id
+
+
 def strip_ansi_terminal_text(text: str) -> str:
     """清洗终端控制字符，保留可读文本。"""
     return ANSI_ESCAPE_RE.sub("", (text or "").replace("\r", "\n"))
