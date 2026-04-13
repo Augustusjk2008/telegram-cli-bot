@@ -41,12 +41,20 @@ export function readStoredUserAvatarName() {
   if (typeof window === "undefined") {
     return DEFAULT_USER_AVATAR_NAME;
   }
-  return resolveAvatarName(localStorage.getItem(USER_AVATAR_STORAGE_KEY) || undefined, "user");
+  try {
+    return resolveAvatarName(localStorage.getItem(USER_AVATAR_STORAGE_KEY) || undefined, "user");
+  } catch {
+    return DEFAULT_USER_AVATAR_NAME;
+  }
 }
 
 export function storeUserAvatarName(avatarName: string) {
   if (typeof window === "undefined") {
     return;
   }
-  localStorage.setItem(USER_AVATAR_STORAGE_KEY, resolveAvatarName(avatarName, "user"));
+  try {
+    localStorage.setItem(USER_AVATAR_STORAGE_KEY, resolveAvatarName(avatarName, "user"));
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }

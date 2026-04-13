@@ -43,20 +43,36 @@ const TerminalScreen = lazy(() =>
 );
 
 function readStoredToken() {
-  return sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() || "";
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
 }
 
 function storeToken(token: string) {
   const trimmed = token.trim();
   if (!trimmed) {
-    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    try {
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures and keep the in-memory state.
+    }
     return;
   }
-  sessionStorage.setItem(TOKEN_STORAGE_KEY, trimmed);
+  try {
+    sessionStorage.setItem(TOKEN_STORAGE_KEY, trimmed);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }
 
 function clearStoredToken() {
-  sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  try {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }
 
 function readStoredBotAlias() {
