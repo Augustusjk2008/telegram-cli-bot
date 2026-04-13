@@ -58,6 +58,21 @@ test("renders standalone login screen without backend", () => {
   expect(document.documentElement.dataset.theme).toBe("deep-space");
 });
 
+test("keeps rendering the login shell when localStorage writes fail", () => {
+  vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+    throw new Error("storage unavailable");
+  });
+  vi.spyOn(window.localStorage, "removeItem").mockImplementation(() => {
+    throw new Error("storage unavailable");
+  });
+
+  render(<App />);
+
+  expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
+  expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
+  expect(document.title).toBe("🦞Safe Claw");
+});
+
 test("shows bottom navigation after entering demo app shell", async () => {
   render(<App />);
   await userEvent.type(screen.getByLabelText("访问口令"), "123");

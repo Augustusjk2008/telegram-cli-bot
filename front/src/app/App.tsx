@@ -60,7 +60,11 @@ function clearStoredToken() {
 }
 
 function readStoredBotAlias() {
-  return localStorage.getItem(BOT_STORAGE_KEY)?.trim() || "";
+  try {
+    return localStorage.getItem(BOT_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
 }
 
 function storeBotAlias(alias: string | null) {
@@ -68,7 +72,11 @@ function storeBotAlias(alias: string | null) {
   if (!trimmed) {
     return;
   }
-  localStorage.setItem(BOT_STORAGE_KEY, trimmed);
+  try {
+    localStorage.setItem(BOT_STORAGE_KEY, trimmed);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }
 
 function readUnreadBots() {
@@ -85,11 +93,15 @@ function readUnreadBots() {
 }
 
 function storeUnreadBots(items: string[]) {
-  if (items.length === 0) {
-    localStorage.removeItem(UNREAD_STORAGE_KEY);
-    return;
+  try {
+    if (items.length === 0) {
+      localStorage.removeItem(UNREAD_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
   }
-  localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(items));
 }
 
 function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
@@ -264,7 +276,7 @@ export function App() {
 
   function handleLogout() {
     clearStoredToken();
-    localStorage.removeItem(UNREAD_STORAGE_KEY);
+    storeUnreadBots([]);
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
     setIsLoggedIn(false);
     setCurrentBot(null);
