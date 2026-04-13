@@ -781,7 +781,9 @@ test("renders sender names timestamps avatars and copies completed assistant rep
   expect(screen.getByText("09:08")).toBeInTheDocument();
   expect(screen.getByText("09:09")).toBeInTheDocument();
   expect(screen.getByRole("img", { name: "你 头像" })).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "main 头像" })).toBeInTheDocument();
+  const mainAvatars = screen.getAllByRole("img", { name: "main 头像" });
+  expect(mainAvatars.length).toBeGreaterThan(0);
+  expect(mainAvatars[mainAvatars.length - 1]?.parentElement).toHaveClass("items-start");
 
   await user.click(screen.getByRole("button", { name: "复制" }));
 

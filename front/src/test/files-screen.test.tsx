@@ -276,11 +276,12 @@ test("home button refreshes the file view to the latest working directory", asyn
 
   render(<FilesScreen botAlias="main" client={createClient({ listFiles: listFilesSpy })} />);
 
-  expect(await screen.findByText("main - C:\\workspace\\old")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "main" })).toBeInTheDocument();
+  expect(screen.getByText("C:\\workspace\\old")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Home" }));
 
   expect(listFilesSpy).toHaveBeenCalledTimes(2);
-  expect(await screen.findByText("main - C:\\workspace\\new-home")).toBeInTheDocument();
+  expect(await screen.findByText("C:\\workspace\\new-home")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "打开 new.txt" })).toBeInTheDocument();
 });
 

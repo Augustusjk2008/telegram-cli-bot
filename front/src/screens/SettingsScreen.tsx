@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
+import { AvatarPicker } from "../components/AvatarPicker";
+import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
+import type { AvatarAsset, BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import { DEFAULT_UI_THEME, UI_THEME_OPTIONS, type UiThemeName } from "../theme";
 
 type Props = {
   botAlias: string;
+  botAvatarName?: string;
   client?: WebBotClient;
   onLogout: () => void;
   themeName?: UiThemeName;
   onThemeChange?: (themeName: UiThemeName) => void;
+  userAvatarName?: string;
+  onUserAvatarChange?: (avatarName: string) => void;
 };
 
 type DraftValues = Record<string, string | boolean>;
@@ -63,15 +69,19 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 export function SettingsScreen({
   botAlias,
+  botAvatarName,
   client = new MockWebBotClient(),
   onLogout,
   themeName = DEFAULT_UI_THEME,
   onThemeChange,
+  userAvatarName = readStoredUserAvatarName(),
+  onUserAvatarChange,
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
+  const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
@@ -107,8 +117,9 @@ export function SettingsScreen({
       client.getCliParams(botAlias),
       client.getTunnelStatus(),
       botAlias === "main" ? client.getGitProxySettings() : Promise.resolve(null),
+      client.listAvatarAssets(),
     ])
-      .then(([overviewResult, cliParamsResult, tunnelResult, gitProxyResult]) => {
+      .then(([overviewResult, cliParamsResult, tunnelResult, gitProxyResult, avatarAssetsResult]) => {
         if (cancelled) return;
 
         if (overviewResult.status !== "fulfilled" || cliParamsResult.status !== "fulfilled") {
@@ -122,9 +133,13 @@ export function SettingsScreen({
         const cliParamsData = cliParamsResult.value;
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
+        const avatarData = avatarAssetsResult.status === "fulfilled" && avatarAssetsResult.value.length > 0
+          ? avatarAssetsResult.value
+          : DEFAULT_AVATAR_ASSETS;
 
         setOverview(overviewData);
         setCliParams(cliParamsData);
+        setAvatarAssets(avatarData);
         setDraftValues(buildDraftValues(cliParamsData));
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
@@ -395,7 +410,17 @@ export function SettingsScreen({
   return (
     <main className="flex flex-col h-full bg-[var(--bg)]">
       <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
-        <h1 className="text-xl font-bold">设置</h1>
+        {botAvatarName || overview?.avatarName ? (
+          <BotIdentity
+            alias={overview?.alias || botAlias}
+            avatarName={botAvatarName || overview?.avatarName}
+            size={32}
+            nameClassName="truncate text-xl font-bold text-[var(--text)]"
+            subtitle={<p className="text-sm text-[var(--muted)]">设置</p>}
+          />
+        ) : (
+          <h1 className="text-xl font-bold">设置</h1>
+        )}
       </header>
 
       <section className="flex-1 overflow-y-auto p-4 space-y-6">
@@ -476,10 +501,27 @@ export function SettingsScreen({
           </div>
         </div>
 
+        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text)]">我的头像</h2>
+            <p className="text-sm text-[var(--muted)]">只影响 Web 页面里“你”的头像显示。</p>
+          </div>
+          <AvatarPicker
+            assets={avatarAssets}
+            selectedName={userAvatarName}
+            previewAlt="我的头像预览"
+            selectLabel="我的头像"
+            kind="user"
+            onSelect={(avatarName) => {
+              onUserAvatarChange?.(avatarName);
+              setNotice("我的头像已更新");
+            }}
+          />
+        </div>
+
         {overview ? (
           <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4">
             <div className="space-y-2">
-              <p><span className="font-medium text-[var(--text)]">Bot:</span> {overview.alias}</p>
               <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
               {overview.cliPath ? (
                 <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>

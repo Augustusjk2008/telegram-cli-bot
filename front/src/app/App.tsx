@@ -17,6 +17,7 @@ import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
+import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
 import { APP_NAME, applyUiTheme, persistUiTheme, readStoredUiTheme, type UiThemeName } from "../theme";
 import "../styles/tokens.css";
 import "../styles/global.css";
@@ -110,6 +111,7 @@ export function App() {
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
+  const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
   const displayBots = applyUnreadStatus(bots, unreadBots);
   const currentBotSummary = displayBots.find((bot) => bot.alias === currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
 
@@ -259,6 +261,11 @@ export function App() {
     setThemeName(nextTheme);
   }
 
+  function handleUserAvatarChange(nextAvatarName: string) {
+    setUserAvatarName(nextAvatarName);
+    storeUserAvatarName(nextAvatarName);
+  }
+
   useEffect(() => {
     if (!currentBot) {
       return;
@@ -297,6 +304,8 @@ export function App() {
             <ChatScreen
               botAlias={alias}
               client={client}
+              botAvatarName={displayBots.find((bot) => bot.alias === alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
+              userAvatarName={userAvatarName}
               isVisible={alias === currentBot}
               isImmersive={alias === currentBot ? isChatImmersive : false}
               onToggleImmersive={alias === currentBot
@@ -311,7 +320,12 @@ export function App() {
   } else if (currentTab === "files") {
     activeScreen = (
       <div className="absolute inset-0">
-        <FilesScreen key={`files-${currentBot}`} botAlias={currentBot} client={client} />
+        <FilesScreen
+          key={`files-${currentBot}`}
+          botAlias={currentBot}
+          botAvatarName={currentBotSummary?.avatarName}
+          client={client}
+        />
       </div>
     );
   } else if (currentTab === "terminal") {
@@ -334,7 +348,7 @@ export function App() {
   } else if (currentTab === "git") {
     activeScreen = (
       <div className="absolute inset-0">
-        <GitScreen key={`git-${currentBot}`} botAlias={currentBot} client={client} />
+        <GitScreen key={`git-${currentBot}`} botAlias={currentBot} botAvatarName={currentBotSummary?.avatarName} client={client} />
       </div>
     );
   } else if (currentTab === "settings") {
@@ -343,10 +357,13 @@ export function App() {
         <SettingsScreen
           key={`settings-${currentBot}`}
           botAlias={currentBot}
+          botAvatarName={currentBotSummary?.avatarName}
           client={client}
           onLogout={handleLogout}
           themeName={themeName}
           onThemeChange={handleThemeChange}
+          userAvatarName={userAvatarName}
+          onUserAvatarChange={handleUserAvatarChange}
         />
       </div>
     );

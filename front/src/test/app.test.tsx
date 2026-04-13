@@ -566,12 +566,12 @@ test("bot manager shows avatar filenames with preview and sends the selected ava
   const createSection = screen.getByRole("heading", { name: "新增 Bot" }).closest("section");
   expect(createSection).not.toBeNull();
   const createScope = within(createSection as HTMLElement);
-  expect(createScope.getAllByText("claude-blue.png").length).toBeGreaterThan(0);
-  expect(createScope.getAllByText("bot-default.png").length).toBeGreaterThan(0);
   expect(createScope.getByText("规格固定为 64x64，建议使用 PNG/JPG/WebP。")).toBeInTheDocument();
+  expect(createScope.getByLabelText("新 Bot 头像")).toBeInTheDocument();
+  expect(createScope.queryByRole("button", { name: "选择头像 claude-blue.png" })).not.toBeInTheDocument();
   expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/bot-default.png");
 
-  await user.click(createScope.getByRole("button", { name: "选择头像 claude-blue.png" }));
+  await user.selectOptions(createScope.getByLabelText("新 Bot 头像"), "claude-blue.png");
 
   expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
 
@@ -585,6 +585,52 @@ test("bot manager shows avatar filenames with preview and sends the selected ava
     avatarName: "claude-blue.png",
   }));
   expect(await screen.findByRole("img", { name: "team-avatar 头像" })).toBeInTheDocument();
+});
+
+test("settings can change my avatar and chat uses the selected image", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/user-default.png");
+  await user.selectOptions(screen.getByLabelText("我的头像"), "claude-blue.png");
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
+  expect(localStorage.getItem("web-user-avatar-name")).toBe("claude-blue.png");
+
+  await user.click(screen.getByRole("button", { name: "聊天" }));
+  await user.type(screen.getByPlaceholderText("输入消息"), "测试头像");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("测试头像")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "你 头像" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
+});
+
+test("bot switcher and bot-specific pages show avatars before bot names", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  expect(screen.getAllByRole("img", { name: "main 头像" }).length).toBeGreaterThan(0);
+
+  await user.click(screen.getByRole("button", { name: "文件" }));
+  expect((await screen.findAllByRole("img", { name: "main 头像" })).length).toBeGreaterThan(0);
+
+  await user.click(screen.getByRole("button", { name: "Git" }));
+  expect((await screen.findAllByRole("img", { name: "main 头像" })).length).toBeGreaterThan(0);
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  expect(await screen.findByRole("img", { name: "team2 头像" })).toBeInTheDocument();
 });
 
 test("bot manager stays open even when a stored bot alias exists", async () => {

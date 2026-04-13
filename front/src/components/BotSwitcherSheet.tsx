@@ -1,5 +1,6 @@
 import { BotSummary } from "../services/types";
 import { X } from "lucide-react";
+import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
 
 type Props = {
@@ -54,14 +55,17 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClo
                       : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
                 }`}
               >
-                <div className="flex min-w-0 flex-col items-start">
-                  <span className="font-semibold">{bot.alias}</span>
-                  <span className="max-w-full truncate text-xs text-[var(--muted)]" title={`${bot.cliType}: ${bot.workingDir}`}>
-                    {bot.cliType}: {bot.workingDir}
-                  </span>
-                  {isOffline ? (
-                    <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
-                  ) : null}
+                <div className="flex min-w-0 items-start gap-3">
+                  <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
+                  <div className="flex min-w-0 flex-col items-start">
+                    <span className="font-semibold">{bot.alias}</span>
+                    <span className="max-w-full truncate text-xs text-[var(--muted)]" title={`${bot.cliType}: ${bot.workingDir}`}>
+                      {bot.cliType}: {bot.workingDir}
+                    </span>
+                    {isOffline ? (
+                      <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
+                    ) : null}
+                  </div>
                 </div>
                 <StatusPill status={bot.status} />
               </button>

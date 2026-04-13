@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
+import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageActions } from "../components/ChatMessageActions";
@@ -16,6 +17,8 @@ import { resolvePreviewFilePath } from "../utils/fileLinks";
 type Props = {
   botAlias: string;
   client?: WebBotClient;
+  botAvatarName?: string;
+  userAvatarName?: string;
   isVisible?: boolean;
   isImmersive?: boolean;
   onToggleImmersive?: () => void;
@@ -136,6 +139,8 @@ function resolveStreamStartMs(runningReply?: RunningReply | null, elapsedSeconds
 export function ChatScreen({
   botAlias,
   client = new MockWebBotClient(),
+  botAvatarName,
+  userAvatarName,
   isVisible = true,
   isImmersive = false,
   onToggleImmersive,
@@ -525,13 +530,18 @@ export function ChatScreen({
   const killTaskActive = isStreaming || actionLoading === "kill";
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
-  const assistantAvatarName = botOverview?.avatarName;
+  const assistantAvatarName = botOverview?.avatarName || botAvatarName;
 
   return (
     <main className="relative flex flex-col h-full">
       {!isImmersive ? (
         <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
-          <h1 className="text-lg font-semibold">{botAlias}</h1>
+          <BotIdentity
+            alias={botAlias}
+            avatarName={assistantAvatarName}
+            size={32}
+            nameClassName="truncate text-lg font-semibold text-[var(--text)]"
+          />
           {isStreaming ? (
             <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
@@ -613,10 +623,10 @@ export function ChatScreen({
 
           return (
             <div key={item.id} className={isUser ? "flex justify-end" : "flex justify-start"}>
-              <div className={`flex max-w-[88%] gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+              <div className={`flex max-w-[88%] items-start gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
                 <ChatAvatar
                   alt={`${messageName} 头像`}
-                  avatarName={isUser ? undefined : assistantAvatarName}
+                  avatarName={isUser ? userAvatarName : assistantAvatarName}
                   kind={isUser ? "user" : "bot"}
                   size={32}
                 />

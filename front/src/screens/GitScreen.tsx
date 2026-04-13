@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { GitBranch, RefreshCw } from "lucide-react";
+import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { GitChangedFile, GitDiffPayload, GitOverview } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
   botAlias: string;
+  botAvatarName?: string;
   client?: WebBotClient;
 };
 
@@ -76,7 +78,7 @@ function diffLineClasses(kind: DiffLineKind) {
   return "text-[var(--text)]";
 }
 
-export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) {
+export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClient() }: Props) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -149,7 +151,17 @@ export function GitScreen({ botAlias, client = new MockWebBotClient() }: Props) 
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold">Git</h1>
-            <p className="text-sm text-[var(--muted)]">{botAlias}</p>
+            {botAvatarName ? (
+              <BotIdentity
+                alias={botAlias}
+                avatarName={botAvatarName}
+                size={28}
+                className="mt-1 flex min-w-0 items-center gap-2"
+                nameClassName="truncate text-sm font-medium text-[var(--muted)]"
+              />
+            ) : (
+              <p className="text-sm text-[var(--muted)]">{botAlias}</p>
+            )}
           </div>
           <button
             type="button"

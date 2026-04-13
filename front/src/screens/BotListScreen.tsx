@@ -5,6 +5,7 @@ import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { AvatarAsset, BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { DEFAULT_AVATAR_ASSETS, pickAvailableAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
 
 type Props = {
@@ -23,13 +24,6 @@ const EMPTY_CREATE_DRAFT: CreateDraft = {
   workingDir: "",
   avatarName: "bot-default.png",
 };
-
-const DEFAULT_AVATAR_ASSETS: AvatarAsset[] = [
-  { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
-  { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
-  { name: "kimi-teal.png", url: "/assets/avatars/kimi-teal.png" },
-  { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
-];
 
 export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Props) {
   const [bots, setBots] = useState<BotSummary[]>([]);
@@ -51,12 +45,21 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
         client.listBots(),
         client.listAvatarAssets().catch(() => DEFAULT_AVATAR_ASSETS),
       ]);
+      const resolvedAssets = assets.length > 0 ? assets : DEFAULT_AVATAR_ASSETS;
       setBots(data);
-      setAvatarAssets(assets.length > 0 ? assets : DEFAULT_AVATAR_ASSETS);
+      setAvatarAssets(resolvedAssets);
+      setCreateDraft((prev) => ({
+        ...prev,
+        avatarName: pickAvailableAvatarName(prev.avatarName, resolvedAssets, "bot"),
+      }));
       setAvatarDrafts((prev) => {
         const next = { ...prev };
         for (const bot of data) {
-          next[bot.alias] = next[bot.alias] || bot.avatarName || "bot-default.png";
+          next[bot.alias] = pickAvailableAvatarName(
+            next[bot.alias] || bot.avatarName,
+            resolvedAssets,
+            "bot",
+          );
         }
         return next;
       });
@@ -87,7 +90,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
         token: createDraft.token.trim(),
         cliPath: normalizePathInput(createDraft.cliPath),
         workingDir: normalizePathInput(createDraft.workingDir),
-        avatarName: createDraft.avatarName,
+        avatarName: pickAvailableAvatarName(createDraft.avatarName, avatarAssets, "bot"),
       });
       setCreateDraft(EMPTY_CREATE_DRAFT);
       setNotice("Bot 已创建");
@@ -173,7 +176,11 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
   }
 
   async function saveAvatar(bot: BotSummary) {
-    const avatarName = avatarDrafts[bot.alias] || bot.avatarName || "bot-default.png";
+    const avatarName = pickAvailableAvatarName(
+      avatarDrafts[bot.alias] || bot.avatarName,
+      avatarAssets,
+      "bot",
+    );
     setSavingAction(`${bot.alias}:avatar`);
     setError("");
     setNotice("");
@@ -276,6 +283,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             assets={avatarAssets}
             selectedName={createDraft.avatarName}
             previewAlt="新 Bot 头像预览"
+            selectLabel="新 Bot 头像"
             onSelect={(avatarName) => setCreateDraft((prev) => ({ ...prev, avatarName }))}
           />
         </div>
@@ -348,6 +356,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                   assets={avatarAssets}
                   selectedName={avatarDrafts[bot.alias] || bot.avatarName || "bot-default.png"}
                   previewAlt={`${bot.alias} 头像预览`}
+                  selectLabel={`${bot.alias} 头像`}
                   onSelect={(avatarName) => setAvatarDrafts((prev) => ({ ...prev, [bot.alias]: avatarName }))}
                 />
 

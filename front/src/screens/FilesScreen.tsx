@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, FolderPlus, House, Upload } from "lucide-react";
+import { BotIdentity } from "../components/BotIdentity";
 import { FileList } from "../components/FileList";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -8,10 +9,11 @@ import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
   botAlias: string;
+  botAvatarName?: string;
   client?: WebBotClient;
 };
 
-export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props) {
+export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotClient() }: Props) {
   const [currentPath, setCurrentPath] = useState("/");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,7 +128,20 @@ export function FilesScreen({ botAlias, client = new MockWebBotClient() }: Props
               <ChevronLeft className="w-5 h-5" />
             </button>
           ) : null}
-          <h1 className="text-lg font-semibold truncate">{botAlias} - {currentPath}</h1>
+          <div className="min-w-0">
+            {botAvatarName ? (
+              <BotIdentity
+                alias={botAlias}
+                avatarName={botAvatarName}
+                size={28}
+                className="flex min-w-0 items-center gap-2"
+                nameClassName="truncate text-lg font-semibold text-[var(--text)]"
+              />
+            ) : (
+              <h1 className="text-lg font-semibold truncate">{botAlias}</h1>
+            )}
+            <p className="truncate text-xs text-[var(--muted)]">{currentPath}</p>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <button

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 import subprocess
+import zlib
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -47,6 +49,23 @@ from bot.web.git_service import (
     stage_git_paths,
 )
 from bot.assistant_proposals import create_proposal
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    row = b"\x00" + (b"\x00\x00\x00" * width)
+    raw = row * height
+    compressed = zlib.compress(raw)
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        checksum = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", checksum)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", compressed)
+        + chunk(b"IEND", b"")
+    )
 
 
 @pytest.fixture
@@ -873,8 +892,9 @@ async def test_admin_avatar_assets_route_lists_available_files(
 
     avatar_dir = temp_dir / "assets" / "avatars"
     avatar_dir.mkdir(parents=True)
-    (avatar_dir / "bot-default.png").write_bytes(b"png")
-    (avatar_dir / "claude-blue.png").write_bytes(b"png")
+    (avatar_dir / "bot-default.png").write_bytes(_png_bytes(64, 64))
+    (avatar_dir / "claude-blue.png").write_bytes(_png_bytes(64, 64))
+    (avatar_dir / "too-small.png").write_bytes(_png_bytes(32, 32))
     monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
 
     app = WebApiServer(web_manager)._build_app()
@@ -902,7 +922,7 @@ async def test_admin_add_bot_route_accepts_avatar_name(
 
     avatar_dir = temp_dir / "assets" / "avatars"
     avatar_dir.mkdir(parents=True)
-    (avatar_dir / "claude-blue.png").write_bytes(b"png")
+    (avatar_dir / "claude-blue.png").write_bytes(_png_bytes(64, 64))
     monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
 
     app = WebApiServer(web_manager)._build_app()
@@ -941,7 +961,7 @@ async def test_admin_update_avatar_route_persists_avatar_selection(
 
     avatar_dir = temp_dir / "assets" / "avatars"
     avatar_dir.mkdir(parents=True)
-    (avatar_dir / "kimi-teal.png").write_bytes(b"png")
+    (avatar_dir / "kimi-teal.png").write_bytes(_png_bytes(64, 64))
     monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
 
     web_manager.managed_profiles["team2"] = BotProfile(
