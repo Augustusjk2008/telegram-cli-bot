@@ -69,8 +69,10 @@ class TunnelService:
     @staticmethod
     def _build_local_url(host: str, port: int) -> str:
         tunnel_host = host.strip() or "127.0.0.1"
-        if tunnel_host in {"0.0.0.0", "::", "[::]"}:
+        if tunnel_host in {"0.0.0.0"}:
             tunnel_host = "127.0.0.1"
+        elif tunnel_host in {"::", "[::]"}:
+            tunnel_host = "::1"
         return f"http://{TunnelService._format_http_host(tunnel_host)}:{port}"
 
     def _build_initial_snapshot(self) -> dict[str, Any]:

@@ -110,7 +110,7 @@ async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(mon
 
 
 @pytest.mark.asyncio
-async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_ipv6_any(monkeypatch):
+async def test_run_all_bots_prints_ipv6_loopback_when_web_host_is_ipv6_any(monkeypatch):
     import bot.main as main_module
 
     fake_manager = MagicMock()
@@ -139,8 +139,9 @@ async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_ipv6_an
         await main_module.run_all_bots()
 
     assert "可访问地址:" in printed
-    assert "   本机: http://127.0.0.1:9000" in printed
-    assert "   局域网 IP: http://192.168.31.5:9000" in printed
+    assert "   本机: http://[::1]:9000" in printed
+    assert "   本机: http://127.0.0.1:9000" not in printed
+    assert "   局域网 IP: http://192.168.31.5:9000" not in printed
 
 
 @pytest.mark.asyncio

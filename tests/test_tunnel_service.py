@@ -15,6 +15,11 @@ def test_tunnel_service_build_local_url_brackets_ipv6_loopback():
     assert TunnelService._build_local_url("::1", 8765) == "http://[::1]:8765"
 
 
+@pytest.mark.parametrize("host", ["::", "[::]"])
+def test_tunnel_service_build_local_url_uses_ipv6_loopback_for_any(host: str):
+    assert TunnelService._build_local_url(host, 8765) == "http://[::1]:8765"
+
+
 @pytest.mark.asyncio
 async def test_tunnel_service_reuses_persisted_quick_tunnel_without_starting_new_process(tmp_path: Path):
     state_file = tmp_path / "web-tunnel-state.json"

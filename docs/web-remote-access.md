@@ -419,7 +419,7 @@ cloudflared tunnel --url http://127.0.0.1:8765
 成功后：
 
 - Web 设置页会显示 `https://*.trycloudflare.com`
-- 在启用 Telegram 的情况下，主 bot 也可能把地址推送给允许用户
+- 如果配置了 Telegram token 且 `ALLOWED_USER_IDS` 可用，即使 Telegram 未启用，也可能通过临时 bot 推送地址
 - 地址会复制到本机剪贴板
 
 ### 5.6 验证清单

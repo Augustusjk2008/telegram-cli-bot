@@ -130,8 +130,8 @@ Assistant-mode command surface includes:
 
 Required optional dependencies:
 
-- `openai-whisper`
-- `pydub`
+- `python -m pip install -r requirements-voice.txt`
+- Python 3.13+ 若提示 `audioop` 缺失，额外安装 `audioop-lts`
 - FFmpeg
 
 If those dependencies are missing, the voice handler is skipped and the rest of the bot still runs.
