@@ -370,3 +370,125 @@ def load_native_transcript(provider: str, transcript_path: Path, *, session_id: 
         turns.append(finalized)
 
     return turns
+
+
+def create_stream_trace_state(provider: str) -> dict[str, Any]:
+    return {
+        "provider": str(provider or "").strip(),
+        "buffer": "",
+        "seen": set(),
+    }
+
+
+def _stream_event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(event.get("kind") or ""),
+        str(event.get("raw_type") or ""),
+        str(event.get("call_id") or ""),
+        str(event.get("summary") or ""),
+    )
+
+
+def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
+    event_type = str(item.get("type") or "").strip()
+    if not event_type.startswith("item."):
+        return []
+
+    payload = item.get("item") if isinstance(item.get("item"), dict) else {}
+    payload_type = str(payload.get("type") or "").strip()
+    if event_type != "item.completed":
+        return []
+    if payload_type == "function_call":
+        name = _stringify_value(payload.get("name")) or "function_call"
+        raw_arguments = payload.get("arguments")
+        arguments = _parse_jsonish(raw_arguments)
+        return [
+            _trace_event(
+                "tool_call",
+                raw_type="function_call",
+                title=name,
+                tool_name=name,
+                call_id=_stringify_value(payload.get("call_id")),
+                summary=_summarize_tool_payload(name, arguments),
+                payload={
+                    "arguments": arguments,
+                    "raw_arguments": raw_arguments,
+                },
+            )
+        ]
+    if payload_type == "function_call_output":
+        output = payload.get("output")
+        return [
+            _trace_event(
+                "tool_result",
+                raw_type="function_call_output",
+                call_id=_stringify_value(payload.get("call_id")),
+                summary=_stringify_value(output) or "工具调用已返回",
+                payload={"output": output},
+            )
+        ]
+    if payload_type in {"assistant_message", "agent_message"}:
+        text = _stringify_value(payload.get("text"))
+        if text:
+            return [
+                _trace_event(
+                    "commentary",
+                    raw_type=payload_type,
+                    summary=text,
+                )
+            ]
+    return []
+
+
+def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
+    item_type = str(item.get("type") or "").strip()
+    if item_type == "stream_event":
+        return []
+    if item_type not in {"assistant", "user"}:
+        return []
+
+    turn = _new_turn_state()
+    _consume_claude_line(item, turn)
+    return [dict(event) for event in turn["trace"]]
+
+
+def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    state["buffer"] = str(state.get("buffer") or "") + str(chunk or "")
+    if "\n" not in state["buffer"] and "\r" not in state["buffer"]:
+        return events
+
+    raw_lines = state["buffer"].splitlines(keepends=True)
+    complete_lines: list[str] = []
+    state["buffer"] = ""
+    for raw_line in raw_lines:
+        if raw_line.endswith("\n") or raw_line.endswith("\r"):
+            complete_lines.append(raw_line)
+        else:
+            state["buffer"] = raw_line
+
+    for raw_line in complete_lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            item = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+
+        if provider == "codex":
+            candidate_events = _consume_live_codex_line(item)
+        elif provider == "claude":
+            candidate_events = _consume_live_claude_line(item)
+        else:
+            candidate_events = []
+
+        for event in candidate_events:
+            event_key = _stream_event_key(event)
+            if event_key in state["seen"]:
+                continue
+            state["seen"].add(event_key)
+            events.append(event)
+    return events

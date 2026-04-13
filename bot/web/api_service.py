@@ -68,6 +68,8 @@ from bot.sessions import (
     update_bot_working_dir,
 )
 from bot.utils import is_dangerous_command
+from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
+from bot.web.native_history_builder import build_web_chat_history, finalize_web_chat_turn
 
 logger = logging.getLogger(__name__)
 DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
@@ -694,8 +696,9 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
 
 
 def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int = 50) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    return {"items": session.history[-max(1, limit):]}
+    return {"items": build_web_chat_history(profile, session, limit=max(1, limit))}
 
 
 def reset_user_session(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -715,18 +718,12 @@ def kill_user_process(manager: MultiBotManager, alias: str, user_id: int) -> dic
         if not session.is_processing or session.process is None:
             return {"killed": False, "message": msg("kill", "no_task")}
         process = session.process
+        session.stop_requested = True
 
     try:
         if process.poll() is None:
-            try:
-                if process.stdout:
-                    process.stdout.close()
-            except Exception:
-                pass
             process.terminate()
-            if process.poll() is None:
-                process.kill()
-            return {"killed": True, "message": msg("kill", "killed")}
+            return {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
         return {"killed": False, "message": msg("kill", "already_done")}
     except Exception as exc:
         _raise(500, "kill_failed", msg("kill", "error", error=str(exc)))
@@ -925,6 +922,79 @@ def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: 
         if preview_text:
             event["preview_text"] = preview_text[-800:]
     return event
+
+
+def _trace_event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(event.get("kind") or ""),
+        str(event.get("raw_type") or ""),
+        str(event.get("call_id") or ""),
+        str(event.get("summary") or ""),
+    )
+
+
+def _merge_trace_events(*sources: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for source in sources:
+        for item in source or []:
+            if not isinstance(item, dict):
+                continue
+            key = _trace_event_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(dict(item))
+    return merged
+
+
+def _build_terminal_trace(
+    *,
+    live_trace: list[dict[str, Any]],
+    stop_requested: bool,
+    timed_out: bool,
+    returncode: int,
+) -> list[dict[str, Any]]:
+    trace = _merge_trace_events(live_trace)
+    if stop_requested:
+        return _merge_trace_events(
+            trace,
+            [{"kind": "cancelled", "source": "runtime", "summary": "用户终止输出"}],
+        )
+    if timed_out:
+        return _merge_trace_events(
+            trace,
+            [{"kind": "error", "source": "runtime", "summary": "命令执行超时"}],
+        )
+    if isinstance(returncode, int) and returncode not in (0,):
+        return _merge_trace_events(
+            trace,
+            [{"kind": "error", "source": "runtime", "summary": f"命令退出码 {returncode}"}],
+        )
+    return trace
+
+
+def _resolve_completion_state(
+    session: UserSession,
+    *,
+    timed_out: bool,
+    returncode: int,
+    response_text: str,
+) -> str:
+    with session._lock:
+        stop_requested = bool(session.stop_requested)
+    has_response = bool(str(response_text or "").strip())
+    if timed_out:
+        return "error"
+    if stop_requested and (not isinstance(returncode, int) or returncode != 0):
+        return "cancelled"
+    if stop_requested and returncode == 0 and has_response:
+        return "completed"
+    if stop_requested:
+        return "cancelled"
+    if isinstance(returncode, int) and returncode not in (0,):
+        return "error"
+    return "completed"
 
 
 def _calculate_elapsed_seconds(loop: asyncio.AbstractEventLoop, started_at: float) -> int:
@@ -1132,7 +1202,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         session_id_changed = False
-        history_added = False
         meta_sent = False
         max_attempts = 2 if cli_type == "claude" else 1
 
@@ -1151,10 +1220,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
-
-            if not history_added:
-                session.add_to_history("user", text)
-                history_added = True
 
             try:
                 process = subprocess.Popen(
@@ -1204,6 +1269,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
+            trace_state = create_stream_trace_state(cli_type)
+            live_trace_events: list[dict[str, Any]] = []
 
             def read_stdout() -> None:
                 try:
@@ -1246,6 +1313,9 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
                         text_chunk = str(item)
                         raw_output_parts.append(text_chunk)
+                        for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
+                            live_trace_events.append(trace_event)
+                            yield {"type": "trace", "event": trace_event}
 
                         if cli_type == "codex":
                             for line in text_chunk.splitlines():
@@ -1258,7 +1328,18 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         elif claude_collector is not None:
                             claude_collector.consume_chunk(text_chunk, now=loop.time())
 
+                    with session._lock:
+                        stop_requested = bool(session.stop_requested)
+
                     if (
+                        stop_requested
+                        and not timed_out
+                        and done_terminate_started_at is None
+                        and process.poll() is None
+                    ):
+                        done_terminate_started_at = loop.time()
+                        process.terminate()
+                    elif (
                         not timed_out
                         and claude_collector is not None
                         and claude_collector.detector is not None
@@ -1380,14 +1461,37 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 session_id_changed = False
 
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
-            session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
+            completion_state = _resolve_completion_state(
+                session,
+                timed_out=timed_out,
+                returncode=returncode,
+                response_text=response,
+            )
+            with session._lock:
+                stop_requested = bool(session.stop_requested)
+                preview_text = session.running_preview_text or ""
+            final_trace = _build_terminal_trace(
+                live_trace=live_trace_events,
+                stop_requested=stop_requested,
+                timed_out=timed_out,
+                returncode=returncode,
+            )
+            fallback_output = response if completion_state == "completed" else (preview_text or response)
+            done_message = finalize_web_chat_turn(
+                profile,
+                session,
+                user_text=text,
+                fallback_output=fallback_output,
+                fallback_trace=final_trace,
+                completion_state=completion_state,
+            )
             if assistant_home is not None:
                 try:
                     _finalize_assistant_chat_turn(
                         assistant_home,
                         user_id=user_id,
                         user_text=text,
-                        response=response,
+                        response=str(done_message.get("content") or response),
                         assistant_pre_surface=assistant_pre_surface,
                     )
                 except Exception as exc:
@@ -1397,7 +1501,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             session.clear_running_reply()
             yield {
                 "type": "done",
-                "output": response,
+                "output": str(done_message.get("content") or response),
+                "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
                 "timed_out": timed_out,
@@ -1457,7 +1562,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         session_id_changed = False
-        history_added = False
         max_attempts = 2 if cli_type == "claude" else 1
 
         for attempt_index in range(max_attempts):
@@ -1475,10 +1579,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
-
-            if not history_added:
-                session.add_to_history("user", text)
-                history_added = True
 
             try:
                 process = subprocess.Popen(
@@ -1571,14 +1671,29 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 session.persist()
 
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
-            session.add_to_history("assistant", response, elapsed_seconds=elapsed_seconds)
+            completion_state = _resolve_completion_state(
+                session,
+                timed_out=timed_out,
+                returncode=returncode,
+                response_text=response,
+            )
+            with session._lock:
+                preview_text = session.running_preview_text or ""
+            done_message = finalize_web_chat_turn(
+                profile,
+                session,
+                user_text=text,
+                fallback_output=response if completion_state == "completed" else (preview_text or response),
+                fallback_trace=[],
+                completion_state=completion_state,
+            )
             if assistant_home is not None:
                 try:
                     _finalize_assistant_chat_turn(
                         assistant_home,
                         user_id=user_id,
                         user_text=text,
-                        response=response,
+                        response=str(done_message.get("content") or response),
                         assistant_pre_surface=assistant_pre_surface,
                     )
                 except Exception as exc:
@@ -1587,7 +1702,8 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 session.is_processing = False
             session.clear_running_reply()
             return {
-                "output": response,
+                "output": str(done_message.get("content") or response),
+                "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
                 "timed_out": timed_out,

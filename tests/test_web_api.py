@@ -29,10 +29,12 @@ from bot.web.api_service import (
     WebApiError,
     change_working_directory,
     get_directory_listing,
+    get_history,
     get_session_for_alias,
     get_overview,
     resolve_session_bot_id,
     get_working_directory,
+    kill_user_process,
     list_bots,
     read_file_content,
     run_chat,
@@ -1683,7 +1685,6 @@ async def test_run_cli_chat_claude_done_detector_avoids_communicate_and_strips_o
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
-    session = get_session_for_alias(web_manager, "main", 1001)
     fake_process = MagicMock()
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
@@ -1695,9 +1696,8 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
     assert data["output"] == "完成回复"
     assert isinstance(data["elapsed_seconds"], int)
     assert data["elapsed_seconds"] >= 0
-    assert session.history[-1]["role"] == "assistant"
-    assert session.history[-1]["content"] == "完成回复"
-    assert session.history[-1]["elapsed_seconds"] == data["elapsed_seconds"]
+    assert data["message"]["role"] == "assistant"
+    assert data["message"]["content"] == "完成回复"
 
 
 @pytest.mark.asyncio
@@ -1993,6 +1993,59 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     assert isinstance(done_event["elapsed_seconds"], int)
     assert done_event["elapsed_seconds"] >= 0
 
+
+def test_get_history_uses_overlay_backed_native_shape_instead_of_legacy_history(
+    web_manager: MultiBotManager,
+):
+    web_manager.main_profile.cli_type = "codex"
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.history = [{"role": "assistant", "content": "legacy"}]
+    session.web_turn_overlays = [
+        {
+            "provider": "codex",
+            "native_session_id": "",
+            "user_text": "列出当前目录",
+            "started_at": "2026-04-14T10:00:00",
+            "updated_at": "2026-04-14T10:00:05",
+            "summary_text": "目录已读取完成。",
+            "summary_kind": "final",
+            "completion_state": "completed",
+            "trace": [{"kind": "tool_call", "summary": "Get-ChildItem -Force"}],
+            "locator_hint": {"cwd": str(session.working_dir)},
+        }
+    ]
+
+    data = get_history(web_manager, "main", 1001, limit=10)
+
+    assert [item["role"] for item in data["items"]] == ["user", "assistant"]
+    assert data["items"][0]["content"] == "列出当前目录"
+    assert data["items"][1]["content"] == "目录已读取完成。"
+    assert all(item["content"] != "legacy" for item in data["items"])
+
+
+def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    process = MagicMock()
+    process.poll.return_value = None
+    process.terminate = MagicMock()
+
+    with session._lock:
+        session.process = process
+        session.is_processing = True
+        session.stop_requested = False
+        session.running_user_text = "继续"
+        session.running_preview_text = "处理中预览"
+        session.running_started_at = "2026-04-14T10:00:00"
+        session.running_updated_at = "2026-04-14T10:00:03"
+
+    result = kill_user_process(web_manager, "main", 1001)
+
+    assert result["killed"] is True
+    assert session.stop_requested is True
+    assert session.is_processing is True
+    assert session.running_preview_text == "处理中预览"
+    process.terminate.assert_called_once()
+
 def test_codex_status_event_skips_json_meta_preview():
     event = _build_stream_status_event(
         cli_type="codex",
@@ -2081,6 +2134,68 @@ async def test_stream_cli_chat_claude_done_detector_strips_preview_and_done_outp
     assert done_event["output"] == "你好"
     assert done_event["returncode"] == 0
     fake_process.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.delta","item":{"type":"assistant_message","delta":"我先检查目录结构。"}}\n',
+                '{"type":"item.completed","item":{"type":"function_call","name":"shell_command","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}","call_id":"call_1"}}\n',
+                '{"type":"item.completed","item":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"目录已读取完成。"}}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "列出当前目录")]
+
+    trace_events = [event for event in events if event["type"] == "trace"]
+    done_event = next(event for event in events if event["type"] == "done")
+
+    assert trace_events
+    assert trace_events[0]["event"]["kind"] == "tool_call"
+    assert trace_events[0]["event"]["summary"] == "Get-ChildItem -Force"
+    assert trace_events[1]["event"]["kind"] == "tool_result"
+    assert done_event["message"]["role"] == "assistant"
+    assert done_event["message"]["content"] == "目录已读取完成。"
 
 
 @pytest.mark.asyncio

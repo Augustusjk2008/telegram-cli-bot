@@ -24,12 +24,31 @@ def _overlay_key(overlay: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _overlay_to_turn(overlay: dict[str, Any], native_trace: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    merged_trace = [dict(item) for item in (native_trace or [])]
-    for item in overlay.get("trace") or []:
-        if isinstance(item, dict):
-            merged_trace.append(dict(item))
+def _trace_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(item.get("kind") or ""),
+        str(item.get("raw_type") or ""),
+        str(item.get("call_id") or ""),
+        str(item.get("summary") or ""),
+    )
 
+
+def _merge_trace_lists(*sources: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for source in sources:
+        for item in source or []:
+            if not isinstance(item, dict):
+                continue
+            key = _trace_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(dict(item))
+    return merged
+
+
+def _overlay_to_turn(overlay: dict[str, Any], native_trace: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "id": f"overlay-{overlay.get('provider')}-{overlay.get('started_at') or overlay.get('updated_at') or ''}",
         "role": "assistant",
@@ -41,7 +60,7 @@ def _overlay_to_turn(overlay: dict[str, Any], native_trace: list[dict[str, Any]]
             "completion_state": str(overlay.get("completion_state") or "cancelled"),
             "summary_kind": str(overlay.get("summary_kind") or "partial_preview"),
             "trace_version": 1,
-            "trace": merged_trace,
+            "trace": _merge_trace_lists(native_trace, overlay.get("trace") or []),
             "native_source": {
                 "provider": overlay.get("provider"),
                 "session_id": overlay.get("native_session_id"),
@@ -137,3 +156,103 @@ def build_web_chat_history(profile, session, *, limit: int = 50) -> list[dict[st
     for turn in merged_turns:
         messages.extend(_turn_to_messages(turn))
     return messages[-max(1, limit):]
+
+
+def _get_native_session_id(provider: str, session) -> str:
+    if provider == "codex":
+        return str(getattr(session, "codex_session_id", "") or "")
+    if provider == "claude":
+        return str(getattr(session, "claude_session_id", "") or "")
+    return ""
+
+
+def _message_matches_turn(
+    item: dict[str, Any],
+    *,
+    provider: str,
+    session_id: str,
+    user_text: str,
+) -> bool:
+    if str(item.get("role") or "") != "assistant":
+        return False
+    if user_text and str(item.get("user_text") or "") != user_text:
+        return False
+
+    native_source = item.get("meta", {}).get("native_source", {})
+    item_provider = str(native_source.get("provider") or "")
+    item_session_id = str(native_source.get("session_id") or "")
+    if provider and item_provider and item_provider != provider:
+        return False
+    if session_id and item_session_id and item_session_id != session_id:
+        return False
+    return True
+
+
+def _select_latest_assistant_message(
+    items: list[dict[str, Any]],
+    *,
+    provider: str,
+    session_id: str,
+    user_text: str,
+) -> dict[str, Any] | None:
+    for item in reversed(items):
+        if _message_matches_turn(item, provider=provider, session_id=session_id, user_text=user_text):
+            return item
+    return None
+
+
+def finalize_web_chat_turn(
+    profile,
+    session,
+    *,
+    user_text: str,
+    fallback_output: str,
+    fallback_trace: list[dict[str, Any]] | None = None,
+    completion_state: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    provider = normalize_cli_type(getattr(profile, "cli_type", ""))
+    session_id = _get_native_session_id(provider, session)
+    requested_user_text = str(user_text or "")
+    current_items = build_web_chat_history(profile, session, limit=max(20, limit))
+    matched = _select_latest_assistant_message(
+        current_items,
+        provider=provider,
+        session_id=session_id,
+        user_text=requested_user_text,
+    )
+
+    resolved_completion_state = str(completion_state or ("cancelled" if getattr(session, "stop_requested", False) else "completed"))
+    if (
+        resolved_completion_state == "completed"
+        and matched is not None
+        and str(matched.get("meta", {}).get("summary_kind") or "") == "final"
+    ):
+        return matched
+
+    summary_text = str(fallback_output or getattr(session, "running_preview_text", "") or "已终止，未返回可显示内容")
+    summary_kind = "final" if resolved_completion_state == "completed" and summary_text else "partial_preview"
+    overlay = {
+        "provider": provider,
+        "native_session_id": session_id,
+        "user_text": requested_user_text,
+        "started_at": getattr(session, "running_started_at", "") or getattr(session, "running_updated_at", "") or "",
+        "updated_at": getattr(session, "running_updated_at", "") or getattr(session, "running_started_at", "") or "",
+        "summary_text": summary_text,
+        "summary_kind": summary_kind,
+        "completion_state": resolved_completion_state,
+        "trace": [dict(item) for item in (fallback_trace or []) if isinstance(item, dict)],
+        "locator_hint": {"cwd": getattr(session, "working_dir", "")},
+    }
+    session.upsert_web_turn_overlay(overlay)
+
+    current_items = build_web_chat_history(profile, session, limit=max(20, limit))
+    matched = _select_latest_assistant_message(
+        current_items,
+        provider=provider,
+        session_id=session_id,
+        user_text=requested_user_text,
+    )
+    if matched is not None:
+        return matched
+    return _turn_to_messages(_overlay_to_turn(overlay))[-1]

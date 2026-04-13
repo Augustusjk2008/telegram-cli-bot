@@ -137,6 +137,7 @@ class UserSession:
             self.running_preview_text = ""
             self.running_started_at = now
             self.running_updated_at = now
+            self.stop_requested = False
         self.persist()
 
     def update_running_reply(self, preview_text: Optional[str] = None):
@@ -155,6 +156,7 @@ class UserSession:
             self.running_preview_text = ""
             self.running_started_at = None
             self.running_updated_at = None
+            self.stop_requested = False
         self.persist()
 
     def upsert_web_turn_overlay(self, overlay: dict, *, limit: int = 20):
