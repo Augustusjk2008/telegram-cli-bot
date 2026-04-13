@@ -52,6 +52,10 @@ class TunnelService:
         self._startup_timeout = startup_timeout
         self._state_file = Path(state_file).expanduser()
         self._local_url = self._build_local_url(host, port)
+        normalized_host = host.strip()
+        self._restore_local_urls = {self._local_url}
+        if normalized_host in {"::", "[::]"}:
+            self._restore_local_urls.add(f"http://127.0.0.1:{port}")
         self._state_lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
         self._expected_stop = False
@@ -269,7 +273,7 @@ class TunnelService:
         if str(data.get("mode") or "").strip() != "cloudflare_quick":
             self._clear_state_file()
             return False
-        if str(data.get("local_url") or "").strip() != self._local_url:
+        if str(data.get("local_url") or "").strip() not in self._restore_local_urls:
             self._clear_state_file()
             return False
 
