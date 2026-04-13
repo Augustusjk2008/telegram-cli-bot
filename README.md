@@ -36,6 +36,7 @@
 - `assistant` 是本机唯一长期助手；本项目内最多只能创建一个 `assistant` bot
 - `assistant` 的工作目录创建后不可修改；如需换路径，只能删除 bot 后重建
 - `assistant` 的历史、记忆、proposal、upgrade 全部存放在 `<assistant_workdir>/.assistant/`
+- `assistant` 定时任务的设计方案见 [docs/assistant-cron-plan.md](docs/assistant-cron-plan.md)
 
 ## 安装前准备
 
