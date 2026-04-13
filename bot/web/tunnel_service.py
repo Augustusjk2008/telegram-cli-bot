@@ -10,12 +10,14 @@ import logging
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from bot.platform.processes import build_subprocess_group_kwargs
 
@@ -78,6 +80,19 @@ class TunnelService:
         elif tunnel_host in {"::", "[::]"}:
             tunnel_host = "::1"
         return f"http://{TunnelService._format_http_host(tunnel_host)}:{port}"
+
+    @staticmethod
+    def _can_connect_local_url(local_url: str, timeout: float = 0.5) -> bool:
+        parsed = urlsplit(local_url)
+        host = parsed.hostname
+        port = parsed.port
+        if not host or port is None:
+            return False
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
 
     def _build_initial_snapshot(self) -> dict[str, Any]:
         if self._manual_public_url:
@@ -273,7 +288,11 @@ class TunnelService:
         if str(data.get("mode") or "").strip() != "cloudflare_quick":
             self._clear_state_file()
             return False
-        if str(data.get("local_url") or "").strip() not in self._restore_local_urls:
+        persisted_local_url = str(data.get("local_url") or "").strip()
+        if persisted_local_url not in self._restore_local_urls:
+            self._clear_state_file()
+            return False
+        if persisted_local_url != self._local_url and not self._can_connect_local_url(persisted_local_url):
             self._clear_state_file()
             return False
 
