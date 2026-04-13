@@ -43,7 +43,7 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
 
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
   const containerClassName = variant === "chat"
-    ? "min-w-0 w-full text-[15px] leading-7 text-[var(--text)]"
+    ? "chat-body-content min-w-0 w-full text-[var(--text)]"
     : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
 
   return (

@@ -87,15 +87,23 @@ export function readStoredUiTheme(): UiThemeName {
   if (typeof window === "undefined") {
     return DEFAULT_UI_THEME;
   }
-  const raw = window.localStorage.getItem(UI_THEME_STORAGE_KEY)?.trim() || "";
-  return isUiThemeName(raw) ? raw : DEFAULT_UI_THEME;
+  try {
+    const raw = window.localStorage.getItem(UI_THEME_STORAGE_KEY)?.trim() || "";
+    return isUiThemeName(raw) ? raw : DEFAULT_UI_THEME;
+  } catch {
+    return DEFAULT_UI_THEME;
+  }
 }
 
 export function persistUiTheme(themeName: UiThemeName) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(UI_THEME_STORAGE_KEY, themeName);
+  try {
+    window.localStorage.setItem(UI_THEME_STORAGE_KEY, themeName);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
 }
 
 export function applyUiTheme(themeName: UiThemeName) {

@@ -15,6 +15,12 @@ html, body, #root {
   box-sizing: border-box;
 }
 
+.chat-body-content {
+  font-family: var(--chat-body-font-family);
+  font-size: var(--chat-body-font-size);
+  line-height: var(--chat-body-line-height);
+}
+
 .terminal-shell {
   width: max-content;
   min-width: 100%;

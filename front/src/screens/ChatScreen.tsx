@@ -656,13 +656,17 @@ export function ChatScreen({
                       isUser
                         ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white whitespace-pre-wrap break-all"
                         : item.state === "error"
-                          ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700 whitespace-pre-wrap break-all"
+                          ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
                           : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
                     }
                   >
-                    {item.role === "assistant" && item.state !== "streaming" && item.state !== "error"
-                      ? <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
-                      : item.text || (item.state === "streaming" ? "正在输出..." : "")}
+                    {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+                      <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
+                    ) : (
+                      <div className="chat-body-content whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
+                        {item.text || (item.state === "streaming" ? "正在输出..." : "")}
+                      </div>
+                    )}
                   </div>
                   {item.role === "assistant" && item.state === "streaming" ? (
                     <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">

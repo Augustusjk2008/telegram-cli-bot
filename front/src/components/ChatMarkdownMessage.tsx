@@ -28,7 +28,7 @@ class ChatMarkdownBoundary extends Component<Props, State> {
       return (
         <pre
           data-testid="assistant-markdown-fallback"
-          className="whitespace-pre-wrap break-all text-[15px] leading-7 [overflow-wrap:anywhere]"
+          className="chat-body-content whitespace-pre-wrap break-all [overflow-wrap:anywhere]"
         >
           {this.props.content}
         </pre>

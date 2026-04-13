@@ -299,6 +299,45 @@ test("renders loaded assistant history as markdown but keeps user and system tex
   expect(screen.getByText("# 系统消息")).toBeInTheDocument();
 });
 
+test("renders chat bodies with the shared chat-body-content class", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "用户纯文本",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "# 助手 markdown\n- 条目",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        text: "助手错误文本",
+        createdAt: new Date().toISOString(),
+        state: "error",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const userMessage = await screen.findByText("用户纯文本");
+  expect(userMessage.closest(".chat-body-content")).not.toBeNull();
+
+  const assistantMarkdown = await screen.findByRole("heading", { name: "助手 markdown" });
+  expect(assistantMarkdown.closest(".chat-body-content")).not.toBeNull();
+
+  const assistantError = screen.getByText("助手错误文本");
+  expect(assistantError.closest(".chat-body-content")).not.toBeNull();
+});
+
 test("kill button is disabled while idle and highlighted while streaming", async () => {
   const user = userEvent.setup();
   const client = createClient({
