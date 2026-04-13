@@ -111,21 +111,6 @@ class MultiBotManager:
         return bool((profile.token or "").strip())
 
     @staticmethod
-    def _apply_builder_proxy(builder, proxy_url: str):
-        if not proxy_url:
-            return builder
-        proxy_method = getattr(builder, "proxy", None)
-        if callable(proxy_method):
-            try:
-                return proxy_method(proxy_url)
-            except TypeError:
-                pass
-        proxy_url_method = getattr(builder, "proxy_url", None)
-        if callable(proxy_url_method):
-            return proxy_url_method(proxy_url)
-        return builder
-
-    @staticmethod
     def _build_httpx_request(proxy_url: str = "", **kwargs) -> HTTPXRequest:
         if not proxy_url:
             return HTTPXRequest(**kwargs)
@@ -627,8 +612,6 @@ class MultiBotManager:
         # 应用代理配置
         proxy_kwargs = get_proxy_kwargs()
         proxy_url = str(proxy_kwargs.get("proxy_url") or "").strip() if proxy_kwargs else ""
-        if proxy_url:
-            builder = self._apply_builder_proxy(builder, proxy_url)
         # 增加连接池大小和超时时间以适应多bot并发请求
         request = self._build_httpx_request(
             proxy_url=proxy_url,

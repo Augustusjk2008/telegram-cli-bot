@@ -426,70 +426,22 @@ class TestManagerProxyCompatibility:
     """测试代理兼容逻辑"""
 
     @pytest.mark.asyncio
-    async def test_start_profile_uses_builder_proxy_when_proxy_url_missing(self, temp_dir: Path):
+    async def test_start_profile_with_proxy_avoids_builder_conflict(self, temp_dir: Path):
         profile = BotProfile(alias="main", token="tok")
         manager = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
+        fake_me = MagicMock(id=123, username="tester")
 
-        class DummyApp:
-            def __init__(self):
-                self.bot_data = {}
-                self.bot = MagicMock()
-                self.bot.get_me = AsyncMock(return_value=MagicMock(id=123, username="tester"))
-                self.running = True
-                self.updater = MagicMock()
-
-            async def initialize(self):
-                return None
-
-            async def start(self):
-                self.running = True
-
-            async def stop(self):
-                self.running = False
-
-            async def shutdown(self):
-                return None
-
-            def add_error_handler(self, _handler):
-                return None
-
-        class DummyBuilder:
-            def __init__(self, app):
-                self._app = app
-                self.proxy_called_with = None
-                self.request_obj = None
-                self.get_updates_request_obj = None
-
-            def token(self, _token):
-                return self
-
-            def proxy(self, url):
-                self.proxy_called_with = url
-                return self
-
-            def request(self, request):
-                self.request_obj = request
-                return self
-
-            def get_updates_request(self, request):
-                self.get_updates_request_obj = request
-                return self
-
-            def build(self):
-                return self._app
-
-        app = DummyApp()
-        builder = DummyBuilder(app)
-
-        with patch("bot.manager.get_proxy_kwargs", return_value={"proxy_url": "http://proxy"}), \
-             patch("bot.manager.Application.builder", return_value=builder), \
-             patch("bot.manager.HTTPXRequest", return_value=MagicMock()), \
+        with patch("bot.manager.get_proxy_kwargs", return_value={"proxy_url": "http://127.0.0.1:7890"}), \
+             patch("bot.manager.register_handlers", lambda *args, **kwargs: None), \
              patch.object(manager, "_start_updater_polling_with_retry", AsyncMock()), \
-             patch("bot.manager.register_handlers", lambda *args, **kwargs: None):
+             patch("telegram.Bot.get_me", new=AsyncMock(return_value=fake_me)), \
+             patch("telegram.ext.Application.initialize", new=AsyncMock()), \
+             patch("telegram.ext.Application.start", new=AsyncMock()), \
+             patch("telegram.ext.Application.stop", new=AsyncMock()), \
+             patch("telegram.ext.Application.shutdown", new=AsyncMock()):
             result = await manager._start_profile(profile, is_main=False)
 
-        assert result is app
-        assert builder.proxy_called_with == "http://proxy"
+        assert result is not None
 
     @pytest.mark.asyncio
     async def test_start_profile_falls_back_to_httpx_proxy_url(self, temp_dir: Path):
