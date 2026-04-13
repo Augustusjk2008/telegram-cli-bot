@@ -606,7 +606,7 @@ export function ChatScreen({
             暂无消息，开始聊天吧
           </div>
         ) : null}
-        {items.map((item) => {
+        {items.map((item, index) => {
           if (item.role === "system") {
             return (
               <div key={item.id} className="flex justify-center">
@@ -620,18 +620,37 @@ export function ChatScreen({
           const isUser = item.role === "user";
           const messageName = isUser ? "你" : assistantName;
           const isRestoredAssistant = item.id === restoredAssistantId(botAlias) && Boolean(restoredReply);
+          const previousRole = index > 0 ? items[index - 1]?.role : "";
+          const showInlineMobileAvatar = previousRole !== item.role;
+          const inlineAvatar = showInlineMobileAvatar ? (
+            <span className="sm:hidden">
+              <ChatAvatar
+                alt={`${messageName} 头像`}
+                avatarName={isUser ? userAvatarName : assistantAvatarName}
+                kind={isUser ? "user" : "bot"}
+                size={20}
+              />
+            </span>
+          ) : null;
 
           return (
             <div key={item.id} className={isUser ? "flex justify-end" : "flex justify-start"}>
-              <div className={`flex max-w-[88%] items-start gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
-                <ChatAvatar
-                  alt={`${messageName} 头像`}
-                  avatarName={isUser ? userAvatarName : assistantAvatarName}
-                  kind={isUser ? "user" : "bot"}
-                  size={32}
-                />
+              <div className={`flex max-w-[94%] items-start gap-3 sm:max-w-[88%] ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+                <div className="hidden shrink-0 sm:flex items-start">
+                  <ChatAvatar
+                    alt={`${messageName} 头像`}
+                    avatarName={isUser ? userAvatarName : assistantAvatarName}
+                    kind={isUser ? "user" : "bot"}
+                    size={32}
+                  />
+                </div>
                 <div className="min-w-0">
-                  <ChatMessageMeta name={messageName} createdAt={item.createdAt} align={isUser ? "right" : "left"} />
+                  <ChatMessageMeta
+                    name={messageName}
+                    createdAt={item.createdAt}
+                    align={isUser ? "right" : "left"}
+                    avatar={inlineAvatar}
+                  />
                   <div
                     className={
                       isUser

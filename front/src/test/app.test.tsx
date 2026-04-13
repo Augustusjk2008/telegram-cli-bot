@@ -609,7 +609,9 @@ test("settings can change my avatar and chat uses the selected image", async () 
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   expect(await screen.findByText("测试头像")).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "你 头像" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
+  const userAvatars = screen.getAllByRole("img", { name: "你 头像" });
+  expect(userAvatars.length).toBeGreaterThan(0);
+  expect(userAvatars.every((avatar) => avatar.getAttribute("src") === "/assets/avatars/claude-blue.png")).toBe(true);
 });
 
 test("bot switcher and bot-specific pages show avatars before bot names", async () => {

@@ -1,7 +1,10 @@
+import type { ReactNode } from "react";
+
 type Props = {
   name: string;
   createdAt: string;
   align?: "left" | "right";
+  avatar?: ReactNode;
 };
 
 function formatTime(createdAt: string) {
@@ -16,12 +19,17 @@ function formatTime(createdAt: string) {
   });
 }
 
-export function ChatMessageMeta({ name, createdAt, align = "left" }: Props) {
+export function ChatMessageMeta({ name, createdAt, align = "left", avatar }: Props) {
   return (
-    <div className={align === "right" ? "mb-1 flex justify-end gap-2 text-xs text-[var(--muted)]" : "mb-1 flex gap-2 text-xs text-[var(--muted)]"}>
+    <div
+      className={align === "right"
+        ? "mb-1 flex items-center justify-end gap-2 text-xs text-[var(--muted)]"
+        : "mb-1 flex items-center gap-2 text-xs text-[var(--muted)]"}
+    >
+      {align === "left" ? avatar : null}
       <span>{name}</span>
       <span>{formatTime(createdAt)}</span>
+      {align === "right" ? avatar : null}
     </div>
   );
 }
-

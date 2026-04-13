@@ -780,15 +780,87 @@ test("renders sender names timestamps avatars and copies completed assistant rep
   expect(screen.getAllByText("main").length).toBeGreaterThan(0);
   expect(screen.getByText("09:08")).toBeInTheDocument();
   expect(screen.getByText("09:09")).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "你 头像" })).toBeInTheDocument();
+  expect(screen.getAllByRole("img", { name: "你 头像" }).length).toBeGreaterThan(0);
   const mainAvatars = screen.getAllByRole("img", { name: "main 头像" });
   expect(mainAvatars.length).toBeGreaterThan(0);
-  expect(mainAvatars[mainAvatars.length - 1]?.parentElement).toHaveClass("items-start");
+  const desktopMainAvatar = mainAvatars.find((avatar) =>
+    avatar.parentElement?.className.includes("hidden shrink-0 sm:flex items-start"),
+  );
+  expect(desktopMainAvatar?.parentElement).toHaveClass("items-start");
 
   await user.click(screen.getByRole("button", { name: "复制" }));
 
   expect(writeText).toHaveBeenCalledWith("世界");
   expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
+});
+
+test("uses inline mobile avatars and only shows the first avatar in consecutive message runs", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      avatarName: "claude-blue.png",
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "第一条助手消息",
+        createdAt: "2026-04-13T09:09:00",
+        state: "done",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        text: "第二条助手消息",
+        createdAt: "2026-04-13T09:10:00",
+        state: "done",
+      },
+      {
+        id: "user-1",
+        role: "user",
+        text: "第一条用户消息",
+        createdAt: "2026-04-13T09:11:00",
+        state: "done",
+      },
+      {
+        id: "user-2",
+        role: "user",
+        text: "第二条用户消息",
+        createdAt: "2026-04-13T09:12:00",
+        state: "done",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("第一条助手消息")).toBeInTheDocument();
+
+  const assistantAvatars = screen.getAllByRole("img", { name: "main 头像" });
+  const inlineAssistantAvatars = assistantAvatars.filter((avatar) =>
+    avatar.parentElement?.className.includes("sm:hidden"),
+  );
+  const desktopAssistantAvatars = assistantAvatars.filter((avatar) =>
+    avatar.parentElement?.className.includes("hidden shrink-0 sm:flex"),
+  );
+
+  expect(inlineAssistantAvatars).toHaveLength(1);
+  expect(desktopAssistantAvatars).toHaveLength(2);
+
+  const userAvatars = screen.getAllByRole("img", { name: "你 头像" });
+  const inlineUserAvatars = userAvatars.filter((avatar) =>
+    avatar.parentElement?.className.includes("sm:hidden"),
+  );
+  const desktopUserAvatars = userAvatars.filter((avatar) =>
+    avatar.parentElement?.className.includes("hidden shrink-0 sm:flex"),
+  );
+
+  expect(inlineUserAvatars).toHaveLength(1);
+  expect(desktopUserAvatars).toHaveLength(2);
 });
 
 test("shows a continue action for restored replies and sends the assistant resume prompt", async () => {
