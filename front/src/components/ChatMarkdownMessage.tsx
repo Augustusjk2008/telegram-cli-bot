@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import { MarkdownContent } from "./MarkdownPreview";
 
 type Props = {
@@ -26,12 +27,12 @@ class ChatMarkdownBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <pre
-          data-testid="assistant-markdown-fallback"
-          className="chat-body-content whitespace-pre-wrap break-all [overflow-wrap:anywhere]"
-        >
-          {this.props.content}
-        </pre>
+        <div data-testid="assistant-markdown-fallback">
+          <ChatPlainTextMessage
+            content={this.props.content}
+            className="text-[var(--text)]"
+          />
+        </div>
       );
     }
 

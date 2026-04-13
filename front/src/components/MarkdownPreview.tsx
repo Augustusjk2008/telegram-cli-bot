@@ -42,8 +42,9 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
 }
 
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
-  const containerClassName = variant === "chat"
-    ? "chat-body-content min-w-0 w-full text-[var(--text)]"
+  const isChat = variant === "chat";
+  const containerClassName = isChat
+    ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
     : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
 
   return (
@@ -52,16 +53,19 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
         remarkPlugins={[remarkGfm]}
         urlTransform={safeUrlTransform}
         components={{
-          h1: ({ children }) => <h1 className="mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-3 mt-8 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h2>,
-          h3: ({ children }) => <h3 className="mb-3 mt-6 break-words text-xl font-semibold [overflow-wrap:anywhere]">{children}</h3>,
-          h4: ({ children }) => <h4 className="mb-2 mt-5 break-words text-lg font-semibold [overflow-wrap:anywhere]">{children}</h4>,
-          p: ({ children }) => <p className="my-3 break-words [overflow-wrap:anywhere]">{children}</p>,
-          ul: ({ children }) => <ul className="my-4 list-disc space-y-2 pl-6">{children}</ul>,
-          ol: ({ children }) => <ol className="my-4 list-decimal space-y-2 pl-6">{children}</ol>,
+          h1: ({ children }) => <h1 className={isChat ? "break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h1>,
+          h2: ({ children }) => <h2 className={isChat ? "break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-3 mt-8 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h2>,
+          h3: ({ children }) => <h3 className={isChat ? "break-words text-xl font-semibold [overflow-wrap:anywhere]" : "mb-3 mt-6 break-words text-xl font-semibold [overflow-wrap:anywhere]"}>{children}</h3>,
+          h4: ({ children }) => <h4 className={isChat ? "break-words text-lg font-semibold [overflow-wrap:anywhere]" : "mb-2 mt-5 break-words text-lg font-semibold [overflow-wrap:anywhere]"}>{children}</h4>,
+          p: ({ children }) => <p className={isChat ? "break-words [overflow-wrap:anywhere]" : "my-3 break-words [overflow-wrap:anywhere]"}>{children}</p>,
+          ul: ({ children }) => <ul className={isChat ? "list-disc space-y-2 pl-6" : "my-4 list-disc space-y-2 pl-6"}>{children}</ul>,
+          ol: ({ children }) => <ol className={isChat ? "list-decimal space-y-2 pl-6" : "my-4 list-decimal space-y-2 pl-6"}>{children}</ol>,
           li: ({ children }) => <li className="break-words pl-1 [overflow-wrap:anywhere]">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-5 break-words border-l-4 border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--muted)] [overflow-wrap:anywhere]">
+            <blockquote className={isChat
+              ? "break-words border-l-4 border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--muted)] [overflow-wrap:anywhere]"
+              : "my-5 break-words border-l-4 border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--muted)] [overflow-wrap:anywhere]"}
+            >
               {children}
             </blockquote>
           ),
@@ -86,10 +90,10 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
               </a>
             );
           },
-          pre: ({ children }) => <pre className="my-4 min-w-0 overflow-x-auto">{children}</pre>,
+          pre: ({ children }) => <pre className={isChat ? "min-w-0 overflow-x-auto" : "my-4 min-w-0 overflow-x-auto"}>{children}</pre>,
           code: InlineCode,
           table: ({ children }) => (
-            <div className="my-5 overflow-x-auto">
+            <div className={isChat ? "overflow-x-auto" : "my-5 overflow-x-auto"}>
               <table className="min-w-full border-collapse overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
                 {children}
               </table>
@@ -100,9 +104,12 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
           tr: ({ children }) => <tr className="border-b border-[var(--border)] last:border-b-0">{children}</tr>,
           th: ({ children }) => <th className="break-words px-3 py-2 text-left text-sm font-semibold [overflow-wrap:anywhere]">{children}</th>,
           td: ({ children }) => <td className="break-words px-3 py-2 align-top text-sm [overflow-wrap:anywhere]">{children}</td>,
-          hr: () => <hr className="my-6 border-0 border-t border-[var(--border)]" />,
+          hr: () => <hr className={isChat ? "border-0 border-t border-[var(--border)]" : "my-6 border-0 border-t border-[var(--border)]"} />,
           img: ({ src, alt }) => (
-            <div className="my-4 rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+            <div className={isChat
+              ? "rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"
+              : "my-4 rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"}
+            >
               <span className="mr-2 font-medium text-[var(--text)]">图片路径</span>
               <span className="break-all">{src || alt || "(未提供路径)"}</span>
             </div>

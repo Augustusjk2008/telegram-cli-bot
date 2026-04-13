@@ -215,8 +215,18 @@ test("settings tab shows cli params and tunnel status", async () => {
   expect(await screen.findByText("界面与阅读")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "深空轨道" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "经典暖色" })).toBeInTheDocument();
+  expect(screen.getAllByText("深空轨道")).toHaveLength(1);
+  expect(screen.getAllByText("经典暖色")).toHaveLength(1);
   expect(screen.getByLabelText("聊天正文字体")).toHaveValue("sans");
   expect(screen.getByLabelText("聊天正文字号")).toHaveValue("medium");
+  expect(screen.getByLabelText("聊天行间距")).toHaveValue("normal");
+  expect(screen.getByLabelText("聊天段间距")).toHaveValue("normal");
+  expect(screen.getByRole("option", { name: "系统默认" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "宋体阅读" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "楷体阅读" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "仿宋阅读" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "代码字体" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "无衬线" })).not.toBeInTheDocument();
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
   expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
   expect(screen.getByText("公网访问")).toBeInTheDocument();
@@ -238,16 +248,25 @@ test("main settings can switch and persist appearance preferences", async () => 
   expect(localStorage.getItem("web-ui-theme")).toBe("classic");
   expect(await screen.findByText("界面主题已切换")).toBeInTheDocument();
 
-  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "mono");
-  expect(localStorage.getItem("web-chat-body-font-family")).toBe("mono");
+  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "kai");
+  expect(localStorage.getItem("web-chat-body-font-family")).toBe("kai");
   expect(await screen.findByText("聊天正文字体已更新")).toBeInTheDocument();
 
   await user.selectOptions(screen.getByLabelText("聊天正文字号"), "large");
   expect(localStorage.getItem("web-chat-body-font-size")).toBe("large");
-  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"Cascadia Code", "Consolas", "Microsoft YaHei UI", monospace');
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"KaiTi", "Kaiti SC", "STKaiti", serif');
   expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("17px");
-  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("32px");
   expect(await screen.findByText("聊天正文字号已更新")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("聊天行间距"), "relaxed");
+  expect(localStorage.getItem("web-chat-body-line-height")).toBe("relaxed");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("2.1");
+  expect(await screen.findByText("聊天行间距已更新")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("聊天段间距"), "relaxed");
+  expect(localStorage.getItem("web-chat-body-paragraph-spacing")).toBe("relaxed");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-paragraph-spacing")).toBe("1.1em");
+  expect(await screen.findByText("聊天段间距已更新")).toBeInTheDocument();
 });
 
 test("team2 settings hide the main appearance module", async () => {
@@ -265,6 +284,8 @@ test("team2 settings hide the main appearance module", async () => {
   expect(screen.queryByText("界面与阅读")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("聊天正文字号")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天行间距")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天段间距")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "深空轨道" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "经典暖色" })).not.toBeInTheDocument();
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
@@ -280,13 +301,16 @@ test("re-mounting app restores persisted appearance preferences", async () => {
 
   await user.click(screen.getByRole("button", { name: "设置" }));
   await user.click(await screen.findByRole("button", { name: "经典暖色" }));
-  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "serif");
+  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "kai");
   await user.selectOptions(screen.getByLabelText("聊天正文字号"), "small");
+  await user.selectOptions(screen.getByLabelText("聊天行间距"), "tight");
+  await user.selectOptions(screen.getByLabelText("聊天段间距"), "relaxed");
 
   expect(document.documentElement.dataset.theme).toBe("classic");
-  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"SimSun", "Songti SC", "STSong", serif');
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"KaiTi", "Kaiti SC", "STKaiti", serif');
   expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("14px");
-  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("24px");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("1.65");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-paragraph-spacing")).toBe("1.1em");
 
   unmount();
   sessionStorage.clear();
@@ -296,13 +320,16 @@ test("re-mounting app restores persisted appearance preferences", async () => {
   await screen.findByRole("button", { name: "聊天" });
   await user.click(screen.getByRole("button", { name: "设置" }));
 
-  expect(screen.getByLabelText("聊天正文字体")).toHaveValue("serif");
+  expect(screen.getByLabelText("聊天正文字体")).toHaveValue("kai");
   expect(screen.getByLabelText("聊天正文字号")).toHaveValue("small");
+  expect(screen.getByLabelText("聊天行间距")).toHaveValue("tight");
+  expect(screen.getByLabelText("聊天段间距")).toHaveValue("relaxed");
 
   expect(document.documentElement.dataset.theme).toBe("classic");
-  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"SimSun", "Songti SC", "STSong", serif');
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"KaiTi", "Kaiti SC", "STKaiti", serif');
   expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("14px");
-  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("24px");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("1.65");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-paragraph-spacing")).toBe("1.1em");
 });
 
 test("settings tab ignores optional tunnel failures and keeps core settings available", async () => {
@@ -645,9 +672,10 @@ test("bot manager preserves Linux-style create paths", async () => {
   }));
 });
 
-test("bot manager shows avatar filenames with preview and sends the selected avatar on create", async () => {
+test("bot manager uses compact avatar dropdowns and saves avatar choices immediately", async () => {
   const user = userEvent.setup();
   const addBotSpy = vi.spyOn(MockWebBotClient.prototype, "addBot");
+  const updateAvatarSpy = vi.spyOn(MockWebBotClient.prototype, "updateBotAvatar");
 
   render(<App />);
 
@@ -662,12 +690,13 @@ test("bot manager shows avatar filenames with preview and sends the selected ava
   const createSection = screen.getByRole("heading", { name: "新增 Bot" }).closest("section");
   expect(createSection).not.toBeNull();
   const createScope = within(createSection as HTMLElement);
-  expect(createScope.getByText("规格固定为 64x64，建议使用 PNG/JPG/WebP。")).toBeInTheDocument();
-  expect(createScope.getByLabelText("新 Bot 头像")).toBeInTheDocument();
+  expect(createScope.queryByText("规格固定为 64x64，建议使用 PNG/JPG/WebP。")).not.toBeInTheDocument();
+  expect(createScope.getByRole("button", { name: "新 Bot 头像" })).toBeInTheDocument();
   expect(createScope.queryByRole("button", { name: "选择头像 claude-blue.png" })).not.toBeInTheDocument();
   expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/bot-default.png");
 
-  await user.selectOptions(createScope.getByLabelText("新 Bot 头像"), "claude-blue.png");
+  await user.click(createScope.getByRole("button", { name: "新 Bot 头像" }));
+  await user.click(createScope.getByRole("button", { name: "选择头像 claude-blue.png" }));
 
   expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
 
@@ -681,6 +710,15 @@ test("bot manager shows avatar filenames with preview and sends the selected ava
     avatarName: "claude-blue.png",
   }));
   expect(await screen.findByRole("img", { name: "team-avatar 头像" })).toBeInTheDocument();
+
+  const teamSection = screen.getByRole("heading", { name: "team2" }).closest("section");
+  expect(teamSection).not.toBeNull();
+  const teamScope = within(teamSection as HTMLElement);
+  await user.click(teamScope.getByRole("button", { name: "team2 头像" }));
+  await user.click(teamScope.getByRole("button", { name: "选择头像 codex-slate.png" }));
+
+  expect(updateAvatarSpy).toHaveBeenCalledWith("team2", "codex-slate.png");
+  expect(await screen.findByText("已更新 team2 的头像")).toBeInTheDocument();
 });
 
 test("settings can change my avatar and chat uses the selected image", async () => {
@@ -696,7 +734,8 @@ test("settings can change my avatar and chat uses the selected image", async () 
 
   expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
   expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/user-default.png");
-  await user.selectOptions(screen.getByLabelText("我的头像"), "claude-blue.png");
+  await user.click(screen.getByRole("button", { name: "我的头像" }));
+  await user.click(screen.getByRole("button", { name: "选择头像 claude-blue.png" }));
   expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
   expect(localStorage.getItem("web-user-avatar-name")).toBe("claude-blue.png");
 

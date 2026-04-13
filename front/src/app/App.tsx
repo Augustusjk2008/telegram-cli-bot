@@ -24,12 +24,18 @@ import {
   applyUiTheme,
   persistChatBodyFontFamily,
   persistChatBodyFontSize,
+  persistChatBodyLineHeight,
+  persistChatBodyParagraphSpacing,
   persistUiTheme,
   readStoredChatBodyFontFamily,
   readStoredChatBodyFontSize,
+  readStoredChatBodyLineHeight,
+  readStoredChatBodyParagraphSpacing,
   readStoredUiTheme,
   type ChatBodyFontFamilyName,
   type ChatBodyFontSizeName,
+  type ChatBodyLineHeightName,
+  type ChatBodyParagraphSpacingName,
   type UiThemeName,
 } from "../theme";
 import "../styles/tokens.css";
@@ -142,6 +148,8 @@ export function App() {
   const [themeName, setThemeName] = useState<UiThemeName>(() => readStoredUiTheme());
   const [chatBodyFontFamily, setChatBodyFontFamily] = useState<ChatBodyFontFamilyName>(() => readStoredChatBodyFontFamily());
   const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
+  const [chatBodyLineHeight, setChatBodyLineHeight] = useState<ChatBodyLineHeightName>(() => readStoredChatBodyLineHeight());
+  const [chatBodyParagraphSpacing, setChatBodyParagraphSpacing] = useState<ChatBodyParagraphSpacingName>(() => readStoredChatBodyParagraphSpacing());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentTab, setCurrentTab] = useState<"chat" | "files" | "terminal" | "git" | "settings">("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
@@ -190,10 +198,17 @@ export function App() {
   }, [themeName]);
 
   useLayoutEffect(() => {
-    applyChatReadingPreferences(chatBodyFontFamily, chatBodyFontSize);
+    applyChatReadingPreferences(
+      chatBodyFontFamily,
+      chatBodyFontSize,
+      chatBodyLineHeight,
+      chatBodyParagraphSpacing,
+    );
     persistChatBodyFontFamily(chatBodyFontFamily);
     persistChatBodyFontSize(chatBodyFontSize);
-  }, [chatBodyFontFamily, chatBodyFontSize]);
+    persistChatBodyLineHeight(chatBodyLineHeight);
+    persistChatBodyParagraphSpacing(chatBodyParagraphSpacing);
+  }, [chatBodyFontFamily, chatBodyFontSize, chatBodyLineHeight, chatBodyParagraphSpacing]);
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -318,6 +333,14 @@ export function App() {
     setChatBodyFontSize(nextFontSize);
   }
 
+  function handleChatBodyLineHeightChange(nextLineHeight: ChatBodyLineHeightName) {
+    setChatBodyLineHeight(nextLineHeight);
+  }
+
+  function handleChatBodyParagraphSpacingChange(nextParagraphSpacing: ChatBodyParagraphSpacingName) {
+    setChatBodyParagraphSpacing(nextParagraphSpacing);
+  }
+
   function handleUserAvatarChange(nextAvatarName: string) {
     setUserAvatarName(nextAvatarName);
     storeUserAvatarName(nextAvatarName);
@@ -423,6 +446,10 @@ export function App() {
           onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
           chatBodyFontSize={chatBodyFontSize}
           onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
+          chatBodyLineHeight={chatBodyLineHeight}
+          onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
+          chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+          onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
           userAvatarName={userAvatarName}
           onUserAvatarChange={handleUserAvatarChange}
         />

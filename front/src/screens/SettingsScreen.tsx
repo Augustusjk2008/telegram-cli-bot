@@ -9,12 +9,18 @@ import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
   CHAT_BODY_FONT_SIZE_OPTIONS,
+  CHAT_BODY_LINE_HEIGHT_OPTIONS,
+  CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
   DEFAULT_CHAT_BODY_FONT_FAMILY,
   DEFAULT_CHAT_BODY_FONT_SIZE,
+  DEFAULT_CHAT_BODY_LINE_HEIGHT,
+  DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
   DEFAULT_UI_THEME,
   UI_THEME_OPTIONS,
   type ChatBodyFontFamilyName,
   type ChatBodyFontSizeName,
+  type ChatBodyLineHeightName,
+  type ChatBodyParagraphSpacingName,
   type UiThemeName,
 } from "../theme";
 
@@ -29,6 +35,10 @@ type Props = {
   onChatBodyFontFamilyChange?: (fontFamily: ChatBodyFontFamilyName) => void;
   chatBodyFontSize?: ChatBodyFontSizeName;
   onChatBodyFontSizeChange?: (fontSize: ChatBodyFontSizeName) => void;
+  chatBodyLineHeight?: ChatBodyLineHeightName;
+  onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
+  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
+  onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
   userAvatarName?: string;
   onUserAvatarChange?: (avatarName: string) => void;
 };
@@ -92,6 +102,10 @@ export function SettingsScreen({
   onChatBodyFontFamilyChange,
   chatBodyFontSize = DEFAULT_CHAT_BODY_FONT_SIZE,
   onChatBodyFontSizeChange,
+  chatBodyLineHeight = DEFAULT_CHAT_BODY_LINE_HEIGHT,
+  onChatBodyLineHeightChange,
+  chatBodyParagraphSpacing = DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
+  onChatBodyParagraphSpacingChange,
   userAvatarName = readStoredUserAvatarName(),
   onUserAvatarChange,
 }: Props) {
@@ -351,6 +365,22 @@ export function SettingsScreen({
     onChatBodyFontSizeChange?.(nextFontSize);
   };
 
+  const handleChatBodyLineHeightChange = (nextLineHeight: ChatBodyLineHeightName) => {
+    if (nextLineHeight === chatBodyLineHeight) {
+      return;
+    }
+    setNotice("聊天行间距已更新");
+    onChatBodyLineHeightChange?.(nextLineHeight);
+  };
+
+  const handleChatBodyParagraphSpacingChange = (nextParagraphSpacing: ChatBodyParagraphSpacingName) => {
+    if (nextParagraphSpacing === chatBodyParagraphSpacing) {
+      return;
+    }
+    setNotice("聊天段间距已更新");
+    onChatBodyParagraphSpacingChange?.(nextParagraphSpacing);
+  };
+
   const runTunnelAction = async (action: "start" | "stop" | "restart") => {
     setTunnelAction(action);
     setError("");
@@ -474,10 +504,7 @@ export function SettingsScreen({
 
         {botAlias === "main" ? (
           <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
-              <p className="text-sm text-[var(--muted)]">仅影响当前浏览器。登录页、内部页面和聊天正文会同步更新。</p>
-            </div>
+            <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {UI_THEME_OPTIONS.map((themeOption) => {
@@ -494,11 +521,11 @@ export function SettingsScreen({
                         ? "rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] p-4 text-left shadow-sm"
                         : "rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4 text-left hover:bg-[var(--surface-strong)]"
                     }
-                  >
-                    <div
-                      className="mb-3 rounded-2xl border p-3"
-                      style={{
-                        backgroundColor: themeOption.preview.surface,
+                    >
+                      <div
+                        className="mb-3 rounded-2xl border p-3"
+                        style={{
+                          backgroundColor: themeOption.preview.surface,
                         borderColor: themeOption.preview.border,
                       }}
                     >
@@ -518,16 +545,6 @@ export function SettingsScreen({
                           className="h-3 w-8 rounded-full"
                           style={{ backgroundColor: themeOption.preview.accentStrong }}
                         />
-                      </div>
-                      <div
-                        className="mt-3 rounded-xl border px-3 py-2 text-[11px]"
-                        style={{
-                          backgroundColor: themeOption.preview.surface,
-                          borderColor: themeOption.preview.border,
-                          color: themeOption.preview.text,
-                        }}
-                      >
-                        <span>{themeOption.label}</span>
                       </div>
                     </div>
                     <div className="font-medium text-[var(--text)]">{themeOption.label}</div>
@@ -552,6 +569,20 @@ export function SettingsScreen({
               </label>
 
               <label className="space-y-2">
+                <div className="text-sm font-medium text-[var(--text)]">聊天行间距</div>
+                <select
+                  aria-label="聊天行间距"
+                  value={chatBodyLineHeight}
+                  onChange={(event) => handleChatBodyLineHeightChange(event.target.value as ChatBodyLineHeightName)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                >
+                  {CHAT_BODY_LINE_HEIGHT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2">
                 <div className="text-sm font-medium text-[var(--text)]">聊天正文字号</div>
                 <select
                   aria-label="聊天正文字号"
@@ -564,26 +595,39 @@ export function SettingsScreen({
                   ))}
                 </select>
               </label>
+
+              <label className="space-y-2">
+                <div className="text-sm font-medium text-[var(--text)]">聊天段间距</div>
+                <select
+                  aria-label="聊天段间距"
+                  value={chatBodyParagraphSpacing}
+                  onChange={(event) => handleChatBodyParagraphSpacingChange(event.target.value as ChatBodyParagraphSpacingName)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                >
+                  {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
         ) : null}
 
         <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-          <div>
+          <div className="flex items-center justify-between gap-4">
             <h2 className="text-base font-semibold text-[var(--text)]">我的头像</h2>
-            <p className="text-sm text-[var(--muted)]">只影响 Web 页面里“你”的头像显示。</p>
+            <AvatarPicker
+              assets={avatarAssets}
+              selectedName={userAvatarName}
+              previewAlt="我的头像预览"
+              selectLabel="我的头像"
+              kind="user"
+              onSelect={(avatarName) => {
+                onUserAvatarChange?.(avatarName);
+                setNotice("我的头像已更新");
+              }}
+            />
           </div>
-          <AvatarPicker
-            assets={avatarAssets}
-            selectedName={userAvatarName}
-            previewAlt="我的头像预览"
-            selectLabel="我的头像"
-            kind="user"
-            onSelect={(avatarName) => {
-              onUserAvatarChange?.(avatarName);
-              setNotice("我的头像已更新");
-            }}
-          />
         </div>
 
         {overview ? (
@@ -598,10 +642,7 @@ export function SettingsScreen({
             </div>
 
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
-              <div>
-                <h2 className="font-medium text-[var(--text)]">Bot CLI 配置</h2>
-                <p className="mt-1 text-xs text-[var(--muted)]">修改当前 Bot 使用的 CLI 类型和可执行路径。</p>
-              </div>
+              <h2 className="font-medium text-[var(--text)]">Bot CLI 配置</h2>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="space-y-1">
                   <span className="text-sm text-[var(--text)]">CLI 类型</span>
@@ -641,9 +682,7 @@ export function SettingsScreen({
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
               <div>
                 <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
-                <p className="text-xs text-[var(--muted)] mt-1">
-                  {workdirLocked ? "assistant 型 Bot 的默认工作目录已锁定" : "保存后会更新当前 Bot 的默认工作目录"}
-                </p>
+                {workdirLocked ? <p className="mt-1 text-xs text-[var(--muted)]">assistant 型 Bot 的默认工作目录已锁定</p> : null}
               </div>
               <div className="flex items-center gap-2">
                 <input
@@ -674,10 +713,7 @@ export function SettingsScreen({
         {botAlias === "main" ? (
           <>
             <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-              <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
-                <p className="text-sm text-[var(--muted)]">仅影响当前程序中的 Git 操作和系统脚本中的 Git。留空则直连，不使用代理。</p>
-              </div>
+              <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
               <div className="flex items-center gap-2">
                 <input
                   aria-label="Git 代理端口"
@@ -704,10 +740,7 @@ export function SettingsScreen({
             </div>
 
             <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-              <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">服务管理</h2>
-                <p className="text-sm text-[var(--muted)]">仅主 Bot 可执行服务重启和前端构建</p>
-              </div>
+              <h2 className="text-base font-semibold text-[var(--text)]">服务管理</h2>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"

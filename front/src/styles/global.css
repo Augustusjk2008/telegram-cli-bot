@@ -21,6 +21,27 @@ html, body, #root {
   line-height: var(--chat-body-line-height);
 }
 
+.chat-plain-text-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-plain-text-content > p {
+  margin: 0;
+}
+
+.chat-plain-text-content > p + p {
+  margin-top: var(--chat-body-paragraph-spacing);
+}
+
+.chat-markdown-content > * {
+  margin-block: 0;
+}
+
+.chat-markdown-content > * + * {
+  margin-top: var(--chat-body-paragraph-spacing);
+}
+
 .terminal-shell {
   width: max-content;
   min-width: 100%;

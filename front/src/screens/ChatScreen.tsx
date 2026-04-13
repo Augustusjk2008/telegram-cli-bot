@@ -6,6 +6,7 @@ import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageActions } from "../components/ChatMessageActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
+import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { RestoredReplyNotice } from "../components/RestoredReplyNotice";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -654,7 +655,7 @@ export function ChatScreen({
                   <div
                     className={
                       isUser
-                        ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white whitespace-pre-wrap break-all"
+                        ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
                         : item.state === "error"
                           ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
                           : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
@@ -663,9 +664,10 @@ export function ChatScreen({
                     {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
                       <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
                     ) : (
-                      <div className="chat-body-content whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
-                        {item.text || (item.state === "streaming" ? "正在输出..." : "")}
-                      </div>
+                      <ChatPlainTextMessage
+                        content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
+                        className={isUser ? "text-white" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
+                      />
                     )}
                   </div>
                   {item.role === "assistant" && item.state === "streaming" ? (

@@ -35,7 +35,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
   const [savingAction, setSavingAction] = useState("");
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
-  const [avatarDrafts, setAvatarDrafts] = useState<Record<string, string>>({});
 
   async function loadBots() {
     setLoading(true);
@@ -52,17 +51,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
         ...prev,
         avatarName: pickAvailableAvatarName(prev.avatarName, resolvedAssets, "bot"),
       }));
-      setAvatarDrafts((prev) => {
-        const next = { ...prev };
-        for (const bot of data) {
-          next[bot.alias] = pickAvailableAvatarName(
-            next[bot.alias] || bot.avatarName,
-            resolvedAssets,
-            "bot",
-          );
-        }
-        return next;
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载 Bot 失败");
     } finally {
@@ -175,20 +163,26 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
     }
   }
 
-  async function saveAvatar(bot: BotSummary) {
-    const avatarName = pickAvailableAvatarName(
-      avatarDrafts[bot.alias] || bot.avatarName,
-      avatarAssets,
-      "bot",
-    );
+  async function updateExistingBotAvatar(bot: BotSummary, avatarName: string) {
+    const nextAvatarName = pickAvailableAvatarName(avatarName, avatarAssets, "bot");
+    if (nextAvatarName === (bot.avatarName || "bot-default.png")) {
+      return;
+    }
+
     setSavingAction(`${bot.alias}:avatar`);
     setError("");
     setNotice("");
+    setBots((prev) => prev.map((item) => (
+      item.alias === bot.alias
+        ? { ...item, avatarName: nextAvatarName }
+        : item
+    )));
     try {
-      await client.updateBotAvatar(bot.alias, avatarName);
+      await client.updateBotAvatar(bot.alias, nextAvatarName);
       setNotice(`已更新 ${bot.alias} 的头像`);
       await loadBots();
     } catch (err) {
+      await loadBots();
       setError(err instanceof Error ? err.message : "更新头像失败");
     } finally {
       setSavingAction("");
@@ -197,9 +191,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
 
   return (
     <main className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
-      <header className="mb-6 space-y-2">
+      <header className="mb-6">
         <h1 className="text-2xl font-bold">Bot 管理</h1>
-        <p className="text-sm text-[var(--muted)]">在这里新增、选择、启停、改名和删除 Bot。</p>
       </header>
 
       {error ? (
@@ -214,9 +207,15 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
       ) : null}
 
       <section className="mb-6 space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
-        <div>
+        <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">新增 Bot</h2>
-          <p className="text-sm text-[var(--muted)]">创建新的托管 Bot，保存后会立即加入列表。</p>
+          <AvatarPicker
+            assets={avatarAssets}
+            selectedName={createDraft.avatarName}
+            previewAlt="新 Bot 头像预览"
+            selectLabel="新 Bot 头像"
+            onSelect={(avatarName) => setCreateDraft((prev) => ({ ...prev, avatarName }))}
+          />
         </div>
         <div className="space-y-3">
           <input
@@ -235,7 +234,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder="留空则仅通过 Web 使用"
           />
-          <p className="text-xs text-[var(--muted)]">Telegram Token 可选。留空后该 Bot 不连接 Telegram，只能通过 Web 使用。</p>
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-sm">
               <span className="text-[var(--muted)]">新 Bot 模式</span>
@@ -278,13 +276,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder="/srv/telegram-cli-bridge/team3"
-          />
-          <AvatarPicker
-            assets={avatarAssets}
-            selectedName={createDraft.avatarName}
-            previewAlt="新 Bot 头像预览"
-            selectLabel="新 Bot 头像"
-            onSelect={(avatarName) => setCreateDraft((prev) => ({ ...prev, avatarName }))}
           />
         </div>
         <button
@@ -332,44 +323,36 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                       <p className="text-sm text-[var(--muted)]">状态: {bot.lastActiveText}</p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
-                    onClick={() => {
-                      if (isOffline) {
-                        return;
+                  <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
+                    <AvatarPicker
+                      assets={avatarAssets}
+                      selectedName={bot.avatarName || "bot-default.png"}
+                      previewAlt={`${bot.alias} 头像预览`}
+                      selectLabel={`${bot.alias} 头像`}
+                      disabled={savingAction !== ""}
+                      onSelect={(avatarName) => {
+                        void updateExistingBotAvatar(bot, avatarName);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
+                      onClick={() => {
+                        if (isOffline) {
+                          return;
+                        }
+                        onSelect(bot.alias);
+                      }}
+                      disabled={isOffline}
+                      className={
+                        isOffline
+                          ? "cursor-not-allowed rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 opacity-100"
+                          : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
                       }
-                      onSelect(bot.alias);
-                    }}
-                    disabled={isOffline}
-                    className={
-                      isOffline
-                        ? "cursor-not-allowed rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 opacity-100"
-                        : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                    }
-                  >
-                    {isOffline ? "不可进入" : "进入"}
-                  </button>
-                </div>
-
-                <AvatarPicker
-                  assets={avatarAssets}
-                  selectedName={avatarDrafts[bot.alias] || bot.avatarName || "bot-default.png"}
-                  previewAlt={`${bot.alias} 头像预览`}
-                  selectLabel={`${bot.alias} 头像`}
-                  onSelect={(avatarName) => setAvatarDrafts((prev) => ({ ...prev, [bot.alias]: avatarName }))}
-                />
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    aria-label={`保存头像 ${bot.alias}`}
-                    onClick={() => void saveAvatar(bot)}
-                    disabled={savingAction !== ""}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                  >
-                    {savingAction === `${bot.alias}:avatar` ? "保存中..." : "保存头像"}
-                  </button>
+                    >
+                      {isOffline ? "不可进入" : "进入"}
+                    </button>
+                  </div>
                 </div>
 
                 {!isMain ? (

@@ -30,7 +30,8 @@
   --terminal-muted: #9fb3ca;
   --chat-body-font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --chat-body-font-size: 15px;
-  --chat-body-line-height: 28px;
+  --chat-body-line-height: 1.9;
+  --chat-body-paragraph-spacing: 0.75em;
 }
 
 :root[data-theme="classic"] {

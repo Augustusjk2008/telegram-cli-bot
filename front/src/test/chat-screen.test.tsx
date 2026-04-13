@@ -338,6 +338,35 @@ test("renders chat bodies with the shared chat-body-content class", async () => 
   expect(assistantError.closest(".chat-body-content")).not.toBeNull();
 });
 
+test("renders plain text messages as paragraphs so reading spacing can apply", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "第一段第一行\n第一段第二行\n\n第二段",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+    ],
+  });
+
+  const { container } = render(<ChatScreen botAlias="main" client={client} />);
+
+  await waitFor(() => {
+    expect(container.querySelector(".chat-body-content")).not.toBeNull();
+  });
+
+  const textBody = container.querySelector(".chat-plain-text-content");
+  expect(textBody).not.toBeNull();
+  const paragraphs = textBody?.querySelectorAll("p") || [];
+  expect(paragraphs).toHaveLength(2);
+  expect(paragraphs[0]?.textContent).toContain("第一段第一行");
+  expect(paragraphs[0]?.textContent).toContain("第一段第二行");
+  expect(paragraphs[0]?.innerHTML).toContain("<br");
+  expect(paragraphs[1]?.textContent).toBe("第二段");
+});
+
 test("kill button is disabled while idle and highlighted while streaming", async () => {
   const user = userEvent.setup();
   const client = createClient({
