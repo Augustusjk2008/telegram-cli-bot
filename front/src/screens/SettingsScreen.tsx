@@ -6,7 +6,17 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { AvatarAsset, BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
-import { DEFAULT_UI_THEME, UI_THEME_OPTIONS, type UiThemeName } from "../theme";
+import {
+  CHAT_BODY_FONT_FAMILY_OPTIONS,
+  CHAT_BODY_FONT_SIZE_OPTIONS,
+  DEFAULT_CHAT_BODY_FONT_FAMILY,
+  DEFAULT_CHAT_BODY_FONT_SIZE,
+  DEFAULT_UI_THEME,
+  UI_THEME_OPTIONS,
+  type ChatBodyFontFamilyName,
+  type ChatBodyFontSizeName,
+  type UiThemeName,
+} from "../theme";
 
 type Props = {
   botAlias: string;
@@ -15,6 +25,10 @@ type Props = {
   onLogout: () => void;
   themeName?: UiThemeName;
   onThemeChange?: (themeName: UiThemeName) => void;
+  chatBodyFontFamily?: ChatBodyFontFamilyName;
+  onChatBodyFontFamilyChange?: (fontFamily: ChatBodyFontFamilyName) => void;
+  chatBodyFontSize?: ChatBodyFontSizeName;
+  onChatBodyFontSizeChange?: (fontSize: ChatBodyFontSizeName) => void;
   userAvatarName?: string;
   onUserAvatarChange?: (avatarName: string) => void;
 };
@@ -74,6 +88,10 @@ export function SettingsScreen({
   onLogout,
   themeName = DEFAULT_UI_THEME,
   onThemeChange,
+  chatBodyFontFamily = DEFAULT_CHAT_BODY_FONT_FAMILY,
+  onChatBodyFontFamilyChange,
+  chatBodyFontSize = DEFAULT_CHAT_BODY_FONT_SIZE,
+  onChatBodyFontSizeChange,
   userAvatarName = readStoredUserAvatarName(),
   onUserAvatarChange,
 }: Props) {
@@ -317,6 +335,22 @@ export function SettingsScreen({
     onThemeChange?.(nextTheme);
   };
 
+  const handleChatBodyFontFamilyChange = (nextFontFamily: ChatBodyFontFamilyName) => {
+    if (nextFontFamily === chatBodyFontFamily) {
+      return;
+    }
+    setNotice("聊天正文字体已更新");
+    onChatBodyFontFamilyChange?.(nextFontFamily);
+  };
+
+  const handleChatBodyFontSizeChange = (nextFontSize: ChatBodyFontSizeName) => {
+    if (nextFontSize === chatBodyFontSize) {
+      return;
+    }
+    setNotice("聊天正文字号已更新");
+    onChatBodyFontSizeChange?.(nextFontSize);
+  };
+
   const runTunnelAction = async (action: "start" | "stop" | "restart") => {
     setTunnelAction(action);
     setError("");
@@ -438,68 +472,101 @@ export function SettingsScreen({
           </div>
         ) : null}
 
-        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-          <div>
-            <h2 className="text-base font-semibold text-[var(--text)]">界面主题</h2>
-            <p className="text-sm text-[var(--muted)]">仅影响当前浏览器。登录页和内部页面会统一切换配色风格。</p>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {UI_THEME_OPTIONS.map((themeOption) => {
-              const isActive = themeName === themeOption.value;
-              return (
-                <button
-                  key={themeOption.value}
-                  type="button"
-                  aria-label={themeOption.label}
-                  aria-pressed={isActive}
-                  onClick={() => handleThemeChange(themeOption.value)}
-                  className={
-                    isActive
-                      ? "rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] p-4 text-left shadow-sm"
-                      : "rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4 text-left hover:bg-[var(--surface-strong)]"
-                  }
-                >
-                  <div
-                    className="mb-3 rounded-2xl border p-3"
-                    style={{
-                      backgroundColor: themeOption.preview.surface,
-                      borderColor: themeOption.preview.border,
-                    }}
+        {botAlias === "main" ? (
+          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
+              <p className="text-sm text-[var(--muted)]">仅影响当前浏览器。登录页、内部页面和聊天正文会同步更新。</p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {UI_THEME_OPTIONS.map((themeOption) => {
+                const isActive = themeName === themeOption.value;
+                return (
+                  <button
+                    key={themeOption.value}
+                    type="button"
+                    aria-label={themeOption.label}
+                    aria-pressed={isActive}
+                    onClick={() => handleThemeChange(themeOption.value)}
+                    className={
+                      isActive
+                        ? "rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] p-4 text-left shadow-sm"
+                        : "rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4 text-left hover:bg-[var(--surface-strong)]"
+                    }
                   >
-                    <div className="flex gap-2">
-                      <span
-                        className="h-3 w-8 rounded-full"
-                        style={{ backgroundColor: themeOption.preview.accent }}
-                      />
-                      <span
-                        className="h-3 w-8 rounded-full border"
-                        style={{
-                          backgroundColor: themeOption.preview.surface,
-                          borderColor: themeOption.preview.border,
-                        }}
-                      />
-                      <span
-                        className="h-3 w-8 rounded-full"
-                        style={{ backgroundColor: themeOption.preview.accentStrong }}
-                      />
-                    </div>
                     <div
-                      className="mt-3 rounded-xl border px-3 py-2 text-[11px]"
+                      className="mb-3 rounded-2xl border p-3"
                       style={{
                         backgroundColor: themeOption.preview.surface,
                         borderColor: themeOption.preview.border,
-                        color: themeOption.preview.text,
                       }}
                     >
-                      <span>{themeOption.label}</span>
+                      <div className="flex gap-2">
+                        <span
+                          className="h-3 w-8 rounded-full"
+                          style={{ backgroundColor: themeOption.preview.accent }}
+                        />
+                        <span
+                          className="h-3 w-8 rounded-full border"
+                          style={{
+                            backgroundColor: themeOption.preview.surface,
+                            borderColor: themeOption.preview.border,
+                          }}
+                        />
+                        <span
+                          className="h-3 w-8 rounded-full"
+                          style={{ backgroundColor: themeOption.preview.accentStrong }}
+                        />
+                      </div>
+                      <div
+                        className="mt-3 rounded-xl border px-3 py-2 text-[11px]"
+                        style={{
+                          backgroundColor: themeOption.preview.surface,
+                          borderColor: themeOption.preview.border,
+                          color: themeOption.preview.text,
+                        }}
+                      >
+                        <span>{themeOption.label}</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="font-medium text-[var(--text)]">{themeOption.label}</div>
-                </button>
-              );
-            })}
+                    <div className="font-medium text-[var(--text)]">{themeOption.label}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="space-y-2">
+                <div className="text-sm font-medium text-[var(--text)]">聊天正文字体</div>
+                <select
+                  aria-label="聊天正文字体"
+                  value={chatBodyFontFamily}
+                  onChange={(event) => handleChatBodyFontFamilyChange(event.target.value as ChatBodyFontFamilyName)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                >
+                  {CHAT_BODY_FONT_FAMILY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2">
+                <div className="text-sm font-medium text-[var(--text)]">聊天正文字号</div>
+                <select
+                  aria-label="聊天正文字号"
+                  value={chatBodyFontSize}
+                  onChange={(event) => handleChatBodyFontSizeChange(event.target.value as ChatBodyFontSizeName)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                >
+                  {CHAT_BODY_FONT_SIZE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
           <div>

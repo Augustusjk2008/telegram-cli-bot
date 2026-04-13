@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
 import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
@@ -18,7 +18,20 @@ import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
-import { APP_NAME, applyUiTheme, persistUiTheme, readStoredUiTheme, type UiThemeName } from "../theme";
+import {
+  APP_NAME,
+  applyChatReadingPreferences,
+  applyUiTheme,
+  persistChatBodyFontFamily,
+  persistChatBodyFontSize,
+  persistUiTheme,
+  readStoredChatBodyFontFamily,
+  readStoredChatBodyFontSize,
+  readStoredUiTheme,
+  type ChatBodyFontFamilyName,
+  type ChatBodyFontSizeName,
+  type UiThemeName,
+} from "../theme";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
@@ -99,6 +112,8 @@ export function App() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
   const [themeName, setThemeName] = useState<UiThemeName>(() => readStoredUiTheme());
+  const [chatBodyFontFamily, setChatBodyFontFamily] = useState<ChatBodyFontFamilyName>(() => readStoredChatBodyFontFamily());
+  const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentTab, setCurrentTab] = useState<"chat" | "files" | "terminal" | "git" | "settings">("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
@@ -141,10 +156,16 @@ export function App() {
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     applyUiTheme(themeName);
     persistUiTheme(themeName);
   }, [themeName]);
+
+  useLayoutEffect(() => {
+    applyChatReadingPreferences(chatBodyFontFamily, chatBodyFontSize);
+    persistChatBodyFontFamily(chatBodyFontFamily);
+    persistChatBodyFontSize(chatBodyFontSize);
+  }, [chatBodyFontFamily, chatBodyFontSize]);
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -261,6 +282,14 @@ export function App() {
     setThemeName(nextTheme);
   }
 
+  function handleChatBodyFontFamilyChange(nextFontFamily: ChatBodyFontFamilyName) {
+    setChatBodyFontFamily(nextFontFamily);
+  }
+
+  function handleChatBodyFontSizeChange(nextFontSize: ChatBodyFontSizeName) {
+    setChatBodyFontSize(nextFontSize);
+  }
+
   function handleUserAvatarChange(nextAvatarName: string) {
     setUserAvatarName(nextAvatarName);
     storeUserAvatarName(nextAvatarName);
@@ -362,6 +391,10 @@ export function App() {
           onLogout={handleLogout}
           themeName={themeName}
           onThemeChange={handleThemeChange}
+          chatBodyFontFamily={chatBodyFontFamily}
+          onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
+          chatBodyFontSize={chatBodyFontSize}
+          onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
           userAvatarName={userAvatarName}
           onUserAvatarChange={handleUserAvatarChange}
         />

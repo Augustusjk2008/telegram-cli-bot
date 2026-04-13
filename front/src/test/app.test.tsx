@@ -184,16 +184,18 @@ test("settings tab shows cli params and tunnel status", async () => {
 
   await user.click(screen.getByRole("button", { name: "设置" }));
 
-  expect(await screen.findByText("界面主题")).toBeInTheDocument();
+  expect(await screen.findByText("界面与阅读")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "深空轨道" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "经典暖色" })).toBeInTheDocument();
+  expect(screen.getByLabelText("聊天正文字体")).toHaveValue("sans");
+  expect(screen.getByLabelText("聊天正文字号")).toHaveValue("medium");
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
   expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
   expect(screen.getByText("公网访问")).toBeInTheDocument();
   expect(screen.getByText("https://demo.trycloudflare.com")).toBeInTheDocument();
 });
 
-test("settings tab can switch and persist the global theme", async () => {
+test("main settings can switch and persist appearance preferences", async () => {
   const user = userEvent.setup();
   render(<App />);
 
@@ -207,6 +209,63 @@ test("settings tab can switch and persist the global theme", async () => {
   expect(document.documentElement.dataset.theme).toBe("classic");
   expect(localStorage.getItem("web-ui-theme")).toBe("classic");
   expect(await screen.findByText("界面主题已切换")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "mono");
+  expect(localStorage.getItem("web-chat-body-font-family")).toBe("mono");
+  expect(await screen.findByText("聊天正文字体已更新")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("聊天正文字号"), "large");
+  expect(localStorage.getItem("web-chat-body-font-size")).toBe("large");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"Cascadia Code", "Consolas", "Microsoft YaHei UI", monospace');
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("17px");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("32px");
+  expect(await screen.findByText("聊天正文字号已更新")).toBeInTheDocument();
+});
+
+test("team2 settings hide the main appearance module", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+  await user.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(screen.queryByText("界面与阅读")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天正文字号")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "深空轨道" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "经典暖色" })).not.toBeInTheDocument();
+});
+
+test("re-mounting app restores persisted appearance preferences", async () => {
+  const user = userEvent.setup();
+  const { unmount } = render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(await screen.findByRole("button", { name: "经典暖色" }));
+  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "serif");
+  await user.selectOptions(screen.getByLabelText("聊天正文字号"), "small");
+
+  expect(document.documentElement.dataset.theme).toBe("classic");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"SimSun", "Songti SC", "STSong", serif');
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("14px");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("24px");
+
+  unmount();
+  render(<App />);
+
+  expect(document.documentElement.dataset.theme).toBe("classic");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"SimSun", "Songti SC", "STSong", serif');
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("14px");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("24px");
 });
 
 test("settings tab ignores optional tunnel failures and keeps core settings available", async () => {

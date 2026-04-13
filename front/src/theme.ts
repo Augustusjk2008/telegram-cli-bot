@@ -1,10 +1,16 @@
 export type UiThemeName = "deep-space" | "classic";
+export type ChatBodyFontFamilyName = "sans" | "serif" | "mono";
+export type ChatBodyFontSizeName = "small" | "medium" | "large";
 
 export const APP_NAME = "🦞Safe Claw";
 export const APP_SLOGAN = "【志在空间 威震长空】";
 export const APP_YEAR = "2026";
 export const UI_THEME_STORAGE_KEY = "web-ui-theme";
+export const CHAT_BODY_FONT_FAMILY_STORAGE_KEY = "web-chat-body-font-family";
+export const CHAT_BODY_FONT_SIZE_STORAGE_KEY = "web-chat-body-font-size";
 export const DEFAULT_UI_THEME: UiThemeName = "deep-space";
+export const DEFAULT_CHAT_BODY_FONT_FAMILY: ChatBodyFontFamilyName = "sans";
+export const DEFAULT_CHAT_BODY_FONT_SIZE: ChatBodyFontSizeName = "medium";
 
 export const UI_THEME_OPTIONS: Array<{
   value: UiThemeName;
@@ -47,8 +53,34 @@ export const UI_THEME_OPTIONS: Array<{
   },
 ];
 
+export const CHAT_BODY_FONT_FAMILY_OPTIONS: Array<{
+  value: ChatBodyFontFamilyName;
+  label: string;
+}> = [
+  { value: "sans", label: "无衬线" },
+  { value: "serif", label: "衬线" },
+  { value: "mono", label: "等宽" },
+];
+
+export const CHAT_BODY_FONT_SIZE_OPTIONS: Array<{
+  value: ChatBodyFontSizeName;
+  label: string;
+}> = [
+  { value: "small", label: "小" },
+  { value: "medium", label: "中" },
+  { value: "large", label: "大" },
+];
+
 function isUiThemeName(value: string): value is UiThemeName {
   return value === "deep-space" || value === "classic";
+}
+
+function isChatBodyFontFamilyName(value: string): value is ChatBodyFontFamilyName {
+  return value === "sans" || value === "serif" || value === "mono";
+}
+
+function isChatBodyFontSizeName(value: string): value is ChatBodyFontSizeName {
+  return value === "small" || value === "medium" || value === "large";
 }
 
 export function readStoredUiTheme(): UiThemeName {
@@ -71,6 +103,72 @@ export function applyUiTheme(themeName: UiThemeName) {
     return;
   }
   document.documentElement.dataset.theme = themeName;
+}
+
+export function readStoredChatBodyFontFamily(): ChatBodyFontFamilyName {
+  if (typeof window === "undefined") {
+    return DEFAULT_CHAT_BODY_FONT_FAMILY;
+  }
+  const raw = window.localStorage.getItem(CHAT_BODY_FONT_FAMILY_STORAGE_KEY)?.trim() || "";
+  return isChatBodyFontFamilyName(raw) ? raw : DEFAULT_CHAT_BODY_FONT_FAMILY;
+}
+
+export function persistChatBodyFontFamily(fontFamily: ChatBodyFontFamilyName) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CHAT_BODY_FONT_FAMILY_STORAGE_KEY, fontFamily);
+}
+
+export function readStoredChatBodyFontSize(): ChatBodyFontSizeName {
+  if (typeof window === "undefined") {
+    return DEFAULT_CHAT_BODY_FONT_SIZE;
+  }
+  const raw = window.localStorage.getItem(CHAT_BODY_FONT_SIZE_STORAGE_KEY)?.trim() || "";
+  return isChatBodyFontSizeName(raw) ? raw : DEFAULT_CHAT_BODY_FONT_SIZE;
+}
+
+export function persistChatBodyFontSize(fontSize: ChatBodyFontSizeName) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CHAT_BODY_FONT_SIZE_STORAGE_KEY, fontSize);
+}
+
+export function getChatBodyFontFamilyValue(fontFamily: ChatBodyFontFamilyName) {
+  if (fontFamily === "serif") {
+    return '"SimSun", "Songti SC", "STSong", serif';
+  }
+  if (fontFamily === "mono") {
+    return '"Cascadia Code", "Consolas", "Microsoft YaHei UI", monospace';
+  }
+  return '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+}
+
+export function getChatBodyFontSizeValue(fontSize: ChatBodyFontSizeName) {
+  if (fontSize === "small") {
+    return { fontSize: "14px", lineHeight: "24px" };
+  }
+  if (fontSize === "large") {
+    return { fontSize: "17px", lineHeight: "32px" };
+  }
+  return { fontSize: "15px", lineHeight: "28px" };
+}
+
+export function applyChatReadingPreferences(
+  fontFamily: ChatBodyFontFamilyName,
+  fontSize: ChatBodyFontSizeName,
+) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const root = document.documentElement;
+  const nextSize = getChatBodyFontSizeValue(fontSize);
+
+  root.style.setProperty("--chat-body-font-family", getChatBodyFontFamilyValue(fontFamily));
+  root.style.setProperty("--chat-body-font-size", nextSize.fontSize);
+  root.style.setProperty("--chat-body-line-height", nextSize.lineHeight);
 }
 
 export function getTerminalTheme(themeName: UiThemeName) {
