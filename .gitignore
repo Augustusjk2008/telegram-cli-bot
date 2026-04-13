@@ -11,4 +11,8 @@ docs/superpowers/
 .env.copy
 .env copy
 .venv/
+venv/
+.cloudflared_url
+.claude/settings.local.json
+tmp_bot_create_check/
 .web_tunnel_state.json
