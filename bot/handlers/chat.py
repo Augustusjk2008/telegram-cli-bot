@@ -40,6 +40,7 @@ from bot.assistant_compaction import (
     snapshot_managed_surface,
 )
 from bot.assistant_context import compile_assistant_prompt
+from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_state import record_assistant_capture
@@ -586,16 +587,231 @@ async def stream_codex_json_output(
 
 
 async def stream_claude_json_output(
-    process: subprocess.Popen, update: Update, session=None
+    process: subprocess.Popen, update: Update, session=None, *, done_session=None
 ) -> Tuple[str, Optional[str], int, bool]:
     """流式读取 Claude stream-json 输出。"""
-    return await _stream_json_cli_output(
-        process,
-        update,
-        session,
-        cli_name="Claude",
-        parse_output=parse_claude_stream_json_output,
+    if done_session is None or not getattr(done_session, "enabled", False):
+        return await _stream_json_cli_output(
+            process,
+            update,
+            session,
+            cli_name="Claude",
+            parse_output=parse_claude_stream_json_output,
+        )
+
+    loop = asyncio.get_running_loop()
+    message = await update.message.reply_text(
+        msg("chat", "processing").replace("处理中", "Claude处理中"),
+        reply_markup=get_stop_keyboard()
     )
+    start_time = loop.time()
+    timed_out = False
+
+    output_queue: queue.Queue[str] = queue.Queue()
+    returncode_container: List[Optional[int]] = [None]
+    stop_reading = threading.Event()
+    collector = ClaudeDoneCollector(done_session)
+    last_update_time = 0.0
+    progress_message = message
+    done_terminate_started_at: Optional[float] = None
+    done_force_killed = False
+
+    def read_stdout():
+        try:
+            if process.stdout is None:
+                return
+            stdout = process.stdout
+            while not stop_reading.is_set():
+                line = stdout.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                    continue
+                output_queue.put(line)
+            returncode_container[0] = process.poll()
+        except Exception as e:
+            logger.warning(f"读取 Claude stdout 时出错: {e}")
+
+    reader_thread = threading.Thread(target=read_stdout, daemon=True)
+    reader_thread.start()
+
+    try:
+        while reader_thread.is_alive() or not output_queue.empty():
+            await asyncio.sleep(CLI_TIMEOUT_CHECK_INTERVAL)
+            now = loop.time()
+            elapsed = int(now - start_time)
+
+            if elapsed >= CLI_EXEC_TIMEOUT and not timed_out:
+                timed_out = True
+                try:
+                    await safe_edit_text(
+                        progress_message,
+                        f"⏱️ Claude已超时（{elapsed}秒），正在收集剩余输出...",
+                        reply_markup=get_stop_keyboard()
+                    )
+                except Exception:
+                    pass
+                stop_reading.set()
+                process.terminate()
+                reader_thread.join(timeout=5)
+                if reader_thread.is_alive() or process.poll() is None:
+                    await _terminate_process_tree(process)
+                continue
+
+            drained = False
+            while not output_queue.empty():
+                try:
+                    line = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained = True
+                collector.consume_chunk(str(line), now=now)
+
+            if (
+                not timed_out
+                and collector.detector is not None
+                and done_terminate_started_at is None
+                and collector.detector.poll(now=now)
+                and process.poll() is None
+            ):
+                done_terminate_started_at = now
+                process.terminate()
+            elif (
+                done_terminate_started_at is not None
+                and not done_force_killed
+                and process.poll() is None
+                and (now - done_terminate_started_at) >= 1.0
+            ):
+                done_force_killed = True
+                await _terminate_process_tree(process)
+
+            time_since_last_update = now - last_update_time
+            update_interval = 1 if timed_out else CLI_PROGRESS_UPDATE_INTERVAL
+            if time_since_last_update >= update_interval:
+                last_update_time = now
+                preview_text = collector.preview_text or collector.final_text or collector.raw_output
+
+                if timed_out:
+                    status_text = f"⏱️ 已超时（{elapsed}秒），正在收集剩余输出...\n已收集 {len(collector.raw_output)} 字符\n\n"
+                else:
+                    status_text = msg("chat", "processing_with_time", elapsed=elapsed).replace("处理中", "Claude处理中") + "\n\n"
+
+                preview = preview_text[-800:] if len(preview_text) > 800 else preview_text
+                preview = preview.strip()
+                if preview and not timed_out:
+                    status_text += f"<pre>{html.escape(preview)}</pre>"
+
+                await safe_edit_text(progress_message, status_text, reply_markup=get_stop_keyboard())
+
+            if not drained:
+                continue
+
+        stop_reading.set()
+        if reader_thread.is_alive():
+            reader_thread.join(timeout=3)
+
+        while not output_queue.empty():
+            try:
+                collector.consume_chunk(str(output_queue.get_nowait()), now=loop.time())
+            except queue.Empty:
+                break
+
+        returncode = await _resolve_process_returncode(process, returncode_container[0])
+        if done_terminate_started_at is not None and not timed_out:
+            returncode = 0
+        was_stopped = _is_stop_requested(session)
+
+        final_text = collector.final_text
+        if timed_out:
+            if not final_text:
+                final_text = msg("chat", "timeout_no_output")
+
+            chunks = split_text_into_chunks(final_text, max_len=900)
+            try:
+                await progress_message.delete()
+            except Exception:
+                pass
+
+            for i, chunk in enumerate(chunks):
+                prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
+                is_last = (i == len(chunks) - 1)
+                footer = (
+                    f"\n\n{msg('chat', 'timeout', timeout=CLI_EXEC_TIMEOUT)}"
+                    f"\n{msg('chat', 'timeout_warning')}"
+                ) if is_last else ""
+                formatted = f"⏱️ {prefix}<pre>{html.escape(chunk)}</pre>{footer}"
+                await update.message.reply_text(formatted, parse_mode="HTML")
+                await asyncio.sleep(0.3)
+
+            return final_text, collector.session_id, returncode, True
+
+        if not final_text:
+            final_text = msg("chat", "no_output")
+
+        chunks = split_text_into_chunks(final_text, max_len=900)
+        icon = "🛑" if was_stopped else ("✅" if returncode == 0 else "⚠️")
+
+        try:
+            await progress_message.delete()
+        except Exception:
+            pass
+
+        for i, chunk in enumerate(chunks):
+            prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
+            formatted = f"{icon} {prefix}<pre>{html.escape(chunk)}</pre>"
+            await update.message.reply_text(formatted, parse_mode="HTML")
+            await asyncio.sleep(0.3)
+
+        return final_text, collector.session_id, returncode, False
+    except Exception as e:
+        if HTTPX_ERRORS and isinstance(e, HTTPX_ERRORS):
+            logger.error(f"Telegram 网络连接错误: {e}")
+        else:
+            logger.error(f"Claude done detector 流式处理错误: {e}")
+
+        stop_reading.set()
+        if reader_thread.is_alive():
+            reader_thread.join(timeout=3)
+
+        while not output_queue.empty():
+            try:
+                collector.consume_chunk(str(output_queue.get_nowait()), now=loop.time())
+            except queue.Empty:
+                break
+
+        returncode = await _resolve_process_returncode(process, returncode_container[0])
+        if collector.raw_output.strip():
+            final_text = collector.final_text or msg("chat", "no_output")
+            try:
+                await progress_message.delete()
+            except Exception:
+                pass
+
+            error_type = "网络连接错误" if (HTTPX_ERRORS and isinstance(e, HTTPX_ERRORS)) else "流式处理错误"
+            error_notice = f"⚠️ Claude {error_type}: <code>{html.escape(str(e))}</code>\n已恢复已收集的输出："
+            try:
+                await update.message.reply_text(error_notice, parse_mode="HTML")
+            except Exception:
+                pass
+
+            chunks = split_text_into_chunks(final_text, max_len=900)
+            for i, chunk in enumerate(chunks):
+                prefix = f"[{i + 1}/{len(chunks)}] " if len(chunks) > 1 else ""
+                formatted = f"⚠️ {prefix}<pre>{html.escape(chunk)}</pre>"
+                try:
+                    await update.message.reply_text(formatted, parse_mode="HTML")
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)
+
+            return final_text, collector.session_id, returncode, False
+
+        try:
+            await safe_edit_text(progress_message, msg("chat", "error", error=str(e)))
+        except Exception:
+            pass
+        return "", None, returncode, False
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text_override: str = None):
@@ -664,6 +880,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.touch()
 
         full_prompt = user_text
+        done_session = None
         assistant_pre_surface: dict[str, str] = {}
         if profile.bot_mode == "assistant":
             assistant_home = bootstrap_assistant_home(profile.working_dir)
@@ -681,6 +898,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
                 session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
                 session.persist()
+
+        if cli_type == "claude":
+            done_session = build_claude_done_session(full_prompt, cli_type=cli_type)
+            full_prompt = done_session.prompt_text
 
         try:
             cmd, use_stdin = build_cli_command(
@@ -746,7 +967,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                             session.codex_session_id = None
                             session_id_changed = True
             elif cli_type == "claude":
-                response, _, returncode, timed_out = await stream_claude_json_output(process, update, session)
+                response, _, returncode, timed_out = await stream_claude_json_output(
+                    process,
+                    update,
+                    session,
+                    done_session=done_session,
+                )
                 with session._lock:
                     if timed_out:
                         pass

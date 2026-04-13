@@ -203,6 +203,55 @@ class TestHandleTextMessageAuth:
         assert sync_mock.call_count == 2
         assert session_mock.managed_prompt_hash_seen == "hash-updated"
 
+    @pytest.mark.asyncio
+    async def test_claude_done_detector_wraps_prompt_before_building_command(self, mock_update, mock_context, temp_dir):
+        from bot.claude_done import ClaudeDoneSession
+        from bot.handlers.chat import handle_text_message
+
+        profile_mock = MagicMock()
+        profile_mock.bot_mode = "cli"
+        profile_mock.cli_type = "claude"
+        profile_mock.cli_path = "claude"
+        profile_mock.working_dir = str(temp_dir)
+        profile_mock.cli_params = MagicMock()
+
+        session_mock = MagicMock()
+        session_mock.working_dir = str(temp_dir)
+        session_mock.is_processing = False
+        session_mock.codex_session_id = None
+        session_mock.kimi_session_id = None
+        session_mock.claude_session_id = None
+        session_mock.claude_session_initialized = False
+        session_mock.managed_prompt_hash_seen = None
+        session_mock._lock = threading.Lock()
+
+        done_session = ClaudeDoneSession(
+            enabled=True,
+            prompt_text="wrapped prompt",
+            sentinel="__TCB_DONE_test__",
+            quiet_seconds=0.0,
+            nonce="test",
+        )
+        fake_process = MagicMock()
+
+        with patch("bot.handlers.chat.check_auth", return_value=True), \
+             patch("bot.handlers.chat.get_current_profile", return_value=profile_mock), \
+             patch("bot.handlers.chat.get_current_session", return_value=session_mock), \
+             patch("bot.handlers.chat.resolve_cli_executable", return_value="claude"), \
+             patch("bot.handlers.chat.build_claude_done_session", return_value=done_session) as done_mock, \
+             patch("bot.handlers.chat.build_cli_command", return_value=(["claude"], False)) as build_mock, \
+             patch("bot.handlers.chat.subprocess.Popen", return_value=fake_process), \
+             patch(
+                 "bot.handlers.chat.stream_claude_json_output",
+                 new_callable=AsyncMock,
+                 return_value=("ok", None, 0, False),
+             ) as stream_mock:
+            await handle_text_message(mock_update, mock_context)
+
+        done_mock.assert_called_once_with(mock_update.message.text, cli_type="claude")
+        assert build_mock.call_args.kwargs["user_text"] == "wrapped prompt"
+        assert stream_mock.call_args.kwargs["done_session"] is done_session
+
 
 class TestCollectCliOutput:
     """测试 collect_cli_output 返回类型"""
@@ -383,6 +432,77 @@ class TestStreamClaudeJsonOutput:
         assert session_id == "sess-1"
         assert output == "你好，世界"
         assert "你好，世界" in mock_update.message.reply_text.await_args_list[1].args[0]
+
+    @pytest.mark.asyncio
+    async def test_strips_sentinel_and_terminates_after_quiet_window(self, mock_update):
+        from bot.claude_done import build_claude_done_session
+        from bot.handlers import chat
+
+        progress_message = MagicMock()
+        progress_message.delete = AsyncMock()
+        progress_message.edit_text = AsyncMock()
+        final_message = MagicMock()
+        mock_update.message.reply_text = AsyncMock(side_effect=[progress_message, final_message])
+
+        session_mock = MagicMock()
+        session_mock.stop_requested = False
+        session_mock._lock = threading.Lock()
+
+        class FakeStdout:
+            def __init__(self):
+                self._lines = [
+                    '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好\\n__TCB_DONE_abc123__"}}}\n',
+                    '{"type":"result","subtype":"success","session_id":"sess-1","result":"你好\\n__TCB_DONE_abc123__"}\n',
+                ]
+
+            def readline(self):
+                return self._lines.pop(0) if self._lines else ""
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.returncode = None
+                self.stdin = None
+                self.terminate = MagicMock(side_effect=self._terminate)
+
+            def _terminate(self):
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                if self.returncode is None:
+                    self.returncode = 0
+                return self.returncode
+
+        process = FakeProcess()
+        done_session = build_claude_done_session(
+            "hello",
+            cli_type="claude",
+            enabled=True,
+            quiet_seconds=0.0,
+            sentinel_mode="nonce",
+            nonce="abc123",
+        )
+
+        with patch.object(chat, "CLI_TIMEOUT_CHECK_INTERVAL", 0.01), \
+             patch.object(chat, "CLI_PROGRESS_UPDATE_INTERVAL", 60), \
+             patch.object(chat, "CLI_EXEC_TIMEOUT", 5):
+            output, session_id, returncode, timed_out = await chat.stream_claude_json_output(
+                process,
+                mock_update,
+                session_mock,
+                done_session=done_session,
+            )
+
+        assert timed_out is False
+        assert returncode == 0
+        assert session_id == "sess-1"
+        assert output == "你好"
+        process.terminate.assert_called_once()
+        final_text = mock_update.message.reply_text.await_args_list[1].args[0]
+        assert "__TCB_DONE_" not in final_text
 
 
 def test_terminate_process_tree_sync_uses_platform_helper(monkeypatch):

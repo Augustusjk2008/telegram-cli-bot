@@ -25,6 +25,7 @@ from bot.assistant_compaction import (
     snapshot_managed_surface,
 )
 from bot.assistant_context import compile_assistant_prompt
+from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_proposals import list_proposals, set_proposal_status
@@ -799,14 +800,104 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
     return final_text, thread_id, returncode, timed_out
 
 
-async def _communicate_claude_process(process: subprocess.Popen) -> tuple[str, Optional[str], int, bool]:
-    raw_output, returncode, timed_out = await _communicate_process(process)
-    final_text, session_id = parse_claude_stream_json_output(raw_output)
+async def _communicate_claude_process(
+    process: subprocess.Popen,
+    *,
+    done_session=None,
+) -> tuple[str, Optional[str], int, bool]:
+    if done_session is None or not getattr(done_session, "enabled", False):
+        raw_output, returncode, timed_out = await _communicate_process(process)
+        final_text, session_id = parse_claude_stream_json_output(raw_output)
+        if timed_out and not final_text:
+            final_text = msg("chat", "timeout_no_output")
+        elif not final_text:
+            final_text = msg("chat", "no_output")
+        return final_text, session_id, returncode, timed_out
+
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    output_queue: queue.Queue[Any] = queue.Queue()
+    reader_done = threading.Event()
+    collector = ClaudeDoneCollector(done_session)
+    timed_out = False
+    done_terminate_started_at: Optional[float] = None
+    done_force_killed = False
+
+    def read_stdout() -> None:
+        try:
+            if process.stdout is None:
+                return
+            stdout = process.stdout
+            while True:
+                line = stdout.readline()
+                if line:
+                    output_queue.put(line)
+                    continue
+                if process.poll() is not None:
+                    remaining = stdout.read()
+                    if remaining:
+                        output_queue.put(remaining)
+                    break
+                time.sleep(0.05)
+        except Exception as exc:  # pragma: no cover - defensive
+            output_queue.put(exc)
+        finally:
+            reader_done.set()
+
+    reader_thread = threading.Thread(target=read_stdout, daemon=True)
+    reader_thread.start()
+
+    while not reader_done.is_set() or not output_queue.empty():
+        now = loop.time()
+        if not timed_out and (now - started_at) >= CLI_EXEC_TIMEOUT and process.poll() is None:
+            timed_out = True
+            await loop.run_in_executor(None, _terminate_process_sync, process)
+
+        drained = False
+        while True:
+            try:
+                item = output_queue.get_nowait()
+            except queue.Empty:
+                break
+            drained = True
+            if isinstance(item, Exception):
+                raise item
+            collector.consume_chunk(str(item), now=now)
+
+        if (
+            not timed_out
+            and collector.detector is not None
+            and done_terminate_started_at is None
+            and collector.detector.poll(now=now)
+            and process.poll() is None
+        ):
+            done_terminate_started_at = now
+            process.terminate()
+        elif (
+            done_terminate_started_at is not None
+            and not done_force_killed
+            and process.poll() is None
+            and (now - done_terminate_started_at) >= 1.0
+        ):
+            done_force_killed = True
+            await loop.run_in_executor(None, _terminate_process_sync, process)
+
+        if not drained:
+            await asyncio.sleep(0.1)
+
+    await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+    returncode = process.poll() if process is not None else -1
+    if returncode is None:
+        returncode = -1
+    if done_terminate_started_at is not None and not timed_out:
+        returncode = 0
+
+    final_text = collector.final_text
     if timed_out and not final_text:
         final_text = msg("chat", "timeout_no_output")
     elif not final_text:
         final_text = msg("chat", "no_output")
-    return final_text, session_id, returncode, timed_out
+    return final_text, collector.session_id, returncode, timed_out
 
 
 async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
@@ -838,6 +929,11 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             user_text=text,
             cli_type=cli_type,
         )
+
+    done_session = None
+    if cli_type == "claude":
+        done_session = build_claude_done_session(prompt_text, cli_type=cli_type)
+        prompt_text = done_session.prompt_text
 
     with session._lock:
         if session.is_processing:
@@ -919,6 +1015,9 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             thread_id: Optional[str] = None
             timed_out = False
             last_status_signature: tuple[int, Optional[str]] | None = None
+            claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
+            done_terminate_started_at: Optional[float] = None
+            done_force_killed = False
 
             def read_stdout() -> None:
                 try:
@@ -970,12 +1069,42 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                                 parsed = parse_codex_json_line(stripped)
                                 if parsed["thread_id"]:
                                     thread_id = parsed["thread_id"]
+                        elif claude_collector is not None:
+                            claude_collector.consume_chunk(text_chunk, now=loop.time())
 
-                    status_event = _build_stream_status_event(
-                        cli_type=cli_type,
-                        elapsed_seconds=int(loop.time() - started_at),
-                        raw_output="".join(raw_output_parts),
-                    )
+                    if (
+                        not timed_out
+                        and claude_collector is not None
+                        and claude_collector.detector is not None
+                        and done_terminate_started_at is None
+                        and claude_collector.detector.poll(now=loop.time())
+                        and process.poll() is None
+                    ):
+                        done_terminate_started_at = loop.time()
+                        process.terminate()
+                    elif (
+                        done_terminate_started_at is not None
+                        and not done_force_killed
+                        and process.poll() is None
+                        and (loop.time() - done_terminate_started_at) >= 1.0
+                    ):
+                        done_force_killed = True
+                        await loop.run_in_executor(None, _terminate_process_sync, process)
+
+                    if claude_collector is not None:
+                        status_event = {
+                            "type": "status",
+                            "elapsed_seconds": int(loop.time() - started_at),
+                        }
+                        preview_text = claude_collector.preview_text
+                        if preview_text:
+                            status_event["preview_text"] = preview_text[-800:]
+                    else:
+                        status_event = _build_stream_status_event(
+                            cli_type=cli_type,
+                            elapsed_seconds=int(loop.time() - started_at),
+                            raw_output="".join(raw_output_parts),
+                        )
                     status_signature = (
                         int(status_event.get("elapsed_seconds", 0)),
                         status_event.get("preview_text"),
@@ -994,6 +1123,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 returncode = process.poll() if process is not None else -1
                 if returncode is None:
                     returncode = -1
+                if done_terminate_started_at is not None and not timed_out:
+                    returncode = 0
             finally:
                 with session._lock:
                     session.process = None
@@ -1003,7 +1134,10 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id
             elif cli_type == "claude":
-                response, _ = parse_claude_stream_json_output(raw_output)
+                if claude_collector is not None:
+                    response = claude_collector.final_text or ""
+                else:
+                    response, _ = parse_claude_stream_json_output(raw_output)
             else:
                 response = raw_output.strip()
 
@@ -1121,6 +1255,11 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
             cli_type=cli_type,
         )
 
+    done_session = None
+    if cli_type == "claude":
+        done_session = build_claude_done_session(prompt_text, cli_type=cli_type)
+        prompt_text = done_session.prompt_text
+
     with session._lock:
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
@@ -1188,7 +1327,10 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 if cli_type == "codex":
                     response, thread_id, returncode, timed_out = await _communicate_codex_process(process)
                 elif cli_type == "claude":
-                    response, _, returncode, timed_out = await _communicate_claude_process(process)
+                    response, _, returncode, timed_out = await _communicate_claude_process(
+                        process,
+                        done_session=done_session,
+                    )
                 else:
                     response, returncode, timed_out = await _communicate_process(process)
                     response = response.strip() or (msg("chat", "timeout_no_output") if timed_out else msg("chat", "no_output"))

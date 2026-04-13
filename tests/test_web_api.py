@@ -1450,6 +1450,70 @@ async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBot
 
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_claude_done_detector_avoids_communicate_and_strips_output(web_manager: MultiBotManager):
+    from bot.claude_done import build_claude_done_session
+
+    web_manager.main_profile.cli_type = "claude"
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"最终回答\\n__TCB_DONE_abc123__"}}}\n',
+                '{"type":"result","subtype":"success","session_id":"sess-1","result":"最终回答\\n__TCB_DONE_abc123__"}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    fake_process = FakeProcess()
+    done_session = build_claude_done_session(
+        "hello",
+        cli_type="claude",
+        enabled=True,
+        quiet_seconds=0.0,
+        sentinel_mode="nonce",
+        nonce="abc123",
+    )
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=done_session), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_process",
+             new_callable=AsyncMock,
+             side_effect=AssertionError("communicate should not be used when done detector is enabled"),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert data["output"] == "最终回答"
+    assert data["returncode"] == 0
+    assert "__TCB_DONE_" not in data["output"]
+    fake_process.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     fake_process = MagicMock()
@@ -1786,6 +1850,69 @@ def test_claude_status_event_extracts_text_delta_preview():
         "elapsed_seconds": 2,
         "preview_text": "你好",
     }
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_claude_done_detector_strips_preview_and_done_output(web_manager: MultiBotManager):
+    from bot.claude_done import build_claude_done_session
+
+    web_manager.main_profile.cli_type = "claude"
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好\\n__TCB_DONE_abc123__"}}}\n',
+                '{"type":"result","subtype":"success","session_id":"sess-1","result":"你好\\n__TCB_DONE_abc123__"}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    fake_process = FakeProcess()
+    done_session = build_claude_done_session(
+        "hello",
+        cli_type="claude",
+        enabled=True,
+        quiet_seconds=0.0,
+        sentinel_mode="nonce",
+        nonce="abc123",
+    )
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=done_session), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    status_events = [event for event in events if event["type"] == "status" and event.get("preview_text")]
+    done_event = next(event for event in events if event["type"] == "done")
+
+    assert status_events
+    assert status_events[-1]["preview_text"] == "你好"
+    assert done_event["output"] == "你好"
+    assert done_event["returncode"] == 0
+    fake_process.terminate.assert_called_once()
 
 
 @pytest.mark.asyncio
