@@ -7,7 +7,6 @@ Bot 管理器测试
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +17,14 @@ from bot.config import BOT_ALIAS_RE, RESERVED_ALIASES
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.sessions import get_or_create_session
+
+
+def test_manager_module_no_longer_imports_telegram_runtime():
+    source = Path("bot/manager.py").read_text(encoding="utf-8")
+
+    assert ("from " + "telegram") not in source
+    assert ("telegram" ".ext") not in source
+    assert "register_handlers" not in source
 
 
 class TestManagerLoadSave:
@@ -68,17 +75,17 @@ class TestManagerLoadSave:
         assert "sub1" in m.managed_profiles
         assert m.managed_profiles["sub1"].token == "tok1"
 
-    def test_load_profiles_rejects_kimi_cli_type(self, temp_dir: Path):
+    def test_load_profiles_rejects_removed_legacy_cli_type(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(
             json.dumps(
                 {
                     "bots": [
                         {
-                            "alias": "kimi1",
+                            "alias": "legacy1",
                             "token": "tok1",
-                            "cli_type": "kimi",
-                            "cli_path": "kimi",
+                            "cli_type": "ki" "mi",
+                            "cli_path": "ki" "mi",
                             "working_dir": str(temp_dir),
                             "enabled": True,
                         }
@@ -88,7 +95,7 @@ class TestManagerLoadSave:
             encoding="utf-8",
         )
 
-        with pytest.raises(ValueError, match="kimi"):
+        with pytest.raises(ValueError, match="已移除"):
             MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
     def test_save_bots_format(self, temp_dir: Path):
@@ -414,10 +421,10 @@ class TestManagerValidation:
             avatar_name="bot-default.png",
         )
 
-        await manager.set_bot_avatar("team2", "kimi-teal.png")
+        await manager.set_bot_avatar("team2", "mint-teal.png")
 
-        assert manager.managed_profiles["team2"].avatar_name == "kimi-teal.png"
-        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["avatar_name"] == "kimi-teal.png"
+        assert manager.managed_profiles["team2"].avatar_name == "mint-teal.png"
+        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["avatar_name"] == "mint-teal.png"
 
     @pytest.mark.asyncio
     async def test_main_bot_avatar_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
@@ -454,11 +461,11 @@ class TestManagerValidation:
         monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
 
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
-        await manager.set_bot_avatar("team2", "kimi-teal.png")
+        await manager.set_bot_avatar("team2", "mint-teal.png")
 
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
-        assert restored.managed_profiles["team2"].avatar_name == "kimi-teal.png"
+        assert restored.managed_profiles["team2"].avatar_name == "mint-teal.png"
 
     @pytest.mark.asyncio
     async def test_removed_bot_does_not_reuse_stale_persisted_avatar(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
@@ -481,7 +488,7 @@ class TestManagerValidation:
         monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
 
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
-        await manager.set_bot_avatar("team2", "kimi-teal.png")
+        await manager.set_bot_avatar("team2", "mint-teal.png")
 
         with patch.object(manager, "_stop_application", AsyncMock(return_value=None)), \
              patch("bot.manager.resolve_cli_executable", return_value="claude"), \
@@ -501,7 +508,7 @@ class TestManagerValidation:
         assert restored.managed_profiles["team2"].avatar_name == "bot-default.png"
 
     @pytest.mark.asyncio
-    async def test_start_profile_skips_telegram_when_token_missing(self, temp_dir: Path):
+    async def test_start_profile_is_web_only_noop(self, temp_dir: Path):
         profile = BotProfile(alias="main", token="tok")
         m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
         web_only = BotProfile(
@@ -514,179 +521,36 @@ class TestManagerValidation:
             bot_mode="cli",
         )
 
-        with patch("bot.manager.Application.builder", side_effect=AssertionError("should not connect telegram")):
-            app = await m._start_profile(web_only, is_main=False)
+        app = await m._start_profile(web_only, is_main=False)
 
         assert app is None
         assert "web_only" not in m.applications
 
-    def test_handle_network_error_exhausted_checks_main_bot_id(self, temp_dir: Path):
+    @pytest.mark.asyncio
+    async def test_start_watchdog_is_web_only_noop(self, temp_dir: Path):
         profile = BotProfile(alias="main", token="tok")
         m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
-        m._main_bot_network_error_count = 9
-        m.applications["main"] = MagicMock(bot_data={"bot_id": 123})
 
-        with patch("bot.manager.is_bot_processing", autospec=True, return_value=False) as mock_processing, \
-             patch("bot.config.RESTART_EVENT", None):
-            m._handle_network_error_exhausted("main")
+        await m.start_watchdog()
+        await m.stop_watchdog()
 
-        mock_processing.assert_called_once_with(123)
+        assert getattr(m, "_watchdog_task", None) is None
 
     @pytest.mark.asyncio
-    async def test_manager_warning_sent_to_main_bot_when_idle(self, temp_dir: Path):
+    async def test_shutdown_all_clears_stub_applications(self, temp_dir: Path):
         profile = BotProfile(alias="main", token="tok")
-        with patch("bot.manager.ALLOWED_USER_IDS", [987654321]), \
-             patch("bot.manager.is_bot_processing", autospec=True, return_value=False):
-            m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
-            app = MagicMock()
-            app.bot = MagicMock()
-            app.bot.send_message = AsyncMock()
-            app.bot_data = {"bot_id": 123}
-            m.applications["main"] = app
+        m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
+        workdir = temp_dir / "repo"
+        workdir.mkdir()
+        session = get_or_create_session(123, "team1", 456, default_working_dir=str(workdir))
+        m.applications["team1"] = MagicMock(bot_data={"bot_id": 123})
+        m.bot_id_to_alias[123] = "team1"
 
-            logging.getLogger("bot.manager").warning("测试告警 alias=%s", "team1")
+        await m.shutdown_all()
 
-            for _ in range(20):
-                if app.bot.send_message.await_count:
-                    break
-                await asyncio.sleep(0.01)
-
-            assert app.bot.send_message.await_count == 1
-            kwargs = app.bot.send_message.await_args.kwargs
-            assert kwargs["chat_id"] == 987654321
-            assert "测试告警 alias=team1" in kwargs["text"]
-            assert "WARNING" in kwargs["text"]
-
-    @pytest.mark.asyncio
-    async def test_manager_warning_waits_until_main_bot_idle(self, temp_dir: Path):
-        profile = BotProfile(alias="main", token="tok")
-        with patch("bot.manager.ALLOWED_USER_IDS", [987654321]), \
-             patch("bot.manager.is_bot_processing", autospec=True, side_effect=[True, True, False]):
-            m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
-            m._main_bot_alert_retry_delay = 0.01
-            app = MagicMock()
-            app.bot = MagicMock()
-            app.bot.send_message = AsyncMock()
-            app.bot_data = {"bot_id": 123}
-            m.applications["main"] = app
-
-            logging.getLogger("bot.manager").error("测试错误 alias=%s", "team2")
-
-            await asyncio.sleep(0.005)
-            assert app.bot.send_message.await_count == 0
-
-            for _ in range(30):
-                if app.bot.send_message.await_count:
-                    break
-                await asyncio.sleep(0.01)
-
-            assert app.bot.send_message.await_count == 1
-            kwargs = app.bot.send_message.await_args.kwargs
-            assert "测试错误 alias=team2" in kwargs["text"]
-            assert "ERROR" in kwargs["text"]
-
-
-class TestManagerProxyCompatibility:
-    """测试代理兼容逻辑"""
-
-    @pytest.mark.asyncio
-    async def test_start_profile_with_proxy_avoids_builder_conflict(self, temp_dir: Path):
-        profile = BotProfile(alias="main", token="tok")
-        manager = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
-        fake_me = MagicMock(id=123, username="tester")
-
-        with patch("bot.manager.get_proxy_kwargs", return_value={"proxy_url": "http://127.0.0.1:7890"}), \
-             patch("bot.manager.register_handlers", lambda *args, **kwargs: None), \
-             patch.object(manager, "_start_updater_polling_with_retry", AsyncMock()), \
-             patch("telegram.Bot.get_me", new=AsyncMock(return_value=fake_me)), \
-             patch("telegram.ext.Application.initialize", new=AsyncMock()), \
-             patch("telegram.ext.Application.start", new=AsyncMock()), \
-             patch("telegram.ext.Application.stop", new=AsyncMock()), \
-             patch("telegram.ext.Application.shutdown", new=AsyncMock()):
-            result = await manager._start_profile(profile, is_main=False)
-
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_start_profile_falls_back_to_httpx_proxy_url(self, temp_dir: Path):
-        profile = BotProfile(alias="main", token="tok")
-        manager = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
-
-        class DummyApp:
-            def __init__(self):
-                self.bot_data = {}
-                self.bot = MagicMock()
-                self.bot.get_me = AsyncMock(return_value=MagicMock(id=123, username="tester"))
-                self.running = True
-                self.updater = MagicMock()
-
-            async def initialize(self):
-                return None
-
-            async def start(self):
-                self.running = True
-
-            async def stop(self):
-                self.running = False
-
-            async def shutdown(self):
-                return None
-
-            def add_error_handler(self, _handler):
-                return None
-
-        class DummyBuilder:
-            def __init__(self, app):
-                self._app = app
-                self.request_obj = None
-                self.get_updates_request_obj = None
-                self.proxy_url_called_with = None
-
-            def token(self, _token):
-                return self
-
-            def proxy_url(self, url):
-                self.proxy_url_called_with = url
-                return self
-
-            def request(self, request):
-                self.request_obj = request
-                return self
-
-            def get_updates_request(self, request):
-                self.get_updates_request_obj = request
-                return self
-
-            def build(self):
-                return self._app
-
-        class FakeRequest:
-            def __init__(self, kwargs):
-                self.kwargs = kwargs
-
-        request_calls = []
-
-        def fake_httpx_request(**kwargs):
-            request_calls.append(kwargs)
-            if "proxy" in kwargs:
-                raise TypeError("proxy not supported")
-            return FakeRequest(kwargs)
-
-        app = DummyApp()
-        builder = DummyBuilder(app)
-
-        with patch("bot.manager.get_proxy_kwargs", return_value={"proxy_url": "http://proxy"}), \
-             patch("bot.manager.Application.builder", return_value=builder), \
-             patch("bot.manager.HTTPXRequest", side_effect=fake_httpx_request), \
-             patch.object(manager, "_start_updater_polling_with_retry", AsyncMock()), \
-             patch("bot.manager.register_handlers", lambda *args, **kwargs: None):
-            result = await manager._start_profile(profile, is_main=False)
-
-        assert result is app
-        assert builder.request_obj.kwargs.get("proxy_url") == "http://proxy"
-        assert builder.get_updates_request_obj.kwargs.get("proxy_url") == "http://proxy"
-        assert any("proxy" in call for call in request_calls)
-        assert any("proxy_url" in call for call in request_calls)
+        assert session.bot_alias == "team1"
+        assert not m.applications
+        assert 123 not in m.bot_id_to_alias
 
 
 class TestManagerGetProfile:

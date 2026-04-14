@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import html
 import logging
 import os
 import subprocess
@@ -15,8 +14,6 @@ from typing import Any
 
 from aiohttp import WSMsgType, WSCloseCode, web
 from aiohttp.client_exceptions import ClientConnectionResetError
-from telegram import Bot
-from telegram.request import HTTPXRequest
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.config import (
@@ -31,7 +28,6 @@ from bot.config import (
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
     WEB_TUNNEL_STATE_FILE,
-    get_proxy_kwargs,
     request_restart,
 )
 from bot.manager import MultiBotManager
@@ -364,76 +360,10 @@ class WebApiServer:
         if not public_url:
             return False
 
-        self._copy_text_to_clipboard(public_url)
-
-        if not ALLOWED_USER_IDS:
-            return False
-
-        main_app = self.manager.applications.get(self.manager.main_profile.alias)
-        bot: Bot | Any | None = main_app.bot if main_app is not None else self._build_notification_bot()
-        if bot is None:
-            return False
-
-        text = (
-            "🌐 <b>Web 公网地址已就绪</b>\n\n"
-            f"来源: <code>{html.escape(reason)}</code>\n"
-            f"公网地址: <code>{html.escape(public_url)}</code>\n"
-            f"本地地址: <code>{html.escape(str(snapshot.get('local_url') or ''))}</code>"
-        )
-
-        sent_any = False
-        should_shutdown = main_app is None
-        initialized = False
-        try:
-            if should_shutdown:
-                await bot.initialize()
-                initialized = True
-
-            for user_id in ALLOWED_USER_IDS:
-                try:
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=text,
-                        parse_mode="HTML",
-                    )
-                    sent_any = True
-                except Exception as exc:
-                    logger.info("发送 Web 公网地址通知失败(已忽略) user_id=%s: %s", user_id, exc)
-        except Exception as exc:
-            logger.info("初始化 Web 公网地址通知 bot 失败(已忽略): %s", exc)
-        finally:
-            if should_shutdown and initialized:
-                try:
-                    await bot.shutdown()
-                except Exception as exc:
-                    logger.info("关闭 Web 公网地址通知 bot 失败(已忽略): %s", exc)
-
-        return sent_any
-
-    def _build_notification_bot(self) -> Bot | None:
-        token = str(getattr(self.manager.main_profile, "token", "") or "").strip()
-        if not token or token == "your_bot_token_here":
-            return None
-
-        proxy_kwargs = get_proxy_kwargs()
-        proxy_url = str(proxy_kwargs.get("proxy_url") or "").strip() if proxy_kwargs else ""
-        request = self._build_notification_request(proxy_url=proxy_url)
-        return Bot(token=token, request=request)
-
-    def _build_notification_request(self, proxy_url: str = "") -> HTTPXRequest:
-        request_kwargs = {
-            "connection_pool_size": 8,
-            "read_timeout": 60,
-            "write_timeout": 60,
-            "connect_timeout": 30,
-            "pool_timeout": 30,
-        }
-        if not proxy_url:
-            return HTTPXRequest(**request_kwargs)
-        try:
-            return HTTPXRequest(**request_kwargs, proxy=proxy_url)
-        except TypeError:
-            return HTTPXRequest(**request_kwargs, proxy_url=proxy_url)
+        copied = self._copy_text_to_clipboard(public_url)
+        if copied:
+            logger.info("已复制 Web 公网地址到剪贴板 reason=%s url=%s", reason, public_url)
+        return copied
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -441,7 +371,6 @@ class WebApiServer:
                 "ok": True,
                 "service": "telegram-cli-bridge-web",
                 "web_enabled": True,
-                "telegram_running": bool(self.manager.applications),
                 "host": WEB_HOST,
                 "port": WEB_PORT,
             }

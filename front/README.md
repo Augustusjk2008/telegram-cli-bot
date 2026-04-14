@@ -25,7 +25,6 @@ npm run dev
 PowerShell 示例：
 
 ```powershell
-$env:TELEGRAM_ENABLED = "false"
 $env:WEB_ENABLED = "true"
 $env:WEB_HOST = "127.0.0.1"
 $env:WEB_PORT = "8765"
@@ -36,7 +35,6 @@ python -m bot
 Bash 示例：
 
 ```bash
-export TELEGRAM_ENABLED="false"
 export WEB_ENABLED="true"
 export WEB_HOST="127.0.0.1"
 export WEB_PORT="8765"

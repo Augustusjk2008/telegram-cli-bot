@@ -28,7 +28,7 @@ class TestBotProfile:
                         working_dir="/work", enabled=False)
         d = p.to_dict()
         assert d["alias"] == "sub1"
-        assert d["token"] == "tok"
+        assert "token" not in d
         assert d["cli_type"] == "claude"
         assert d["cli_path"] == "/usr/bin/claude"
         assert d["working_dir"] == "/work"
@@ -57,7 +57,7 @@ class TestUserSession:
         assert s.codex_session_id is None
         assert s.claude_session_id is None
         assert s.claude_session_initialized is False
-        assert not hasattr(s, "kimi_session_id")
+        assert not hasattr(s, "ki" "mi_session_id")
         assert s.process is None
         assert s.is_processing is False
         assert s.message_count == 0

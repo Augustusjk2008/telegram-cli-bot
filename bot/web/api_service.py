@@ -52,7 +52,6 @@ from bot.cli import (
     should_mark_claude_session_initialized,
     should_reset_claude_session,
     should_reset_codex_session,
-    should_reset_kimi_session,
 )
 from bot.config import CLI_EXEC_TIMEOUT
 from bot.manager import MultiBotManager
@@ -103,7 +102,6 @@ class CliAttemptState:
     cli_session_id: Optional[str]
     resume_session: bool
     codex_session_id: Optional[str] = None
-    new_kimi_session_id_created: bool = False
 
 
 def _raise(status: int, code: str, message: str):
@@ -755,8 +753,6 @@ def _has_native_session(session: UserSession, cli_type: str) -> bool:
             return bool(session.codex_session_id)
         if cli_type == "claude":
             return bool(session.claude_session_initialized)
-        if cli_type == "kimi":
-            return bool(session.kimi_session_id)
     return False
 
 
@@ -823,16 +819,6 @@ def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemp
                 resume_session=bool(session.codex_session_id),
                 codex_session_id=session.codex_session_id,
             )
-        if cli_type == "kimi":
-            new_session_created = False
-            if not session.kimi_session_id:
-                session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
-                new_session_created = True
-            return CliAttemptState(
-                cli_session_id=session.kimi_session_id,
-                resume_session=False,
-                new_kimi_session_id_created=new_session_created,
-            )
         if cli_type == "claude":
             if not session.claude_session_id:
                 session.claude_session_id = str(uuid.uuid4())
@@ -850,11 +836,6 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
             if session.codex_session_id is None:
                 return False
             session.codex_session_id = None
-            return True
-        if cli_type == "kimi":
-            if session.kimi_session_id is None:
-                return False
-            session.kimi_session_id = None
             return True
         if cli_type == "claude":
             changed = session.claude_session_id is not None or session.claude_session_initialized
@@ -1495,14 +1476,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            elif cli_type == "kimi":
-                with session._lock:
-                    if not timed_out and should_reset_kimi_session(response, returncode):
-                        if session.kimi_session_id is not None:
-                            session.kimi_session_id = None
-                            session_id_changed = True
-                    elif not timed_out and attempt.new_kimi_session_id_created and session.kimi_session_id is not None:
-                        session_id_changed = True
 
             if session_id_changed:
                 session.persist()
@@ -1706,14 +1679,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            elif cli_type == "kimi":
-                with session._lock:
-                    if not timed_out and should_reset_kimi_session(response, returncode):
-                        if session.kimi_session_id is not None:
-                            session.kimi_session_id = None
-                            session_id_changed = True
-                    elif not timed_out and attempt.new_kimi_session_id_created and session.kimi_session_id is not None:
-                        session_id_changed = True
 
             if session_id_changed:
                 session.persist()

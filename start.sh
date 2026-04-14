@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-export TELEGRAM_CLI_BRIDGE_SUPERVISOR=1
+export CLI_BRIDGE_SUPERVISOR=1
 export WEB_ENABLED="true"
 
 if command -v python3 >/dev/null 2>&1; then

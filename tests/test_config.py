@@ -17,6 +17,7 @@ from bot.config import (
     RESTART_EXIT_CODE,
     RESTART_EVENT,
     RESTART_REQUESTED,
+    RESTART_SUPERVISOR_ENV,
     SESSION_TIMEOUT,
     SUPPORTED_CLI_TYPES,
     WORKING_DIR,
@@ -30,7 +31,13 @@ class TestConfigConstants:
     """测试配置常量值"""
 
     def test_supported_cli_types(self):
-        assert SUPPORTED_CLI_TYPES == {"kimi", "claude", "codex"}
+        assert SUPPORTED_CLI_TYPES == {"claude", "codex"}
+
+    def test_config_module_no_longer_exports_telegram_runtime_envs(self):
+        import bot.config as config
+
+        assert not hasattr(config, "TELEGRAM" "_ENABLED")
+        assert not hasattr(config, "TELEGRAM" "_BOT_TOKEN")
 
     def test_dangerous_commands_is_set(self):
         assert isinstance(DANGEROUS_COMMANDS, set)
@@ -141,6 +148,9 @@ class TestRestartMechanism:
 
     def test_restart_exit_code_for_supervisor(self):
         assert RESTART_EXIT_CODE == 75
+
+    def test_restart_supervisor_env_uses_generic_web_only_name(self):
+        assert RESTART_SUPERVISOR_ENV == "CLI_BRIDGE_SUPERVISOR"
 
     def test_build_reexec_args_prefers_orig_argv(self, monkeypatch):
         import bot.config as config

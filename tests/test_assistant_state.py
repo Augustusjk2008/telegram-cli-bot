@@ -19,7 +19,8 @@ def test_assistant_session_persist_writes_user_state_file(tmp_path):
 
     state_path = home.root / "state" / "users" / "1001.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["history"][-1]["content"] == "hello"
+    assert "history" not in data
+    assert data["message_count"] == 0
     assert data["browse_dir"] == str(workdir / "notes")
 
 

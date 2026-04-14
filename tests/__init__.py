@@ -1,1 +1,1 @@
-# Telegram CLI Bridge Tests
+# CLI Bridge Tests

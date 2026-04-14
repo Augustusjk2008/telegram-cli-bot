@@ -3,24 +3,23 @@ param(
     [string]$Mode = "default"
 )
 
-# Telegram CLI Bridge - Tray Startup Script
+# CLI Bridge - Tray Startup Script
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $scriptDir
 $restartExitCode = 75
-$env:TELEGRAM_CLI_BRIDGE_SUPERVISOR = "1"
+$env:CLI_BRIDGE_SUPERVISOR = "1"
 
 if ($Mode -eq "web") {
-    $env:TELEGRAM_ENABLED = "false"
     $env:WEB_ENABLED = "true"
 }
 
 $serviceName = if ($Mode -eq "web") {
-    "Telegram CLI Bridge - Web Mode"
+    "CLI Bridge - Web Mode"
 } else {
-    "Telegram CLI Bridge"
+    "CLI Bridge"
 }
 
 function Start-BotProcess {

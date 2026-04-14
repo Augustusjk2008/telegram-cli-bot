@@ -679,23 +679,3 @@ def should_mark_claude_session_initialized(response: str, returncode: int) -> bo
         return False
 
     return True
-
-
-def should_reset_kimi_session(response: str, returncode: int) -> bool:
-    """Kimi 会话失效时重置 session_id。"""
-    if returncode == 0:
-        return False
-    lower = (response or "").lower()
-    if not lower:
-        return False
-    reset_markers = (
-        "session not found",
-        "invalid session",
-        "conversation not found",
-        "session expired",
-        "session id not found",
-        "unauthorized",
-        "authentication failed",
-        "invalid token",
-    )
-    return any(marker in lower for marker in reset_markers)

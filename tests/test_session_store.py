@@ -39,7 +39,6 @@ class TestSaveAndLoadSession:
                 bot_id=1,
                 user_id=100,
                 codex_session_id="thread_abc123",
-                kimi_session_id="kimi_xyz789",
                 claude_session_id="uuid_456",
             )
             
@@ -47,7 +46,6 @@ class TestSaveAndLoadSession:
             data = load_session(1, 100)
             assert data is not None
             assert data["codex_session_id"] == "thread_abc123"
-            assert data["kimi_session_id"] == "kimi_xyz789"
             assert data["claude_session_id"] == "uuid_456"
 
     def test_save_without_session_ids(self, temp_dir: Path):
@@ -86,7 +84,6 @@ class TestSaveAndLoadSession:
             data = load_session(1, 100)
             assert data is not None
             assert data["codex_session_id"] == "thread_abc123"
-            assert "kimi_session_id" not in data
             assert "claude_session_id" not in data
 
     def test_save_session_omits_legacy_history_snapshot_fields(self, temp_dir: Path):

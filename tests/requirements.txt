@@ -1,4 +1,4 @@
-# Test dependencies for telegram-cli-bridge
+# Test dependencies for CLI Bridge
 
 # Testing framework
 pytest>=7.0.0
@@ -11,5 +11,4 @@ pytest-mock>=3.10.0
 # Type checking (optional but recommended)
 pytest-mypy-plugins>=1.10.0
 
-# For Telegram Bot testing
-# python-telegram-bot[ext] is already in main requirements
+# PTY / terminal tests may require extra runtime packages from the main requirements

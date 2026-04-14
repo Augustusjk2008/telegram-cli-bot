@@ -12,14 +12,14 @@ def test_start_ps1_declares_web_mode_and_sets_web_envs():
     content = Path("start.ps1").read_text(encoding="utf-8")
 
     assert 'ValidateSet("default", "web")' in content
-    assert '$env:TELEGRAM_ENABLED = "false"' in content
     assert '$env:WEB_ENABLED = "true"' in content
+    assert ("TELEGRAM" "_ENABLED") not in content
 
 
 def test_start_sh_runs_python_module_and_sets_supervisor_env():
     content = Path("start.sh").read_text(encoding="utf-8")
 
-    assert "TELEGRAM_CLI_BRIDGE_SUPERVISOR=1" in content
+    assert "CLI_BRIDGE_SUPERVISOR=1" in content
     assert 'if command -v python3 >/dev/null 2>&1; then' in content
     assert 'elif command -v python >/dev/null 2>&1; then' in content
     assert '"$PYTHON_BIN" -m bot' in content
@@ -31,4 +31,4 @@ def test_start_sh_is_web_only():
     content = Path("start.sh").read_text(encoding="utf-8")
 
     assert 'export WEB_ENABLED="true"' in content
-    assert "TELEGRAM_ENABLED" not in content
+    assert ("TELEGRAM" "_ENABLED") not in content

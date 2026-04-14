@@ -16,7 +16,14 @@ def test_web_server_uses_platform_terminal_module():
     source = Path("bot/web/server.py").read_text(encoding="utf-8")
 
     assert "from bot.platform.terminal import create_shell_process" in source
-    assert "from bot.handlers.tui_server import create_shell_process" not in source
+    assert ("from bot." + "handlers.tui_server import create_shell_process") not in source
+
+
+def test_main_module_no_longer_references_telegram_runtime():
+    source = Path("bot/main.py").read_text(encoding="utf-8")
+
+    assert ("TELEGRAM" "_ENABLED") not in source
+    assert ("TELEGRAM" "_BOT_TOKEN") not in source
 
 
 @pytest.mark.asyncio
@@ -35,7 +42,6 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     fake_event = MagicMock()
     fake_event.wait = AsyncMock()
 
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
@@ -43,8 +49,8 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
 
-    fake_manager.start_all.assert_awaited_once()
-    fake_manager.start_watchdog.assert_awaited_once()
+    fake_manager.start_all.assert_not_called()
+    fake_manager.start_watchdog.assert_not_called()
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
     fake_manager.shutdown_all.assert_awaited_once()
@@ -68,7 +74,6 @@ async def test_run_all_bots_prints_web_access_url_for_specific_host(monkeypatch)
 
     printed: list[str] = []
     monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_HOST", "127.0.0.1")
     monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
@@ -100,7 +105,6 @@ async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(mon
 
     printed: list[str] = []
     monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_HOST", "0.0.0.0")
     monkeypatch.setattr(main_module.config, "WEB_PORT", 9000)
@@ -134,7 +138,6 @@ async def test_run_all_bots_prints_ipv6_loopback_when_web_host_is_ipv6_any(monke
 
     printed: list[str] = []
     monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_HOST", "::")
     monkeypatch.setattr(main_module.config, "WEB_PORT", 9000)
@@ -169,7 +172,6 @@ async def test_run_all_bots_prints_ipv6_loopback_host(monkeypatch):
 
     printed: list[str] = []
     monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_HOST", "::1")
     monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
@@ -199,7 +201,6 @@ async def test_run_all_bots_supports_web_only_mode(monkeypatch):
     fake_event = MagicMock()
     fake_event.wait = AsyncMock()
 
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
@@ -231,7 +232,6 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
         async def wait(self):
             main_module.config.RESTART_REQUESTED = True
 
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
@@ -245,28 +245,26 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_run_all_bots_requires_at_least_one_runtime(monkeypatch):
+async def test_run_all_bots_requires_web_runtime(monkeypatch):
     import bot.main as main_module
 
     fake_manager = MagicMock()
     fake_manager.shutdown_all = AsyncMock()
 
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", False)
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
          patch.object(main_module.asyncio, "Event", return_value=MagicMock()):
-        with pytest.raises(RuntimeError, match="不能同时为 false"):
+        with pytest.raises(RuntimeError, match="WEB_ENABLED 不能为 false"):
             await main_module.run_all_bots()
 
 
-def test_main_allows_empty_telegram_token_in_web_only_mode(monkeypatch):
+def test_main_prints_web_only_runtime_status(monkeypatch):
     import bot.main as main_module
 
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", False)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-    monkeypatch.setattr(main_module, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(main_module, "safe_print", lambda *args, **kwargs: None)
+    printed: list[str] = []
+    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
     monkeypatch.setattr(main_module, "disable_console_quick_edit", lambda: None)
     monkeypatch.setattr(main_module, "prevent_system_sleep", lambda: None)
     monkeypatch.setattr(main_module.time, "sleep", lambda *args, **kwargs: None)
@@ -279,44 +277,8 @@ def test_main_allows_empty_telegram_token_in_web_only_mode(monkeypatch):
 
     main_module.main()
 
-
-def test_main_rejects_empty_telegram_token_when_telegram_enabled(monkeypatch):
-    import bot.main as main_module
-
-    printed = []
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", True)
-    monkeypatch.setattr(main_module, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module, "disable_console_quick_edit", lambda: None)
-    monkeypatch.setattr(main_module, "prevent_system_sleep", lambda: None)
-    monkeypatch.setattr(main_module.time, "sleep", lambda *args, **kwargs: None)
-
-    def fake_asyncio_run(coro):
-        coro.close()
-        return None
-
-    monkeypatch.setattr(main_module.asyncio, "run", fake_asyncio_run)
-
-    with pytest.raises(SystemExit) as exc_info:
-        main_module.main()
-
-    assert exc_info.value.code == 1
-    assert any("TELEGRAM_BOT_TOKEN" in line for line in printed)
-
-
-def test_main_rejects_placeholder_telegram_token_when_telegram_enabled(monkeypatch):
-    import bot.main as main_module
-
-    printed = []
-    monkeypatch.setattr(main_module, "TELEGRAM_ENABLED", True)
-    monkeypatch.setattr(main_module, "TELEGRAM_BOT_TOKEN", "your_bot_token_here")
-    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-
-    with pytest.raises(SystemExit) as exc_info:
-        main_module.main()
-
-    assert exc_info.value.code == 1
-    assert any("TELEGRAM_BOT_TOKEN" in line for line in printed)
+    assert any(line == "   Web API: 开启" for line in printed)
+    assert all(line != "   Telegram: 开启" and line != "   Telegram: 关闭" for line in printed)
 
 
 def test_safe_print_falls_back_on_gbk_console(monkeypatch):
@@ -350,14 +312,13 @@ async def test_supervised_web_restart_exits_with_terminal_connection():
     env = os.environ.copy()
     env.update(
         {
-            "TELEGRAM_ENABLED": "false",
             "WEB_ENABLED": "true",
             "WEB_HOST": "127.0.0.1",
             "WEB_PORT": str(port),
             "WEB_API_TOKEN": token,
             "WEB_TUNNEL_MODE": "disabled",
             "WEB_TUNNEL_AUTOSTART": "false",
-            "TELEGRAM_CLI_BRIDGE_SUPERVISOR": "1",
+            "CLI_BRIDGE_SUPERVISOR": "1",
             "PYTHONUNBUFFERED": "1",
         }
     )
