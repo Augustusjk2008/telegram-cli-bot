@@ -130,6 +130,8 @@ type RawCliParamsPayload = {
   }>;
 };
 
+const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
+
 type RawTunnelSnapshot = {
   mode: "disabled" | "cloudflare_quick" | "manual";
   status: "stopped" | "starting" | "running" | "error";
@@ -871,12 +873,19 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async restartService(): Promise<void> {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller
+      ? window.setTimeout(() => {
+          controller.abort();
+        }, RESTART_SERVICE_REQUEST_TIMEOUT_MS)
+      : null;
     try {
       const response = await fetch("/api/admin/restart", {
         method: "POST",
         cache: "no-store",
         keepalive: true,
         headers: this.headers(),
+        signal: controller?.signal,
       });
       try {
         const payload = (await response.json()) as JsonEnvelope<{ restart_requested: boolean }>;
@@ -896,6 +905,10 @@ export class RealWebBotClient implements WebBotClient {
         return;
       }
       throw error;
+    } finally {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     }
   }
 

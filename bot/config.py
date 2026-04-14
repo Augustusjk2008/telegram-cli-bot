@@ -30,11 +30,14 @@ def _split_csv_env(raw_value: str) -> List[str]:
 
 
 def _get_project_config(name: str, default: str = "") -> str:
-    """读取项目配置，优先使用仓库 .env 中的显式值。"""
+    """读取项目配置，优先使用当前进程显式环境变量，其次回退到仓库 .env。"""
+    env_value = os.environ.get(name)
+    if env_value is not None and str(env_value).strip():
+        return str(env_value)
     dotenv_value = _DOTENV_VALUES.get(name)
     if dotenv_value is not None and str(dotenv_value).strip():
         return str(dotenv_value)
-    return os.environ.get(name, default)
+    return default
 
 ALLOWED_USER_IDS: List[int] = []
 _allowed_raw = os.environ.get("ALLOWED_USER_IDS", "")

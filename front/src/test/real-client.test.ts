@@ -9,6 +9,7 @@ describe("RealWebBotClient", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     fetchMock.mockReset();
     vi.unstubAllGlobals();
   });
@@ -945,6 +946,47 @@ describe("RealWebBotClient", () => {
         }),
       }),
     );
+  });
+
+  test("restartService tolerates a hung restart request by aborting after a short timeout", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+      );
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const restartPromise = client.restartService();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(restartPromise).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/restart",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        keepalive: true,
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    vi.useRealTimers();
   });
 
   test("readFileFull uses cat mode endpoint", async () => {
