@@ -55,11 +55,11 @@ from bot.cli import (
     should_reset_kimi_session,
 )
 from bot.config import CLI_EXEC_TIMEOUT
-from bot.handlers.admin import execute_script, list_available_scripts, stream_execute_script
-from bot.handlers.shell import strip_ansi_escape
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
+from bot.platform.output import strip_ansi_escape
+from bot.platform.scripts import execute_script, list_available_scripts, stream_execute_script
 from bot.sessions import (
     align_session_paths,
     get_or_create_session,

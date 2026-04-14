@@ -72,6 +72,13 @@ def _png_bytes(width: int, height: int) -> bytes:
     )
 
 
+def test_web_api_service_no_longer_imports_telegram_shell_or_admin_handlers():
+    source = Path("bot/web/api_service.py").read_text(encoding="utf-8")
+
+    assert "from bot.handlers.admin import" not in source
+    assert "from bot.handlers.shell import" not in source
+
+
 @pytest.fixture
 def web_manager(temp_dir: Path) -> MultiBotManager:
     storage_file = temp_dir / "managed_bots.json"
