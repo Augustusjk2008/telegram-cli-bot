@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
-import type { BotOverview, BotSummary, ChatMessage, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
+import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 afterEach(() => {
@@ -26,6 +26,12 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       workingDir: "C:\\workspace",
     }),
     listMessages: async (): Promise<ChatMessage[]> => [],
+    getMessageTrace: async (): Promise<ChatTraceDetails> => ({
+      traceCount: 0,
+      toolCallCount: 0,
+      processCount: 0,
+      trace: [],
+    }),
     sendMessage: async () => ({
       id: "assistant-1",
       role: "assistant" as const,

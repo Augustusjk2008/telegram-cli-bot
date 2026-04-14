@@ -6,6 +6,7 @@ import type {
   BotOverview,
   BotSummary,
   ChatMessage,
+  ChatTraceDetails,
   CliParamsPayload,
   DirectoryListing,
   GitActionResult,
@@ -75,6 +76,12 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       workingDir: "C:\\workspace\\repo",
     }),
     listMessages: async (): Promise<ChatMessage[]> => [],
+    getMessageTrace: async (): Promise<ChatTraceDetails> => ({
+      traceCount: 0,
+      toolCallCount: 0,
+      processCount: 0,
+      trace: [],
+    }),
     sendMessage: async (): Promise<ChatMessage> => ({
       id: "assistant-1",
       role: "assistant",

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
-import type { ChatMessage, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
+import type { ChatMessage, ChatTraceDetails, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
@@ -23,6 +23,12 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       isProcessing: false,
     }),
     listMessages: async () => [],
+    getMessageTrace: async (): Promise<ChatTraceDetails> => ({
+      traceCount: 0,
+      toolCallCount: 0,
+      processCount: 0,
+      trace: [],
+    }),
     sendMessage: async (_botAlias: string, _text: string, onChunk: (chunk: string) => void) => {
       onChunk("Mock response");
       return {
@@ -238,6 +244,253 @@ test("shows streaming state before assistant message completes", async () => {
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
   expect(screen.getByText("正在输出...")).toBeInTheDocument();
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
+});
+
+test("keeps process details collapsed by default and tool details collapsed until expanded", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      _onChunk: (chunk: string) => void,
+      _onStatus,
+      onTrace,
+    ) => {
+      onTrace?.({
+        kind: "commentary",
+        summary: "我先检查目录结构。",
+      } as never);
+      onTrace?.({
+        kind: "tool_call",
+        title: "shell_command",
+        toolName: "shell_command",
+        callId: "call_1",
+        summary: "Get-ChildItem -Force",
+        payload: {
+          arguments: {
+            command: "Get-ChildItem -Force",
+          },
+        },
+      } as never);
+      onTrace?.({
+        kind: "tool_result",
+        callId: "call_1",
+        summary: "bot\\web\\api_service.py",
+        payload: {
+          output: "bot\\web\\api_service.py",
+        },
+      } as never);
+      return {
+        id: "assistant-rich",
+        role: "assistant",
+        text: "目录已读取完成。",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      } as ChatMessage;
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "列出当前目录");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("目录已读取完成。")).toBeInTheDocument();
+  expect(screen.queryByText("我先检查目录结构。")).not.toBeInTheDocument();
+  expect(screen.queryByText("Get-ChildItem -Force")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+  expect(screen.getByText("我先检查目录结构。")).toBeInTheDocument();
+  expect(screen.getByText("Get-ChildItem -Force")).toBeInTheDocument();
+  expect(screen.getByText("bot\\web\\api_service.py")).toBeInTheDocument();
+});
+
+test("renders empty tool call payloads with readable fallback instead of raw empty json", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      _onChunk: (chunk: string) => void,
+      _onStatus,
+      onTrace,
+    ) => {
+      onTrace?.({
+        kind: "tool_call",
+        title: "list_mcp_resources",
+        toolName: "list_mcp_resources",
+        callId: "call_empty",
+        summary: "{}",
+        payload: {
+          arguments: {},
+          raw_arguments: "{}",
+        },
+      } as never);
+      onTrace?.({
+        kind: "tool_result",
+        callId: "call_empty",
+        summary: "{}",
+        payload: {
+          output: {},
+        },
+      } as never);
+      return {
+        id: "assistant-empty-tool",
+        role: "assistant",
+        text: "已经检查完资源列表。",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      } as ChatMessage;
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "看下资源");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("已经检查完资源列表。")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+  expect(screen.getByText("无参数")).toBeInTheDocument();
+  expect(screen.getByText("已返回，无可显示内容")).toBeInTheDocument();
+  expect(screen.queryByText("{}")).not.toBeInTheDocument();
+});
+
+test("collapses long tool content to five lines until expanded", async () => {
+  const user = userEvent.setup();
+  const longOutput = ["第 1 行", "第 2 行", "第 3 行", "第 4 行", "第 5 行", "第 6 行"].join("\n");
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      _onChunk: (chunk: string) => void,
+      _onStatus,
+      onTrace,
+    ) => {
+      onTrace?.({
+        kind: "tool_result",
+        callId: "call_long",
+        summary: longOutput,
+        payload: {
+          output: longOutput,
+        },
+      } as never);
+      return {
+        id: "assistant-long-tool",
+        role: "assistant",
+        text: "命令执行完成。",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      } as ChatMessage;
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "查看长输出");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("命令执行完成。")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+  expect(
+    screen.getByText((content) => content.includes("第 1 行") && content.includes("第 5 行")),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("第 6 行")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "展开完整内容" }));
+
+  expect(
+    screen.getByText((content) => content.includes("第 5 行") && content.includes("第 6 行")),
+  ).toBeInTheDocument();
+});
+
+test("lazy-loads trace details only after expanding a history message and keeps event order", async () => {
+  const user = userEvent.setup();
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      {
+        kind: "commentary",
+        summary: "我先检查目录结构。",
+      },
+      {
+        kind: "tool_call",
+        title: "shell_command",
+        toolName: "shell_command",
+        callId: "call_1",
+        summary: "Get-ChildItem -Force",
+        payload: {
+          arguments: {
+            command: "Get-ChildItem -Force",
+          },
+        },
+      },
+      {
+        kind: "tool_result",
+        callId: "call_1",
+        summary: "README.md\nbot\nfront",
+        payload: {
+          output: "README.md\nbot\nfront",
+        },
+      },
+      {
+        kind: "commentary",
+        summary: "目录已读取完成。",
+      },
+    ],
+    traceCount: 4,
+    toolCallCount: 1,
+    processCount: 2,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "列出当前目录",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "目录已读取完成。",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          traceCount: 4,
+          toolCallCount: 1,
+          processCount: 2,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("目录已读取完成。")).toBeInTheDocument();
+  expect(getMessageTrace).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+  expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1");
+  expect(await screen.findByText("我先检查目录结构。")).toBeInTheDocument();
+  expect(screen.getByText("Get-ChildItem -Force")).toBeInTheDocument();
+  expect(screen.getByText((content) => content.includes("README.md") && content.includes("bot") && content.includes("front"))).toBeInTheDocument();
+
+  const panel = screen.getByTestId("chat-trace-panel-assistant-1");
+  const traceItems = Array.from(panel.querySelectorAll("[data-trace-seq]"));
+  expect(traceItems).toHaveLength(4);
+  expect(traceItems[0]?.textContent).toContain("我先检查目录结构。");
+  expect(traceItems[1]?.textContent).toContain("Get-ChildItem -Force");
+  expect(traceItems[2]?.textContent).toContain("README.md");
+  expect(traceItems[3]?.textContent).toContain("目录已读取完成。");
 });
 
 test("shows a streaming placeholder before the first assistant chunk arrives", async () => {
@@ -803,7 +1056,7 @@ test("shows persisted elapsed badge from loaded history", async () => {
   expect(screen.getByText("用时 8 秒")).toBeInTheDocument();
 });
 
-test("renders sender names timestamps avatars and copies completed assistant replies", async () => {
+test("renders sender names timestamps avatars and shows copy inside expanded trace details", async () => {
   const user = userEvent.setup();
   const writeText = vi.fn(async () => undefined);
   Object.defineProperty(window.navigator, "clipboard", {
@@ -837,6 +1090,17 @@ test("renders sender names timestamps avatars and copies completed assistant rep
         createdAt: "2026-04-13T09:09:00",
         elapsedSeconds: 5,
         state: "done",
+        meta: {
+          traceCount: 1,
+          processCount: 1,
+          toolCallCount: 0,
+          trace: [
+            {
+              kind: "commentary",
+              summary: "先检查当前目录结构",
+            },
+          ],
+        },
       },
     ],
   });
@@ -856,6 +1120,9 @@ test("renders sender names timestamps avatars and copies completed assistant rep
   );
   expect(desktopMainAvatar?.parentElement).toHaveClass("items-start");
 
+  expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
   await user.click(screen.getByRole("button", { name: "复制" }));
 
   expect(writeText).toHaveBeenCalledWith("世界");

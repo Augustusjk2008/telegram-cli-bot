@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import os
 import queue
@@ -69,7 +70,7 @@ from bot.sessions import (
 )
 from bot.utils import is_dangerous_command
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
-from bot.web.native_history_builder import build_web_chat_history, finalize_web_chat_turn
+from bot.web.native_history_builder import build_web_chat_history, finalize_web_chat_turn, get_web_chat_trace
 
 logger = logging.getLogger(__name__)
 DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
@@ -698,7 +699,16 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
 def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int = 50) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    return {"items": build_web_chat_history(profile, session, limit=max(1, limit))}
+    return {"items": build_web_chat_history(profile, session, limit=max(1, limit), include_trace=False)}
+
+
+def get_history_trace(manager: MultiBotManager, alias: str, user_id: int, message_id: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    data = get_web_chat_trace(profile, session, message_id)
+    if data is None:
+        _raise(404, "trace_not_found", "未找到对应消息的过程详情")
+    return data
 
 
 def reset_user_session(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -856,25 +866,64 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
 
 
 def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
-    preview_parts: list[str] = []
+    preview_text = ""
+    current_delta = ""
     fallback_parts: list[str] = []
     for line in raw_output.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         parsed = parse_codex_json_line(stripped)
-        if parsed["delta_text"]:
-            preview_parts.append(parsed["delta_text"])
-            continue
         if parsed["error_text"]:
             fallback_parts.append(parsed["error_text"])
             continue
-        if not stripped.startswith("{"):
-            fallback_parts.append(stripped)
 
-    preview_text = "".join(preview_parts).strip()
-    if preview_text:
-        return preview_text
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            if not stripped.startswith("{"):
+                fallback_parts.append(stripped)
+            continue
+
+        if not isinstance(event, dict):
+            continue
+
+        event_type = str(event.get("type") or "").strip()
+        item = event.get("item")
+        if not isinstance(item, dict):
+            if parsed["delta_text"]:
+                preview_text = parsed["delta_text"]
+            continue
+
+        item_type = str(item.get("type") or "").strip()
+        if item_type not in {"assistant_message", "agent_message"}:
+            continue
+
+        if event_type == "item.delta":
+            delta_value = item.get("delta")
+            text_value = item.get("text")
+            chunk = ""
+            if isinstance(delta_value, str) and delta_value:
+                chunk = delta_value
+            elif isinstance(text_value, str) and text_value:
+                chunk = text_value
+            if chunk:
+                current_delta += chunk
+                preview_text = current_delta
+            continue
+
+        if event_type == "item.completed":
+            text_value = item.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                current_delta = ""
+                preview_text = text_value.strip()
+            continue
+
+        if parsed["delta_text"]:
+            preview_text = parsed["delta_text"]
+
+    if preview_text.strip():
+        return preview_text.strip()
 
     fallback_text = "\n".join(part for part in fallback_parts if part).strip()
     return fallback_text or None

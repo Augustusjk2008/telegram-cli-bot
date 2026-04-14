@@ -3,6 +3,8 @@ import type {
   BotSummary,
   ChatMessage,
   ChatStatusUpdate,
+  ChatTraceDetails,
+  ChatTraceEvent,
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
@@ -22,11 +24,13 @@ export interface WebBotClient {
   listBots(): Promise<BotSummary[]>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
+  getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails>;
   sendMessage(
     botAlias: string,
     text: string,
     onChunk: (chunk: string) => void,
     onStatus?: (status: ChatStatusUpdate) => void,
+    onTrace?: (trace: ChatTraceEvent) => void,
   ): Promise<ChatMessage>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string): Promise<DirectoryListing>;

@@ -7,10 +7,18 @@ import { ChatMessageActions } from "../components/ChatMessageActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
+import { ChatTracePanel } from "../components/ChatTracePanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { RestoredReplyNotice } from "../components/RestoredReplyNotice";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, RunningReply, SystemScript } from "../services/types";
+import type {
+  BotOverview,
+  ChatMessage,
+  ChatMessageMetaInfo,
+  ChatTraceEvent,
+  RunningReply,
+  SystemScript,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { buildResumePrompt } from "../utils/chatResume";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
@@ -137,6 +145,59 @@ function resolveStreamStartMs(runningReply?: RunningReply | null, elapsedSeconds
   return Date.now();
 }
 
+function traceEventKey(event: ChatTraceEvent) {
+  return [
+    event.kind || "",
+    event.rawType || "",
+    event.callId || "",
+    event.summary || "",
+  ].join("|");
+}
+
+function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>) {
+  const merged: ChatTraceEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    for (const event of source || []) {
+      const key = traceEventKey(event);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(event);
+    }
+  }
+
+  return merged.length > 0 ? merged : undefined;
+}
+
+function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
+  const trace = mergeTraceEvents(base?.trace, incoming?.trace);
+  const meta: ChatMessageMetaInfo = {
+    completionState: incoming?.completionState || base?.completionState,
+    summaryKind: incoming?.summaryKind || base?.summaryKind,
+    traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
+    traceCount: incoming?.traceCount ?? base?.traceCount ?? trace?.length,
+    toolCallCount: incoming?.toolCallCount ?? base?.toolCallCount ?? trace?.filter((event) => event.kind === "tool_call").length,
+    processCount: incoming?.processCount ?? base?.processCount ?? trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length,
+    nativeSource: incoming?.nativeSource || base?.nativeSource,
+    trace,
+  };
+
+  return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
+}
+
+function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent): ChatMessage {
+  return {
+    ...item,
+    meta: mergeMessageMeta(item.meta, {
+      trace: [traceEvent],
+      traceVersion: 1,
+    }),
+  };
+}
+
 export function ChatScreen({
   botAlias,
   client = new MockWebBotClient(),
@@ -167,6 +228,7 @@ export function ChatScreen({
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [restoredReply, setRestoredReply] = useState<RunningReply | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState("");
+  const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -204,6 +266,7 @@ export function ChatScreen({
     setBotOverview(null);
     setRestoredReply(null);
     setCopiedMessageId("");
+    setTraceLoadState({});
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
 
@@ -355,6 +418,61 @@ export function ChatScreen({
     void loadPreview(nextPath, "preview");
   }
 
+  async function loadMessageTrace(messageId: string) {
+    const currentMessage = items.find((item) => item.id === messageId);
+    if (!currentMessage || currentMessage.role !== "assistant") {
+      return;
+    }
+    if ((currentMessage.meta?.trace || []).length > 0) {
+      return;
+    }
+    if ((traceLoadState[messageId]?.loading)) {
+      return;
+    }
+    if (!(currentMessage.meta?.traceCount || 0)) {
+      return;
+    }
+
+    setTraceLoadState((prev) => ({
+      ...prev,
+      [messageId]: {
+        loading: true,
+      },
+    }));
+
+    try {
+      const traceDetails = await client.getMessageTrace(botAlias, messageId);
+      setItems((prev) => prev.map((item) => (
+        item.id === messageId
+          ? {
+              ...item,
+              meta: mergeMessageMeta(item.meta, {
+                trace: traceDetails.trace,
+                traceCount: traceDetails.traceCount,
+                toolCallCount: traceDetails.toolCallCount,
+                processCount: traceDetails.processCount,
+                traceVersion: 1,
+              }),
+            }
+          : item
+      )));
+      setTraceLoadState((prev) => ({
+        ...prev,
+        [messageId]: {
+          loading: false,
+        },
+      }));
+    } catch (err) {
+      setTraceLoadState((prev) => ({
+        ...prev,
+        [messageId]: {
+          loading: false,
+          error: err instanceof Error ? err.message : "加载过程详情失败",
+        },
+      }));
+    }
+  }
+
   async function handleSend(text: string) {
     const localStartedAtMs = Date.now();
     const userMessage: ChatMessage = {
@@ -414,6 +532,15 @@ export function ChatScreen({
             );
           }
         },
+        (traceEvent) => {
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === assistantId
+                ? appendTraceToMessage(item, traceEvent)
+                : item,
+            ),
+          );
+        },
       );
 
       const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
@@ -424,7 +551,14 @@ export function ChatScreen({
         elapsedSeconds,
       };
 
-      setItems((prev) => prev.map((item) => (item.id === assistantId ? finalizedMessage : item)));
+      setItems((prev) => prev.map((item) => (
+        item.id === assistantId
+          ? {
+              ...finalizedMessage,
+              meta: mergeMessageMeta(item.meta, finalizedMessage.meta),
+            }
+          : item
+      )));
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
       }
@@ -621,6 +755,10 @@ export function ChatScreen({
           const isUser = item.role === "user";
           const messageName = isUser ? "你" : assistantName;
           const isRestoredAssistant = item.id === restoredAssistantId(botAlias) && Boolean(restoredReply);
+          const trace = item.meta?.trace;
+          const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
+          const hasTracePanel = item.role === "assistant" && traceCount > 0;
+          const canCopyAssistantMessage = item.role === "assistant" && item.state !== "streaming" && item.state !== "error";
           const previousRole = index > 0 ? items[index - 1]?.role : "";
           const showInlineMobileAvatar = previousRole !== item.role;
           const inlineAvatar = showInlineMobileAvatar ? (
@@ -676,7 +814,22 @@ export function ChatScreen({
                       <span>正在输出</span>
                     </div>
                   ) : null}
-                  {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+                  {hasTracePanel ? (
+                    <ChatTracePanel
+                      messageId={item.id}
+                      trace={trace}
+                      traceCount={traceCount}
+                      toolCallCount={item.meta?.toolCallCount}
+                      processCount={item.meta?.processCount}
+                      elapsedSeconds={canCopyAssistantMessage ? item.elapsedSeconds : undefined}
+                      copyLabel={canCopyAssistantMessage ? (copiedMessageId === item.id ? "已复制" : "复制") : undefined}
+                      onCopy={canCopyAssistantMessage ? (() => void handleCopyMessage(item)) : undefined}
+                      isLoading={Boolean(traceLoadState[item.id]?.loading)}
+                      loadError={traceLoadState[item.id]?.error}
+                      onLoadTrace={() => void loadMessageTrace(item.id)}
+                    />
+                  ) : null}
+                  {canCopyAssistantMessage && !hasTracePanel ? (
                     <ChatMessageActions
                       elapsedSeconds={item.elapsedSeconds}
                       copyLabel={copiedMessageId === item.id ? "已复制" : "复制"}

@@ -52,6 +52,7 @@ from .api_service import (
     get_directory_listing,
     get_file_metadata,
     get_history,
+    get_history_trace,
     get_overview,
     list_avatar_assets,
     list_assistant_proposals,
@@ -702,6 +703,12 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit)})
 
+    async def get_history_trace_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        message_id = request.match_info.get("message_id", "")
+        return _json({"ok": True, "data": get_history_trace(self.manager, alias, auth.user_id, message_id)})
+
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -1032,6 +1039,7 @@ class WebApiServer:
         app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
         app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
+        app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)
         app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
         app.router.add_post("/api/bots/{alias}/git/init", self.post_git_init)
         app.router.add_get("/api/bots/{alias}/git/diff", self.get_git_diff_view)

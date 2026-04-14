@@ -77,6 +77,7 @@ describe("RealWebBotClient", () => {
         status: "busy",
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
+        avatarName: "bot-default.png",
       },
     ]);
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -320,6 +321,206 @@ describe("RealWebBotClient", () => {
     ]);
   });
 
+  test("listMessages maps rich native history meta and lazy trace counters", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [
+              {
+                id: "codex-thread-1-0-user",
+                created_at: "2026-04-14T10:00:00",
+                role: "user",
+                content: "列出当前目录",
+                meta: {
+                  native_source: {
+                    provider: "codex",
+                    session_id: "thread-1",
+                  },
+                },
+              },
+              {
+                id: "codex-thread-1-0",
+                created_at: "2026-04-14T10:00:00",
+                role: "assistant",
+                content: "目录已读取完成。",
+                meta: {
+                  summary_kind: "final",
+                  completion_state: "completed",
+                  trace_version: 1,
+                  trace_count: 3,
+                  tool_call_count: 1,
+                  process_count: 1,
+                  native_source: {
+                    provider: "codex",
+                    session_id: "thread-1",
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const messages = await client.listMessages("main");
+
+    expect(messages).toEqual([
+      {
+        id: "codex-thread-1-0-user",
+        role: "user",
+        text: "列出当前目录",
+        createdAt: "2026-04-14T10:00:00",
+        state: "done",
+        meta: {
+          nativeSource: {
+            provider: "codex",
+            sessionId: "thread-1",
+          },
+        },
+      },
+      {
+        id: "codex-thread-1-0",
+        role: "assistant",
+        text: "目录已读取完成。",
+        createdAt: "2026-04-14T10:00:00",
+        state: "done",
+        meta: {
+          summaryKind: "final",
+          completionState: "completed",
+          traceVersion: 1,
+          traceCount: 3,
+          toolCallCount: 1,
+          processCount: 1,
+          nativeSource: {
+            provider: "codex",
+            sessionId: "thread-1",
+          },
+        },
+      },
+    ]);
+  });
+
+  test("getMessageTrace maps rich native trace payload for one history message", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            message_id: "codex-thread-1-0",
+            trace_count: 3,
+            tool_call_count: 1,
+            process_count: 1,
+            trace: [
+              {
+                kind: "commentary",
+                source: "native",
+                raw_type: "agent_message",
+                summary: "我先检查目录结构。",
+              },
+              {
+                kind: "tool_call",
+                source: "native",
+                raw_type: "function_call",
+                title: "shell_command",
+                tool_name: "shell_command",
+                call_id: "call_1",
+                summary: "Get-ChildItem -Force",
+                payload: {
+                  arguments: {
+                    command: "Get-ChildItem -Force",
+                  },
+                },
+              },
+              {
+                kind: "tool_result",
+                source: "native",
+                raw_type: "function_call_output",
+                call_id: "call_1",
+                summary: "bot/web/api_service.py",
+                payload: {
+                  output: "bot/web/api_service.py",
+                },
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const traceDetails = await client.getMessageTrace("main", "codex-thread-1-0");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/history/codex-thread-1-0/trace",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    expect(traceDetails).toEqual({
+      traceCount: 3,
+      toolCallCount: 1,
+      processCount: 1,
+      trace: [
+        {
+          kind: "commentary",
+          rawType: "agent_message",
+          summary: "我先检查目录结构。",
+          source: "native",
+        },
+        {
+          kind: "tool_call",
+          rawType: "function_call",
+          title: "shell_command",
+          toolName: "shell_command",
+          callId: "call_1",
+          summary: "Get-ChildItem -Force",
+          source: "native",
+          payload: {
+            arguments: {
+              command: "Get-ChildItem -Force",
+            },
+          },
+        },
+        {
+          kind: "tool_result",
+          rawType: "function_call_output",
+          callId: "call_1",
+          summary: "bot/web/api_service.py",
+          source: "native",
+          payload: {
+            output: "bot/web/api_service.py",
+          },
+        },
+      ],
+    });
+  });
+
   test("updateBotWorkdir patches admin workdir endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({
@@ -368,6 +569,7 @@ describe("RealWebBotClient", () => {
       status: "running",
       workingDir: "C:\\workspace\\next",
       lastActiveText: "运行中",
+      avatarName: "bot-default.png",
     });
   });
 
@@ -421,6 +623,7 @@ describe("RealWebBotClient", () => {
       workingDir: "C:\\workspace\\demo",
       lastActiveText: "运行中",
       cliPath: "claude.cmd",
+      avatarName: "bot-default.png",
     });
   });
 
@@ -1044,6 +1247,119 @@ describe("RealWebBotClient", () => {
     ]);
     expect(message.text).toBe("最终结果");
     expect(message.elapsedSeconds).toBe(4);
+  });
+
+  test("sendMessage forwards trace events and prefers done.message over done.output", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: trace\ndata: {\"event\":{\"kind\":\"commentary\",\"source\":\"native\",\"raw_type\":\"agent_message\",\"summary\":\"我先检查目录结构。\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: trace\ndata: {\"event\":{\"kind\":\"tool_call\",\"source\":\"native\",\"raw_type\":\"function_call\",\"title\":\"shell_command\",\"tool_name\":\"shell_command\",\"call_id\":\"call_1\",\"summary\":\"Get-ChildItem -Force\",\"payload\":{\"arguments\":{\"command\":\"Get-ChildItem -Force\"}}}}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"fallback output\",\"elapsed_seconds\":4,\"message\":{\"id\":\"codex-thread-1-0\",\"role\":\"assistant\",\"content\":\"目录已读取完成。\",\"created_at\":\"2026-04-14T10:00:00\",\"meta\":{\"summary_kind\":\"final\",\"completion_state\":\"completed\",\"trace_version\":1,\"native_source\":{\"provider\":\"codex\",\"session_id\":\"thread-1\"},\"trace\":[{\"kind\":\"commentary\",\"source\":\"native\",\"raw_type\":\"agent_message\",\"summary\":\"我先检查目录结构。\"}]}}}\n\n"));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const traces: unknown[] = [];
+    const message = await (client.sendMessage as unknown as (
+      botAlias: string,
+      text: string,
+      onChunk: (chunk: string) => void,
+      onStatus?: (status: unknown) => void,
+      onTrace?: (trace: unknown) => void,
+    ) => Promise<unknown>)(
+      "main",
+      "hello",
+      () => undefined,
+      undefined,
+      (trace) => {
+        traces.push(trace);
+      },
+    ) as {
+      text: string;
+      elapsedSeconds?: number;
+      meta?: {
+        summaryKind?: string;
+        completionState?: string;
+        nativeSource?: { provider?: string; sessionId?: string };
+        trace?: Array<{ kind?: string; summary?: string; toolName?: string; callId?: string }>;
+      };
+    };
+
+    expect(traces).toEqual([
+      {
+        kind: "commentary",
+        rawType: "agent_message",
+        summary: "我先检查目录结构。",
+        source: "native",
+      },
+      {
+        kind: "tool_call",
+        rawType: "function_call",
+        title: "shell_command",
+        toolName: "shell_command",
+        callId: "call_1",
+        summary: "Get-ChildItem -Force",
+        source: "native",
+        payload: {
+          arguments: {
+            command: "Get-ChildItem -Force",
+          },
+        },
+      },
+    ]);
+    expect(message.text).toBe("目录已读取完成。");
+    expect(message.elapsedSeconds).toBe(4);
+    expect(message.meta?.summaryKind).toBe("final");
+    expect(message.meta?.completionState).toBe("completed");
+    expect(message.meta?.nativeSource).toEqual({
+      provider: "codex",
+      sessionId: "thread-1",
+    });
+    expect(message.meta?.trace).toEqual([
+      {
+        kind: "commentary",
+        rawType: "agent_message",
+        summary: "我先检查目录结构。",
+        source: "native",
+      },
+      {
+        kind: "tool_call",
+        rawType: "function_call",
+        title: "shell_command",
+        toolName: "shell_command",
+        callId: "call_1",
+        summary: "Get-ChildItem -Force",
+        source: "native",
+        payload: {
+          arguments: {
+            command: "Get-ChildItem -Force",
+          },
+        },
+      },
+    ]);
   });
 
   test("getGitOverview maps git workspace payload", async () => {

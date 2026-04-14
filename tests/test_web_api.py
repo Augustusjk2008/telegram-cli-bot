@@ -30,6 +30,7 @@ from bot.web.api_service import (
     change_working_directory,
     get_directory_listing,
     get_history,
+    get_history_trace,
     get_session_for_alias,
     get_overview,
     resolve_session_bot_id,
@@ -2021,6 +2022,48 @@ def test_get_history_uses_overlay_backed_native_shape_instead_of_legacy_history(
     assert data["items"][0]["content"] == "列出当前目录"
     assert data["items"][1]["content"] == "目录已读取完成。"
     assert all(item["content"] != "legacy" for item in data["items"])
+    assert data["items"][1]["meta"]["trace_count"] == 1
+    assert "trace" not in data["items"][1]["meta"]
+
+
+def test_get_history_trace_returns_full_trace_for_assistant_message(
+    web_manager: MultiBotManager,
+):
+    web_manager.main_profile.cli_type = "codex"
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.web_turn_overlays = [
+        {
+            "provider": "codex",
+            "native_session_id": "",
+            "user_text": "列出当前目录",
+            "started_at": "2026-04-14T10:00:00",
+            "updated_at": "2026-04-14T10:00:05",
+            "summary_text": "目录已读取完成。",
+            "summary_kind": "final",
+            "completion_state": "completed",
+            "trace": [
+                {"kind": "commentary", "summary": "我先检查目录结构。"},
+                {"kind": "tool_call", "summary": "Get-ChildItem -Force"},
+                {"kind": "tool_result", "summary": "bot\nfront"},
+            ],
+            "locator_hint": {"cwd": str(session.working_dir)},
+        }
+    ]
+
+    history = get_history(web_manager, "main", 1001, limit=10)
+    assistant_message_id = history["items"][1]["id"]
+
+    data = get_history_trace(web_manager, "main", 1001, assistant_message_id)
+
+    assert data["message_id"] == assistant_message_id
+    assert data["trace_count"] == 3
+    assert data["tool_call_count"] == 1
+    assert data["process_count"] == 1
+    assert [item["kind"] for item in data["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
 
 
 def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_manager: MultiBotManager):
@@ -2056,6 +2099,24 @@ def test_codex_status_event_skips_json_meta_preview():
     assert event == {
         "type": "status",
         "elapsed_seconds": 3,
+    }
+
+
+def test_codex_status_event_uses_latest_message_preview_without_duplication():
+    event = _build_stream_status_event(
+        cli_type="codex",
+        elapsed_seconds=3,
+        raw_output=(
+            '{"type":"item.delta","item":{"type":"assistant_message","delta":"我先检查目录结构。"}}\n'
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"我先检查目录结构。"}}\n'
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"目录已读取完成。"}}\n'
+        ),
+    )
+
+    assert event == {
+        "type": "status",
+        "elapsed_seconds": 3,
+        "preview_text": "目录已读取完成。",
     }
 
 

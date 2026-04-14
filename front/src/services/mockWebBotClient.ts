@@ -3,6 +3,8 @@ import type {
   BotSummary,
   ChatMessage,
   ChatStatusUpdate,
+  ChatTraceDetails,
+  ChatTraceEvent,
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
@@ -181,11 +183,21 @@ export class MockWebBotClient implements WebBotClient {
     return mockChatMessages[botAlias] || [];
   }
 
+  async getMessageTrace(_botAlias: string, _messageId: string): Promise<ChatTraceDetails> {
+    return {
+      traceCount: 0,
+      toolCallCount: 0,
+      processCount: 0,
+      trace: [],
+    };
+  }
+
   async sendMessage(
     botAlias: string,
     text: string,
     onChunk: (chunk: string) => void,
     onStatus?: (status: ChatStatusUpdate) => void,
+    onTrace?: (trace: ChatTraceEvent) => void,
   ): Promise<ChatMessage> {
     let streamed = "";
     await streamAssistantReply((chunk) => {

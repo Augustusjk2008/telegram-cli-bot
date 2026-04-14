@@ -8,7 +8,10 @@ import type {
   BotStatus,
   BotSummary,
   ChatMessage,
+  ChatTraceDetails,
+  ChatMessageMetaInfo,
   ChatStatusUpdate,
+  ChatTraceEvent,
   CliParamsPayload,
   CliType,
   CreateBotInput,
@@ -51,10 +54,46 @@ type RawAvatarAsset = {
 };
 
 type RawHistoryItem = {
+  id?: string;
   timestamp?: string;
+  created_at?: string;
   role: "user" | "assistant" | "system";
   content: string;
   elapsed_seconds?: number;
+  meta?: RawChatMessageMeta;
+};
+
+type RawChatTraceEvent = {
+  kind?: string;
+  summary?: string;
+  source?: string;
+  raw_type?: string;
+  title?: string;
+  tool_name?: string;
+  call_id?: string;
+  payload?: unknown;
+};
+
+type RawChatMessageMeta = {
+  completion_state?: string;
+  summary_kind?: string;
+  trace_version?: number;
+  trace_count?: number;
+  tool_call_count?: number;
+  process_count?: number;
+  trace?: RawChatTraceEvent[];
+  native_source?: {
+    provider?: string;
+    session_id?: string;
+  };
+};
+
+type RawChatTraceDetails = {
+  message_id?: string;
+  trace_count?: number;
+  tool_call_count?: number;
+  process_count?: number;
+  trace?: RawChatTraceEvent[];
 };
 
 type RawFileEntry = {
@@ -150,8 +189,9 @@ type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
   | { type: "status"; elapsed_seconds?: number; preview_text?: string }
+  | { type: "trace"; event?: RawChatTraceEvent }
   | { type: "log"; text?: string }
-  | { type: "done"; output?: string; elapsed_seconds?: number; script_name?: string; success?: boolean }
+  | { type: "done"; output?: string; elapsed_seconds?: number; script_name?: string; success?: boolean; message?: RawHistoryItem }
   | { type: "error"; message?: string; code?: string };
 
 function mapStatus(status: string, isProcessing = false): BotStatus {
@@ -229,6 +269,157 @@ function mapRunningReply(raw?: RawRunningReply | null): RunningReply | null {
     previewText: raw.preview_text,
     startedAt: raw.started_at,
     updatedAt: raw.updated_at,
+  };
+}
+
+function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
+  if (!raw) {
+    return null;
+  }
+  const kind = String(raw.kind || "").trim();
+  const summary = String(raw.summary || "").trim();
+  if (!kind && !summary) {
+    return null;
+  }
+
+  const event: ChatTraceEvent = {
+    kind: kind || "unknown",
+    summary,
+  };
+  if (raw.source) {
+    event.source = raw.source;
+  }
+  if (raw.raw_type) {
+    event.rawType = raw.raw_type;
+  }
+  if (raw.title) {
+    event.title = raw.title;
+  }
+  if (raw.tool_name) {
+    event.toolName = raw.tool_name;
+  }
+  if (raw.call_id) {
+    event.callId = raw.call_id;
+  }
+  if (typeof raw.payload !== "undefined") {
+    event.payload = raw.payload;
+  }
+  return event;
+}
+
+function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  const trace = (raw.trace || [])
+    .map((item) => mapTraceEvent(item))
+    .filter((item): item is ChatTraceEvent => Boolean(item));
+  const traceSummary = summarizeTrace(trace);
+
+  const meta: ChatMessageMetaInfo = {};
+  if (raw.completion_state) {
+    meta.completionState = raw.completion_state;
+  }
+  if (raw.summary_kind) {
+    meta.summaryKind = raw.summary_kind;
+  }
+  if (typeof raw.trace_version === "number") {
+    meta.traceVersion = raw.trace_version;
+  }
+  if (typeof raw.trace_count === "number") {
+    meta.traceCount = raw.trace_count;
+  } else if (trace.length > 0) {
+    meta.traceCount = traceSummary.traceCount;
+  }
+  if (typeof raw.tool_call_count === "number") {
+    meta.toolCallCount = raw.tool_call_count;
+  } else if (trace.length > 0) {
+    meta.toolCallCount = traceSummary.toolCallCount;
+  }
+  if (typeof raw.process_count === "number") {
+    meta.processCount = raw.process_count;
+  } else if (trace.length > 0) {
+    meta.processCount = traceSummary.processCount;
+  }
+  if (trace.length > 0) {
+    meta.trace = trace;
+  }
+  if (raw.native_source?.provider || raw.native_source?.session_id) {
+    meta.nativeSource = {
+      provider: raw.native_source.provider || undefined,
+      sessionId: raw.native_source.session_id || undefined,
+    };
+  }
+
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
+function summarizeTrace(trace?: ChatTraceEvent[]) {
+  return {
+    traceCount: trace?.length || 0,
+    toolCallCount: (trace || []).filter((item) => item.kind === "tool_call").length,
+    processCount: (trace || []).filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
+  };
+}
+
+function traceEventKey(event: ChatTraceEvent): string {
+  return [
+    event.kind || "",
+    event.rawType || "",
+    event.callId || "",
+    event.summary || "",
+  ].join("|");
+}
+
+function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>): ChatTraceEvent[] | undefined {
+  const merged: ChatTraceEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    for (const item of source || []) {
+      const key = traceEventKey(item);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+
+  return merged.length > 0 ? merged : undefined;
+}
+
+function mergeMessageMeta(
+  base?: ChatMessageMetaInfo,
+  incoming?: ChatMessageMetaInfo,
+  streamedTrace?: ChatTraceEvent[],
+): ChatMessageMetaInfo | undefined {
+  const trace = mergeTraceEvents(base?.trace, incoming?.trace, streamedTrace);
+  const traceSummary = trace ? summarizeTrace(trace) : undefined;
+  const meta: ChatMessageMetaInfo = {
+    completionState: incoming?.completionState || base?.completionState,
+    summaryKind: incoming?.summaryKind || base?.summaryKind,
+    traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
+    traceCount: incoming?.traceCount ?? base?.traceCount ?? traceSummary?.traceCount,
+    toolCallCount: incoming?.toolCallCount ?? base?.toolCallCount ?? traceSummary?.toolCallCount,
+    processCount: incoming?.processCount ?? base?.processCount ?? traceSummary?.processCount,
+    nativeSource: incoming?.nativeSource || base?.nativeSource,
+    trace,
+  };
+
+  return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
+}
+
+function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatMessage["state"] = "done"): ChatMessage {
+  return {
+    id: raw.id || `${raw.timestamp || raw.created_at || "history"}-${index}`,
+    role: raw.role,
+    text: raw.content,
+    createdAt: raw.created_at || raw.timestamp || new Date().toISOString(),
+    state: fallbackState,
+    ...(typeof raw.elapsed_seconds === "number" ? { elapsedSeconds: raw.elapsed_seconds } : {}),
+    ...(mapMessageMeta(raw.meta) ? { meta: mapMessageMeta(raw.meta) } : {}),
   };
 }
 
@@ -314,6 +505,19 @@ function mapGitActionResult(raw: RawGitActionResult): GitActionResult {
 function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
   return {
     port: raw.port || "",
+  };
+}
+
+function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
+  const trace = (raw.trace || [])
+    .map((item) => mapTraceEvent(item))
+    .filter((item): item is ChatTraceEvent => Boolean(item));
+  const summary = summarizeTrace(trace);
+  return {
+    traceCount: typeof raw.trace_count === "number" ? raw.trace_count : summary.traceCount,
+    toolCallCount: typeof raw.tool_call_count === "number" ? raw.tool_call_count : summary.toolCallCount,
+    processCount: typeof raw.process_count === "number" ? raw.process_count : summary.processCount,
+    trace,
   };
 }
 
@@ -437,14 +641,14 @@ export class RealWebBotClient implements WebBotClient {
 
   async listMessages(botAlias: string): Promise<ChatMessage[]> {
     const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history`);
-    return data.items.map((item, index) => ({
-      id: `${item.timestamp || "history"}-${index}`,
-      role: item.role,
-      text: item.content,
-      createdAt: item.timestamp || new Date().toISOString(),
-      elapsedSeconds: typeof item.elapsed_seconds === "number" ? item.elapsed_seconds : undefined,
-      state: "done",
-    }));
+    return data.items.map((item, index) => mapChatMessage(item, index));
+  }
+
+  async getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails> {
+    const data = await this.requestJson<RawChatTraceDetails>(
+      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace`,
+    );
+    return mapChatTraceDetails(data);
   }
 
   async sendMessage(
@@ -452,6 +656,7 @@ export class RealWebBotClient implements WebBotClient {
     text: string,
     onChunk: (chunk: string) => void,
     onStatus?: (status: ChatStatusUpdate) => void,
+    onTrace?: (trace: ChatTraceEvent) => void,
   ): Promise<ChatMessage> {
     const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`, {
       method: "POST",
@@ -478,6 +683,8 @@ export class RealWebBotClient implements WebBotClient {
     let streamedText = "";
     let finalText = "";
     let finalElapsedSeconds: number | undefined;
+    let finalMessage: ChatMessage | null = null;
+    const streamedTrace: ChatTraceEvent[] = [];
 
     while (true) {
       const { value, done } = await reader.read();
@@ -508,8 +715,20 @@ export class RealWebBotClient implements WebBotClient {
             elapsedSeconds: event.elapsed_seconds,
             previewText: event.preview_text,
           });
+        } else if (event.type === "trace") {
+          const traceEvent = mapTraceEvent(event.event);
+          if (traceEvent) {
+            streamedTrace.push(traceEvent);
+            onTrace?.(traceEvent);
+          }
         } else if (event.type === "done") {
-          finalText = event.output || streamedText;
+          if (event.message) {
+            finalMessage = mapChatMessage(event.message, 0);
+            finalMessage.meta = mergeMessageMeta(undefined, finalMessage.meta, streamedTrace);
+            finalText = finalMessage.text;
+          } else {
+            finalText = event.output || streamedText;
+          }
           if (typeof event.elapsed_seconds === "number") {
             finalElapsedSeconds = event.elapsed_seconds;
           }
@@ -521,14 +740,24 @@ export class RealWebBotClient implements WebBotClient {
       }
     }
 
+    if (finalMessage) {
+      return {
+        ...finalMessage,
+        elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
+        meta: mergeMessageMeta(undefined, finalMessage.meta, streamedTrace),
+      };
+    }
+
     const messageText = finalText || streamedText;
+    const meta = mergeMessageMeta(undefined, undefined, streamedTrace);
     return {
       id: `assistant-${Date.now()}`,
       role: "assistant",
       text: messageText,
       createdAt: new Date().toISOString(),
-      elapsedSeconds: finalElapsedSeconds,
       state: "done",
+      ...(typeof finalElapsedSeconds === "number" ? { elapsedSeconds: finalElapsedSeconds } : {}),
+      ...(meta ? { meta } : {}),
     };
   }
 

@@ -37,6 +37,40 @@ export type BotOverview = {
   runningReply?: RunningReply | null;
 };
 
+export type ChatTraceEvent = {
+  kind: string;
+  summary: string;
+  source?: string;
+  rawType?: string;
+  title?: string;
+  toolName?: string;
+  callId?: string;
+  payload?: unknown;
+};
+
+export type ChatMessageNativeSource = {
+  provider?: string;
+  sessionId?: string;
+};
+
+export type ChatMessageMetaInfo = {
+  completionState?: string;
+  summaryKind?: string;
+  traceVersion?: number;
+  traceCount?: number;
+  toolCallCount?: number;
+  processCount?: number;
+  trace?: ChatTraceEvent[];
+  nativeSource?: ChatMessageNativeSource;
+};
+
+export type ChatTraceDetails = {
+  traceCount: number;
+  toolCallCount: number;
+  processCount: number;
+  trace: ChatTraceEvent[];
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -44,6 +78,7 @@ export type ChatMessage = {
   createdAt: string;
   elapsedSeconds?: number;
   state?: "done" | "streaming" | "error";
+  meta?: ChatMessageMetaInfo;
 };
 
 export type ChatStatusUpdate = {

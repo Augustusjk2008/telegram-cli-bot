@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 def _trace_event(kind: str, **extra: Any) -> dict[str, Any]:
@@ -33,15 +33,16 @@ def _stringify_value(value: Any) -> str:
     return str(value).strip()
 
 
-def _extract_text_blocks(content: Any) -> list[str]:
+def _extract_text_blocks(content: Any, *, block_types: Iterable[str] | None = None) -> list[str]:
     result: list[str] = []
+    allowed_types = set(block_types or {"text", "output_text"})
     if not isinstance(content, list):
         return result
     for block in content:
         if not isinstance(block, dict):
             continue
         block_type = str(block.get("type") or "").strip()
-        if block_type not in {"text", "output_text"}:
+        if block_type not in allowed_types:
             continue
         text_value = _stringify_value(block.get("text"))
         if text_value:
@@ -60,7 +61,36 @@ def _extract_timestamp(item: dict[str, Any]) -> str:
 def _append_assistant_text(assistant_messages: list[str], text: Any) -> None:
     value = _stringify_value(text)
     if value:
+        if assistant_messages and assistant_messages[-1] == value:
+            return
         assistant_messages.append(value)
+
+
+def _assign_user_text(turn: dict[str, Any], text: Any) -> None:
+    value = _stringify_value(text)
+    if not value:
+        return
+    current = _stringify_value(turn.get("user_text"))
+    if not current:
+        turn["user_text"] = value
+        return
+    if current == value:
+        return
+    turn["user_text"] = f"{current}\n{value}".strip()
+
+
+def _extract_input_text_blocks(content: Any) -> list[str]:
+    return _extract_text_blocks(content, block_types={"input_text", "text", "output_text"})
+
+
+def _resolve_payload(item: dict[str, Any]) -> dict[str, Any]:
+    nested_item = item.get("item")
+    if isinstance(nested_item, dict):
+        return nested_item
+    payload = item.get("payload")
+    if isinstance(payload, dict):
+        return payload
+    return {}
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -90,6 +120,17 @@ def _summarize_tool_payload(name: str, payload: Any) -> str:
     return rendered or name
 
 
+def _normalize_custom_tool_output(value: Any) -> tuple[str, Any]:
+    parsed = _parse_jsonish(value)
+    if isinstance(parsed, dict):
+        nested_output = parsed.get("output")
+        nested_summary = _stringify_value(nested_output)
+        if nested_summary:
+            return nested_summary, nested_output
+    summary = _stringify_value(parsed) or "工具调用已返回"
+    return summary, parsed
+
+
 def _extract_claude_user_text(item: dict[str, Any]) -> str:
     message = item.get("message") if isinstance(item.get("message"), dict) else {}
     parts: list[str] = []
@@ -110,6 +151,11 @@ def _new_turn_state(user_text: str = "", created_at: str = "") -> dict[str, Any]
         "created_at": _stringify_value(created_at),
         "updated_at": _stringify_value(created_at),
         "trace": [],
+        "trace_count": 0,
+        "tool_call_count": 0,
+        "process_count": 0,
+        "last_trace_summary": "",
+        "last_trace_signature": None,
         "assistant_messages": [],
     }
 
@@ -123,20 +169,56 @@ def _touch_turn(turn: dict[str, Any], timestamp: str) -> None:
     turn["updated_at"] = ts
 
 
+def _trace_signature(event: dict[str, Any]) -> tuple[str, str, str]:
+    kind = str(event.get("kind") or "")
+    summary = _stringify_value(event.get("summary"))
+    if kind in {"tool_call", "tool_result"}:
+        return kind, _stringify_value(event.get("call_id")), summary
+    return kind, "", summary
+
+
+def _append_trace_event(turn: dict[str, Any], event: dict[str, Any], *, include_trace: bool) -> None:
+    signature = _trace_signature(event)
+    if turn.get("last_trace_signature") == signature:
+        return
+
+    turn["last_trace_signature"] = signature
+    turn["trace_count"] = int(turn.get("trace_count") or 0) + 1
+    kind = str(event.get("kind") or "")
+    if kind == "tool_call":
+        turn["tool_call_count"] = int(turn.get("tool_call_count") or 0) + 1
+    elif kind != "tool_result":
+        turn["process_count"] = int(turn.get("process_count") or 0) + 1
+
+    summary = _stringify_value(event.get("summary"))
+    if summary:
+        turn["last_trace_summary"] = summary
+
+    if include_trace:
+        turn["trace"].append(event)
+
+
 def _finalize_turn(
     provider: str,
     session_id: str,
     turn_index: int,
     turn: dict[str, Any],
+    *,
+    include_trace: bool,
 ) -> dict[str, Any] | None:
-    if not turn.get("user_text") and not turn.get("trace") and not turn.get("assistant_messages"):
+    if (
+        not turn.get("user_text")
+        and not turn.get("assistant_messages")
+        and not turn.get("trace_count")
+        and not turn.get("last_trace_summary")
+    ):
         return None
 
     assistant_messages = turn.get("assistant_messages") or []
     trace = [dict(item) for item in turn.get("trace") or []]
     summary_text = assistant_messages[-1] if assistant_messages else ""
-    if not summary_text and trace:
-        summary_text = _stringify_value(trace[-1].get("summary"))
+    if not summary_text:
+        summary_text = _stringify_value(turn.get("last_trace_summary"))
 
     return {
         "id": f"{provider}-{session_id}-{turn_index}",
@@ -149,7 +231,10 @@ def _finalize_turn(
             "completion_state": "completed",
             "summary_kind": "final" if summary_text else "partial_preview",
             "trace_version": 1,
-            "trace": trace,
+            "trace_count": int(turn.get("trace_count") or len(trace)),
+            "tool_call_count": int(turn.get("tool_call_count") or 0),
+            "process_count": int(turn.get("process_count") or 0),
+            **({"trace": trace} if include_trace and trace else {}),
             "native_source": {
                 "provider": provider,
                 "session_id": session_id,
@@ -158,24 +243,32 @@ def _finalize_turn(
     }
 
 
-def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
+def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_trace: bool) -> None:
     item_type = str(item.get("type") or "").strip()
-    trace = turn["trace"]
     assistant_messages = turn["assistant_messages"]
 
     if item_type == "response_item":
-        payload = item.get("item") if isinstance(item.get("item"), dict) else {}
+        payload = _resolve_payload(item)
         payload_type = str(payload.get("type") or "").strip()
+        payload_phase = _stringify_value(payload.get("phase")).lower()
+        if payload_type == "reasoning":
+            return
         if payload_type == "message":
+            if _stringify_value(payload.get("role")) == "user":
+                user_text = "\n".join(_extract_input_text_blocks(payload.get("content"))).strip()
+                _assign_user_text(turn, user_text)
+                return
             for text in _extract_text_blocks(payload.get("content")):
                 _append_assistant_text(assistant_messages, text)
-                trace.append(_trace_event("commentary", raw_type="message", summary=text))
+                if payload_phase not in {"final", "final_answer"}:
+                    _append_trace_event(turn, _trace_event("commentary", raw_type="message", summary=text), include_trace=include_trace)
             return
         if payload_type == "function_call":
             name = _stringify_value(payload.get("name")) or "function_call"
             raw_arguments = payload.get("arguments")
             arguments = _parse_jsonish(raw_arguments)
-            trace.append(
+            _append_trace_event(
+                turn,
                 _trace_event(
                     "tool_call",
                     raw_type="function_call",
@@ -187,60 +280,119 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
                         "arguments": arguments,
                         "raw_arguments": raw_arguments,
                     },
-                )
+                ),
+                include_trace=include_trace,
+            )
+            return
+        if payload_type == "custom_tool_call":
+            name = _stringify_value(payload.get("name")) or "custom_tool_call"
+            tool_input = _parse_jsonish(payload.get("input"))
+            _append_trace_event(
+                turn,
+                _trace_event(
+                    "tool_call",
+                    raw_type="custom_tool_call",
+                    title=name,
+                    tool_name=name,
+                    call_id=_stringify_value(payload.get("call_id")),
+                    summary=_summarize_tool_payload(name, tool_input),
+                    payload=tool_input,
+                ),
+                include_trace=include_trace,
             )
             return
         if payload_type == "function_call_output":
             output = payload.get("output")
-            trace.append(
+            _append_trace_event(
+                turn,
                 _trace_event(
                     "tool_result",
                     raw_type="function_call_output",
                     call_id=_stringify_value(payload.get("call_id")),
                     summary=_stringify_value(output) or "工具调用已返回",
                     payload={"output": output},
-                )
+                ),
+                include_trace=include_trace,
             )
             return
-        trace.append(
+        if payload_type == "custom_tool_call_output":
+            summary, normalized_output = _normalize_custom_tool_output(payload.get("output"))
+            _append_trace_event(
+                turn,
+                _trace_event(
+                    "tool_result",
+                    raw_type="custom_tool_call_output",
+                    call_id=_stringify_value(payload.get("call_id")),
+                    summary=summary,
+                    payload=normalized_output,
+                ),
+                include_trace=include_trace,
+            )
+            return
+        _append_trace_event(
+            turn,
             _trace_event(
                 "unknown",
                 raw_type=payload_type or item_type or "unknown",
                 summary=_safe_json_dumps(payload),
                 payload=payload,
-            )
+            ),
+            include_trace=include_trace,
         )
         return
 
     if item_type == "event_msg":
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        payload = _resolve_payload(item)
+        payload_type = _stringify_value(payload.get("type"))
+        payload_phase = _stringify_value(payload.get("phase")).lower()
+        if payload_type == "user_message":
+            _assign_user_text(turn, payload.get("message"))
+            return
         message = _stringify_value(payload.get("message"))
         if message:
+            if payload_type == "agent_message" and payload_phase == "commentary":
+                _append_trace_event(
+                    turn,
+                    _trace_event(
+                        "commentary",
+                        raw_type=payload_type or "event_msg",
+                        summary=message,
+                        payload=payload,
+                    ),
+                    include_trace=include_trace,
+                )
+                return
+            if payload_type == "agent_message":
+                _append_assistant_text(assistant_messages, message)
+                return
             _append_assistant_text(assistant_messages, message)
-            trace.append(
+            _append_trace_event(
+                turn,
                 _trace_event(
                     "commentary",
-                    raw_type=_stringify_value(payload.get("type")) or "event_msg",
+                    raw_type=payload_type or "event_msg",
                     summary=message,
                     payload=payload,
-                )
+                ),
+                include_trace=include_trace,
             )
         return
 
     if item_type not in {"turn_context", "session_meta"}:
-        trace.append(
+        _append_trace_event(
+            turn,
             _trace_event(
                 "unknown",
                 raw_type=item_type or "unknown",
                 summary=_safe_json_dumps(item),
                 payload=item,
-            )
+            ),
+            include_trace=include_trace,
         )
 
 
-def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
+def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any], *, include_trace: bool) -> None:
     item_type = str(item.get("type") or "").strip()
-    trace = turn["trace"]
     assistant_messages = turn["assistant_messages"]
     message = item.get("message") if isinstance(item.get("message"), dict) else {}
     content = message.get("content") if isinstance(message.get("content"), list) else []
@@ -254,12 +406,13 @@ def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
                 text = _stringify_value(block.get("text"))
                 if text:
                     _append_assistant_text(assistant_messages, text)
-                    trace.append(_trace_event("commentary", raw_type="text", summary=text))
+                    _append_trace_event(turn, _trace_event("commentary", raw_type="text", summary=text), include_trace=include_trace)
                 continue
             if block_type == "tool_use":
                 name = _stringify_value(block.get("name")) or "tool_use"
                 payload = block.get("input")
-                trace.append(
+                _append_trace_event(
+                    turn,
                     _trace_event(
                         "tool_call",
                         raw_type="tool_use",
@@ -268,16 +421,19 @@ def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
                         call_id=_stringify_value(block.get("id")),
                         summary=_summarize_tool_payload(name, payload),
                         payload=payload,
-                    )
+                    ),
+                    include_trace=include_trace,
                 )
                 continue
-            trace.append(
+            _append_trace_event(
+                turn,
                 _trace_event(
                     "unknown",
                     raw_type=block_type or item_type or "unknown",
                     summary=_safe_json_dumps(block),
                     payload=block,
-                )
+                ),
+                include_trace=include_trace,
             )
         return
 
@@ -293,7 +449,8 @@ def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
                 summary = "\n".join(_extract_text_blocks(raw_content)).strip()
             else:
                 summary = _stringify_value(raw_content)
-            trace.append(
+            _append_trace_event(
+                turn,
                 _trace_event(
                     "tool_result",
                     raw_type="tool_result",
@@ -303,21 +460,30 @@ def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any]) -> None:
                         "content": raw_content,
                         "is_error": bool(block.get("is_error")),
                     },
-                )
+                ),
+                include_trace=include_trace,
             )
         return
 
-    trace.append(
+    _append_trace_event(
+        turn,
         _trace_event(
             "unknown",
             raw_type=item_type or "unknown",
             summary=_safe_json_dumps(item),
             payload=item,
-        )
+        ),
+        include_trace=include_trace,
     )
 
 
-def load_native_transcript(provider: str, transcript_path: Path, *, session_id: str) -> list[dict[str, Any]]:
+def load_native_transcript(
+    provider: str,
+    transcript_path: Path,
+    *,
+    session_id: str,
+    include_trace: bool = True,
+) -> list[dict[str, Any]]:
     if not transcript_path.is_file():
         return []
 
@@ -340,17 +506,17 @@ def load_native_transcript(provider: str, transcript_path: Path, *, session_id: 
         item_type = str(item.get("type") or "").strip()
 
         if provider == "codex" and item_type == "turn_context":
-            finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {})
+            finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
             if finalized is not None:
                 turns.append(finalized)
                 turn_index += 1
-            current_turn = _new_turn_state(item.get("content"), timestamp)
+            current_turn = _new_turn_state(_resolve_payload(item).get("content") or item.get("content"), timestamp)
             continue
 
         if provider == "claude" and item_type == "user":
             user_text = _extract_claude_user_text(item)
             if user_text:
-                finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {})
+                finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
                 if finalized is not None:
                     turns.append(finalized)
                     turn_index += 1
@@ -361,11 +527,11 @@ def load_native_transcript(provider: str, transcript_path: Path, *, session_id: 
 
         _touch_turn(current_turn, timestamp)
         if provider == "codex":
-            _consume_codex_line(item, current_turn)
+            _consume_codex_line(item, current_turn, include_trace=include_trace)
         else:
-            _consume_claude_line(item, current_turn)
+            _consume_claude_line(item, current_turn, include_trace=include_trace)
 
-    finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {})
+    finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
     if finalized is not None:
         turns.append(finalized)
 
@@ -394,7 +560,7 @@ def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     if not event_type.startswith("item."):
         return []
 
-    payload = item.get("item") if isinstance(item.get("item"), dict) else {}
+    payload = _resolve_payload(item)
     payload_type = str(payload.get("type") or "").strip()
     if event_type != "item.completed":
         return []
@@ -416,6 +582,20 @@ def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
                 },
             )
         ]
+    if payload_type == "custom_tool_call":
+        name = _stringify_value(payload.get("name")) or "custom_tool_call"
+        tool_input = _parse_jsonish(payload.get("input"))
+        return [
+            _trace_event(
+                "tool_call",
+                raw_type="custom_tool_call",
+                title=name,
+                tool_name=name,
+                call_id=_stringify_value(payload.get("call_id")),
+                summary=_summarize_tool_payload(name, tool_input),
+                payload=tool_input,
+            )
+        ]
     if payload_type == "function_call_output":
         output = payload.get("output")
         return [
@@ -425,6 +605,17 @@ def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
                 call_id=_stringify_value(payload.get("call_id")),
                 summary=_stringify_value(output) or "工具调用已返回",
                 payload={"output": output},
+            )
+        ]
+    if payload_type == "custom_tool_call_output":
+        summary, normalized_output = _normalize_custom_tool_output(payload.get("output"))
+        return [
+            _trace_event(
+                "tool_result",
+                raw_type="custom_tool_call_output",
+                call_id=_stringify_value(payload.get("call_id")),
+                summary=summary,
+                payload=normalized_output,
             )
         ]
     if payload_type in {"assistant_message", "agent_message"}:
