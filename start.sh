@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 export TELEGRAM_CLI_BRIDGE_SUPERVISOR=1
-MODE="${1:-default}"
+export WEB_ENABLED="true"
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -14,11 +14,6 @@ elif command -v python >/dev/null 2>&1; then
 else
   echo "错误: 未找到 python3 或 python，请先安装 Python 并加入 PATH" >&2
   exit 127
-fi
-
-if [[ "$MODE" == "web" ]]; then
-  export TELEGRAM_ENABLED="false"
-  export WEB_ENABLED="true"
 fi
 
 while true; do

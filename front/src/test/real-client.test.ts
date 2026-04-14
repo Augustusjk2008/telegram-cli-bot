@@ -58,7 +58,7 @@ describe("RealWebBotClient", () => {
           data: [
             {
               alias: "main",
-              cli_type: "kimi",
+              cli_type: "codex",
               status: "running",
               is_processing: true,
               working_dir: "C:\\workspace\\demo",
@@ -74,7 +74,7 @@ describe("RealWebBotClient", () => {
     expect(bots).toEqual([
       {
         alias: "main",
-        cliType: "kimi",
+        cliType: "codex",
         status: "busy",
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
@@ -661,11 +661,11 @@ describe("RealWebBotClient", () => {
     await client.login("secret-token");
     const bot = await client.addBot({
       alias: "team3",
-      token: "333:abc",
       botMode: "cli",
       cliType: "codex",
       cliPath: "codex",
       workingDir: "C:\\workspace\\team3",
+      avatarName: "bot-default.png",
     });
 
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -678,11 +678,11 @@ describe("RealWebBotClient", () => {
         }),
         body: JSON.stringify({
           alias: "team3",
-          token: "333:abc",
           bot_mode: "cli",
           cli_type: "codex",
           cli_path: "codex",
           working_dir: "C:\\workspace\\team3",
+          avatar_name: "bot-default.png",
         }),
       }),
     );

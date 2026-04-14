@@ -1058,7 +1058,6 @@ export class RealWebBotClient implements WebBotClient {
       },
       body: JSON.stringify({
         alias: input.alias,
-        token: input.token,
         bot_mode: input.botMode,
         cli_type: input.cliType,
         cli_path: input.cliPath,

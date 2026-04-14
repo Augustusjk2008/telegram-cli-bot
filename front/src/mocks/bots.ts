@@ -4,7 +4,7 @@ import { DEMO_MAIN_WORKDIR, DEMO_TEAM_WORKDIR } from "./demoEnvironment";
 export const mockBots: BotSummary[] = [
   {
     alias: "main",
-    cliType: "kimi",
+    cliType: "codex",
     status: "running",
     workingDir: DEMO_MAIN_WORKDIR,
     lastActiveText: "刚刚活跃",

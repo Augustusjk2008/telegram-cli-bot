@@ -1,4 +1,4 @@
-export type CliType = "kimi" | "claude" | "codex";
+export type CliType = "claude" | "codex";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 
 export type BotSummary = {
@@ -136,7 +136,6 @@ export type CliParamsPayload = {
 
 export type CreateBotInput = {
   alias: string;
-  token: string;
   botMode: "cli" | "assistant";
   cliType: CliType;
   cliPath: string;

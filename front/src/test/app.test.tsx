@@ -467,7 +467,7 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
     .mockResolvedValueOnce([
       {
         alias: "main",
-        cliType: "kimi",
+        cliType: "codex",
         status: "running",
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "运行中",
@@ -483,7 +483,7 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
     .mockResolvedValueOnce([
       {
         alias: "main",
-        cliType: "kimi",
+        cliType: "codex",
         status: "busy",
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
@@ -507,7 +507,7 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
 
   expect(listBotsSpy).toHaveBeenCalledTimes(2);
   expect(await screen.findByText("处理中")).toBeInTheDocument();
-  expect(screen.getByText("kimi: C:\\workspace\\demo")).toBeInTheDocument();
+  expect(screen.getByText("codex: C:\\workspace\\demo")).toBeInTheDocument();
 });
 
 test("marks a bot unread after a hidden reply completes and clears it on return", async () => {
@@ -611,7 +611,6 @@ test("bot manager can add rename and delete managed bots", async () => {
   expect(document.title).toBe("Bot 管理 - 🦞Safe Claw");
 
   await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
-  await user.type(screen.getByLabelText("Bot Token"), "333:abc");
   await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
   await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team3");
   await user.click(screen.getByRole("button", { name: "创建 Bot" }));
@@ -631,7 +630,7 @@ test("bot manager can add rename and delete managed bots", async () => {
   expect(screen.queryByText("planner")).not.toBeInTheDocument();
 });
 
-test("bot manager can create a web-only bot without telegram token", async () => {
+test("create bot form no longer asks for telegram token", async () => {
   const user = userEvent.setup();
 
   render(<App />);
@@ -644,6 +643,7 @@ test("bot manager can create a web-only bot without telegram token", async () =>
   await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
 
   expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Bot Token")).not.toBeInTheDocument();
   await user.type(screen.getByLabelText("新 Bot 别名"), "web-only");
   await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
   await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\web-only");
@@ -809,7 +809,7 @@ test("bot manager highlights offline bots and blocks entering them", async () =>
   vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
     {
       alias: "main",
-      cliType: "kimi",
+      cliType: "codex",
       status: "running",
       workingDir: "C:\\workspace\\demo",
       lastActiveText: "运行中",
@@ -841,7 +841,7 @@ test("bot switcher disables offline bots", async () => {
   vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
     {
       alias: "main",
-      cliType: "kimi",
+      cliType: "codex",
       status: "running",
       workingDir: "C:\\workspace\\demo",
       lastActiveText: "运行中",

@@ -27,9 +27,8 @@ def test_start_sh_runs_python_module_and_sets_supervisor_env():
     assert 'if [[ "$exit_code" -ne 75 ]]' in content
 
 
-def test_start_sh_supports_web_mode():
+def test_start_sh_is_web_only():
     content = Path("start.sh").read_text(encoding="utf-8")
 
-    assert 'if [[ "$MODE" == "web" ]]' in content
-    assert 'export TELEGRAM_ENABLED="false"' in content
     assert 'export WEB_ENABLED="true"' in content
+    assert "TELEGRAM_ENABLED" not in content

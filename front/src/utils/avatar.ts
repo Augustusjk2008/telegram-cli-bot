@@ -8,7 +8,6 @@ export const DEFAULT_AVATAR_ASSETS: AvatarAsset[] = [
   { name: "user-default.png", url: "/assets/avatars/user-default.png" },
   { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
   { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
-  { name: "kimi-teal.png", url: "/assets/avatars/kimi-teal.png" },
   { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
 ];
 
