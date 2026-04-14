@@ -861,7 +861,7 @@ async def test_admin_restart_returns_response_before_triggering_restart(web_mana
 
 
 @pytest.mark.asyncio
-async def test_admin_add_bot_route_accepts_empty_token_for_web_only_bot(
+async def test_admin_add_bot_route_no_longer_requires_token_field(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     temp_dir: Path,
@@ -879,7 +879,6 @@ async def test_admin_add_bot_route_accepts_empty_token_for_web_only_bot(
                     "/api/admin/bots",
                     json={
                         "alias": "web_only",
-                        "token": "",
                         "bot_mode": "cli",
                         "cli_type": "codex",
                         "cli_path": "codex",

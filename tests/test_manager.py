@@ -23,6 +23,13 @@ from bot.sessions import get_or_create_session
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 
+    def test_bot_profile_to_dict_omits_token(self):
+        profile = BotProfile(alias="team2", cli_type="claude", cli_path="claude")
+
+        payload = profile.to_dict()
+
+        assert "token" not in payload
+
     def test_bot_profile_round_trips_avatar_name(self):
         profile = BotProfile(
             alias="team2",
@@ -351,7 +358,7 @@ class TestManagerValidation:
             m._validate_alias("-invalid")
 
     @pytest.mark.asyncio
-    async def test_add_bot_allows_empty_token_for_web_only_mode(self, temp_dir: Path):
+    async def test_add_bot_no_longer_requires_token(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         profile = BotProfile(alias="main", token="main_tok")
@@ -361,7 +368,6 @@ class TestManagerValidation:
              patch.object(m, "_start_profile", AsyncMock(return_value=None)) as start_profile:
             created = await m.add_bot(
                 alias="web_only",
-                token="",
                 cli_type="codex",
                 cli_path="codex",
                 working_dir=str(temp_dir),
@@ -370,7 +376,7 @@ class TestManagerValidation:
 
         assert created.token == ""
         assert m.managed_profiles["web_only"].token == ""
-        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["token"] == ""
+        assert "token" not in json.loads(storage.read_text(encoding="utf-8"))["bots"][0]
         start_profile.assert_awaited_once()
 
     @pytest.mark.asyncio

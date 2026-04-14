@@ -1981,23 +1981,23 @@ async def stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]
 async def add_managed_bot(
     manager: MultiBotManager,
     alias: str,
-    token: str,
     bot_mode: str,
     cli_type: Optional[str],
     cli_path: Optional[str],
     working_dir: Optional[str],
     avatar_name: Optional[str] = None,
+    token: str = "",
 ) -> dict[str, Any]:
     resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=bool(str(avatar_name or "").strip()))
     try:
         profile = await manager.add_bot(
-            alias,
-            token,
-            cli_type,
-            cli_path,
-            working_dir,
-            bot_mode,
-            resolved_avatar_name,
+            alias=alias,
+            token=token,
+            cli_type=cli_type,
+            cli_path=cli_path,
+            working_dir=working_dir,
+            bot_mode=bot_mode,
+            avatar_name=resolved_avatar_name,
         )
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))

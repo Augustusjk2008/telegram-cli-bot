@@ -763,7 +763,7 @@ class MultiBotManager:
     async def add_bot(
         self,
         alias: str,
-        token: str,
+        token: str = "",
         cli_type: Optional[str] = None,
         cli_path: Optional[str] = None,
         working_dir: Optional[str] = None,
@@ -771,7 +771,7 @@ class MultiBotManager:
         avatar_name: Optional[str] = None,
     ) -> BotProfile:
         alias = alias.strip().lower()
-        token = token.strip()
+        token = (token or "").strip()
         self._validate_alias(alias)
 
         cli_type = validate_cli_type(cli_type or CLI_TYPE)

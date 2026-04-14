@@ -879,7 +879,6 @@ class WebApiServer:
         data = await add_managed_bot(
             self.manager,
             alias=body.get("alias", ""),
-            token=body.get("token", ""),
             bot_mode=body.get("bot_mode", "cli"),
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
