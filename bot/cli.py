@@ -51,7 +51,7 @@ def build_cli_command(
     """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。
 
     Args:
-        cli_type: CLI 类型 (kimi/claude/codex)
+        cli_type: CLI 类型 (claude/codex)
         resolved_cli: 解析后的 CLI 可执行文件路径
         user_text: 用户输入文本
         env: 环境变量字典（会被修改以设置 CLI 特定的环境变量）

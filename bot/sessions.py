@@ -53,7 +53,6 @@ def get_or_create_session(
             stored_data = load_session(bot_id, user_id) if load_persisted_state else None
             
             codex_session_id = None
-            kimi_session_id = None
             claude_session_id = None
             claude_session_initialized = False
             working_dir = default_working_dir
@@ -69,7 +68,6 @@ def get_or_create_session(
             
             if stored_data:
                 codex_session_id = stored_data.get("codex_session_id")
-                kimi_session_id = stored_data.get("kimi_session_id")
                 claude_session_id = stored_data.get("claude_session_id")
                 working_dir = stored_data.get("working_dir") or default_working_dir
                 browse_dir = stored_data.get("browse_dir") or None
@@ -93,7 +91,6 @@ def get_or_create_session(
                 claude_session_initialized = bool(claude_session_id)
                 if (
                     codex_session_id
-                    or kimi_session_id
                     or claude_session_id
                     or web_turn_overlays
                     or running_started_at
@@ -101,7 +98,6 @@ def get_or_create_session(
                 ):
                     logger.info(f"已恢复会话: bot={bot_id}, user={user_id}, "
                               f"codex={codex_session_id is not None}, "
-                              f"kimi={kimi_session_id is not None}, "
                               f"claude={claude_session_id is not None}, "
                               f"overlays={len(web_turn_overlays)}, "
                               f"running={running_started_at is not None}")
@@ -114,7 +110,6 @@ def get_or_create_session(
                 browse_dir=browse_dir,
                 history=[],
                 codex_session_id=codex_session_id,
-                kimi_session_id=kimi_session_id,
                 claude_session_id=claude_session_id,
                 claude_session_initialized=claude_session_initialized,
                 web_turn_overlays=web_turn_overlays,
@@ -139,7 +134,6 @@ def _save_session_to_store(session: UserSession):
             bot_id=session.bot_id,
             user_id=session.user_id,
             codex_session_id=session.codex_session_id,
-            kimi_session_id=session.kimi_session_id,
             claude_session_id=session.claude_session_id,
             working_dir=session.working_dir,
             browse_dir=session.browse_dir,

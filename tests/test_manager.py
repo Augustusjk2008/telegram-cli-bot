@@ -49,8 +49,8 @@ class TestManagerLoadSave:
                 {
                     "alias": "sub1",
                     "token": "tok1",
-                    "cli_type": "kimi",
-                    "cli_path": "kimi",
+                    "cli_type": "codex",
+                    "cli_path": "codex",
                     "working_dir": str(temp_dir),
                     "enabled": True,
                 }
@@ -60,6 +60,29 @@ class TestManagerLoadSave:
         m = MultiBotManager(main_profile=profile, storage_file=str(storage))
         assert "sub1" in m.managed_profiles
         assert m.managed_profiles["sub1"].token == "tok1"
+
+    def test_load_profiles_rejects_kimi_cli_type(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(
+            json.dumps(
+                {
+                    "bots": [
+                        {
+                            "alias": "kimi1",
+                            "token": "tok1",
+                            "cli_type": "kimi",
+                            "cli_path": "kimi",
+                            "working_dir": str(temp_dir),
+                            "enabled": True,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="kimi"):
+            MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
     def test_save_bots_format(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
@@ -98,7 +121,7 @@ class TestManagerLoadSave:
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({
             "bots": [
-                {"alias": "main", "token": "tok", "cli_type": "kimi"},
+                {"alias": "main", "token": "tok", "cli_type": "codex"},
             ]
         }))
         profile = BotProfile(alias="main", token="main_tok")
@@ -686,7 +709,7 @@ class TestManagerGetStatusLines:
     """测试 get_status_lines"""
 
     def test_main_only(self, temp_dir: Path):
-        main_profile = BotProfile(alias="main", token="main_tok", cli_type="kimi", cli_path="kimi")
+        main_profile = BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex")
         m = MultiBotManager(main_profile=main_profile, storage_file=str(temp_dir / "b.json"))
         # 没有启动任何 application，main 状态为 stopped
         lines = m.get_status_lines()
@@ -697,7 +720,7 @@ class TestManagerGetStatusLines:
         assert "主 Bot" in result
 
     def test_with_sub_bots(self, temp_dir: Path):
-        main_profile = BotProfile(alias="main", token="main_tok", cli_type="kimi", cli_path="kimi")
+        main_profile = BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex")
         m = MultiBotManager(main_profile=main_profile, storage_file=str(temp_dir / "b.json"))
         m.managed_profiles["sub1"] = BotProfile(
             alias="sub1", token="tok1", cli_type="claude", cli_path="claude"

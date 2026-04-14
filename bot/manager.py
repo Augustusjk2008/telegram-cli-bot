@@ -481,6 +481,8 @@ class MultiBotManager:
             if not alias or alias in RESERVED_ALIASES:
                 continue
             raw_cli_type = str(item.get("cli_type", CLI_TYPE)).strip() or CLI_TYPE
+            if raw_cli_type.lower() == "kimi":
+                raise ValueError(f"子Bot `{alias}` 使用了已移除的 cli_type: kimi")
             try:
                 cli_type = validate_cli_type(raw_cli_type)
             except ValueError:

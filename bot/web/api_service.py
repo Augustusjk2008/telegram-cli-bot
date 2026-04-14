@@ -346,7 +346,6 @@ def _get_browser_directory(session: UserSession) -> str:
 def _build_session_ids(session: UserSession) -> dict[str, Any]:
     return {
         "codex_session_id": session.codex_session_id,
-        "kimi_session_id": session.kimi_session_id,
         "claude_session_id": session.claude_session_id,
         "claude_session_initialized": session.claude_session_initialized,
     }

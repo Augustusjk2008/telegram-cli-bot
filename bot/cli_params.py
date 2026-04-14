@@ -13,19 +13,6 @@ logger = logging.getLogger(__name__)
 
 # ============ 各 CLI 的默认参数配置 ============
 
-DEFAULT_KIMI_PARAMS = {
-    # 基础参数
-    "quiet": True,           # --quiet: 静默模式
-    "yolo": True,            # -y: 自动确认
-    "thinking": True,        # --thinking: 显示思考过程
-    # 可选参数
-    "model": None,           # -m: 模型选择 (如 "kimi-k2")
-    "temperature": None,     # --temperature: 温度参数
-    "max_tokens": None,      # --max-tokens: 最大token数
-    # 高级参数 (通过 extra_args 传递)
-    "extra_args": [],        # 额外参数列表
-}
-
 DEFAULT_CLAUDE_PARAMS = {
     # 基础参数
     "yolo": True,                    # --dangerously-skip-permissions
@@ -53,7 +40,6 @@ DEFAULT_CODEX_PARAMS = {
 
 # CLI 类型到默认参数的映射
 DEFAULT_PARAMS_MAP = {
-    "kimi": DEFAULT_KIMI_PARAMS,
     "claude": DEFAULT_CLAUDE_PARAMS,
     "codex": DEFAULT_CODEX_PARAMS,
 }
@@ -62,15 +48,6 @@ DEFAULT_PARAMS_MAP = {
 SUPPORTED_CLI_TYPES = set(DEFAULT_PARAMS_MAP.keys())
 
 PARAM_SCHEMA_MAP = {
-    "kimi": {
-        "quiet": {"type": "boolean", "description": "静默模式"},
-        "yolo": {"type": "boolean", "description": "自动确认"},
-        "thinking": {"type": "boolean", "description": "显示思考过程"},
-        "model": {"type": "string", "description": "模型选择", "nullable": True},
-        "temperature": {"type": "number", "description": "温度参数", "nullable": True},
-        "max_tokens": {"type": "number", "description": "最大 token 数", "nullable": True, "integer": True},
-        "extra_args": {"type": "string_list", "description": "额外参数"},
-    },
     "claude": {
         "yolo": {"type": "boolean", "description": "跳过权限确认"},
         "effort": {
@@ -103,14 +80,12 @@ PARAM_SCHEMA_MAP = {
 class CliParamsConfig:
     """CLI 参数配置类"""
     
-    kimi: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_KIMI_PARAMS))
     claude: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CLAUDE_PARAMS))
     codex: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CODEX_PARAMS))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
         return {
-            "kimi": copy.deepcopy(self.kimi),
             "claude": copy.deepcopy(self.claude),
             "codex": copy.deepcopy(self.codex),
         }
@@ -153,7 +128,6 @@ class CliParamsConfig:
         """重置为默认配置"""
         if cli_type is None:
             # 重置所有
-            self.kimi = copy.deepcopy(DEFAULT_KIMI_PARAMS)
             self.claude = copy.deepcopy(DEFAULT_CLAUDE_PARAMS)
             self.codex = copy.deepcopy(DEFAULT_CODEX_PARAMS)
         else:

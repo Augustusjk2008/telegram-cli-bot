@@ -100,7 +100,12 @@ WEB_TUNNEL_CLOUDFLARED_PATH = os.environ.get("WEB_TUNNEL_CLOUDFLARED_PATH", "").
 WEB_TUNNEL_STATE_FILE = os.environ.get("WEB_TUNNEL_STATE_FILE", ".web_tunnel_state.json").strip() or ".web_tunnel_state.json"
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}
+SUPPORTED_CLI_TYPES = {"claude", "codex"}
+if CLI_TYPE not in SUPPORTED_CLI_TYPES:
+    logging.warning("CLI_TYPE=%s 已不再受支持，自动回退为 codex", CLI_TYPE)
+    CLI_TYPE = "codex"
+    if not CLI_PATH or CLI_PATH == "kimi":
+        CLI_PATH = CLI_TYPE
 
 DANGEROUS_COMMANDS: Set[str] = {
     "dd",

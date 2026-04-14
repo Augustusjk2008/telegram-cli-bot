@@ -55,9 +55,9 @@ class TestUserSession:
         assert s.working_dir == str(temp_dir)
         assert s.history == []
         assert s.codex_session_id is None
-        assert s.kimi_session_id is None
         assert s.claude_session_id is None
         assert s.claude_session_initialized is False
+        assert not hasattr(s, "kimi_session_id")
         assert s.process is None
         assert s.is_processing is False
         assert s.message_count == 0

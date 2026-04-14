@@ -141,7 +141,6 @@ class TestSessionPersistence:
                 bot_id=1,
                 user_id=100,
                 codex_session_id="thread_restored_123",
-                kimi_session_id="kimi_restored_456",
                 claude_session_id="claude_restored_789",
             )
             
@@ -155,9 +154,9 @@ class TestSessionPersistence:
             s = get_session(1, "main", 100, str(other_dir))
             
             assert s.codex_session_id == "thread_restored_123"
-            assert s.kimi_session_id == "kimi_restored_456"
             assert s.claude_session_id == "claude_restored_789"
             assert s.claude_session_initialized is True
+            assert not hasattr(s, "kimi_session_id")
 
     def test_reset_session_clears_persistent_store(self, temp_dir: Path):
         """测试重置会话时清除持久化存储"""
@@ -190,7 +189,6 @@ class TestSessionPersistence:
             # 创建带有 session_id 的会话
             s1 = get_session(1, "main", 100, str(temp_dir))
             s1.codex_session_id = "thread_s1"
-            s1.kimi_session_id = "kimi_s1"
             
             s2 = get_session(1, "main", 200, str(temp_dir))
             s2.claude_session_id = "claude_s2"
@@ -201,7 +199,6 @@ class TestSessionPersistence:
             # 验证持久化存储
             data1 = load_session(1, 100)
             assert data1["codex_session_id"] == "thread_s1"
-            assert data1["kimi_session_id"] == "kimi_s1"
             
             data2 = load_session(1, 200)
             assert data2["claude_session_id"] == "claude_s2"
@@ -216,7 +213,7 @@ class TestSessionPersistence:
             save_session(
                 bot_id=1,
                 user_id=100,
-                kimi_session_id="kimi_prev_session",
+                codex_session_id="codex_prev_session",
             )
             
             # 验证存储存在
@@ -230,7 +227,8 @@ class TestSessionPersistence:
             s = get_session(1, "main", 100, str(temp_dir))
             
             # 应该恢复之前的 session_id
-            assert s.kimi_session_id == "kimi_prev_session"
+            assert s.codex_session_id == "codex_prev_session"
+            assert not hasattr(s, "kimi_session_id")
 
     def test_persist_saves_overlay_workdir_and_running_reply_without_history(self, temp_dir: Path):
         """测试会话快照会自动持久化 overlay，但不保存聊天历史"""

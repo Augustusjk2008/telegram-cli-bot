@@ -27,6 +27,7 @@ from bot.web.api_service import (
     _stream_cli_chat,
     _build_stream_status_event,
     WebApiError,
+    build_session_snapshot,
     change_working_directory,
     get_directory_listing,
     get_history,
@@ -78,8 +79,8 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
     profile = BotProfile(
         alias="main",
         token="dummy-token",
-        cli_type="kimi",
-        cli_path="kimi",
+        cli_type="codex",
+        cli_path="codex",
         working_dir=str(temp_dir),
         enabled=True,
     )
@@ -149,7 +150,6 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
 def test_change_working_directory_clears_session_ids(web_manager: MultiBotManager, temp_dir: Path):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-old"
-    session.kimi_session_id = "kimi-old"
     session.claude_session_id = "claude-old"
     session.claude_session_initialized = True
 
@@ -161,9 +161,23 @@ def test_change_working_directory_clears_session_ids(web_manager: MultiBotManage
     assert result["working_dir"] == str(subdir)
     assert session.working_dir == str(subdir)
     assert session.codex_session_id is None
-    assert session.kimi_session_id is None
     assert session.claude_session_id is None
     assert session.claude_session_initialized is False
+
+
+def test_build_session_snapshot_omits_removed_kimi_session_id(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.codex_session_id = "thread-1"
+    session.claude_session_id = "claude-1"
+    session.claude_session_initialized = True
+
+    snapshot = build_session_snapshot(web_manager.main_profile, session)
+
+    assert snapshot["session_ids"] == {
+        "codex_session_id": "thread-1",
+        "claude_session_id": "claude-1",
+        "claude_session_initialized": True,
+    }
 
 
 def test_assistant_change_directory_only_updates_file_browser_path(web_manager: MultiBotManager, temp_dir: Path):
@@ -1571,25 +1585,6 @@ def test_read_missing_file_raises(web_manager: MultiBotManager):
 
 
 @pytest.mark.asyncio
-async def test_run_cli_chat_resets_and_persists_kimi_session(web_manager: MultiBotManager):
-    session = get_session_for_alias(web_manager, "main", 1001)
-    session.kimi_session_id = "kimi-stale"
-    session.persist = MagicMock()
-
-    fake_process = MagicMock()
-
-    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
-         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
-         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, return_value=("session expired", 1, False)):
-        data = await run_cli_chat(web_manager, "main", 1001, "hello")
-
-    assert data["returncode"] == 1
-    assert session.kimi_session_id is None
-    session.persist.assert_called()
-
-
-@pytest.mark.asyncio
 async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "claude"
 
@@ -1688,10 +1683,14 @@ async def test_run_cli_chat_claude_done_detector_avoids_communicate_and_strips_o
 async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
     fake_process = MagicMock()
 
-    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
-         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, return_value=("完成回复", 0, False)):
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("完成回复", "thread-1", 0, False),
+         ):
         data = await run_cli_chat(web_manager, "main", 1001, "hello")
 
     assert data["output"] == "完成回复"
@@ -1984,8 +1983,8 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     fake_process.poll.return_value = 0
     fake_process.wait.return_value = 0
 
-    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
-         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
         events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
 

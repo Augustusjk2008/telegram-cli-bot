@@ -88,7 +88,6 @@ class UserSession:
     browse_dir: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
-    kimi_session_id: Optional[str] = None
     claude_session_id: Optional[str] = None
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
@@ -228,7 +227,6 @@ class UserSession:
         """清除所有 session_id 并持久化"""
         with self._lock:
             self.codex_session_id = None
-            self.kimi_session_id = None
             self.claude_session_id = None
             self.claude_session_initialized = False
         self.persist()
