@@ -148,6 +148,7 @@ def test_list_bots_includes_processing_state_for_current_user(web_manager: Multi
 
 
 def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: Path):
+    web_manager.main_profile.avatar_name = "bot-default.png"
     web_manager.managed_profiles["team2"] = BotProfile(
         alias="team2",
         token="",
