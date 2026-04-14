@@ -12,6 +12,13 @@ from aiohttp import ClientSession
 import pytest
 
 
+def test_web_server_uses_platform_terminal_module():
+    source = Path("bot/web/server.py").read_text(encoding="utf-8")
+
+    assert "from bot.platform.terminal import create_shell_process" in source
+    assert "from bot.handlers.tui_server import create_shell_process" not in source
+
+
 @pytest.mark.asyncio
 async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     import bot.main as main_module

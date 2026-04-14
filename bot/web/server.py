@@ -35,8 +35,8 @@ from bot.config import (
     request_restart,
 )
 from bot.manager import MultiBotManager
-from bot.handlers.tui_server import create_shell_process
 from bot.platform.runtime import get_default_shell
+from bot.platform.terminal import create_shell_process
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
