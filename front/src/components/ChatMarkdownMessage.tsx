@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from "react";
+import { Component, memo, type ReactNode } from "react";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import { MarkdownContent } from "./MarkdownPreview";
 
@@ -44,6 +44,8 @@ class ChatMarkdownBoundary extends Component<Props, State> {
   }
 }
 
-export function ChatMarkdownMessage({ content, onFileLinkClick }: Props) {
+function ChatMarkdownMessageInner({ content, onFileLinkClick }: Props) {
   return <ChatMarkdownBoundary content={content} onFileLinkClick={onFileLinkClick} />;
 }
+
+export const ChatMarkdownMessage = memo(ChatMarkdownMessageInner);

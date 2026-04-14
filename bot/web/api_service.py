@@ -394,8 +394,15 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
     return "configured" if profile.enabled else "stopped"
 
 
-def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[int] = None) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
+def build_bot_summary(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: Optional[int] = None,
+    *,
+    profile: Optional[BotProfile] = None,
+    session: Optional[UserSession] = None,
+) -> dict[str, Any]:
+    profile = profile or get_profile_or_raise(manager, alias)
     app = manager.applications.get(alias)
 
     # 优先使用当前用户 session 的工作目录（如果用户已登录）
@@ -403,12 +410,12 @@ def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[in
     is_processing = False
     if user_id is not None:
         try:
-            session = get_session_for_alias(manager, alias, user_id)
-            if session and session.working_dir:
-                working_dir = session.working_dir
-            if session:
-                with session._lock:
-                    is_processing = session.is_processing
+            current_session = session or get_session_for_alias(manager, alias, user_id)
+            if current_session and current_session.working_dir:
+                working_dir = current_session.working_dir
+            if current_session:
+                with current_session._lock:
+                    is_processing = current_session.is_processing
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
@@ -438,7 +445,7 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     return {
-        "bot": build_bot_summary(manager, alias, user_id),
+        "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
     }
 

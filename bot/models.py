@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 PersistHook = Callable[["UserSession"], None]
+SESSION_PERSIST_DEBOUNCE_SECONDS = 0.25
 
 
 @dataclass
@@ -103,12 +104,13 @@ class UserSession:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
+    _persist_timer: Optional[threading.Timer] = field(default=None, repr=False, compare=False)
 
     def touch(self):
         with self._lock:
             self.last_activity = datetime.now()
             self.message_count += 1
-        self.persist()
+        self.persist_debounced()
 
     def is_expired(self) -> bool:
         elapsed = (datetime.now() - self.last_activity).total_seconds()
@@ -126,7 +128,7 @@ class UserSession:
             self.history.append(item)
             if len(self.history) > 100:
                 self.history = self.history[-100:]
-        self.persist()
+        self.persist_debounced()
 
     def start_running_reply(self, user_text: str):
         now = datetime.now().isoformat()
@@ -136,7 +138,7 @@ class UserSession:
             self.running_started_at = now
             self.running_updated_at = now
             self.stop_requested = False
-        self.persist()
+        self.persist_debounced()
 
     def update_running_reply(self, preview_text: Optional[str] = None):
         now = datetime.now().isoformat()
@@ -146,7 +148,7 @@ class UserSession:
             if preview_text is not None:
                 self.running_preview_text = preview_text
             self.running_updated_at = now
-        self.persist()
+        self.persist_debounced()
 
     def clear_running_reply(self):
         with self._lock:
@@ -203,8 +205,38 @@ class UserSession:
         
         在 session_id 变化时调用，确保重启后能恢复会话。
         """
+        self.flush_persistence()
+
+    def persist_debounced(self):
+        with self._lock:
+            if not self._persist_enabled:
+                return
+            timer = self._persist_timer
+            if timer is not None:
+                timer.cancel()
+            next_timer = threading.Timer(SESSION_PERSIST_DEBOUNCE_SECONDS, self._persist_now)
+            next_timer.daemon = True
+            self._persist_timer = next_timer
+            next_timer.start()
+
+    def flush_persistence(self):
+        timer = None
+        with self._lock:
+            if not self._persist_enabled:
+                return
+            timer = self._persist_timer
+            self._persist_timer = None
+        if timer is not None:
+            timer.cancel()
+        self._persist_now()
+
+    def _persist_now(self):
         if not self._persist_enabled:
             return
+        with self._lock:
+            if not self._persist_enabled:
+                return
+            self._persist_timer = None
         hook = self.persist_hook
         if hook is not None:
             hook(self)
@@ -219,8 +251,12 @@ class UserSession:
     def disable_persistence(self):
         """禁用后续持久化，用于 reset 后阻止陈旧会话对象回写状态。"""
         with self._lock:
+            timer = self._persist_timer
+            self._persist_timer = None
             self._persist_enabled = False
             self.persist_hook = None
+        if timer is not None:
+            timer.cancel()
 
     def clear_session_ids(self):
         """清除所有 session_id 并持久化"""

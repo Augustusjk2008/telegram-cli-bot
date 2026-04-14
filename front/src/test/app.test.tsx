@@ -207,6 +207,67 @@ test("keeps the waiting state after switching bots away and back", async () => {
   expect(await screen.findByText(/已等待 [1-9]\d* 秒/, {}, { timeout: 1500 })).toBeInTheDocument();
 }, 10000);
 
+test("chat screen cache evicts older bots after switching across many bots", async () => {
+  const user = userEvent.setup();
+  const bots = [
+    {
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\main",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "team2",
+      cliType: "claude",
+      status: "running",
+      workingDir: "C:\\workspace\\team2",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "team3",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\team3",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "team4",
+      cliType: "claude",
+      status: "running",
+      workingDir: "C:\\workspace\\team4",
+      lastActiveText: "运行中",
+    },
+  ];
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue(bots);
+  const getBotOverviewSpy = vi.spyOn(MockWebBotClient.prototype, "getBotOverview").mockImplementation(
+    async (botAlias: string) => ({
+      alias: botAlias,
+      cliType: botAlias === "team2" || botAlias === "team4" ? "claude" : "codex",
+      status: "running",
+      workingDir: `C:\\workspace\\${botAlias}`,
+      isProcessing: false,
+    }),
+  );
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  for (const alias of ["team2", "team3", "team4", "main"]) {
+    await user.click(screen.getByRole("button", { name: /main|team2|team3|team4/i }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(alias, "i") }));
+  }
+
+  const aliases = getBotOverviewSpy.mock.calls.map(([alias]) => alias);
+  expect(aliases.filter((alias) => alias === "main")).toHaveLength(2);
+  expect(aliases.filter((alias) => alias === "team2")).toHaveLength(1);
+  expect(aliases.filter((alias) => alias === "team3")).toHaveLength(1);
+  expect(aliases.filter((alias) => alias === "team4")).toHaveLength(1);
+});
+
 test("settings tab shows cli params and tunnel status", async () => {
   const user = userEvent.setup();
   render(<App />);

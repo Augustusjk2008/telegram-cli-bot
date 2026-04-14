@@ -60,6 +60,29 @@ def _make_key(bot_id: int, user_id: int) -> str:
     return f"{bot_id}:{user_id}"
 
 
+def _flush_live_session_if_available(bot_id: int, user_id: int):
+    """在直接读取持久化快照前，尽量刷新同一会话的待写状态。
+
+    `get_session()` 在持有 `sessions_lock` 时也会调用 `load_session()`，这里必须避免阻塞式重入。
+    因此只在能立即拿到锁时刷新；拿不到锁就直接读取磁盘快照。
+    """
+    try:
+        from bot.sessions import sessions, sessions_lock
+    except ImportError:
+        return
+
+    if not sessions_lock.acquire(blocking=False):
+        return
+
+    try:
+        session = sessions.get((bot_id, user_id))
+    finally:
+        sessions_lock.release()
+
+    if session is not None:
+        session.flush_persistence()
+
+
 def load_session(bot_id: int, user_id: int) -> Optional[dict]:
     """加载指定会话的 session 信息
     
@@ -67,6 +90,7 @@ def load_session(bot_id: int, user_id: int) -> Optional[dict]:
         dict: 包含 codex_session_id, claude_session_id
         None: 如果没有找到
     """
+    _flush_live_session_if_available(bot_id, user_id)
     data = load_session_ids()
     key = _make_key(bot_id, user_id)
     return data.get(key)

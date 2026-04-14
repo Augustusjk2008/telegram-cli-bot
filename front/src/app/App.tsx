@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
 import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
@@ -44,6 +44,7 @@ import "../styles/global.css";
 const TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
 const UNREAD_STORAGE_KEY = "web-unread-bots";
+const MAX_CACHED_CHAT_SCREENS = 3;
 const TerminalScreen = lazy(() =>
   import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
 );
@@ -127,11 +128,12 @@ function storeUnreadBots(items: string[]) {
 }
 
 function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
+  const unreadSet = new Set(unreadBots);
   return bots.map((bot) => {
     if (bot.status === "busy") {
       return bot;
     }
-    if (!unreadBots.includes(bot.alias)) {
+    if (!unreadSet.has(bot.alias)) {
       return bot;
     }
     return {
@@ -140,6 +142,18 @@ function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
       lastActiveText: "未读",
     };
   });
+}
+
+function updateMountedChatBots(prev: string[], currentBot: string | null) {
+  if (!currentBot) {
+    return prev;
+  }
+
+  const next = [...prev.filter((alias) => alias !== currentBot), currentBot].slice(-MAX_CACHED_CHAT_SCREENS);
+  if (next.length === prev.length && next.every((alias, index) => alias === prev[index])) {
+    return prev;
+  }
+  return next;
 }
 
 export function App() {
@@ -163,8 +177,14 @@ export function App() {
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
-  const displayBots = applyUnreadStatus(bots, unreadBots);
-  const currentBotSummary = displayBots.find((bot) => bot.alias === currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
+  const displayBots = useMemo(() => applyUnreadStatus(bots, unreadBots), [bots, unreadBots]);
+  const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
+  const currentBotSummary = useMemo(() => {
+    if (!currentBot) {
+      return null;
+    }
+    return botSummaryByAlias.get(currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
+  }, [botSummaryByAlias, bots, currentBot]);
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
@@ -350,7 +370,7 @@ export function App() {
     if (!currentBot) {
       return;
     }
-    setMountedChatBots((prev) => (prev.includes(currentBot) ? prev : [...prev, currentBot]));
+    setMountedChatBots((prev) => updateMountedChatBots(prev, currentBot));
   }, [currentBot]);
 
   useEffect(() => {
@@ -384,7 +404,7 @@ export function App() {
             <ChatScreen
               botAlias={alias}
               client={client}
-              botAvatarName={displayBots.find((bot) => bot.alias === alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
+              botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
               userAvatarName={userAvatarName}
               isVisible={alias === currentBot}
               isImmersive={alias === currentBot ? isChatImmersive : false}

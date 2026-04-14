@@ -6,6 +6,7 @@ import asyncio
 import json
 import struct
 import subprocess
+import time
 import zlib
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -19,7 +20,7 @@ from bot.assistant_docs import ManagedPromptSyncResult
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
-from bot.models import BotProfile
+from bot.models import BotProfile, UserSession
 from bot.session_store import save_session
 from bot.web.server import WebApiServer
 from bot.web.api_service import (
@@ -136,6 +137,22 @@ def test_overview_includes_running_reply_snapshot(web_manager: MultiBotManager):
     }
 
 
+def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBotManager):
+    real_get_session = api_service.get_session_for_alias
+    call_count = 0
+
+    def counted_get_session(manager, alias, user_id):
+      nonlocal call_count
+      call_count += 1
+      return real_get_session(manager, alias, user_id)
+
+    with patch("bot.web.api_service.get_session_for_alias", side_effect=counted_get_session):
+        overview = get_overview(web_manager, "main", 1001)
+
+    assert overview["bot"]["alias"] == "main"
+    assert call_count == 1
+
+
 def test_list_bots_includes_processing_state_for_current_user(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     with session._lock:
@@ -145,6 +162,29 @@ def test_list_bots_includes_processing_state_for_current_user(web_manager: Multi
 
     assert items[0]["alias"] == "main"
     assert items[0]["is_processing"] is True
+
+
+def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyPatch):
+    persisted_preview_texts: list[str] = []
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        working_dir="C:\\workspace",
+    )
+    session.persist_hook = lambda current: persisted_preview_texts.append(current.running_preview_text)
+    monkeypatch.setattr("bot.models.SESSION_PERSIST_DEBOUNCE_SECONDS", 0.01)
+
+    session.start_running_reply("hello")
+    session.update_running_reply("第一段")
+    session.update_running_reply("第二段")
+    time.sleep(0.04)
+
+    assert persisted_preview_texts == ["第二段"]
+
+    session.clear_running_reply()
+
+    assert persisted_preview_texts[-1] == ""
 
 
 def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: Path):
