@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+_ASSISTANT_REREAD_NOTICE = "AGENTS.md 和 CLAUDE.md 已更新，请重新读取。"
+
 
 def _trace_event(kind: str, **extra: Any) -> dict[str, Any]:
     summary = str(extra.get("summary") or "").strip()
@@ -66,8 +68,19 @@ def _append_assistant_text(assistant_messages: list[str], text: Any) -> None:
         assistant_messages.append(value)
 
 
+def _normalize_user_text(value: Any) -> str:
+    text = _stringify_value(value)
+    if not text:
+        return ""
+    if text.startswith(_ASSISTANT_REREAD_NOTICE):
+        remainder = text[len(_ASSISTANT_REREAD_NOTICE):].lstrip()
+        if remainder:
+            return remainder
+    return text
+
+
 def _assign_user_text(turn: dict[str, Any], text: Any) -> None:
-    value = _stringify_value(text)
+    value = _normalize_user_text(text)
     if not value:
         return
     current = _stringify_value(turn.get("user_text"))
@@ -145,7 +158,23 @@ def _extract_claude_user_text(item: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
-def _new_turn_state(user_text: str = "", created_at: str = "") -> dict[str, Any]:
+def _is_codex_instruction_message(text: Any) -> bool:
+    value = _stringify_value(text)
+    if not value:
+        return False
+    return (
+        value.startswith("# AGENTS.md instructions for ")
+        or value.startswith("<environment_context>")
+        or "<environment_context>" in value
+    )
+
+
+def _new_turn_state(
+    user_text: str = "",
+    created_at: str = "",
+    *,
+    has_turn_context: bool = False,
+) -> dict[str, Any]:
     return {
         "user_text": _stringify_value(user_text),
         "created_at": _stringify_value(created_at),
@@ -157,6 +186,7 @@ def _new_turn_state(user_text: str = "", created_at: str = "") -> dict[str, Any]
         "last_trace_summary": "",
         "last_trace_signature": None,
         "assistant_messages": [],
+        "has_turn_context": bool(has_turn_context),
     }
 
 
@@ -216,7 +246,8 @@ def _finalize_turn(
 
     assistant_messages = turn.get("assistant_messages") or []
     trace = [dict(item) for item in turn.get("trace") or []]
-    summary_text = assistant_messages[-1] if assistant_messages else ""
+    has_final_output = bool(assistant_messages)
+    summary_text = assistant_messages[-1] if has_final_output else ""
     if not summary_text:
         summary_text = _stringify_value(turn.get("last_trace_summary"))
 
@@ -229,7 +260,7 @@ def _finalize_turn(
         "user_text": _stringify_value(turn.get("user_text")),
         "meta": {
             "completion_state": "completed",
-            "summary_kind": "final" if summary_text else "partial_preview",
+            "summary_kind": "final" if has_final_output else "partial_preview",
             "trace_version": 1,
             "trace_count": int(turn.get("trace_count") or len(trace)),
             "tool_call_count": int(turn.get("tool_call_count") or 0),
@@ -254,13 +285,19 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
         if payload_type == "reasoning":
             return
         if payload_type == "message":
-            if _stringify_value(payload.get("role")) == "user":
+            payload_role = _stringify_value(payload.get("role")).lower()
+            if payload_role in {"developer", "system"}:
+                return
+            if payload_role == "user":
                 user_text = "\n".join(_extract_input_text_blocks(payload.get("content"))).strip()
+                if not turn.get("has_turn_context") and _is_codex_instruction_message(user_text):
+                    return
                 _assign_user_text(turn, user_text)
                 return
             for text in _extract_text_blocks(payload.get("content")):
-                _append_assistant_text(assistant_messages, text)
-                if payload_phase not in {"final", "final_answer"}:
+                if payload_phase in {"final", "final_answer"}:
+                    _append_assistant_text(assistant_messages, text)
+                else:
                     _append_trace_event(turn, _trace_event("commentary", raw_type="message", summary=text), include_trace=include_trace)
             return
         if payload_type == "function_call":
@@ -510,7 +547,11 @@ def load_native_transcript(
             if finalized is not None:
                 turns.append(finalized)
                 turn_index += 1
-            current_turn = _new_turn_state(_resolve_payload(item).get("content") or item.get("content"), timestamp)
+            current_turn = _new_turn_state(
+                _resolve_payload(item).get("content") or item.get("content"),
+                timestamp,
+                has_turn_context=True,
+            )
             continue
 
         if provider == "claude" and item_type == "user":

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from bot import app_settings
 from bot.config import BOT_ALIAS_RE, RESERVED_ALIASES
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
@@ -388,6 +389,87 @@ class TestManagerValidation:
 
         assert manager.managed_profiles["team2"].avatar_name == "kimi-teal.png"
         assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["avatar_name"] == "kimi-teal.png"
+
+    @pytest.mark.asyncio
+    async def test_main_bot_avatar_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        await manager.set_bot_avatar("main", "codex-slate.png")
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        assert restored.main_profile.avatar_name == "codex-slate.png"
+
+    @pytest.mark.asyncio
+    async def test_managed_bot_avatar_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({
+            "bots": [
+                {
+                    "alias": "team2",
+                    "token": "",
+                    "cli_type": "claude",
+                    "cli_path": "claude",
+                    "working_dir": str(temp_dir),
+                    "enabled": True,
+                    "bot_mode": "cli",
+                    "avatar_name": "bot-default.png",
+                }
+            ]
+        }), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        await manager.set_bot_avatar("team2", "kimi-teal.png")
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        assert restored.managed_profiles["team2"].avatar_name == "kimi-teal.png"
+
+    @pytest.mark.asyncio
+    async def test_removed_bot_does_not_reuse_stale_persisted_avatar(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({
+            "bots": [
+                {
+                    "alias": "team2",
+                    "token": "",
+                    "cli_type": "claude",
+                    "cli_path": "claude",
+                    "working_dir": str(temp_dir),
+                    "enabled": True,
+                    "bot_mode": "cli",
+                    "avatar_name": "bot-default.png",
+                }
+            ]
+        }), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        await manager.set_bot_avatar("team2", "kimi-teal.png")
+
+        with patch.object(manager, "_stop_application", AsyncMock(return_value=None)), \
+             patch("bot.manager.resolve_cli_executable", return_value="claude"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            await manager.remove_bot("team2")
+            await manager.add_bot(
+                alias="team2",
+                token="",
+                cli_type="claude",
+                cli_path="claude",
+                working_dir=str(temp_dir),
+                bot_mode="cli",
+            )
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        assert restored.managed_profiles["team2"].avatar_name == "bot-default.png"
 
     @pytest.mark.asyncio
     async def test_start_profile_skips_telegram_when_token_missing(self, temp_dir: Path):

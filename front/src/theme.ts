@@ -5,7 +5,6 @@ export type ChatBodyLineHeightName = "tight" | "normal" | "relaxed";
 export type ChatBodyParagraphSpacingName = "tight" | "normal" | "relaxed";
 
 export const APP_NAME = "🦞Safe Claw";
-export const APP_SLOGAN = "【志在空间 威震长空】";
 export const APP_YEAR = "2026";
 export const UI_THEME_STORAGE_KEY = "web-ui-theme";
 export const CHAT_BODY_FONT_FAMILY_STORAGE_KEY = "web-chat-body-font-family";

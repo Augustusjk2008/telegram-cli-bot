@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from bot.cli import normalize_cli_type
@@ -22,6 +23,61 @@ def _overlay_key(overlay: dict[str, Any]) -> tuple[str, str, str]:
         str(overlay.get("native_session_id") or ""),
         str(overlay.get("user_text") or ""),
     )
+
+
+def _parse_sort_timestamp(value: Any) -> datetime:
+    text = str(value or "").strip()
+    if not text:
+        return datetime.min.replace(tzinfo=UTC)
+
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+
+    if parsed.tzinfo is None:
+        local_tz = datetime.now().astimezone().tzinfo or UTC
+        parsed = parsed.replace(tzinfo=local_tz)
+    return parsed.astimezone(UTC)
+
+
+def _turn_sort_key(item: dict[str, Any]) -> tuple[datetime, datetime, str]:
+    return (
+        _parse_sort_timestamp(item.get("created_at")),
+        _parse_sort_timestamp(item.get("updated_at")),
+        str(item.get("id") or ""),
+    )
+
+
+def _drop_active_native_turn(provider: str, session, native_turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not native_turns:
+        return native_turns
+
+    running_user_text = str(getattr(session, "running_user_text", "") or "").strip()
+    running_started_at = str(getattr(session, "running_started_at", "") or "").strip()
+    if not running_user_text or not running_started_at:
+        return native_turns
+
+    session_key = (provider, _get_native_session_id(provider, session))
+    pruned_turns = list(native_turns)
+
+    while pruned_turns:
+        last_turn = pruned_turns[-1]
+        if _turn_key(last_turn)[:2] != session_key:
+            break
+
+        summary_kind = str(last_turn.get("meta", {}).get("summary_kind") or "")
+        if summary_kind == "final":
+            break
+
+        last_user_text = str(last_turn.get("user_text") or "").strip()
+        if last_user_text and last_user_text != running_user_text:
+            break
+
+        pruned_turns.pop()
+
+    return pruned_turns
 
 
 def _trace_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
@@ -119,7 +175,7 @@ def merge_native_turns_with_overlay(
         native_trace = existing.get("meta", {}).get("trace") or []
         merged[target_index] = _overlay_to_turn(overlay, native_trace=native_trace, include_trace=include_trace)
 
-    merged.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("updated_at") or ""), str(item.get("id") or "")))
+    merged.sort(key=_turn_sort_key)
     if limit is None:
         return merged
     return merged[-max(1, limit):]
@@ -175,6 +231,8 @@ def build_web_chat_history(
         ref = locate_claude_transcript(session.claude_session_id, cwd_hint=session.working_dir)
         if ref is not None:
             native_turns = load_native_transcript("claude", ref.path, session_id=ref.session_id, include_trace=include_trace)
+
+    native_turns = _drop_active_native_turn(provider, session, native_turns)
 
     merged_turns = merge_native_turns_with_overlay(
         native_turns,

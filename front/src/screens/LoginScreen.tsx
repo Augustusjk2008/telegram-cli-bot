@@ -1,10 +1,22 @@
-import { APP_NAME, APP_SLOGAN, APP_YEAR } from "../theme";
+import { APP_NAME, APP_YEAR } from "../theme";
 
 type Props = {
   onLogin?: (token: string) => Promise<void> | void;
   isLoading?: boolean;
   error?: string;
 };
+
+function LoginRocketBadge() {
+  return (
+    <span
+      role="img"
+      aria-label="火箭徽标"
+      className="text-[1.9rem] leading-none"
+    >
+      🚀
+    </span>
+  );
+}
 
 export function LoginScreen({ onLogin, isLoading, error }: Props) {
   return (
@@ -33,7 +45,7 @@ export function LoginScreen({ onLogin, isLoading, error }: Props) {
         <div className="w-full space-y-5">
           <section className="rounded-[30px] border border-[var(--border)] bg-[var(--surface-overlay)] px-5 py-5 text-center shadow-[var(--shadow-card)] backdrop-blur sm:px-7">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-2xl shadow-[0_0_28px_var(--accent-soft-strong)]">
-              🦞
+              <LoginRocketBadge />
             </div>
             <div className="mt-4 space-y-2">
               <div className="text-[11px] tracking-[0.32em] text-[var(--accent-strong)]">SECURE ACCESS CONSOLE</div>
@@ -82,17 +94,6 @@ export function LoginScreen({ onLogin, isLoading, error }: Props) {
                 </button>
               </form>
             </div>
-          </section>
-
-          <section className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
-            {[APP_SLOGAN, "安全边界", "自主可控", "过程留痕"].map((item) => (
-              <div
-                key={item}
-                className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-3 py-3 text-[var(--muted)] shadow-[var(--shadow-card)] backdrop-blur"
-              >
-                {item}
-              </div>
-            ))}
           </section>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import type { ChatTraceEvent } from "../services/types";
+import { CHAT_TRACE_PREVIEW_CONFIG } from "../utils/chatTracePreview";
 
 type Props = {
   event: ChatTraceEvent;
@@ -8,7 +9,8 @@ type Props = {
 };
 
 const EMPTY_RENDERED_VALUES = new Set(["", "{}", "[]", "\"\"", "null", "undefined"]);
-const MAX_PREVIEW_LINES = 5;
+const MAX_PREVIEW_LINES = CHAT_TRACE_PREVIEW_CONFIG.maxLines;
+const MAX_PREVIEW_CHARS = CHAT_TRACE_PREVIEW_CONFIG.maxChars;
 
 function isMeaningfulRenderedValue(value: string) {
   return !EMPTY_RENDERED_VALUES.has(value.trim());
@@ -64,15 +66,26 @@ function resolveSummary(event: ChatTraceEvent, payloadText = "") {
   return event.kind === "tool_call" ? "无参数" : "已返回，无可显示内容";
 }
 
-function collapseText(value: string, maxLines = MAX_PREVIEW_LINES) {
+function collapseText(value: string, maxLines = MAX_PREVIEW_LINES, maxChars = MAX_PREVIEW_CHARS) {
   const lines = value.split(/\r?\n/);
-  if (lines.length <= maxLines) {
+  let truncated = false;
+  let preview = value;
+
+  if (lines.length > maxLines) {
+    preview = lines.slice(0, maxLines).join("\n");
+    truncated = true;
+  }
+
+  if (preview.length > maxChars) {
+    preview = preview.slice(0, maxChars);
+    truncated = true;
+  }
+
+  if (!truncated) {
     return { text: value, truncated: false };
   }
-  return {
-    text: `${lines.slice(0, maxLines).join("\n")}\n...`,
-    truncated: true,
-  };
+
+  return { text: `${preview}...`, truncated: true };
 }
 
 export function ChatToolTraceCard({ event, index }: Props) {

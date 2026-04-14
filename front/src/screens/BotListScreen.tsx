@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { AvatarPicker } from "../components/AvatarPicker";
-import { ChatAvatar } from "../components/ChatAvatar";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { AvatarAsset, BotSummary, CliType, CreateBotInput } from "../services/types";
@@ -307,88 +306,85 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
                     : "space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4"
                 }
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={36} />
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-semibold">{bot.alias}</h3>
-                        {isMain ? (
-                          <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
-                        ) : null}
-                        <StatusPill status={bot.status} />
-                      </div>
-                      <p className="text-sm text-[var(--muted)]">CLI: {bot.cliType}{bot.cliPath ? ` / ${bot.cliPath}` : ""}</p>
-                      <p className="break-all text-sm text-[var(--muted)]">目录: {bot.workingDir}</p>
-                      <p className="text-sm text-[var(--muted)]">状态: {bot.lastActiveText}</p>
+                <div className="flex items-start gap-3">
+                  <AvatarPicker
+                    assets={avatarAssets}
+                    selectedName={bot.avatarName || "bot-default.png"}
+                    previewAlt={`${bot.alias} 头像`}
+                    selectLabel={`${bot.alias} 头像`}
+                    disabled={savingAction !== ""}
+                    onSelect={(avatarName) => {
+                      void updateExistingBotAvatar(bot, avatarName);
+                    }}
+                  />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold">{bot.alias}</h3>
+                      {isMain ? (
+                        <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
+                      ) : null}
+                      <StatusPill status={bot.status} />
                     </div>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
-                    <AvatarPicker
-                      assets={avatarAssets}
-                      selectedName={bot.avatarName || "bot-default.png"}
-                      previewAlt={`${bot.alias} 头像预览`}
-                      selectLabel={`${bot.alias} 头像`}
-                      disabled={savingAction !== ""}
-                      onSelect={(avatarName) => {
-                        void updateExistingBotAvatar(bot, avatarName);
-                      }}
-                    />
-                    <button
-                      type="button"
-                      aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
-                      onClick={() => {
-                        if (isOffline) {
-                          return;
-                        }
-                        onSelect(bot.alias);
-                      }}
-                      disabled={isOffline}
-                      className={
-                        isOffline
-                          ? "cursor-not-allowed rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 opacity-100"
-                          : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                      }
-                    >
-                      {isOffline ? "不可进入" : "进入"}
-                    </button>
                   </div>
                 </div>
 
-                {!isMain ? (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      aria-label={bot.status === "offline" ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
-                      onClick={() => void toggleBot(bot)}
-                      disabled={savingAction !== ""}
-                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                    >
-                      {savingAction === `${bot.alias}:toggle` ? "处理中..." : bot.status === "offline" ? "启动" : "停止"}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`重命名 ${bot.alias}`}
-                      onClick={() => {
-                        setRenamingAlias((prev) => prev === bot.alias ? "" : bot.alias);
-                        setRenameDrafts((prev) => ({ ...prev, [bot.alias]: bot.alias }));
-                      }}
-                      disabled={savingAction !== ""}
-                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                    >
-                      改名
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`删除 ${bot.alias}`}
-                      onClick={() => void deleteBot(bot)}
-                      disabled={savingAction !== ""}
-                      className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
-                    >
-                      删除
-                    </button>
-                  </div>
-                ) : null}
+                <div
+                  data-testid={`bot-actions-${bot.alias}`}
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <button
+                    type="button"
+                    aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
+                    onClick={() => {
+                      if (isOffline) {
+                        return;
+                      }
+                      onSelect(bot.alias);
+                    }}
+                    disabled={isOffline}
+                    className={
+                      isOffline
+                        ? "cursor-not-allowed rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 opacity-100"
+                        : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    }
+                  >
+                    {isOffline ? "不可进入" : "进入"}
+                  </button>
+                  {!isMain ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label={bot.status === "offline" ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
+                        onClick={() => void toggleBot(bot)}
+                        disabled={savingAction !== ""}
+                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      >
+                        {savingAction === `${bot.alias}:toggle` ? "处理中..." : bot.status === "offline" ? "启动" : "停止"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`重命名 ${bot.alias}`}
+                        onClick={() => {
+                          setRenamingAlias((prev) => prev === bot.alias ? "" : bot.alias);
+                          setRenameDrafts((prev) => ({ ...prev, [bot.alias]: bot.alias }));
+                        }}
+                        disabled={savingAction !== ""}
+                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      >
+                        改名
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`删除 ${bot.alias}`}
+                        onClick={() => void deleteBot(bot)}
+                        disabled={savingAction !== ""}
+                        className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        删除
+                      </button>
+                    </>
+                  ) : null}
+                </div>
 
                 {isRenaming ? (
                   <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">

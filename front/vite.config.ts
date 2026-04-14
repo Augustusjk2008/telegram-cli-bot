@@ -5,7 +5,15 @@ import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
+  const repoRoot = path.resolve(__dirname, '..');
+  const frontRoot = path.resolve(__dirname, '.');
+  const env = {
+    ...loadEnv(mode, repoRoot, ''),
+    ...loadEnv(mode, frontRoot, ''),
+  };
+  const publicEnv = Object.fromEntries(
+    Object.entries(env).filter(([key]) => key.startsWith('VITE_')),
+  );
   return {
     plugins: [react(), tailwindcss()],
     test: {
@@ -16,6 +24,7 @@ export default defineConfig(({mode}) => {
     },
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      __PUBLIC_ENV__: JSON.stringify(publicEnv),
     },
     resolve: {
       alias: {

@@ -24,6 +24,7 @@ except ImportError:
 from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
+from bot import app_settings
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.cli import resolve_cli_executable, validate_cli_type
@@ -97,6 +98,7 @@ class MultiBotManager:
 
         self._activate_manager_notifications()
         self._load_profiles()
+        self._apply_persisted_avatar_names()
 
     def _activate_manager_notifications(self) -> None:
         MultiBotManager._active_notification_manager = self
@@ -526,6 +528,16 @@ class MultiBotManager:
             encoding="utf-8",
         )
 
+    def _apply_persisted_avatar_names(self):
+        main_avatar_name = app_settings.get_bot_avatar_name(self.main_profile.alias)
+        if main_avatar_name:
+            self.main_profile.avatar_name = main_avatar_name
+
+        for alias, profile in self.managed_profiles.items():
+            avatar_name = app_settings.get_bot_avatar_name(alias)
+            if avatar_name:
+                profile.avatar_name = avatar_name
+
     def get_profile(self, alias: str) -> BotProfile:
         if alias == self.main_profile.alias:
             return self.main_profile
@@ -810,6 +822,7 @@ class MultiBotManager:
 
             await self._start_profile(profile, is_main=False)
             self.managed_profiles[alias] = profile
+            app_settings.update_bot_avatar_name(alias, profile.avatar_name)
             self._save_profiles()
             return profile
 
@@ -820,7 +833,9 @@ class MultiBotManager:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
             profile.avatar_name = avatar_name
-            self._save_profiles()
+            app_settings.update_bot_avatar_name(alias, avatar_name)
+            if alias != self.main_profile.alias:
+                self._save_profiles()
 
     async def remove_bot(self, alias: str):
         alias = alias.strip().lower()
@@ -831,6 +846,7 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{alias}`")
             await self._stop_application(alias)
             del self.managed_profiles[alias]
+            app_settings.remove_bot_avatar_name(alias)
             self._save_profiles()
 
     async def start_bot(self, alias: str):
@@ -907,6 +923,7 @@ class MultiBotManager:
                 self._polling_restart_locks[new_alias] = lock
 
             update_bot_alias(alias, new_alias)
+            app_settings.rename_bot_avatar_name(alias, new_alias)
             self._save_profiles()
             return profile
 

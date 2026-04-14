@@ -51,7 +51,11 @@ afterEach(() => {
 test("renders standalone login screen without backend", () => {
   render(<App />);
   expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
-  expect(screen.getByText("【志在空间 威震长空】")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "火箭徽标" })).toBeInTheDocument();
+  expect(screen.queryByText("【志在空间 威震长空】")).not.toBeInTheDocument();
+  expect(screen.queryByText("安全边界")).not.toBeInTheDocument();
+  expect(screen.queryByText("自主可控")).not.toBeInTheDocument();
+  expect(screen.queryByText("过程留痕")).not.toBeInTheDocument();
   expect(screen.getByText("2026")).toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
   expect(document.title).toBe("🦞Safe Claw");
@@ -81,6 +85,7 @@ test("keeps rendering the login shell when storage reads and writes fail", () =>
   render(<App />);
 
   expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "火箭徽标" })).toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
   expect(document.title).toBe("🦞Safe Claw");
   expect(document.documentElement.dataset.theme).toBe("deep-space");
@@ -714,6 +719,13 @@ test("bot manager uses compact avatar dropdowns and saves avatar choices immedia
   const teamSection = screen.getByRole("heading", { name: "team2" }).closest("section");
   expect(teamSection).not.toBeNull();
   const teamScope = within(teamSection as HTMLElement);
+  expect(teamScope.queryByText(/^CLI:/)).not.toBeInTheDocument();
+  expect(teamScope.queryByText(/^目录:/)).not.toBeInTheDocument();
+  const actionRow = teamScope.getByTestId("bot-actions-team2");
+  expect(within(actionRow).getByRole("button", { name: "进入 team2" })).toBeInTheDocument();
+  expect(within(actionRow).getByRole("button", { name: "停止 team2" })).toBeInTheDocument();
+  expect(within(actionRow).getByRole("button", { name: "重命名 team2" })).toBeInTheDocument();
+  expect(within(actionRow).getByRole("button", { name: "删除 team2" })).toBeInTheDocument();
   await user.click(teamScope.getByRole("button", { name: "team2 头像" }));
   await user.click(teamScope.getByRole("button", { name: "选择头像 codex-slate.png" }));
 

@@ -410,6 +410,51 @@ test("collapses long tool content to five lines until expanded", async () => {
   ).toBeInTheDocument();
 });
 
+test("collapses long single-line tool content after two hundred characters until expanded", async () => {
+  const user = userEvent.setup();
+  const longOutput = `开始-${"甲".repeat(210)}-尾巴`;
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      _onChunk: (chunk: string) => void,
+      _onStatus,
+      onTrace,
+    ) => {
+      onTrace?.({
+        kind: "tool_result",
+        callId: "call_long_single_line",
+        summary: longOutput,
+        payload: {
+          output: longOutput,
+        },
+      } as never);
+      return {
+        id: "assistant-long-single-line-tool",
+        role: "assistant",
+        text: "单行输出完成。",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      } as ChatMessage;
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "查看单行长输出");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("单行输出完成。")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+  expect(screen.queryByText("尾巴")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "展开完整内容" }));
+
+  expect(screen.getByText((content) => content.includes("开始-") && content.includes("尾巴"))).toBeInTheDocument();
+});
+
 test("lazy-loads trace details only after expanding a history message and keeps event order", async () => {
   const user = userEvent.setup();
   const getMessageTrace = vi.fn(async () => ({
