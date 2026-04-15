@@ -50,7 +50,7 @@ Linux：
 
 如果目录里还没有 `.env`，Windows 的 `start.bat` / `start.ps1` 会先自动运行 `install.bat` 生成配置，再继续启动。
 
-默认 Web 地址是 `http://127.0.0.1:8765`，登录口令使用 `.env` 里的 `WEB_API_TOKEN`。
+默认 Web 绑定地址是 `0.0.0.0:8765`；本机访问可使用 `http://127.0.0.1:8765`，登录口令使用 `.env` 里的 `WEB_API_TOKEN`。
 
 如果 `.env` 里配置的 `WEB_PORT` 已被占用，启动时会自动尝试 `+1` 直到找到可用端口；控制台、健康检查接口和 Cloudflare quick tunnel 都会同步使用这个实际端口。
 
@@ -83,7 +83,7 @@ CLI_TYPE=codex
 CLI_PATH=codex
 WORKING_DIR=C:\Users\YourName\project
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 ```

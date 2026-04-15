@@ -66,7 +66,7 @@ NGROK_DIR = ""
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "").strip()  # 代理商 API 地址
 WEB_ENABLED = os.environ.get("WEB_ENABLED", "false").lower() == "true"
-WEB_HOST = _get_project_config("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+WEB_HOST = _get_project_config("WEB_HOST", "0.0.0.0").strip() or "0.0.0.0"
 WEB_PORT = int(_get_project_config("WEB_PORT", "8765"))
 WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip()
 WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()

@@ -175,6 +175,12 @@ try {
     Write-Info ("启动目录: {0}" -f $scriptDir)
     Write-Info ("启动模式: {0}" -f $Mode)
 
+    & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.env_migration", "--env-path", $envPath))
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "迁移旧版 .env 配置失败。"
+        exit $LASTEXITCODE
+    }
+
     & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"

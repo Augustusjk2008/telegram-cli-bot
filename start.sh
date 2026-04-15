@@ -49,6 +49,11 @@ else
   exit 127
 fi
 
+if ! "$PYTHON_BIN" -m bot.env_migration --env-path "$SCRIPT_DIR/.env"; then
+  echo "[错误] 迁移旧版 .env 配置失败。" >&2
+  exit 1
+fi
+
 "$PYTHON_BIN" -m bot.updater apply-pending --repo-root "$SCRIPT_DIR"
 show_tunnel_hint
 

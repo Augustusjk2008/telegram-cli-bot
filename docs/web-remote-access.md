@@ -45,7 +45,7 @@ Cloudflare Quick Tunnel 只保留为应急/调试入口。
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 
@@ -59,13 +59,13 @@ WEB_TUNNEL_CLOUDFLARED_PATH=
 
 - `WEB_TUNNEL_MODE=disabled` 表示应用不再自己启动 `cloudflared`
 - `WEB_PUBLIC_URL` 不是必须，但建议填写，这样 Web 设置页能直接显示你的 Tailscale 地址
-- `WEB_HOST` 保持 `127.0.0.1` 即可，不需要改成 `0.0.0.0`
+- `WEB_HOST` 保持 `0.0.0.0` 即可，这也是当前安装器默认值
 
 ### 2.2 Cloudflare Quick Tunnel 方案
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 
@@ -118,7 +118,7 @@ Windows PowerShell 也可以直接复制文件。
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=改成你自己的网页登录口令
 ```
@@ -234,7 +234,7 @@ tailscale status
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 
@@ -384,7 +384,7 @@ Windows：
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 
@@ -398,7 +398,7 @@ Linux：
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 
@@ -508,7 +508,7 @@ WEB_TUNNEL_CLOUDFLARED_PATH=/path/to/cloudflared
 
 ```env
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 

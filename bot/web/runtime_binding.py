@@ -20,7 +20,7 @@ class RuntimeWebBind:
 
 
 def _normalize_host(host: str) -> str:
-    normalized = str(host or "").strip() or "127.0.0.1"
+    normalized = str(host or "").strip() or "0.0.0.0"
     if normalized.startswith("[") and normalized.endswith("]"):
         return normalized[1:-1]
     return normalized
@@ -51,6 +51,7 @@ def _can_bind_host_port(host: str, port: int) -> bool:
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
         sock.bind(sockaddr)
+        sock.listen(1)
         return True
     except OSError as exc:
         if _is_port_in_use_error(exc):
@@ -60,13 +61,20 @@ def _can_bind_host_port(host: str, port: int) -> bool:
         sock.close()
 
 
+def _iter_probe_hosts(host: str) -> tuple[str, ...]:
+    normalized_host = _normalize_host(host)
+    if normalized_host in {"0.0.0.0", "127.0.0.1"}:
+        return ("0.0.0.0", "127.0.0.1")
+    return (normalized_host,)
+
+
 def resolve_runtime_web_bind(host: str, port: int) -> RuntimeWebBind:
     normalized_host = _normalize_host(host)
     configured_port = _validate_port(port)
     candidate_port = configured_port
 
     while candidate_port <= _MAX_TCP_PORT:
-        if _can_bind_host_port(normalized_host, candidate_port):
+        if all(_can_bind_host_port(probe_host, candidate_port) for probe_host in _iter_probe_hosts(normalized_host)):
             return RuntimeWebBind(
                 host=normalized_host,
                 configured_port=configured_port,

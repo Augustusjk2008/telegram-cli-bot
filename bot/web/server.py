@@ -249,7 +249,7 @@ class WebApiServer:
         tunnel_service: TunnelService | None = None,
     ):
         self.manager = manager
-        self._host = str(host or WEB_HOST or "").strip() or "127.0.0.1"
+        self._host = str(host or WEB_HOST or "").strip() or "0.0.0.0"
         self._port = int(port if port is not None else WEB_PORT)
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -373,7 +373,7 @@ class WebApiServer:
         qr.add_data(public_url)
         qr.make(fit=True)
         matrix = qr.get_matrix()
-        return "\n".join("".join("##" if cell else "  " for cell in row) for row in matrix)
+        return "\n".join("".join("██" if cell else "  " for cell in row) for row in matrix)
 
     def _print_public_url_qr(self, public_url: str) -> bool:
         value = str(public_url or "").strip()

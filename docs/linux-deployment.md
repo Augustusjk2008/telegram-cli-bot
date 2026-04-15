@@ -57,7 +57,7 @@ WORKING_DIR=/srv/telegram-cli-bridge/project
 
 TELEGRAM_ENABLED=true
 WEB_ENABLED=true
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 
