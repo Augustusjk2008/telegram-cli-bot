@@ -1,4 +1,4 @@
-export type CliType = "kimi" | "claude" | "codex";
+export type CliType = "claude" | "codex";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 
 export type BotSummary = {
@@ -136,7 +136,6 @@ export type CliParamsPayload = {
 
 export type CreateBotInput = {
   alias: string;
-  token: string;
   botMode: "cli" | "assistant";
   cliType: CliType;
   cliPath: string;
@@ -202,4 +201,19 @@ export type GitActionResult = {
 
 export type GitProxySettings = {
   port: string;
+};
+
+export type AppUpdateStatus = {
+  currentVersion: string;
+  updateEnabled: boolean;
+  updateChannel: "release";
+  lastCheckedAt: string;
+  latestVersion: string;
+  latestReleaseUrl: string;
+  latestNotes: string;
+  pendingUpdateVersion: string;
+  pendingUpdatePath: string;
+  pendingUpdateNotes: string;
+  pendingUpdatePlatform: string;
+  lastError: string;
 };

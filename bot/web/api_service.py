@@ -52,14 +52,13 @@ from bot.cli import (
     should_mark_claude_session_initialized,
     should_reset_claude_session,
     should_reset_codex_session,
-    should_reset_kimi_session,
 )
 from bot.config import CLI_EXEC_TIMEOUT
-from bot.handlers.admin import execute_script, list_available_scripts, stream_execute_script
-from bot.handlers.shell import strip_ansi_escape
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
+from bot.platform.output import strip_ansi_escape
+from bot.platform.scripts import execute_script, list_available_scripts, stream_execute_script
 from bot.sessions import (
     align_session_paths,
     get_or_create_session,
@@ -103,7 +102,6 @@ class CliAttemptState:
     cli_session_id: Optional[str]
     resume_session: bool
     codex_session_id: Optional[str] = None
-    new_kimi_session_id_created: bool = False
 
 
 def _raise(status: int, code: str, message: str):
@@ -346,7 +344,6 @@ def _get_browser_directory(session: UserSession) -> str:
 def _build_session_ids(session: UserSession) -> dict[str, Any]:
     return {
         "codex_session_id": session.codex_session_id,
-        "kimi_session_id": session.kimi_session_id,
         "claude_session_id": session.claude_session_id,
         "claude_session_initialized": session.claude_session_initialized,
     }
@@ -397,8 +394,15 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
     return "configured" if profile.enabled else "stopped"
 
 
-def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[int] = None) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
+def build_bot_summary(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: Optional[int] = None,
+    *,
+    profile: Optional[BotProfile] = None,
+    session: Optional[UserSession] = None,
+) -> dict[str, Any]:
+    profile = profile or get_profile_or_raise(manager, alias)
     app = manager.applications.get(alias)
 
     # 优先使用当前用户 session 的工作目录（如果用户已登录）
@@ -406,12 +410,12 @@ def build_bot_summary(manager: MultiBotManager, alias: str, user_id: Optional[in
     is_processing = False
     if user_id is not None:
         try:
-            session = get_session_for_alias(manager, alias, user_id)
-            if session and session.working_dir:
-                working_dir = session.working_dir
-            if session:
-                with session._lock:
-                    is_processing = session.is_processing
+            current_session = session or get_session_for_alias(manager, alias, user_id)
+            if current_session and current_session.working_dir:
+                working_dir = current_session.working_dir
+            if current_session:
+                with current_session._lock:
+                    is_processing = current_session.is_processing
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
@@ -441,7 +445,7 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     return {
-        "bot": build_bot_summary(manager, alias, user_id),
+        "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
     }
 
@@ -756,8 +760,6 @@ def _has_native_session(session: UserSession, cli_type: str) -> bool:
             return bool(session.codex_session_id)
         if cli_type == "claude":
             return bool(session.claude_session_initialized)
-        if cli_type == "kimi":
-            return bool(session.kimi_session_id)
     return False
 
 
@@ -824,16 +826,6 @@ def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemp
                 resume_session=bool(session.codex_session_id),
                 codex_session_id=session.codex_session_id,
             )
-        if cli_type == "kimi":
-            new_session_created = False
-            if not session.kimi_session_id:
-                session.kimi_session_id = f"kimi-{uuid.uuid4().hex}"
-                new_session_created = True
-            return CliAttemptState(
-                cli_session_id=session.kimi_session_id,
-                resume_session=False,
-                new_kimi_session_id_created=new_session_created,
-            )
         if cli_type == "claude":
             if not session.claude_session_id:
                 session.claude_session_id = str(uuid.uuid4())
@@ -851,11 +843,6 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
             if session.codex_session_id is None:
                 return False
             session.codex_session_id = None
-            return True
-        if cli_type == "kimi":
-            if session.kimi_session_id is None:
-                return False
-            session.kimi_session_id = None
             return True
         if cli_type == "claude":
             changed = session.claude_session_id is not None or session.claude_session_initialized
@@ -1496,14 +1483,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            elif cli_type == "kimi":
-                with session._lock:
-                    if not timed_out and should_reset_kimi_session(response, returncode):
-                        if session.kimi_session_id is not None:
-                            session.kimi_session_id = None
-                            session_id_changed = True
-                    elif not timed_out and attempt.new_kimi_session_id_created and session.kimi_session_id is not None:
-                        session_id_changed = True
 
             if session_id_changed:
                 session.persist()
@@ -1707,14 +1686,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            elif cli_type == "kimi":
-                with session._lock:
-                    if not timed_out and should_reset_kimi_session(response, returncode):
-                        if session.kimi_session_id is not None:
-                            session.kimi_session_id = None
-                            session_id_changed = True
-                    elif not timed_out and attempt.new_kimi_session_id_created and session.kimi_session_id is not None:
-                        session_id_changed = True
 
             if session_id_changed:
                 session.persist()
@@ -1982,23 +1953,23 @@ async def stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]
 async def add_managed_bot(
     manager: MultiBotManager,
     alias: str,
-    token: str,
     bot_mode: str,
     cli_type: Optional[str],
     cli_path: Optional[str],
     working_dir: Optional[str],
     avatar_name: Optional[str] = None,
+    token: str = "",
 ) -> dict[str, Any]:
     resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=bool(str(avatar_name or "").strip()))
     try:
         profile = await manager.add_bot(
-            alias,
-            token,
-            cli_type,
-            cli_path,
-            working_dir,
-            bot_mode,
-            resolved_avatar_name,
+            alias=alias,
+            token=token,
+            cli_type=cli_type,
+            cli_path=cli_path,
+            working_dir=working_dir,
+            bot_mode=bot_mode,
+            avatar_name=resolved_avatar_name,
         )
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))

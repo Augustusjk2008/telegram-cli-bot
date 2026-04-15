@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, ListTree, LoaderCircle } from "lucide-react";
 import type { ChatTraceEvent } from "../services/types";
 import { ChatToolTraceCard } from "./ChatToolTraceCard";
@@ -30,7 +30,7 @@ function describeProcessEvent(event: ChatTraceEvent) {
   return "事件";
 }
 
-export function ChatTracePanel({
+function ChatTracePanelInner({
   messageId,
   trace,
   traceCount,
@@ -161,3 +161,5 @@ export function ChatTracePanel({
     </section>
   );
 }
+
+export const ChatTracePanel = memo(ChatTracePanelInner);

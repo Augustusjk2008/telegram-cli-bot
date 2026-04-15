@@ -13,19 +13,6 @@ logger = logging.getLogger(__name__)
 
 # ============ 各 CLI 的默认参数配置 ============
 
-DEFAULT_KIMI_PARAMS = {
-    # 基础参数
-    "quiet": True,           # --quiet: 静默模式
-    "yolo": True,            # -y: 自动确认
-    "thinking": True,        # --thinking: 显示思考过程
-    # 可选参数
-    "model": None,           # -m: 模型选择 (如 "kimi-k2")
-    "temperature": None,     # --temperature: 温度参数
-    "max_tokens": None,      # --max-tokens: 最大token数
-    # 高级参数 (通过 extra_args 传递)
-    "extra_args": [],        # 额外参数列表
-}
-
 DEFAULT_CLAUDE_PARAMS = {
     # 基础参数
     "yolo": True,                    # --dangerously-skip-permissions
@@ -53,7 +40,6 @@ DEFAULT_CODEX_PARAMS = {
 
 # CLI 类型到默认参数的映射
 DEFAULT_PARAMS_MAP = {
-    "kimi": DEFAULT_KIMI_PARAMS,
     "claude": DEFAULT_CLAUDE_PARAMS,
     "codex": DEFAULT_CODEX_PARAMS,
 }
@@ -62,15 +48,6 @@ DEFAULT_PARAMS_MAP = {
 SUPPORTED_CLI_TYPES = set(DEFAULT_PARAMS_MAP.keys())
 
 PARAM_SCHEMA_MAP = {
-    "kimi": {
-        "quiet": {"type": "boolean", "description": "静默模式"},
-        "yolo": {"type": "boolean", "description": "自动确认"},
-        "thinking": {"type": "boolean", "description": "显示思考过程"},
-        "model": {"type": "string", "description": "模型选择", "nullable": True},
-        "temperature": {"type": "number", "description": "温度参数", "nullable": True},
-        "max_tokens": {"type": "number", "description": "最大 token 数", "nullable": True, "integer": True},
-        "extra_args": {"type": "string_list", "description": "额外参数"},
-    },
     "claude": {
         "yolo": {"type": "boolean", "description": "跳过权限确认"},
         "effort": {
@@ -103,14 +80,12 @@ PARAM_SCHEMA_MAP = {
 class CliParamsConfig:
     """CLI 参数配置类"""
     
-    kimi: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_KIMI_PARAMS))
     claude: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CLAUDE_PARAMS))
     codex: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CODEX_PARAMS))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
         return {
-            "kimi": copy.deepcopy(self.kimi),
             "claude": copy.deepcopy(self.claude),
             "codex": copy.deepcopy(self.codex),
         }
@@ -153,7 +128,6 @@ class CliParamsConfig:
         """重置为默认配置"""
         if cli_type is None:
             # 重置所有
-            self.kimi = copy.deepcopy(DEFAULT_KIMI_PARAMS)
             self.claude = copy.deepcopy(DEFAULT_CLAUDE_PARAMS)
             self.codex = copy.deepcopy(DEFAULT_CODEX_PARAMS)
         else:
@@ -267,66 +241,14 @@ def build_cli_args_from_config(
     
     # 检测 CLI 原生子命令（以 / 开头且为单个词）
     is_cli_subcommand = user_text.startswith("/") and len(user_text.split()) == 1
-    
-    if cli_type == "kimi":
-        return _build_kimi_args(resolved_cli, params, user_text, is_cli_subcommand, session_id)
-    
+
     if cli_type == "claude":
         return _build_claude_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, resume_session)
-    
+
     if cli_type == "codex":
         return _build_codex_args(resolved_cli, params, user_text, is_cli_subcommand, session_id)
-    
+
     raise ValueError(f"不支持的 CLI 类型: {cli_type}")
-
-
-def _build_kimi_args(
-    resolved_cli: str,
-    params: Dict[str, Any],
-    user_text: str,
-    is_cli_subcommand: bool,
-    session_id: Optional[str],
-) -> Tuple[List[str], bool]:
-    """构建 Kimi CLI 参数"""
-    
-    # 处理子命令
-    if is_cli_subcommand:
-        subcmd = user_text[1:]
-        if subcmd in ("help", "usage"):
-            return [resolved_cli, "--help"], False
-        return [resolved_cli, subcmd], False
-    
-    cmd = [resolved_cli]
-    
-    # 添加基础参数
-    if params.get("quiet"):
-        cmd.append("--quiet")
-    if params.get("yolo"):
-        cmd.append("-y")
-    if params.get("thinking"):
-        cmd.append("--thinking")
-    
-    # 添加可选参数
-    if params.get("model"):
-        cmd.extend(["-m", str(params["model"])])
-    if params.get("temperature") is not None:
-        cmd.extend(["--temperature", str(params["temperature"])])
-    if params.get("max_tokens") is not None:
-        cmd.extend(["--max-tokens", str(params["max_tokens"])])
-    
-    # 添加会话ID
-    if session_id:
-        cmd.extend(["-S", session_id])
-    
-    # 添加额外参数
-    extra_args = params.get("extra_args", [])
-    if extra_args:
-        cmd.extend([str(arg) for arg in extra_args])
-    
-    # 添加提示
-    cmd.extend(["-p", user_text])
-    
-    return cmd, False
 
 
 def _build_claude_args(
@@ -450,40 +372,8 @@ def _build_codex_args(
 
 def get_params_help(cli_type: str) -> str:
     """获取指定 CLI 类型的参数说明"""
-    
+
     help_texts = {
-        "kimi": """
-<b>Kimi CLI 可配置参数:</b>
-
-<code>quiet</code> - 静默模式 (布尔值)
-  默认: True
-  对应参数: --quiet
-
-<code>yolo</code> - 自动确认 (布尔值)
-  默认: True
-  对应参数: -y
-
-<code>thinking</code> - 显示思考过程 (布尔值)
-  默认: True
-  对应参数: --thinking
-
-<code>model</code> - 模型选择 (字符串)
-  默认: None
-  对应参数: -m
-  可选值: "kimi-k2", "kimi-k2-thinking" 等
-
-<code>temperature</code> - 温度参数 (数字)
-  默认: None
-  对应参数: --temperature
-
-<code>max_tokens</code> - 最大token数 (整数)
-  默认: None
-  对应参数: --max-tokens
-
-<code>extra_args</code> - 额外参数 (字符串列表)
-  默认: []
-  示例: ["--verbose", "--timeout", "60"]
-""",
         "claude": """
 <b>Claude CLI 可配置参数:</b>
 
@@ -541,7 +431,7 @@ def get_params_help(cli_type: str) -> str:
   示例: ["--timeout", "120"]
 """,
     }
-    
+
     return help_texts.get(cli_type.lower(), "未知 CLI 类型")
 
 

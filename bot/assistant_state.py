@@ -58,7 +58,6 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
                 "working_dir": current.working_dir,
                 "browse_dir": current.browse_dir or "",
                 "codex_session_id": current.codex_session_id,
-                "kimi_session_id": current.kimi_session_id,
                 "claude_session_id": current.claude_session_id,
                 "claude_session_initialized": current.claude_session_initialized,
                 "message_count": current.message_count,
@@ -111,7 +110,6 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
             session.browse_dir = browse_dir
 
         session.codex_session_id = _normalize_optional_str(state.get("codex_session_id"))
-        session.kimi_session_id = _normalize_optional_str(state.get("kimi_session_id"))
         session.claude_session_id = _normalize_optional_str(state.get("claude_session_id"))
         session.claude_session_initialized = bool(
             state.get("claude_session_initialized") or session.claude_session_id

@@ -26,10 +26,17 @@ const FOLLOW_THRESHOLD_PX = 24;
 
 function scheduleLayout(callback: () => void) {
   if (typeof window.requestAnimationFrame === "function") {
-    window.requestAnimationFrame(() => callback());
+    return window.requestAnimationFrame(() => callback());
+  }
+  return window.setTimeout(callback, 0);
+}
+
+function cancelScheduledLayout(handle: number) {
+  if (typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(handle);
     return;
   }
-  window.setTimeout(callback, 0);
+  window.clearTimeout(handle);
 }
 
 function getScrollTarget(viewport: HTMLDivElement | null) {
@@ -58,6 +65,14 @@ export function TerminalScreen({
   isImmersive = false,
   onToggleImmersive,
 }: Props) {
+  const layoutHandleRef = useRef<number | null>(null);
+  const layoutRequestRef = useRef({
+    refit: false,
+    syncViewport: false,
+    follow: false,
+    syncFollowing: false,
+    focus: false,
+  });
   const sessionRef = useRef<TerminalSession | null>(null);
   const listenerDisposersRef = useRef<Disposable[]>([]);
   const launchPendingRef = useRef(false);
@@ -66,6 +81,8 @@ export function TerminalScreen({
   const latestWorkingDirRef = useRef(preferredWorkingDir.trim());
   const lastThemeRef = useRef(themeName);
   const isFollowingRef = useRef(true);
+  const isVisibleRef = useRef(isVisible);
+  const previousVisibleRef = useRef(isVisible);
   const [launchKey, setLaunchKey] = useState(0);
   const [instanceId, setInstanceId] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
@@ -76,9 +93,77 @@ export function TerminalScreen({
   const [isTerminalClosed, setIsTerminalClosed] = useState(false);
   const terminalFontSize = getTerminalFontSize();
 
+  useEffect(() => {
+    isVisibleRef.current = isVisible;
+  }, [isVisible]);
+
   function setFollowing(nextValue: boolean) {
     isFollowingRef.current = nextValue;
     setIsFollowing(nextValue);
+  }
+
+  function flushLayoutWork() {
+    layoutHandleRef.current = null;
+    const request = layoutRequestRef.current;
+    layoutRequestRef.current = {
+      refit: false,
+      syncViewport: false,
+      follow: false,
+      syncFollowing: false,
+      focus: false,
+    };
+
+    const session = sessionRef.current;
+    if (request.refit && session) {
+      session.fit();
+    }
+    if (request.refit || request.syncViewport) {
+      configureTerminalViewport();
+    }
+    if (request.syncFollowing) {
+      syncFollowingStateFromViewport();
+    }
+    if (request.follow && session && isFollowingRef.current) {
+      jumpToLatest();
+    }
+    if (request.focus && session && isVisibleRef.current) {
+      session.focus();
+    }
+  }
+
+  function queueLayoutWork(nextRequest: Partial<typeof layoutRequestRef.current>) {
+    const request = layoutRequestRef.current;
+    request.refit ||= Boolean(nextRequest.refit);
+    request.syncViewport ||= Boolean(nextRequest.syncViewport);
+    request.follow ||= Boolean(nextRequest.follow);
+    request.syncFollowing ||= Boolean(nextRequest.syncFollowing);
+    request.focus ||= Boolean(nextRequest.focus);
+    if (layoutHandleRef.current !== null) {
+      return;
+    }
+    let ranSynchronously = false;
+    const handle = scheduleLayout(() => {
+      ranSynchronously = true;
+      flushLayoutWork();
+    });
+    if (!ranSynchronously) {
+      layoutHandleRef.current = handle;
+    }
+  }
+
+  function clearQueuedLayoutWork() {
+    if (layoutHandleRef.current === null) {
+      return;
+    }
+    cancelScheduledLayout(layoutHandleRef.current);
+    layoutHandleRef.current = null;
+    layoutRequestRef.current = {
+      refit: false,
+      syncViewport: false,
+      follow: false,
+      syncFollowing: false,
+      focus: false,
+    };
   }
 
   function cleanupTerminalListeners() {
@@ -133,6 +218,7 @@ export function TerminalScreen({
   }
 
   function disposeSession() {
+    clearQueuedLayoutWork();
     cleanupTerminalListeners();
     const session = sessionRef.current;
     sessionRef.current = null;
@@ -225,13 +311,7 @@ export function TerminalScreen({
         onOpen: () => {
           setIsConnected(true);
           setError("");
-          scheduleLayout(() => {
-            session.fit();
-            configureTerminalViewport();
-            if (isFollowingRef.current) {
-              jumpToLatest();
-            }
-          });
+          queueLayoutWork({ refit: true, follow: true });
         },
         onClose: () => {
           setIsConnected(false);
@@ -251,18 +331,10 @@ export function TerminalScreen({
           if (!isFollowingRef.current) {
             return;
           }
-          scheduleLayout(() => {
-            session.term.scrollToBottom();
-            const scrollTarget = getScrollTarget(viewportRef.current);
-            if (scrollTarget) {
-              scrollTarget.scrollTop = scrollTarget.scrollHeight;
-            }
-          });
+          queueLayoutWork({ follow: true });
         }),
         session.term.onScroll(() => {
-          scheduleLayout(() => {
-            syncFollowingStateFromViewport();
-          });
+          queueLayoutWork({ syncFollowing: true });
         }),
       ];
 
@@ -271,16 +343,7 @@ export function TerminalScreen({
       setInstanceId((value) => value + 1);
       session.connect();
 
-      scheduleLayout(() => {
-        session.fit();
-        configureTerminalViewport();
-        if (isVisible) {
-          if (isFollowingRef.current) {
-            jumpToLatest();
-          }
-          session.focus();
-        }
-      });
+      queueLayoutWork({ refit: true, follow: true, focus: isVisible });
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法初始化终端");
     } finally {
@@ -289,17 +352,14 @@ export function TerminalScreen({
   }, [activeWorkingDir, authToken, isTerminalClosed, isVisible, launchKey, themeName]);
 
   useEffect(() => {
-    if (!isVisible || !sessionRef.current) {
+    const becameVisible = !previousVisibleRef.current && isVisible;
+    previousVisibleRef.current = isVisible;
+
+    if (!becameVisible || !sessionRef.current) {
       return;
     }
-    scheduleLayout(() => {
-      sessionRef.current?.fit();
-      configureTerminalViewport();
-      if (isFollowingRef.current) {
-        jumpToLatest();
-      }
-    });
-  }, [instanceId, isVisible]);
+    queueLayoutWork({ refit: true, follow: true, focus: true });
+  }, [isVisible]);
 
   useEffect(() => {
     if (!sessionRef.current) {
@@ -307,13 +367,7 @@ export function TerminalScreen({
     }
 
     const refitTerminal = () => {
-      scheduleLayout(() => {
-        sessionRef.current?.fit();
-        configureTerminalViewport();
-        if (isFollowingRef.current) {
-          jumpToLatest();
-        }
-      });
+      queueLayoutWork({ refit: true, follow: true });
     };
 
     window.addEventListener("resize", refitTerminal);
@@ -340,6 +394,7 @@ export function TerminalScreen({
 
   useEffect(() => {
     return () => {
+      clearQueuedLayoutWork();
       disposeSession();
     };
   }, []);
@@ -407,7 +462,7 @@ export function TerminalScreen({
               overscrollBehavior: "contain",
             }}
             onScroll={() => {
-              syncFollowingStateFromViewport();
+              queueLayoutWork({ syncFollowing: true });
             }}
             className="h-full"
           >

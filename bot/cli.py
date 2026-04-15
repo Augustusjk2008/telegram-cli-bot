@@ -51,7 +51,7 @@ def build_cli_command(
     """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。
 
     Args:
-        cli_type: CLI 类型 (kimi/claude/codex)
+        cli_type: CLI 类型 (claude/codex)
         resolved_cli: 解析后的 CLI 可执行文件路径
         user_text: 用户输入文本
         env: 环境变量字典（会被修改以设置 CLI 特定的环境变量）
@@ -679,23 +679,3 @@ def should_mark_claude_session_initialized(response: str, returncode: int) -> bo
         return False
 
     return True
-
-
-def should_reset_kimi_session(response: str, returncode: int) -> bool:
-    """Kimi 会话失效时重置 session_id。"""
-    if returncode == 0:
-        return False
-    lower = (response or "").lower()
-    if not lower:
-        return False
-    reset_markers = (
-        "session not found",
-        "invalid session",
-        "conversation not found",
-        "session expired",
-        "session id not found",
-        "unauthorized",
-        "authentication failed",
-        "invalid token",
-    )
-    return any(marker in lower for marker in reset_markers)

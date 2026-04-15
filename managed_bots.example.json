@@ -1,0 +1,13 @@
+{
+  "bots": [
+    {
+      "alias": "example-cli",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "/path/to/project",
+      "enabled": false,
+      "bot_mode": "cli",
+      "avatar_name": "bot-default.png"
+    }
+  ]
+}

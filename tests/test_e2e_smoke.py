@@ -5,7 +5,6 @@
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -24,7 +23,7 @@ class TestImports:
             RESERVED_ALIASES,
             SESSION_TIMEOUT,
             SUPPORTED_CLI_TYPES,
-            TELEGRAM_BOT_TOKEN,
+            WEB_ENABLED,
             WORKING_DIR,
         )
 
@@ -60,25 +59,6 @@ class TestImports:
             validate_cli_type,
         )
 
-    def test_import_context_helpers(self):
-        from bot.context_helpers import (
-            ensure_admin,
-            get_bot_alias,
-            get_bot_id,
-            get_current_profile,
-            get_current_session,
-            get_manager,
-            is_main_application,
-        )
-
-    def test_import_handlers(self):
-        from bot.handlers import register_handlers
-        from bot.handlers.admin import bot_help, bot_list, bot_add
-        from bot.handlers.basic import start, reset
-        from bot.handlers.chat import handle_text_message
-        from bot.handlers.file import upload_help, handle_document, download_file
-        from bot.handlers.shell import execute_shell
-
     def test_import_manager(self):
         from bot.manager import MultiBotManager
 
@@ -98,7 +78,7 @@ class TestBotProfileIntegration:
         json_str = json.dumps(d)
         restored = json.loads(json_str)
         assert restored["alias"] == "test"
-        assert restored["token"] == "tok"
+        assert "token" not in restored
         assert restored["cli_type"] == "claude"
 
 
@@ -128,15 +108,16 @@ class TestCliIntegration:
         from bot.cli import validate_cli_type, build_cli_command
         from bot.cli_params import CliParamsConfig
 
-        cli_type = validate_cli_type("kimi")
-        assert cli_type == "kimi"
+        cli_type = validate_cli_type("codex")
+        assert cli_type == "codex"
 
         cmd, use_stdin = build_cli_command(
-            cli_type="kimi",
-            resolved_cli="kimi",
+            cli_type="codex",
+            resolved_cli="codex",
             user_text="hello",
             env={},
             params_config=CliParamsConfig(),
+            json_output=True,
         )
         assert isinstance(cmd, list)
         assert len(cmd) > 0
@@ -154,12 +135,12 @@ class TestManagerLoadSave:
         main_profile = BotProfile(alias="main", token="main_tok")
         m1 = MultiBotManager(main_profile=main_profile, storage_file=str(storage))
         m1.managed_profiles["sub1"] = BotProfile(
-            alias="sub1", token="tok1", cli_type="kimi",
-            cli_path="kimi", working_dir=str(temp_dir),
+            alias="sub1", token="tok1", cli_type="claude",
+            cli_path="claude", working_dir=str(temp_dir),
         )
         m1._save_profiles()
 
         # 从文件重新加载
         m2 = MultiBotManager(main_profile=main_profile, storage_file=str(storage))
         assert "sub1" in m2.managed_profiles
-        assert m2.managed_profiles["sub1"].token == "tok1"
+        assert m2.managed_profiles["sub1"].cli_type == "claude"

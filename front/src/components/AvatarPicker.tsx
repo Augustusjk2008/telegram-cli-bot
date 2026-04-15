@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { AvatarAsset } from "../services/types";
 import { pickAvailableAvatarName } from "../utils/avatar";
 import { ChatAvatar } from "./ChatAvatar";
+
+const AVATAR_PICKER_PANEL_WIDTH = 256;
+const AVATAR_PICKER_VIEWPORT_GUTTER = 12;
 
 type Props = {
   assets: AvatarAsset[];
@@ -24,8 +27,45 @@ export function AvatarPicker({
   disabled = false,
 }: Props) {
   const [isOpen, setIsOpen] = useState(false);
+  const [panelLeftOffset, setPanelLeftOffset] = useState(0);
+  const [panelWidth, setPanelWidth] = useState(AVATAR_PICKER_PANEL_WIDTH);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const effectiveName = pickAvailableAvatarName(selectedName, assets, kind);
+
+  useLayoutEffect(() => {
+    if (!isOpen || !rootRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    const updatePanelPosition = () => {
+      const root = rootRef.current;
+      if (!root) {
+        return;
+      }
+
+      const rect = root.getBoundingClientRect();
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || AVATAR_PICKER_PANEL_WIDTH;
+      const nextPanelWidth = Math.min(
+        AVATAR_PICKER_PANEL_WIDTH,
+        Math.max(180, viewportWidth - AVATAR_PICKER_VIEWPORT_GUTTER * 2),
+      );
+      const minViewportLeft = AVATAR_PICKER_VIEWPORT_GUTTER;
+      const maxViewportLeft = Math.max(
+        minViewportLeft,
+        viewportWidth - AVATAR_PICKER_VIEWPORT_GUTTER - nextPanelWidth,
+      );
+      const nextViewportLeft = Math.min(Math.max(rect.left, minViewportLeft), maxViewportLeft);
+
+      setPanelWidth(nextPanelWidth);
+      setPanelLeftOffset(nextViewportLeft - rect.left);
+    };
+
+    updatePanelPosition();
+    window.addEventListener("resize", updatePanelPosition);
+    return () => {
+      window.removeEventListener("resize", updatePanelPosition);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -69,7 +109,14 @@ export function AvatarPicker({
       </button>
 
       {isOpen ? (
-        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-64 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-[var(--shadow-card)]">
+        <div
+          className="absolute top-[calc(100%+0.5rem)] z-30 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-[var(--shadow-card)]"
+          style={{
+            left: `${panelLeftOffset}px`,
+            width: `${panelWidth}px`,
+            maxWidth: `calc(100vw - ${AVATAR_PICKER_VIEWPORT_GUTTER * 2}px)`,
+          }}
+        >
           <div className="max-h-72 overflow-y-auto">
             {assets.map((asset) => {
               const isSelected = asset.name === effectiveName;

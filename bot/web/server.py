@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import html
 import logging
 import os
 import subprocess
@@ -15,8 +14,6 @@ from typing import Any
 
 from aiohttp import WSMsgType, WSCloseCode, web
 from aiohttp.client_exceptions import ClientConnectionResetError
-from telegram import Bot
-from telegram.request import HTTPXRequest
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.config import (
@@ -31,12 +28,17 @@ from bot.config import (
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
     WEB_TUNNEL_STATE_FILE,
-    get_proxy_kwargs,
     request_restart,
 )
 from bot.manager import MultiBotManager
-from bot.handlers.tui_server import create_shell_process
 from bot.platform.runtime import get_default_shell
+from bot.platform.terminal import create_shell_process
+from bot.updater import (
+    check_for_updates,
+    download_latest_update,
+    get_update_status,
+    set_update_enabled,
+)
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
@@ -243,6 +245,7 @@ class WebApiServer:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._restart_task: asyncio.Task[None] | None = None
+        self._update_task: asyncio.Task[None] | None = None
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
         self._tunnel_service = tunnel_service or TunnelService(
@@ -364,76 +367,10 @@ class WebApiServer:
         if not public_url:
             return False
 
-        self._copy_text_to_clipboard(public_url)
-
-        if not ALLOWED_USER_IDS:
-            return False
-
-        main_app = self.manager.applications.get(self.manager.main_profile.alias)
-        bot: Bot | Any | None = main_app.bot if main_app is not None else self._build_notification_bot()
-        if bot is None:
-            return False
-
-        text = (
-            "🌐 <b>Web 公网地址已就绪</b>\n\n"
-            f"来源: <code>{html.escape(reason)}</code>\n"
-            f"公网地址: <code>{html.escape(public_url)}</code>\n"
-            f"本地地址: <code>{html.escape(str(snapshot.get('local_url') or ''))}</code>"
-        )
-
-        sent_any = False
-        should_shutdown = main_app is None
-        initialized = False
-        try:
-            if should_shutdown:
-                await bot.initialize()
-                initialized = True
-
-            for user_id in ALLOWED_USER_IDS:
-                try:
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=text,
-                        parse_mode="HTML",
-                    )
-                    sent_any = True
-                except Exception as exc:
-                    logger.info("发送 Web 公网地址通知失败(已忽略) user_id=%s: %s", user_id, exc)
-        except Exception as exc:
-            logger.info("初始化 Web 公网地址通知 bot 失败(已忽略): %s", exc)
-        finally:
-            if should_shutdown and initialized:
-                try:
-                    await bot.shutdown()
-                except Exception as exc:
-                    logger.info("关闭 Web 公网地址通知 bot 失败(已忽略): %s", exc)
-
-        return sent_any
-
-    def _build_notification_bot(self) -> Bot | None:
-        token = str(getattr(self.manager.main_profile, "token", "") or "").strip()
-        if not token or token == "your_bot_token_here":
-            return None
-
-        proxy_kwargs = get_proxy_kwargs()
-        proxy_url = str(proxy_kwargs.get("proxy_url") or "").strip() if proxy_kwargs else ""
-        request = self._build_notification_request(proxy_url=proxy_url)
-        return Bot(token=token, request=request)
-
-    def _build_notification_request(self, proxy_url: str = "") -> HTTPXRequest:
-        request_kwargs = {
-            "connection_pool_size": 8,
-            "read_timeout": 60,
-            "write_timeout": 60,
-            "connect_timeout": 30,
-            "pool_timeout": 30,
-        }
-        if not proxy_url:
-            return HTTPXRequest(**request_kwargs)
-        try:
-            return HTTPXRequest(**request_kwargs, proxy=proxy_url)
-        except TypeError:
-            return HTTPXRequest(**request_kwargs, proxy_url=proxy_url)
+        copied = self._copy_text_to_clipboard(public_url)
+        if copied:
+            logger.info("已复制 Web 公网地址到剪贴板 reason=%s url=%s", reason, public_url)
+        return copied
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -441,7 +378,6 @@ class WebApiServer:
                 "ok": True,
                 "service": "telegram-cli-bridge-web",
                 "web_enabled": True,
-                "telegram_running": bool(self.manager.applications),
                 "host": WEB_HOST,
                 "port": WEB_PORT,
             }
@@ -879,7 +815,6 @@ class WebApiServer:
         data = await add_managed_bot(
             self.manager,
             alias=body.get("alias", ""),
-            token=body.get("token", ""),
             bot_mode=body.get("bot_mode", "cli"),
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
@@ -953,6 +888,25 @@ class WebApiServer:
             raise WebApiError(400, "invalid_git_proxy_port", str(exc)) from exc
         return _json({"ok": True, "data": data})
 
+    async def admin_get_update(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": get_update_status()})
+
+    async def admin_patch_update(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": set_update_enabled(bool(body.get("update_enabled", True)))})
+
+    async def admin_update_check(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        data = await asyncio.to_thread(check_for_updates)
+        return _json({"ok": True, "data": data})
+
+    async def admin_update_download(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        data = await asyncio.to_thread(download_latest_update)
+        return _json({"ok": True, "data": data})
+
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         self._schedule_restart_request()
@@ -1020,6 +974,15 @@ class WebApiServer:
         data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
         return _json({"ok": True, "data": data})
 
+    async def _auto_refresh_update_status(self) -> None:
+        status = get_update_status()
+        if not status.get("update_enabled"):
+            return
+        try:
+            await asyncio.to_thread(check_for_updates)
+        except Exception as exc:
+            logger.warning("自动检查更新失败: %s", exc)
+
     def _build_app(self) -> web.Application:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
         app.router.add_get("/api/health", self.health)
@@ -1086,6 +1049,10 @@ class WebApiServer:
         )
         app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
         app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)
+        app.router.add_get("/api/admin/update", self.admin_get_update)
+        app.router.add_patch("/api/admin/update", self.admin_patch_update)
+        app.router.add_post("/api/admin/update/check", self.admin_update_check)
+        app.router.add_post("/api/admin/update/download", self.admin_update_download)
         app.router.add_post("/api/admin/restart", self.admin_restart)
         app.router.add_get("/api/admin/tunnel", self.admin_tunnel)
         app.router.add_post("/api/admin/tunnel/start", self.admin_tunnel_start)
@@ -1122,6 +1089,8 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=WEB_HOST, port=WEB_PORT)
         await self._site.start()
+        if get_update_status().get("update_enabled"):
+            self._update_task = asyncio.create_task(self._auto_refresh_update_status())
         if self._tunnel_service.should_autostart():
             tunnel_snapshot = await self._tunnel_service.start()
             await self._notify_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
@@ -1142,6 +1111,10 @@ class WebApiServer:
         if self._restart_task is not None:
             await asyncio.gather(self._restart_task, return_exceptions=True)
             self._restart_task = None
+        if self._update_task is not None:
+            self._update_task.cancel()
+            await asyncio.gather(self._update_task, return_exceptions=True)
+            self._update_task = None
         terminal_tasks = list(self._terminal_tasks)
         self._terminal_tasks.clear()
         for task in terminal_tasks:

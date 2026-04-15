@@ -3,7 +3,7 @@ import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square }
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AvatarAsset, BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
+import type { AppUpdateStatus, AvatarAsset, BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import {
@@ -113,6 +113,7 @@ export function SettingsScreen({
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
@@ -129,6 +130,7 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
+  const [updateAction, setUpdateAction] = useState<"" | "toggle" | "check" | "download">("");
   const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const [serviceAction, setServiceAction] = useState<"" | "restart_service" | "build_frontend">("");
@@ -137,6 +139,7 @@ export function SettingsScreen({
   const [buildLogStatus, setBuildLogStatus] = useState<BuildLogStatus>("idle");
   const [buildLogSummary, setBuildLogSummary] = useState("");
   const buildLogViewportRef = useRef<HTMLDivElement | null>(null);
+  const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
 
   useEffect(() => {
@@ -148,10 +151,11 @@ export function SettingsScreen({
       client.getBotOverview(botAlias),
       client.getCliParams(botAlias),
       client.getTunnelStatus(),
-      botAlias === "main" ? client.getGitProxySettings() : Promise.resolve(null),
+      isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
+      isMainBot ? client.getUpdateStatus() : Promise.resolve(null),
       client.listAvatarAssets(),
     ])
-      .then(([overviewResult, cliParamsResult, tunnelResult, gitProxyResult, avatarAssetsResult]) => {
+      .then(([overviewResult, cliParamsResult, tunnelResult, gitProxyResult, updateResult, avatarAssetsResult]) => {
         if (cancelled) return;
 
         if (overviewResult.status !== "fulfilled" || cliParamsResult.status !== "fulfilled") {
@@ -165,6 +169,7 @@ export function SettingsScreen({
         const cliParamsData = cliParamsResult.value;
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
+        const updateData = updateResult.status === "fulfilled" ? updateResult.value : null;
         const avatarData = avatarAssetsResult.status === "fulfilled" && avatarAssetsResult.value.length > 0
           ? avatarAssetsResult.value
           : DEFAULT_AVATAR_ASSETS;
@@ -179,6 +184,7 @@ export function SettingsScreen({
         setTunnel(tunnelData);
         setGitProxySettings(gitProxyData);
         setGitProxyPortDraft(gitProxyData?.port || "");
+        setUpdateStatus(updateData);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -190,7 +196,7 @@ export function SettingsScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client]);
+  }, [botAlias, client, isMainBot]);
 
   useEffect(() => {
     if (!showBuildLog || !buildLogViewportRef.current) {
@@ -338,6 +344,53 @@ export function SettingsScreen({
       setError(err instanceof Error ? err.message : "保存 Git 代理失败");
     } finally {
       setSavingGitProxy(false);
+    }
+  };
+
+  const saveUpdateToggle = async (enabled: boolean) => {
+    setUpdateAction("toggle");
+    setError("");
+    setNotice("");
+    try {
+      const nextStatus = await client.setUpdateEnabled(enabled);
+      setUpdateStatus(nextStatus);
+      setNotice(enabled ? "已启用自动检查更新" : "已关闭自动检查更新");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存更新设置失败");
+    } finally {
+      setUpdateAction("");
+    }
+  };
+
+  const checkForUpdate = async () => {
+    setUpdateAction("check");
+    setError("");
+    setNotice("");
+    try {
+      const nextStatus = await client.checkForUpdate();
+      setUpdateStatus(nextStatus);
+      setNotice(nextStatus.latestVersion ? `已检查更新，最新版本 ${nextStatus.latestVersion}` : "已完成更新检查");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "检查更新失败");
+    } finally {
+      setUpdateAction("");
+    }
+  };
+
+  const downloadUpdate = async () => {
+    setUpdateAction("download");
+    setError("");
+    setNotice("");
+    try {
+      const nextStatus = await client.downloadUpdate();
+      setUpdateStatus(nextStatus);
+      setNotice(nextStatus.pendingUpdateVersion
+        ? `更新 ${nextStatus.pendingUpdateVersion} 已下载，将在下次启动时应用`
+        : "更新包已下载");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "下载更新失败");
+    } finally {
+      setUpdateAction("");
     }
   };
 
@@ -631,7 +684,22 @@ export function SettingsScreen({
         </div>
 
         {overview ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4">
+          <section
+            aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+            className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4"
+          >
+            <div className="space-y-1">
+              <h2
+                id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+                className="text-base font-semibold text-[var(--text)]"
+              >
+                {isMainBot ? "主 Bot 运维" : "Bot CLI 配置"}
+              </h2>
+              {isMainBot ? (
+                <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置和更新入口。</p>
+              ) : null}
+            </div>
+
             <div className="space-y-2">
               <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
               {overview.cliPath ? (
@@ -642,7 +710,7 @@ export function SettingsScreen({
             </div>
 
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
-              <h2 className="font-medium text-[var(--text)]">Bot CLI 配置</h2>
+              <h3 className="font-medium text-[var(--text)]">运行配置</h3>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="space-y-1">
                   <span className="text-sm text-[var(--text)]">CLI 类型</span>
@@ -654,7 +722,6 @@ export function SettingsScreen({
                   >
                     <option value="codex">codex</option>
                     <option value="claude">claude</option>
-                    <option value="kimi">kimi</option>
                   </select>
                 </label>
                 <label className="space-y-1">
@@ -707,10 +774,76 @@ export function SettingsScreen({
                 )}
               </div>
             </div>
-          </div>
+
+            {isMainBot ? (
+              <div className="space-y-4 border-t border-[var(--border)] pt-4">
+                <h3 className="font-medium text-[var(--text)]">版本更新</h3>
+                <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
+                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                    <span className="text-[var(--text)]">当前版本</span>
+                    <span>{updateStatus?.currentVersion || "未知"}</span>
+                  </p>
+                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                    <span className="text-[var(--text)]">可用版本</span>
+                    <span>{updateStatus?.latestVersion || "暂无"}</span>
+                  </p>
+                </div>
+
+                <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
+                  <span>自动检查更新</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(updateStatus?.updateEnabled)}
+                    disabled={updateAction === "toggle"}
+                    onChange={(event) => void saveUpdateToggle(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+
+                <div className="space-y-2 text-xs text-[var(--muted)]">
+                  <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
+                  {updateStatus?.pendingUpdateVersion ? (
+                    <p>待应用更新: {updateStatus.pendingUpdateVersion}，重启后生效</p>
+                  ) : null}
+                  {updateStatus?.lastError ? (
+                    <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void checkForUpdate()}
+                    disabled={updateAction !== ""}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    {updateAction === "check" ? "检查中..." : "立即检查"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void downloadUpdate()}
+                    disabled={updateAction !== "" || !updateStatus?.latestVersion}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    {updateAction === "download" ? "下载中..." : "下载更新"}
+                  </button>
+                  {updateStatus?.latestReleaseUrl ? (
+                    <a
+                      href={updateStatus.latestReleaseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      查看发布说明
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </section>
         ) : null}
 
-        {botAlias === "main" ? (
+        {isMainBot ? (
           <>
             <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
               <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>

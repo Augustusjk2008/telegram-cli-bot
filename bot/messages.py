@@ -22,7 +22,6 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "msg_count_label": "   消息数: {message_count}",
         "session_id_labels": {
             "codex": "   Codex会话ID: {session_id}",
-            "kimi": "   Kimi会话ID: {session_id}",
             "claude": "   Claude会话ID: {session_id} ({status})"
         },
         "session_id_not_created": "(未创建，收到首条消息后自动生成)",
@@ -53,7 +52,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "admin_cmd_list": "   /bot_list - 列出所有Bot状态",
         "admin_cmd_restart": "   /restart - 重启整个程序（重载代码）",
         "admin_cmd_system": "   /system [脚本名] - 系统脚本管理",
-        "admin_cmd_add": "   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]",
+        "admin_cmd_add": "   /bot_add <alias> [bot_mode] [cli_type] [cli_path] [workdir]",
         "admin_cmd_remove": "   /bot_remove <alias>",
         "admin_cmd_start_stop": "   /bot_start <alias> / /bot_stop <alias>",
         "admin_cmd_set_cli": "   /bot_set_cli <alias> <cli_type> <cli_path>",
@@ -117,7 +116,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "not_found": "❌ 文件不存在",
         "unsafe_path": "⛔ 无效的文件路径",
         "unsafe_filename": "⛔ 文件名包含非法字符",
-        "file_too_large": "❌ 文件太大 (>50MB)，无法通过 Telegram 发送",
+        "file_too_large": "❌ 文件太大 (>50MB)，请直接在工作目录中处理",
         "error": "❌ 发送文件失败: {error}"
     },
     "shell": {
@@ -142,9 +141,9 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
     },
     "admin": {
         "unauthorized": "⛔ 需要管理员权限",
-        "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant\n   cli_type 支持: kimi / claude / codex\n   例: /bot_add team1 123:abc cli codex codex C:/work/project\n   例: /bot_add helper 456:def assistant claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)\n\n8) CLI 参数配置:\n   /bot_params <alias> [cli_type]     - 查看当前参数\n   /bot_params_set <alias> <type> <key> <value>  - 设置参数\n   /bot_params_reset <alias> [cli_type] - 重置参数\n   /bot_params_help [cli_type]        - 显示参数帮助\n\n9) Assistant proposal 审批:\n   /assistant_proposals <alias> [status]\n   /assistant_approve <alias> <proposal_id>\n   /assistant_reject <alias> <proposal_id>",
+        "help_text": "🛠 多Bot管理命令:\n\n0) 重启整个程序（重载代码）:\n   /restart\n\n1) 添加并启动子Bot:\n   /bot_add <alias> [bot_mode] [cli_type] [cli_path] [workdir]\n   bot_mode 支持: cli(默认) / assistant\n   cli_type 支持: claude / codex\n   例: /bot_add team1 cli codex codex C:/work/project\n   例: /bot_add helper assistant claude claude C:/work\n\n2) 查看状态:\n   /bot_list\n\n3) 停止/启动:\n   /bot_stop <alias>\n   /bot_start <alias>\n\n4) 修改CLI配置:\n   /bot_set_cli <alias> <cli_type> <cli_path>\n   /bot_set_workdir <alias> <workdir>\n\n5) 删除子Bot:\n   /bot_remove <alias>\n\n6) 强制终止任务:\n   /bot_kill <alias> [user_id]\n   例: /bot_kill main        (终止主Bot所有任务)\n   例: /bot_kill team1       (终止team1所有任务)\n   例: /bot_kill main 12345  (终止主Bot指定用户的任务)\n\n7) 系统脚本管理:\n   /system          (列出所有可用脚本)\n   /system <脚本名>  (执行指定脚本)\n\n8) CLI 参数配置:\n   /bot_params <alias> [cli_type]     - 查看当前参数\n   /bot_params_set <alias> <type> <key> <value>  - 设置参数\n   /bot_params_reset <alias> [cli_type] - 重置参数\n   /bot_params_help [cli_type]        - 显示参数帮助\n\n9) Assistant proposal 审批:\n   /assistant_proposals <alias> [status]\n   /assistant_approve <alias> <proposal_id>\n   /assistant_reject <alias> <proposal_id>",
         "restart": "🔄 正在重启整个程序并重载代码...",
-        "bot_add_usage": "用法: /bot_add <alias> <token> [bot_mode] [cli_type] [cli_path] [workdir]\nbot_mode: cli(默认) | assistant\nassistant: 最多一个，且必须显式提供 workdir",
+        "bot_add_usage": "用法: /bot_add <alias> [bot_mode] [cli_type] [cli_path] [workdir]\nbot_mode: cli(默认) | assistant\nassistant: 最多一个，且必须显式提供 workdir",
         "bot_add_success": "✅ 子Bot已启动\nalias: <code>{alias}</code>\nusername: @{username}\nmode: <code>{bot_mode}</code>\ncli: <code>{cli_type}</code> / <code>{cli_path}</code>\nworkdir: <code>{workdir}</code>",
         "bot_add_failed": "❌ 添加失败: {error}",
         "bot_remove_usage": "用法: /bot_remove <alias>",
@@ -180,7 +179,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "bot_params_usage": "用法: /bot_params <alias> [cli_type]\n\n示例:\n  /bot_params main         # 查看 main bot 的所有参数\n  /bot_params team1 claude # 只查看 team1 的 claude 参数",
         "bot_params_not_found": "❌ 未找到 alias 为 <code>{alias}</code> 的 Bot",
         "bot_params_failed": "❌ 获取参数失败: {error}",
-        "bot_params_set_usage": "用法: /bot_params_set <alias> <cli_type> <key> <value>\n\n示例:\n  /bot_params_set team1 claude effort high\n  /bot_params_set team1 kimi thinking false\n  /bot_params_set team1 codex model o4-mini\n\n使用 /bot_params_help [cli_type] 查看可用参数",
+        "bot_params_set_usage": "用法: /bot_params_set <alias> <cli_type> <key> <value>\n\n示例:\n  /bot_params_set team1 claude effort high\n  /bot_params_set team1 codex model gpt-5.4\n  /bot_params_set team1 codex reasoning_effort high\n\n使用 /bot_params_help [cli_type] 查看可用参数",
         "bot_params_set_success": "✅ 已设置参数\nBot: <code>{alias}</code>\nCLI: <code>{cli_type}</code>\n参数: <code>{param_key}</code> = <code>{value}</code>",
         "bot_params_set_failed": "❌ 设置参数失败: {error}",
         "bot_params_reset_usage": "用法: /bot_params_reset <alias> [cli_type]\n\n示例:\n  /bot_params_reset team1         # 重置 team1 的所有参数\n  /bot_params_reset team1 claude  # 只重置 team1 的 claude 参数",
@@ -194,20 +193,9 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "assistant_review_success": "✅ Proposal <code>{proposal_id}</code> 已更新为 <code>{status}</code>",
         "assistant_proposals_failed": "❌ assistant proposal 操作失败: {error}"
     },
-    "voice": {
-        "disabled": "❌ 语音识别功能未启用\n\n请在 .env 中设置:\nWHISPER_ENABLED=true\n\n并安装依赖:\npython -m pip install -r requirements-voice.txt",
-        "too_long": "❌ 语音时长超过限制（最大 {max_duration} 秒）",
-        "downloading": "🎤 正在接收语音消息（{duration}秒）...",
-        "converting": "🔄 正在转换音频格式...",
-        "convert_failed": "❌ 音频格式转换失败\n\n请确保已安装 FFmpeg:\nWindows: choco install ffmpeg\nLinux: sudo apt install ffmpeg",
-        "recognizing": "🧠 正在识别语音内容...",
-        "recognized": "✅ <b>识别结果:</b>\n<pre>{text}</pre>\n\n正在发送给 AI 处理...",
-        "recognize_failed": "❌ 语音识别失败: {error}",
-        "error": "❌ 处理语音消息时出错: {error}"
-    },
     "startup": {
         "banner": "═══════════════════════════════════════════════════",
-        "title": "  🤖 Telegram CLI Bridge Bot",
+        "title": "  🤖 CLI Bridge Bot",
         "version": "  版本: 1.0.0",
         "loading_config": "📋 正在加载配置...",
         "loaded": "✅ 配置加载完成",

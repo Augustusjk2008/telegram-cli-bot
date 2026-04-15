@@ -8,7 +8,7 @@ import pytest
 def test_main_uses_supervisor_exit_code_when_restart_requested(monkeypatch):
     import bot.main as main_module
 
-    monkeypatch.setenv("TELEGRAM_CLI_BRIDGE_SUPERVISOR", "1")
+    monkeypatch.setenv("CLI_BRIDGE_SUPERVISOR", "1")
     monkeypatch.setattr(main_module, "safe_print", lambda *args, **kwargs: None)
     monkeypatch.setattr(main_module, "disable_console_quick_edit", lambda: None)
     monkeypatch.setattr(main_module, "prevent_system_sleep", lambda: None)

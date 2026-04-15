@@ -1,7 +1,7 @@
 """测试 assistant 模式收敛后的兼容行为。"""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -18,44 +18,6 @@ class TestAssistantMode:
         profile = BotProfile(alias="cli1", token="test_token")
         assert profile.bot_mode == "cli"
         assert profile.to_dict()["bot_mode"] == "cli"
-
-
-class TestRegisterHandlers:
-    def test_register_cli_handlers(self):
-        from bot.handlers import register_handlers
-
-        app = MagicMock()
-        app.bot_data = {"bot_mode": "cli"}
-        app.add_handler = MagicMock()
-
-        register_handlers(app, include_admin=False)
-
-        command_handlers = [
-            call.args[0]
-            for call in app.add_handler.call_args_list
-            if hasattr(call.args[0], "commands")
-        ]
-        assert any("kill" in handler.commands for handler in command_handlers)
-        assert any("codex_status" in handler.commands for handler in command_handlers)
-
-    def test_register_assistant_handlers_match_cli_surface(self):
-        from bot.handlers import register_handlers
-
-        app = MagicMock()
-        app.bot_data = {"bot_mode": "assistant"}
-        app.add_handler = MagicMock()
-
-        register_handlers(app, include_admin=False)
-
-        command_handlers = [
-            call.args[0]
-            for call in app.add_handler.call_args_list
-            if hasattr(call.args[0], "commands")
-        ]
-        assert any("kill" in handler.commands for handler in command_handlers)
-        assert any("codex_status" in handler.commands for handler in command_handlers)
-        assert not any("memory" in handler.commands for handler in command_handlers)
-        assert not any("tool_stats" in handler.commands for handler in command_handlers)
 
 
 class TestMultiBotManagerWithAssistant:
@@ -206,20 +168,3 @@ class TestMultiBotManagerWithAssistant:
                 working_dir=str(temp_dir),
                 bot_mode="webcli",
             )
-
-    def test_register_handlers_assistant_and_cli_are_only_runtime_modes(self):
-        from bot.handlers import register_handlers
-
-        for mode in ("cli", "assistant"):
-            app = MagicMock()
-            app.bot_data = {"bot_mode": mode}
-            app.add_handler = MagicMock()
-
-            register_handlers(app, include_admin=False)
-
-            command_handlers = [
-                call.args[0]
-                for call in app.add_handler.call_args_list
-                if hasattr(call.args[0], "commands")
-            ]
-            assert any("kill" in handler.commands for handler in command_handlers)

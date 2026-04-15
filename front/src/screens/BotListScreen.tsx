@@ -16,7 +16,6 @@ type CreateDraft = CreateBotInput;
 
 const EMPTY_CREATE_DRAFT: CreateDraft = {
   alias: "",
-  token: "",
   botMode: "cli",
   cliType: "codex",
   cliPath: "",
@@ -74,7 +73,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
       await client.addBot({
         ...createDraft,
         alias: createDraft.alias.trim(),
-        token: createDraft.token.trim(),
         cliPath: normalizePathInput(createDraft.cliPath),
         workingDir: normalizePathInput(createDraft.workingDir),
         avatarName: pickAvailableAvatarName(createDraft.avatarName, avatarAssets, "bot"),
@@ -225,14 +223,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder="team3"
           />
-          <input
-            aria-label="Bot Token"
-            type="text"
-            value={createDraft.token}
-            onChange={(event) => setCreateDraft((prev) => ({ ...prev, token: event.target.value }))}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder="留空则仅通过 Web 使用"
-          />
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-sm">
               <span className="text-[var(--muted)]">新 Bot 模式</span>
@@ -256,7 +246,6 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
               >
                 <option value="codex">codex</option>
                 <option value="claude">claude</option>
-                <option value="kimi">kimi</option>
               </select>
             </label>
           </div>

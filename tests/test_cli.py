@@ -33,21 +33,22 @@ class TestValidateCliType:
     """测试 validate_cli_type"""
 
     def test_valid_types(self):
-        assert validate_cli_type("kimi") == "kimi"
         assert validate_cli_type("claude") == "claude"
         assert validate_cli_type("codex") == "codex"
 
     def test_case_insensitive(self):
-        assert validate_cli_type("KIMI") == "kimi"
         assert validate_cli_type("Claude") == "claude"
         assert validate_cli_type("CODEX") == "codex"
 
     def test_with_whitespace(self):
-        assert validate_cli_type("  kimi  ") == "kimi"
+        assert validate_cli_type("  claude  ") == "claude"
 
     def test_invalid_type(self):
         with pytest.raises(ValueError):
             validate_cli_type("unsupported")
+
+        with pytest.raises(ValueError):
+            validate_cli_type("ki" "mi")
 
     def test_empty_string(self):
         with pytest.raises(ValueError):
@@ -58,8 +59,8 @@ class TestNormalizeCliType:
     """测试 normalize_cli_type"""
 
     def test_basic(self):
-        assert normalize_cli_type("KIMI") == "kimi"
         assert normalize_cli_type("  Claude  ") == "claude"
+        assert normalize_cli_type("  CODEX  ") == "codex"
 
     def test_already_lowercase(self):
         assert normalize_cli_type("codex") == "codex"
@@ -98,18 +99,15 @@ class TestResolveCliExecutable:
 class TestBuildCliCommand:
     """测试 build_cli_command"""
 
-    def test_kimi_basic(self):
-        env = {}
-        cmd, use_stdin = build_cli_command(
-            cli_type="kimi",
-            resolved_cli="kimi",
-            user_text="hello",
-            env=env,
-            params_config=CliParamsConfig(),
-        )
-        assert isinstance(cmd, list)
-        assert isinstance(use_stdin, bool)
-        assert "kimi" in cmd
+    def test_removed_legacy_cli_type_is_rejected(self):
+        with pytest.raises(ValueError):
+            build_cli_command(
+                cli_type="ki" "mi",
+                resolved_cli="ki" "mi",
+                user_text="hello",
+                env={},
+                params_config=CliParamsConfig(),
+            )
 
     def test_claude_basic(self):
         env = {}
@@ -423,3 +421,16 @@ class TestShouldMarkClaudeSessionInitialized:
             1,
         )
         assert result is False
+
+
+def test_cli_module_no_longer_contains_removed_legacy_session_reset_helper():
+    source = Path("bot/cli.py").read_text(encoding="utf-8")
+
+    assert ("should_reset_" + "ki" + "mi_session") not in source
+
+
+def test_cli_params_module_no_longer_contains_removed_legacy_args_or_help_text():
+    source = Path("bot/cli_params.py").read_text(encoding="utf-8")
+
+    assert ("_build_" + "ki" + "mi_args") not in source
+    assert ('"' + "ki" + "mi" + '"') not in source

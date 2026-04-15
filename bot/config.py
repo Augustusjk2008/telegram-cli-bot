@@ -21,10 +21,6 @@ except ImportError:
     pass  # python-dotenv 未安装时跳过
 
 # ============ 环境变量读取 ============
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "your_bot_token_here")
-TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "true").lower() == "true"
-
-
 def _split_csv_env(raw_value: str) -> List[str]:
     return [item.strip() for item in (raw_value or "").split(",") if item.strip()]
 
@@ -59,26 +55,6 @@ CLAUDE_DONE_QUIET_SECONDS = float(os.environ.get("CLAUDE_DONE_QUIET_SECONDS", "2
 CLAUDE_DONE_SENTINEL_MODE = os.environ.get("CLAUDE_DONE_SENTINEL_MODE", "nonce").strip().lower()
 MANAGED_BOTS_FILE = os.environ.get("MANAGED_BOTS_FILE", "managed_bots.json")
 
-# 代理配置（用于连接 Telegram API）
-# 格式: http://host:port 或 socks5://host:port
-# 如果设置了 HTTPS_PROXY 或 HTTP_PROXY 环境变量，也会自动使用
-PROXY_URL = os.environ.get("PROXY_URL", os.environ.get("HTTPS_PROXY", os.environ.get("HTTP_PROXY", ""))).strip()
-
-# Whisper 语音识别配置
-WHISPER_ENABLED = os.environ.get("WHISPER_ENABLED", "true").lower() == "true"
-WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")  # tiny/base/small/medium/large
-WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "zh")  # zh/en/auto
-WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # cpu/cuda
-WHISPER_TEMP_DIR = os.path.abspath(os.path.expanduser(
-    os.environ.get("WHISPER_TEMP_DIR", os.path.join(os.getcwd(), ".whisper_temp"))
-))
-WHISPER_MAX_DURATION = int(os.environ.get("WHISPER_MAX_DURATION", "300"))  # 最大5分钟
-WHISPER_TIMEOUT = int(os.environ.get("WHISPER_TIMEOUT", "120"))  # 转换超时（秒）
-
-# 确保临时目录存在
-if WHISPER_ENABLED:
-    os.makedirs(WHISPER_TEMP_DIR, exist_ok=True)
-
 # Claude API 配置（用于助手模式）
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -98,9 +74,15 @@ WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() ==
 # 可选：指定 cloudflared 的完整路径；若已在 PATH 中可留空。
 WEB_TUNNEL_CLOUDFLARED_PATH = os.environ.get("WEB_TUNNEL_CLOUDFLARED_PATH", "").strip()
 WEB_TUNNEL_STATE_FILE = os.environ.get("WEB_TUNNEL_STATE_FILE", ".web_tunnel_state.json").strip() or ".web_tunnel_state.json"
+APP_UPDATE_REPOSITORY = _get_project_config("APP_UPDATE_REPOSITORY", "").strip()
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"kimi", "claude", "codex"}
+SUPPORTED_CLI_TYPES = {"claude", "codex"}
+if CLI_TYPE not in SUPPORTED_CLI_TYPES:
+    logging.warning("CLI_TYPE=%s 已不再受支持，自动回退为 codex", CLI_TYPE)
+    CLI_TYPE = "codex"
+    if not CLI_PATH:
+        CLI_PATH = CLI_TYPE
 
 DANGEROUS_COMMANDS: Set[str] = {
     "dd",
@@ -146,13 +128,6 @@ RESERVED_ALIASES = {"main"}
 
 BOT_ALIAS_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,31}$")
 
-
-def get_proxy_kwargs():
-    """返回代理配置（用于 telegram.Application 的 builder）"""
-    if PROXY_URL:
-        return {"proxy_url": PROXY_URL}
-    return {}
-
 # ============ Logging 初始化 ============
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -167,7 +142,7 @@ logging.getLogger("aiohttp").setLevel(logging.WARNING)
 RESTART_REQUESTED = False
 RESTART_EVENT: Optional[asyncio.Event] = None
 RESTART_EXIT_CODE = 75
-RESTART_SUPERVISOR_ENV = "TELEGRAM_CLI_BRIDGE_SUPERVISOR"
+RESTART_SUPERVISOR_ENV = "CLI_BRIDGE_SUPERVISOR"
 
 
 # ============ 重启相关函数 ============

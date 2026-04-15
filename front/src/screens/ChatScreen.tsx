@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
@@ -198,6 +198,161 @@ function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent): Ch
   };
 }
 
+function updateMessageById(
+  items: ChatMessage[],
+  messageId: string,
+  updater: (item: ChatMessage) => ChatMessage,
+) {
+  const index = items.findIndex((item) => item.id === messageId);
+  if (index < 0) {
+    return items;
+  }
+
+  const current = items[index];
+  const next = updater(current);
+  if (next === current) {
+    return items;
+  }
+
+  const nextItems = items.slice();
+  nextItems[index] = next;
+  return nextItems;
+}
+
+type ChatMessageRowProps = {
+  item: ChatMessage;
+  previousRole: string;
+  assistantName: string;
+  assistantAvatarName?: string;
+  userAvatarName?: string;
+  botAlias: string;
+  restoredReplyActive: boolean;
+  isStreaming: boolean;
+  isCopied: boolean;
+  traceLoadState?: { loading: boolean; error?: string };
+  onFileLinkClick: (href: string) => void;
+  onLoadTrace: (messageId: string) => void;
+  onCopyMessage: (item: ChatMessage) => void;
+  onResumeContinue: () => void;
+};
+
+const ChatMessageRow = memo(function ChatMessageRow({
+  item,
+  previousRole,
+  assistantName,
+  assistantAvatarName,
+  userAvatarName,
+  botAlias,
+  restoredReplyActive,
+  isStreaming,
+  isCopied,
+  traceLoadState,
+  onFileLinkClick,
+  onLoadTrace,
+  onCopyMessage,
+  onResumeContinue,
+}: ChatMessageRowProps) {
+  if (item.role === "system") {
+    return (
+      <div className="flex justify-center">
+        <div className="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2 text-slate-700 whitespace-pre-wrap break-all">
+          {item.text}
+        </div>
+      </div>
+    );
+  }
+
+  const isUser = item.role === "user";
+  const messageName = isUser ? "你" : assistantName;
+  const trace = item.meta?.trace;
+  const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
+  const hasTracePanel = item.role === "assistant" && traceCount > 0;
+  const canCopyAssistantMessage = item.role === "assistant" && item.state !== "streaming" && item.state !== "error";
+  const showInlineMobileAvatar = previousRole !== item.role;
+  const inlineAvatar = showInlineMobileAvatar ? (
+    <span className="sm:hidden">
+      <ChatAvatar
+        alt={`${messageName} 头像`}
+        avatarName={isUser ? userAvatarName : assistantAvatarName}
+        kind={isUser ? "user" : "bot"}
+        size={20}
+      />
+    </span>
+  ) : null;
+
+  return (
+    <div className={isUser ? "flex justify-end" : "flex justify-start"}>
+      <div className={`flex max-w-[94%] items-start gap-3 sm:max-w-[88%] ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <div className="hidden shrink-0 sm:flex items-start">
+          <ChatAvatar
+            alt={`${messageName} 头像`}
+            avatarName={isUser ? userAvatarName : assistantAvatarName}
+            kind={isUser ? "user" : "bot"}
+            size={32}
+          />
+        </div>
+        <div className="min-w-0">
+          <ChatMessageMeta
+            name={messageName}
+            createdAt={item.createdAt}
+            align={isUser ? "right" : "left"}
+            avatar={inlineAvatar}
+          />
+          <div
+            className={
+              isUser
+                ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
+                : item.state === "error"
+                  ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
+                  : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
+            }
+          >
+            {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+              <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+            ) : (
+              <ChatPlainTextMessage
+                content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
+                className={isUser ? "text-white" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
+              />
+            )}
+          </div>
+          {item.role === "assistant" && item.state === "streaming" ? (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              <span>正在输出</span>
+            </div>
+          ) : null}
+          {hasTracePanel ? (
+            <ChatTracePanel
+              messageId={item.id}
+              trace={trace}
+              traceCount={traceCount}
+              toolCallCount={item.meta?.toolCallCount}
+              processCount={item.meta?.processCount}
+              elapsedSeconds={canCopyAssistantMessage ? item.elapsedSeconds : undefined}
+              copyLabel={canCopyAssistantMessage ? (isCopied ? "已复制" : "复制") : undefined}
+              onCopy={canCopyAssistantMessage ? (() => void onCopyMessage(item)) : undefined}
+              isLoading={Boolean(traceLoadState?.loading)}
+              loadError={traceLoadState?.error}
+              onLoadTrace={() => void onLoadTrace(item.id)}
+            />
+          ) : null}
+          {canCopyAssistantMessage && !hasTracePanel ? (
+            <ChatMessageActions
+              elapsedSeconds={item.elapsedSeconds}
+              copyLabel={isCopied ? "已复制" : "复制"}
+              onCopy={() => void onCopyMessage(item)}
+            />
+          ) : null}
+          {item.id === restoredAssistantId(botAlias) && restoredReplyActive ? (
+            <RestoredReplyNotice disabled={isStreaming} onContinue={() => void onResumeContinue()} />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export function ChatScreen({
   botAlias,
   client = new MockWebBotClient(),
@@ -234,10 +389,35 @@ export function ChatScreen({
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
+  const itemsRef = useRef<ChatMessage[]>([]);
+  const traceLoadStateRef = useRef<Record<string, { loading: boolean; error?: string }>>({});
+  const workingDirRef = useRef("");
+  const botOverviewRef = useRef<BotOverview | null>(null);
+  const restoredReplyRef = useRef<RunningReply | null>(null);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    traceLoadStateRef.current = traceLoadState;
+  }, [traceLoadState]);
+
+  useEffect(() => {
+    workingDirRef.current = workingDir;
+  }, [workingDir]);
+
+  useEffect(() => {
+    botOverviewRef.current = botOverview;
+  }, [botOverview]);
+
+  useEffect(() => {
+    restoredReplyRef.current = restoredReply;
+  }, [restoredReply]);
 
   function appendSystemMessage(text: string) {
     setItems((prev) => [
@@ -370,6 +550,8 @@ export function ChatScreen({
     };
   }, [botAlias, client, streamMode]);
 
+  const lastItem = items[items.length - 1];
+
   useEffect(() => {
     if (!isVisible || loading) {
       return;
@@ -381,7 +563,7 @@ export function ChatScreen({
       bottomAnchorRef.current.scrollIntoView({ block: "end" });
     }
     forceAutoScrollRef.current = false;
-  }, [isVisible, loading, items, isStreaming]);
+  }, [isVisible, isStreaming, lastItem?.id, lastItem?.state, lastItem?.text, loading, items.length]);
 
   function updateAutoScrollStickiness() {
     const container = scrollContainerRef.current;
@@ -392,7 +574,7 @@ export function ChatScreen({
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
   }
 
-  async function loadPreview(name: string, mode: "preview" | "full") {
+  const loadPreview = useCallback(async (name: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     setError("");
     try {
@@ -407,26 +589,26 @@ export function ChatScreen({
     } finally {
       setPreviewLoading(false);
     }
-  }
+  }, [botAlias, client]);
 
-  function handleFileLinkClick(href: string) {
-    const nextPath = resolvePreviewFilePath(href, workingDir);
+  const handleFileLinkClick = useCallback((href: string) => {
+    const nextPath = resolvePreviewFilePath(href, workingDirRef.current);
     if (!nextPath) {
       setError("暂不支持预览该文件链接");
       return;
     }
     void loadPreview(nextPath, "preview");
-  }
+  }, [loadPreview]);
 
-  async function loadMessageTrace(messageId: string) {
-    const currentMessage = items.find((item) => item.id === messageId);
+  const loadMessageTrace = useCallback(async (messageId: string) => {
+    const currentMessage = itemsRef.current.find((item) => item.id === messageId);
     if (!currentMessage || currentMessage.role !== "assistant") {
       return;
     }
     if ((currentMessage.meta?.trace || []).length > 0) {
       return;
     }
-    if ((traceLoadState[messageId]?.loading)) {
+    if ((traceLoadStateRef.current[messageId]?.loading)) {
       return;
     }
     if (!(currentMessage.meta?.traceCount || 0)) {
@@ -442,20 +624,16 @@ export function ChatScreen({
 
     try {
       const traceDetails = await client.getMessageTrace(botAlias, messageId);
-      setItems((prev) => prev.map((item) => (
-        item.id === messageId
-          ? {
-              ...item,
-              meta: mergeMessageMeta(item.meta, {
-                trace: traceDetails.trace,
-                traceCount: traceDetails.traceCount,
-                toolCallCount: traceDetails.toolCallCount,
-                processCount: traceDetails.processCount,
-                traceVersion: 1,
-              }),
-            }
-          : item
-      )));
+      setItems((prev) => updateMessageById(prev, messageId, (item) => ({
+        ...item,
+        meta: mergeMessageMeta(item.meta, {
+          trace: traceDetails.trace,
+          traceCount: traceDetails.traceCount,
+          toolCallCount: traceDetails.toolCallCount,
+          processCount: traceDetails.processCount,
+          traceVersion: 1,
+        }),
+      })));
       setTraceLoadState((prev) => ({
         ...prev,
         [messageId]: {
@@ -471,9 +649,9 @@ export function ChatScreen({
         },
       }));
     }
-  }
+  }, [botAlias, client]);
 
-  async function handleSend(text: string) {
+  const handleSend = useCallback(async (text: string) => {
     const localStartedAtMs = Date.now();
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -509,13 +687,11 @@ export function ChatScreen({
           if (usingPreviewReplace) {
             return;
           }
-          setItems((prev) =>
-            prev.map((item) =>
-              item.id === assistantId
-                ? { ...item, text: item.text + chunk, state: "streaming" }
-                : item,
-            ),
-          );
+          setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+            ...item,
+            text: item.text + chunk,
+            state: "streaming",
+          })));
         },
         (status) => {
           if (typeof status.elapsedSeconds === "number") {
@@ -523,23 +699,15 @@ export function ChatScreen({
           }
           if (status.previewText) {
             usingPreviewReplace = true;
-            setItems((prev) =>
-              prev.map((item) =>
-                item.id === assistantId
-                  ? { ...item, text: status.previewText || item.text, state: "streaming" }
-                  : item,
-              ),
-            );
+            setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+              ...item,
+              text: status.previewText || item.text,
+              state: "streaming",
+            })));
           }
         },
         (traceEvent) => {
-          setItems((prev) =>
-            prev.map((item) =>
-              item.id === assistantId
-                ? appendTraceToMessage(item, traceEvent)
-                : item,
-            ),
-          );
+          setItems((prev) => updateMessageById(prev, assistantId, (item) => appendTraceToMessage(item, traceEvent)));
         },
       );
 
@@ -551,33 +719,27 @@ export function ChatScreen({
         elapsedSeconds,
       };
 
-      setItems((prev) => prev.map((item) => (
-        item.id === assistantId
-          ? {
-              ...finalizedMessage,
-              meta: mergeMessageMeta(item.meta, finalizedMessage.meta),
-            }
-          : item
-      )));
+      setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+        ...finalizedMessage,
+        meta: mergeMessageMeta(item.meta, finalizedMessage.meta),
+      })));
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "发送失败";
       setError(message);
-      setItems((prev) =>
-        prev.map((item) =>
-          item.id === assistantId
-            ? { ...item, text: message, state: "error" }
-            : item,
-        ),
-      );
+      setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+        ...item,
+        text: message,
+        state: "error",
+      })));
     } finally {
       setIsStreaming(false);
       setStreamMode("");
       setStreamStartedAtMs(null);
     }
-  }
+  }, [botAlias, client, onUnreadResult]);
 
   async function handleResetSession() {
     setActionLoading("reset");
@@ -640,7 +802,7 @@ export function ChatScreen({
     }
   }
 
-  async function handleCopyMessage(item: ChatMessage) {
+  const handleCopyMessage = useCallback(async (item: ChatMessage) => {
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error("当前环境不支持复制");
@@ -653,14 +815,15 @@ export function ChatScreen({
     } catch (err) {
       setError(err instanceof Error ? err.message : "复制失败");
     }
-  }
+  }, []);
 
-  async function handleResumeContinue() {
-    if (!restoredReply || isStreaming) {
+  const handleResumeContinue = useCallback(async () => {
+    const activeRestoredReply = restoredReplyRef.current;
+    if (!activeRestoredReply || isStreaming) {
       return;
     }
-    await handleSend(buildResumePrompt(botOverview?.botMode, restoredReply.previewText));
-  }
+    await handleSend(buildResumePrompt(botOverviewRef.current?.botMode, activeRestoredReply.previewText));
+  }, [handleSend, isStreaming]);
 
   const killTaskActive = isStreaming || actionLoading === "kill";
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
@@ -741,109 +904,25 @@ export function ChatScreen({
             暂无消息，开始聊天吧
           </div>
         ) : null}
-        {items.map((item, index) => {
-          if (item.role === "system") {
-            return (
-              <div key={item.id} className="flex justify-center">
-                <div className="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2 text-slate-700 whitespace-pre-wrap break-all">
-                  {item.text}
-                </div>
-              </div>
-            );
-          }
-
-          const isUser = item.role === "user";
-          const messageName = isUser ? "你" : assistantName;
-          const isRestoredAssistant = item.id === restoredAssistantId(botAlias) && Boolean(restoredReply);
-          const trace = item.meta?.trace;
-          const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
-          const hasTracePanel = item.role === "assistant" && traceCount > 0;
-          const canCopyAssistantMessage = item.role === "assistant" && item.state !== "streaming" && item.state !== "error";
-          const previousRole = index > 0 ? items[index - 1]?.role : "";
-          const showInlineMobileAvatar = previousRole !== item.role;
-          const inlineAvatar = showInlineMobileAvatar ? (
-            <span className="sm:hidden">
-              <ChatAvatar
-                alt={`${messageName} 头像`}
-                avatarName={isUser ? userAvatarName : assistantAvatarName}
-                kind={isUser ? "user" : "bot"}
-                size={20}
-              />
-            </span>
-          ) : null;
-
-          return (
-            <div key={item.id} className={isUser ? "flex justify-end" : "flex justify-start"}>
-              <div className={`flex max-w-[94%] items-start gap-3 sm:max-w-[88%] ${isUser ? "flex-row-reverse" : "flex-row"}`}>
-                <div className="hidden shrink-0 sm:flex items-start">
-                  <ChatAvatar
-                    alt={`${messageName} 头像`}
-                    avatarName={isUser ? userAvatarName : assistantAvatarName}
-                    kind={isUser ? "user" : "bot"}
-                    size={32}
-                  />
-                </div>
-                <div className="min-w-0">
-                  <ChatMessageMeta
-                    name={messageName}
-                    createdAt={item.createdAt}
-                    align={isUser ? "right" : "left"}
-                    avatar={inlineAvatar}
-                  />
-                  <div
-                    className={
-                      isUser
-                        ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
-                        : item.state === "error"
-                          ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
-                          : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
-                    }
-                  >
-                    {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
-                      <ChatMarkdownMessage content={item.text} onFileLinkClick={handleFileLinkClick} />
-                    ) : (
-                      <ChatPlainTextMessage
-                        content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
-                        className={isUser ? "text-white" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
-                      />
-                    )}
-                  </div>
-                  {item.role === "assistant" && item.state === "streaming" ? (
-                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
-                      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                      <span>正在输出</span>
-                    </div>
-                  ) : null}
-                  {hasTracePanel ? (
-                    <ChatTracePanel
-                      messageId={item.id}
-                      trace={trace}
-                      traceCount={traceCount}
-                      toolCallCount={item.meta?.toolCallCount}
-                      processCount={item.meta?.processCount}
-                      elapsedSeconds={canCopyAssistantMessage ? item.elapsedSeconds : undefined}
-                      copyLabel={canCopyAssistantMessage ? (copiedMessageId === item.id ? "已复制" : "复制") : undefined}
-                      onCopy={canCopyAssistantMessage ? (() => void handleCopyMessage(item)) : undefined}
-                      isLoading={Boolean(traceLoadState[item.id]?.loading)}
-                      loadError={traceLoadState[item.id]?.error}
-                      onLoadTrace={() => void loadMessageTrace(item.id)}
-                    />
-                  ) : null}
-                  {canCopyAssistantMessage && !hasTracePanel ? (
-                    <ChatMessageActions
-                      elapsedSeconds={item.elapsedSeconds}
-                      copyLabel={copiedMessageId === item.id ? "已复制" : "复制"}
-                      onCopy={() => void handleCopyMessage(item)}
-                    />
-                  ) : null}
-                  {isRestoredAssistant ? (
-                    <RestoredReplyNotice disabled={isStreaming} onContinue={() => void handleResumeContinue()} />
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {items.map((item, index) => (
+          <ChatMessageRow
+            key={item.id}
+            item={item}
+            previousRole={index > 0 ? items[index - 1]?.role : ""}
+            assistantName={assistantName}
+            assistantAvatarName={assistantAvatarName}
+            userAvatarName={userAvatarName}
+            botAlias={botAlias}
+            restoredReplyActive={Boolean(restoredReply)}
+            isStreaming={isStreaming}
+            isCopied={copiedMessageId === item.id}
+            traceLoadState={traceLoadState[item.id]}
+            onFileLinkClick={handleFileLinkClick}
+            onLoadTrace={loadMessageTrace}
+            onCopyMessage={handleCopyMessage}
+            onResumeContinue={handleResumeContinue}
+          />
+        ))}
         <div ref={bottomAnchorRef} aria-hidden="true" />
       </section>
       {isVisible && onToggleImmersive ? (

@@ -6,11 +6,13 @@ import asyncio
 import json
 import struct
 import subprocess
+import time
 import zlib
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
@@ -19,7 +21,7 @@ from bot.assistant_docs import ManagedPromptSyncResult
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
-from bot.models import BotProfile
+from bot.models import BotProfile, UserSession
 from bot.session_store import save_session
 from bot.web.server import WebApiServer
 from bot.web.api_service import (
@@ -27,6 +29,7 @@ from bot.web.api_service import (
     _stream_cli_chat,
     _build_stream_status_event,
     WebApiError,
+    build_session_snapshot,
     change_working_directory,
     get_directory_listing,
     get_history,
@@ -71,6 +74,24 @@ def _png_bytes(width: int, height: int) -> bytes:
     )
 
 
+def test_web_api_service_no_longer_imports_telegram_shell_or_admin_handlers():
+    source = Path("bot/web/api_service.py").read_text(encoding="utf-8")
+
+    assert ("from bot." + "handlers.admin import") not in source
+    assert ("from bot." + "handlers.shell import") not in source
+    assert ("should_reset_" + "ki" + "mi_session") not in source
+    assert ("ki" + "mi_session_id") not in source
+    assert ('cli_type == "' + "ki" + "mi" + '"') not in source
+
+
+def test_web_server_module_no_longer_imports_telegram_runtime():
+    source = Path("bot/web/server.py").read_text(encoding="utf-8")
+
+    assert ("from " + "telegram") not in source
+    assert "Bot(" not in source
+    assert "HTTPXRequest" not in source
+
+
 @pytest.fixture
 def web_manager(temp_dir: Path) -> MultiBotManager:
     storage_file = temp_dir / "managed_bots.json"
@@ -78,8 +99,8 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
     profile = BotProfile(
         alias="main",
         token="dummy-token",
-        cli_type="kimi",
-        cli_path="kimi",
+        cli_type="codex",
+        cli_path="codex",
         working_dir=str(temp_dir),
         enabled=True,
     )
@@ -117,6 +138,22 @@ def test_overview_includes_running_reply_snapshot(web_manager: MultiBotManager):
     }
 
 
+def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBotManager):
+    real_get_session = api_service.get_session_for_alias
+    call_count = 0
+
+    def counted_get_session(manager, alias, user_id):
+      nonlocal call_count
+      call_count += 1
+      return real_get_session(manager, alias, user_id)
+
+    with patch("bot.web.api_service.get_session_for_alias", side_effect=counted_get_session):
+        overview = get_overview(web_manager, "main", 1001)
+
+    assert overview["bot"]["alias"] == "main"
+    assert call_count == 1
+
+
 def test_list_bots_includes_processing_state_for_current_user(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     with session._lock:
@@ -128,7 +165,31 @@ def test_list_bots_includes_processing_state_for_current_user(web_manager: Multi
     assert items[0]["is_processing"] is True
 
 
+def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyPatch):
+    persisted_preview_texts: list[str] = []
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        working_dir="C:\\workspace",
+    )
+    session.persist_hook = lambda current: persisted_preview_texts.append(current.running_preview_text)
+    monkeypatch.setattr("bot.models.SESSION_PERSIST_DEBOUNCE_SECONDS", 0.01)
+
+    session.start_running_reply("hello")
+    session.update_running_reply("第一段")
+    session.update_running_reply("第二段")
+    time.sleep(0.04)
+
+    assert persisted_preview_texts == ["第二段"]
+
+    session.clear_running_reply()
+
+    assert persisted_preview_texts[-1] == ""
+
+
 def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: Path):
+    web_manager.main_profile.avatar_name = "bot-default.png"
     web_manager.managed_profiles["team2"] = BotProfile(
         alias="team2",
         token="",
@@ -149,7 +210,6 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
 def test_change_working_directory_clears_session_ids(web_manager: MultiBotManager, temp_dir: Path):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-old"
-    session.kimi_session_id = "kimi-old"
     session.claude_session_id = "claude-old"
     session.claude_session_initialized = True
 
@@ -161,9 +221,23 @@ def test_change_working_directory_clears_session_ids(web_manager: MultiBotManage
     assert result["working_dir"] == str(subdir)
     assert session.working_dir == str(subdir)
     assert session.codex_session_id is None
-    assert session.kimi_session_id is None
     assert session.claude_session_id is None
     assert session.claude_session_initialized is False
+
+
+def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.codex_session_id = "thread-1"
+    session.claude_session_id = "claude-1"
+    session.claude_session_initialized = True
+
+    snapshot = build_session_snapshot(web_manager.main_profile, session)
+
+    assert snapshot["session_ids"] == {
+        "codex_session_id": "thread-1",
+        "claude_session_id": "claude-1",
+        "claude_session_initialized": True,
+    }
 
 
 def test_assistant_change_directory_only_updates_file_browser_path(web_manager: MultiBotManager, temp_dir: Path):
@@ -840,7 +914,7 @@ async def test_admin_restart_returns_response_before_triggering_restart(web_mana
 
 
 @pytest.mark.asyncio
-async def test_admin_add_bot_route_accepts_empty_token_for_web_only_bot(
+async def test_admin_add_bot_route_no_longer_requires_token_field(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     temp_dir: Path,
@@ -858,7 +932,6 @@ async def test_admin_add_bot_route_accepts_empty_token_for_web_only_bot(
                     "/api/admin/bots",
                     json={
                         "alias": "web_only",
-                        "token": "",
                         "bot_mode": "cli",
                         "cli_type": "codex",
                         "cli_path": "codex",
@@ -954,7 +1027,7 @@ async def test_admin_update_avatar_route_persists_avatar_selection(
 
     avatar_dir = temp_dir / "assets" / "avatars"
     avatar_dir.mkdir(parents=True)
-    (avatar_dir / "kimi-teal.png").write_bytes(_png_bytes(64, 64))
+    (avatar_dir / "mint-teal.png").write_bytes(_png_bytes(64, 64))
     monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
 
     web_manager.managed_profiles["team2"] = BotProfile(
@@ -972,13 +1045,13 @@ async def test_admin_update_avatar_route_persists_avatar_selection(
         async with TestClient(test_server) as client:
             resp = await client.patch(
                 "/api/admin/bots/team2/avatar",
-                json={"avatar_name": "kimi-teal.png"},
+                json={"avatar_name": "mint-teal.png"},
             )
             assert resp.status == 200
             payload = await resp.json()
 
-    assert payload["data"]["bot"]["avatar_name"] == "kimi-teal.png"
-    assert web_manager.managed_profiles["team2"].avatar_name == "kimi-teal.png"
+    assert payload["data"]["bot"]["avatar_name"] == "mint-teal.png"
+    assert web_manager.managed_profiles["team2"].avatar_name == "mint-teal.png"
 
 
 @pytest.mark.asyncio
@@ -1115,6 +1188,74 @@ async def test_admin_git_proxy_route_rejects_invalid_port(
 
 
 @pytest.mark.asyncio
+async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    base_status = {
+        "current_version": "1.0.0",
+        "update_enabled": True,
+        "update_channel": "release",
+        "last_checked_at": "",
+        "last_available_version": "",
+        "last_available_release_url": "",
+        "last_available_notes": "",
+        "pending_update_version": "",
+        "pending_update_path": "",
+        "pending_update_notes": "",
+        "pending_update_platform": "",
+        "update_last_error": "",
+    }
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.get_update_status", return_value=base_status), \
+                 patch("bot.web.server.set_update_enabled", return_value={**base_status, "update_enabled": False}) as toggle_mock, \
+                 patch("bot.web.server.check_for_updates", return_value={**base_status, "last_available_version": "1.0.1"}) as check_mock, \
+                 patch("bot.web.server.download_latest_update", return_value={**base_status, "pending_update_version": "1.0.1"}) as download_mock:
+                resp = await client.get("/api/admin/update")
+                assert resp.status == 200
+                resp = await client.patch("/api/admin/update", json={"update_enabled": False})
+                assert resp.status == 200
+                resp = await client.post("/api/admin/update/check")
+                assert resp.status == 200
+                resp = await client.post("/api/admin/update/download")
+                assert resp.status == 200
+
+    toggle_mock.assert_called_once_with(False)
+    check_mock.assert_called_once()
+    download_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_web_server_start_schedules_auto_update_check_when_enabled(web_manager):
+    server = WebApiServer(web_manager)
+    created_coroutines: list[Any] = []
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        coro.close()
+        return MagicMock()
+
+    with patch("bot.web.server.get_update_status", return_value={"update_enabled": True}), \
+         patch("bot.web.server.asyncio.create_task", side_effect=fake_create_task) as create_task, \
+         patch.object(server, "_runner", None):
+        with patch.object(server, "_build_app", return_value=web.Application()):
+            with patch("bot.web.server.web.AppRunner") as runner_cls:
+                runner = AsyncMock()
+                runner_cls.return_value = runner
+                with patch("bot.web.server.web.TCPSite") as site_cls:
+                    site = AsyncMock()
+                    site_cls.return_value = site
+                    await server.start()
+
+    create_task.assert_called()
+    assert created_coroutines
+
+
+@pytest.mark.asyncio
 async def test_admin_rename_bot_route_updates_alias(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
@@ -1189,14 +1330,10 @@ async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotMan
 
 
 @pytest.mark.asyncio
-async def test_admin_tunnel_restart_notifies_main_bot_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+async def test_admin_tunnel_restart_copies_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
-
-    fake_main_bot = MagicMock()
-    fake_main_bot.send_message = AsyncMock()
-    web_manager.applications["main"] = MagicMock(bot=fake_main_bot)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
 
     class FakeTunnelService:
         def snapshot(self):
@@ -1230,20 +1367,11 @@ async def test_admin_tunnel_restart_notifies_main_bot_public_url(web_manager: Mu
             resp = await client.post("/api/admin/tunnel/restart")
             assert resp.status == 200
 
-    fake_main_bot.send_message.assert_awaited_once()
-    sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
-    assert "fresh.trycloudflare.com" in sent_text
     server._copy_text_to_clipboard.assert_called_once_with("https://fresh.trycloudflare.com")
 
 
 @pytest.mark.asyncio
-async def test_notify_tunnel_public_url_still_copies_when_telegram_send_fails(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
-
-    fake_main_bot = MagicMock()
-    fake_main_bot.send_message = AsyncMock(side_effect=RuntimeError("network down"))
-    web_manager.applications["main"] = MagicMock(bot=fake_main_bot)
-
+async def test_notify_tunnel_public_url_returns_clipboard_result_for_quick_tunnel(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)
     server._copy_text_to_clipboard = MagicMock(return_value=True)
 
@@ -1260,97 +1388,34 @@ async def test_notify_tunnel_public_url_still_copies_when_telegram_send_fails(we
         reason="web_server_start",
     )
 
-    assert result is False
-    fake_main_bot.send_message.assert_awaited_once()
+    assert result is True
     server._copy_text_to_clipboard.assert_called_once_with("https://failed.trycloudflare.com")
 
 
 @pytest.mark.asyncio
-async def test_notify_tunnel_public_url_uses_main_profile_token_without_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
-    monkeypatch.setattr("bot.web.server.get_proxy_kwargs", lambda: {})
-
+async def test_notify_tunnel_public_url_returns_false_when_clipboard_copy_fails(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)
-    server._copy_text_to_clipboard = MagicMock(return_value=True)
-    fake_notification_bot = MagicMock()
-    fake_notification_bot.initialize = AsyncMock()
-    fake_notification_bot.send_message = AsyncMock()
-    fake_notification_bot.shutdown = AsyncMock()
-    fake_request = object()
+    server._copy_text_to_clipboard = MagicMock(return_value=False)
 
-    with patch("bot.web.server.HTTPXRequest", return_value=fake_request) as httpx_request_cls, patch(
-        "bot.web.server.Bot", return_value=fake_notification_bot
-    ) as bot_cls:
-        result = await server._notify_tunnel_public_url(
-            {
-                "mode": "cloudflare_quick",
-                "status": "running",
-                "source": "quick_tunnel",
-                "public_url": "https://web-only.trycloudflare.com",
-                "local_url": "http://127.0.0.1:8765",
-                "last_error": "",
-                "pid": 1234,
-            },
-            reason="web_server_start",
-        )
+    result = await server._notify_tunnel_public_url(
+        {
+            "mode": "cloudflare_quick",
+            "status": "running",
+            "source": "quick_tunnel",
+            "public_url": "https://web-only.trycloudflare.com",
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "pid": 1234,
+        },
+        reason="web_server_start",
+    )
 
-    assert result is True
+    assert result is False
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only.trycloudflare.com")
-    httpx_request_cls.assert_called_once_with(
-        connection_pool_size=8,
-        read_timeout=60,
-        write_timeout=60,
-        connect_timeout=30,
-        pool_timeout=30,
-    )
-    bot_cls.assert_called_once_with(token="dummy-token", request=fake_request)
-    fake_notification_bot.initialize.assert_awaited_once()
-    fake_notification_bot.send_message.assert_awaited_once_with(
-        chat_id=1001,
-        text=ANY,
-        parse_mode="HTML",
-    )
-    fake_notification_bot.shutdown.assert_awaited_once()
-    sent_text = fake_notification_bot.send_message.await_args.kwargs["text"]
-    assert "https://web-only.trycloudflare.com" in sent_text
-
-
-def test_build_notification_bot_falls_back_to_proxy_url_for_older_ptb(
-    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch
-):
-    server = WebApiServer(web_manager)
-    fake_request = object()
-    calls: list[dict[str, object]] = []
-
-    def fake_httpx_request(**kwargs):
-        calls.append(dict(kwargs))
-        if "proxy" in kwargs:
-            raise TypeError("unexpected keyword argument 'proxy'")
-        return fake_request
-
-    monkeypatch.setattr("bot.web.server.get_proxy_kwargs", lambda: {"proxy_url": "http://127.0.0.1:7897"})
-
-    with patch("bot.web.server.HTTPXRequest", side_effect=fake_httpx_request) as httpx_request_cls, patch(
-        "bot.web.server.Bot", return_value=MagicMock()
-    ) as bot_cls:
-        bot = server._build_notification_bot()
-
-    assert bot is bot_cls.return_value
-    assert len(calls) == 2
-    assert calls[0]["proxy"] == "http://127.0.0.1:7897"
-    assert calls[1]["proxy_url"] == "http://127.0.0.1:7897"
-    bot_cls.assert_called_once_with(token="dummy-token", request=fake_request)
-    assert httpx_request_cls.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
-
-    fake_main_bot = MagicMock()
-    fake_main_bot.send_message = AsyncMock()
-    web_manager.applications["main"] = MagicMock(bot=fake_main_bot)
-
+async def test_web_server_start_copies_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     class FakeTunnelService:
         def should_autostart(self):
             return True
@@ -1401,10 +1466,19 @@ async def test_web_server_start_notifies_main_bot_public_url_on_autostart(web_ma
     await server.start()
     await server.stop()
 
-    fake_main_bot.send_message.assert_awaited_once()
-    sent_text = fake_main_bot.send_message.await_args.kwargs["text"]
-    assert "startup.trycloudflare.com" in sent_text
     server._copy_text_to_clipboard.assert_called_once_with("https://startup.trycloudflare.com")
+
+
+@pytest.mark.asyncio
+async def test_health_payload_omits_telegram_status(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+
+    response = await server.health(MagicMock())
+    payload = json.loads(response.text)
+
+    assert payload["ok"] is True
+    assert payload["service"] == "telegram-cli-bridge-web"
+    assert "telegram_running" not in payload
 
 
 @pytest.mark.asyncio
@@ -1456,10 +1530,7 @@ async def test_web_server_start_logs_bracketed_ipv6_url(
 
 
 @pytest.mark.asyncio
-async def test_web_server_start_in_web_only_mode_pushes_tunnel_to_telegram_via_profile_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
-    monkeypatch.setattr("bot.web.server.get_proxy_kwargs", lambda: {})
-
+async def test_web_server_start_in_web_only_mode_copies_tunnel_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     class FakeTunnelService:
         def should_autostart(self):
             return True
@@ -1507,43 +1578,14 @@ async def test_web_server_start_in_web_only_mode_pushes_tunnel_to_telegram_via_p
 
     server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
     server._copy_text_to_clipboard = MagicMock(return_value=True)
-    fake_notification_bot = MagicMock()
-    fake_notification_bot.initialize = AsyncMock()
-    fake_notification_bot.send_message = AsyncMock()
-    fake_notification_bot.shutdown = AsyncMock()
-    fake_request = object()
-
-    with patch("bot.web.server.HTTPXRequest", return_value=fake_request) as httpx_request_cls, patch(
-        "bot.web.server.Bot", return_value=fake_notification_bot
-    ) as bot_cls:
-        await server.start()
-        await server.stop()
+    await server.start()
+    await server.stop()
 
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only-start.trycloudflare.com")
-    httpx_request_cls.assert_called_once_with(
-        connection_pool_size=8,
-        read_timeout=60,
-        write_timeout=60,
-        connect_timeout=30,
-        pool_timeout=30,
-    )
-    bot_cls.assert_called_once_with(token="dummy-token", request=fake_request)
-    fake_notification_bot.initialize.assert_awaited_once()
-    fake_notification_bot.send_message.assert_awaited_once_with(
-        chat_id=1001,
-        text=ANY,
-        parse_mode="HTML",
-    )
-    fake_notification_bot.shutdown.assert_awaited_once()
-    sent_text = fake_notification_bot.send_message.await_args.kwargs["text"]
-    assert "https://web-only-start.trycloudflare.com" in sent_text
 
 
 @pytest.mark.asyncio
-async def test_notify_tunnel_public_url_skips_telegram_without_token_or_main_application(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [1001])
-    web_manager.main_profile.token = ""
-
+async def test_notify_tunnel_public_url_skips_non_quick_tunnel(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)
     server._copy_text_to_clipboard = MagicMock(return_value=True)
 
@@ -1551,7 +1593,7 @@ async def test_notify_tunnel_public_url_skips_telegram_without_token_or_main_app
         {
             "mode": "cloudflare_quick",
             "status": "running",
-            "source": "quick_tunnel",
+            "source": "configured",
             "public_url": "https://no-token.trycloudflare.com",
             "local_url": "http://127.0.0.1:8765",
             "last_error": "",
@@ -1561,32 +1603,13 @@ async def test_notify_tunnel_public_url_skips_telegram_without_token_or_main_app
     )
 
     assert result is False
-    server._copy_text_to_clipboard.assert_called_once_with("https://no-token.trycloudflare.com")
+    server._copy_text_to_clipboard.assert_not_called()
 
 
 def test_read_missing_file_raises(web_manager: MultiBotManager):
     with pytest.raises(WebApiError) as exc_info:
         read_file_content(web_manager, "main", 1001, "missing.txt")
     assert exc_info.value.code == "file_not_found"
-
-
-@pytest.mark.asyncio
-async def test_run_cli_chat_resets_and_persists_kimi_session(web_manager: MultiBotManager):
-    session = get_session_for_alias(web_manager, "main", 1001)
-    session.kimi_session_id = "kimi-stale"
-    session.persist = MagicMock()
-
-    fake_process = MagicMock()
-
-    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
-         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
-         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, return_value=("session expired", 1, False)):
-        data = await run_cli_chat(web_manager, "main", 1001, "hello")
-
-    assert data["returncode"] == 1
-    assert session.kimi_session_id is None
-    session.persist.assert_called()
 
 
 @pytest.mark.asyncio
@@ -1688,10 +1711,14 @@ async def test_run_cli_chat_claude_done_detector_avoids_communicate_and_strips_o
 async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
     fake_process = MagicMock()
 
-    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
-         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, return_value=("完成回复", 0, False)):
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("完成回复", "thread-1", 0, False),
+         ):
         data = await run_cli_chat(web_manager, "main", 1001, "hello")
 
     assert data["output"] == "完成回复"
@@ -1880,6 +1907,95 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trace_error(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root-claude-stream"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"assistant","session_id":"session-1","message":{"content":[{"type":"text","text":"我先检查最近变更。"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git status --short"}}]}}\n',
+                '{"type":"result","subtype":"success","session_id":"session-1","result":"最近有 1 个文件修改。"}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(False, False, "hash-current"),
+         ), \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value=AssistantPromptPayload(
+                 prompt_text="assistant payload",
+                 managed_prompt_hash_seen="hash-current",
+             ),
+         ), \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
+         patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.list_pending_capture_ids", return_value=["cap_1"]), \
+         patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
+         patch("bot.web.api_service.finalize_compaction", return_value=False), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=MagicMock(enabled=False, prompt_text="assistant payload")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "assistant1", 1001, "查看最近变更")]
+
+    trace_events = [event for event in events if event["type"] == "trace"]
+    done_event = next(event for event in events if event["type"] == "done")
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+
+    assert [event["event"]["kind"] for event in trace_events] == ["commentary", "tool_call"]
+    assert trace_events[1]["event"]["summary"] == "git status --short"
+    assert done_event["message"]["role"] == "assistant"
+    assert done_event["message"]["content"] == "最近有 1 个文件修改。"
+    assert session.claude_session_initialized is True
+    assert session.managed_prompt_hash_seen == "hash-current"
+
+
+@pytest.mark.asyncio
 async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotManager, temp_dir: Path):
     workdir = temp_dir / "assistant-cli"
     workdir.mkdir()
@@ -1984,8 +2100,8 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     fake_process.poll.return_value = 0
     fake_process.wait.return_value = 0
 
-    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
-         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
         events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
 

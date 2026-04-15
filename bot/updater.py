@@ -1,0 +1,257 @@
+"""GitHub Release based updater."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tarfile
+import urllib.request
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from bot import app_settings
+from bot.config import APP_UPDATE_REPOSITORY
+from bot.version import APP_VERSION
+
+UPDATE_CACHE_DIR_NAME = ".updates"
+PROTECTED_UPDATE_PATHS = {
+    ".env",
+    "managed_bots.json",
+    ".session_store.json",
+    ".web_admin_settings.json",
+    ".assistant",
+    ".claude",
+    ".git",
+    ".updates",
+}
+
+
+def get_update_status() -> dict[str, Any]:
+    settings = app_settings._load_settings()
+    return {
+        "current_version": APP_VERSION,
+        "update_enabled": bool(settings["update_enabled"]),
+        "update_channel": settings["update_channel"] or "release",
+        "last_checked_at": settings["last_checked_at"],
+        "last_available_version": settings["last_available_version"],
+        "last_available_release_url": settings["last_available_release_url"],
+        "last_available_notes": settings["last_available_notes"],
+        "pending_update_version": settings["pending_update_version"],
+        "pending_update_path": settings["pending_update_path"],
+        "pending_update_notes": settings["pending_update_notes"],
+        "pending_update_platform": settings["pending_update_platform"],
+        "update_last_error": settings["update_last_error"],
+    }
+
+
+def set_update_enabled(enabled: bool) -> dict[str, Any]:
+    settings = app_settings._load_settings()
+    settings["update_enabled"] = bool(enabled)
+    app_settings._save_settings(settings)
+    return get_update_status()
+
+
+def check_for_updates() -> dict[str, Any]:
+    settings = app_settings._load_settings()
+    settings["last_checked_at"] = _now_iso()
+    settings["update_last_error"] = ""
+
+    try:
+        release = _fetch_latest_release()
+    except Exception as exc:
+        settings["update_last_error"] = str(exc)
+        app_settings._save_settings(settings)
+        return get_update_status()
+
+    settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
+    settings["last_available_release_url"] = str(release.get("html_url") or "")
+    settings["last_available_notes"] = str(release.get("body") or "")
+    app_settings._save_settings(settings)
+    return get_update_status()
+
+
+def download_latest_update(repo_root: Path | None = None) -> dict[str, Any]:
+    release = _fetch_latest_release()
+    asset = _select_release_asset(release.get("assets", []))
+    cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
+    cache_root.mkdir(parents=True, exist_ok=True)
+    target_path = cache_root / asset["name"]
+    _download_file(asset["browser_download_url"], target_path)
+
+    settings = app_settings._load_settings()
+    settings["last_checked_at"] = _now_iso()
+    settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
+    settings["last_available_release_url"] = str(release.get("html_url") or "")
+    settings["last_available_notes"] = str(release.get("body") or "")
+    settings["pending_update_version"] = _normalize_tag_name(release["tag_name"])
+    settings["pending_update_path"] = str(target_path)
+    settings["pending_update_notes"] = str(release.get("body") or "")
+    settings["pending_update_platform"] = "windows-x64" if os.name == "nt" else "linux-x64"
+    settings["update_last_error"] = ""
+    app_settings._save_settings(settings)
+    return get_update_status()
+
+
+def apply_pending_update(repo_root: Path) -> dict[str, Any]:
+    repo_root = Path(repo_root).resolve()
+    settings = app_settings._load_settings()
+    pending_path = str(settings.get("pending_update_path") or "").strip()
+    if not pending_path:
+        return {"applied": False, "reason": "no_pending_update"}
+
+    package_path = Path(pending_path)
+    if not package_path.is_absolute():
+        package_path = (repo_root / package_path).resolve()
+    if not package_path.exists():
+        settings["update_last_error"] = f"更新包不存在: {package_path}"
+        app_settings._save_settings(settings)
+        return {"applied": False, "reason": "missing_package", "path": str(package_path)}
+
+    extracted_files = 0
+    for relative_path, data in _iter_package_entries(package_path):
+        if _is_protected_update_path(relative_path):
+            continue
+
+        target_path = repo_root / relative_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+        extracted_files += 1
+
+    settings["pending_update_version"] = ""
+    settings["pending_update_path"] = ""
+    settings["pending_update_notes"] = ""
+    settings["pending_update_platform"] = ""
+    settings["update_last_error"] = ""
+    app_settings._save_settings(settings)
+    return {
+        "applied": True,
+        "version": _normalize_tag_name(settings.get("last_available_version") or settings.get("pending_update_version")),
+        "files_written": extracted_files,
+        "package_path": str(package_path),
+    }
+
+
+def _fetch_latest_release() -> dict[str, Any]:
+    repository = str(APP_UPDATE_REPOSITORY or "").strip()
+    if not repository:
+        raise RuntimeError("未配置 APP_UPDATE_REPOSITORY")
+
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/releases/latest",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"cli-bridge/{APP_VERSION}",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _select_release_asset(assets: list[dict[str, Any]]) -> dict[str, Any]:
+    expected_token = "windows" if os.name == "nt" else "linux"
+    expected_suffix = ".zip" if os.name == "nt" else ".tar.gz"
+    for asset in assets:
+        name = str(asset.get("name") or "").lower()
+        if expected_token in name and name.endswith(expected_suffix):
+            return asset
+    raise RuntimeError("未找到当前平台的 release 包")
+
+
+def _download_file(url: str, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target.with_suffix(target.suffix + ".tmp")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/octet-stream",
+            "User-Agent": f"cli-bridge/{APP_VERSION}",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        temp_path.write_bytes(response.read())
+    temp_path.replace(target)
+
+
+def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
+    if zipfile.is_zipfile(package_path):
+        return _iter_zip_entries(package_path)
+    if package_path.name.endswith(".tar.gz"):
+        return _iter_tar_entries(package_path)
+    raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
+
+
+def _iter_zip_entries(package_path: Path) -> list[tuple[str, bytes]]:
+    entries: list[tuple[str, bytes]] = []
+    with zipfile.ZipFile(package_path) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            relative_path = _normalize_archive_path(member.filename)
+            if not relative_path:
+                continue
+            entries.append((relative_path, archive.read(member)))
+    return entries
+
+
+def _iter_tar_entries(package_path: Path) -> list[tuple[str, bytes]]:
+    entries: list[tuple[str, bytes]] = []
+    with tarfile.open(package_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            relative_path = _normalize_archive_path(member.name)
+            if not relative_path:
+                continue
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                continue
+            entries.append((relative_path, extracted.read()))
+    return entries
+
+
+def _normalize_archive_path(raw_path: str) -> str:
+    parts: list[str] = []
+    for part in str(raw_path or "").replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            return ""
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _is_protected_update_path(relative_path: str) -> bool:
+    root_name = relative_path.split("/", 1)[0]
+    return relative_path in PROTECTED_UPDATE_PATHS or root_name in PROTECTED_UPDATE_PATHS
+
+
+def _normalize_tag_name(tag_name: Any) -> str:
+    value = str(tag_name or "").strip()
+    if value.lower().startswith("v"):
+        return value[1:]
+    return value
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    apply_parser = subcommands.add_parser("apply-pending")
+    apply_parser.add_argument("--repo-root", default=os.getcwd())
+    args = parser.parse_args(argv)
+
+    if args.command == "apply-pending":
+        result = apply_pending_update(Path(args.repo_root).resolve())
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("applied") or result.get("reason") == "no_pending_update" else 1
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

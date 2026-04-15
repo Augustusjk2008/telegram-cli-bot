@@ -1,132 +1,137 @@
-# Telegram CLI Bridge
+# Web AI CLI Bridge
 
-一个支持 Windows 与 Ubuntu/Debian Linux 的 Telegram / Web 双入口 AI CLI Bridge。
+一个支持 Windows 与 Ubuntu/Debian Linux 的 Web AI CLI Bridge。
 
-它可以把你在 Telegram 或 Web 页面里发出的消息，转交给本机已经安装好的 AI Coding CLI，例如：
+它把浏览器里的聊天、文件、Git 和设置操作转交给本机已经安装好的 AI Coding CLI。当前保留的 CLI 只有：
 
 - `codex`
 - `claude`
-- `kimi`
 
-当前一等支持平台：
-
-- Windows
-- Ubuntu / Debian Linux
-
-适合这样的使用场景：
-
-- 想在 Telegram 里直接和本机 CLI 对话
-- 想在网页里统一管理聊天、文件、Git 和设置
-- 想把自己的电脑变成一个长期运行的个人 AI 助手入口
+当前入口仅为 Web 页面，不再提供 Telegram 机器人入口。
 
 ## 功能概览
 
-- Telegram 聊天入口
-- Web 管理界面
-- 支持 `codex` / `claude` / `kimi`
-- 支持 Windows 与 Ubuntu/Debian Linux
-- 支持文件浏览、上传、下载、查看
-- Web 端支持 Git 概览与常见操作
-- 支持一个主 Bot + 多个托管子 Bot
-- 可选语音转文字
-- 可选 Cloudflare Quick Tunnel 手机公网访问
+- Web 聊天
+- 多 Bot 管理
+- 支持 `cli` / `assistant` 两种 Bot 模式
+- 文件浏览、预览、上传、下载
+- Git 概览、diff、stage、commit、fetch/pull/push、stash
+- CLI 参数配置
+- 可选 Cloudflare Quick Tunnel 远程访问
+- GitHub Release 自动检查与下载更新
 
 ## Assistant 约束
 
-- `assistant` 是本机唯一长期助手；本项目内最多只能创建一个 `assistant` bot
-- `assistant` 的工作目录创建后不可修改；如需换路径，只能删除 bot 后重建
-- `assistant` 的历史、记忆、proposal、upgrade 全部存放在 `<assistant_workdir>/.assistant/`
-- `assistant` 定时任务的设计方案见 [docs/assistant-cron-plan.md](docs/assistant-cron-plan.md)
+- 整个项目最多只能创建一个 `assistant` Bot
+- `assistant` 的默认工作目录创建后不可修改
+- `assistant` 的状态、proposal、upgrade、记忆都保存在 `<assistant_workdir>/.assistant/`
 
-## 安装前准备
+## 环境要求
 
-仓库当前同时支持：
+1. Python 3.10+
+2. Node.js 18+
+3. 已安装至少一个本地 CLI
+   可选：`codex` 或 `claude`
 
-- Windows 本地运行
-- Ubuntu / Debian Linux 部署
+如果你要在 Linux 上长期部署，可以结合 [docs/linux-deployment.md](docs/linux-deployment.md) 一起使用。
 
-下面的快速开始示例仍以 Windows PowerShell 为主。
+## 快速开始
 
-如果你要在 Linux 上长期部署，请直接结合这份文档一起看：
+### Windows 一键安装
 
-- `docs/linux-deployment.md`
+Windows 用户可以直接双击运行：
 
-开始前请准备好：
+```powershell
+.\install.bat
+```
 
-1. Python
-   建议使用 Python 3.10 及以上，并确保 `python` 命令可用。
-2. Telegram Bot Token
-   如果你要使用 Telegram，请到 `@BotFather` 创建机器人，拿到 `TELEGRAM_BOT_TOKEN`。
-3. 至少一个本地 CLI
-   例如 `codex`、`claude` 或 `kimi`。请先确认它已经安装完成，并且你可以在终端里直接运行它。
-4. Node.js
-   只有在你要使用 Web 界面时才需要。仅使用 Telegram 可以不装。
+安装器会按顺序检查并准备：
 
-## 5 分钟快速开始
+- Python 3.10+
+- Node.js 18+
+- Git
+- 后端依赖
+- 前端依赖与构建
+- `.env`
 
-### 1. 安装 Python 依赖
+说明：
 
-在仓库根目录执行：
+- 安装器会自动安装 Python / Node.js / Git
+- `codex` / `claude` 只检查，不会自动安装
+- 如果两者都没装，安装器会给出明显警告，并提示你后续如何处理
+
+### Linux 一键安装
+
+Ubuntu / Debian 用户可以直接运行：
+
+```bash
+bash install.sh
+```
+
+如果只想做环境检查，不执行安装：
+
+```bash
+bash install.sh --check-only
+```
+
+### 1. 安装后端依赖
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-如需语音转写功能，再额外安装：
+### 2. 安装并构建前端
 
 ```bash
-python -m pip install -r requirements-voice.txt
+cd front
+npm install
+npm run build
+cd ..
 ```
 
-### 2. 从模板生成 `.env`
-
-先复制示例配置文件：
+### 3. 生成 `.env`
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-然后编辑 `.env`，至少填下面这些字段：
+至少填这些字段：
 
 ```env
-TELEGRAM_BOT_TOKEN=填入你的 Telegram Bot Token
 CLI_TYPE=codex
 CLI_PATH=codex
 WORKING_DIR=C:\Users\YourName\project
 
-TELEGRAM_ENABLED=true
-WEB_ENABLED=false
-
-ALLOWED_USER_IDS=
+WEB_ENABLED=true
+WEB_HOST=127.0.0.1
+WEB_PORT=8765
+WEB_API_TOKEN=change-this-password
 ```
-
-如果你不想用复制命令，也可以在仓库根目录手动新建 `.env`，再填同样的内容。
-
-如果你只使用 Web，并且设置了 `TELEGRAM_ENABLED=false`，可以把 `TELEGRAM_BOT_TOKEN` 留空。
 
 说明：
 
-- `CLI_TYPE` 可选：`codex` / `claude` / `kimi`
-- `CLI_PATH` 是 CLI 可执行文件路径
-  如果该命令已经在系统 `PATH` 中，直接写 `codex` 这类命令名即可
-  如果不在 `PATH` 中，请写绝对路径
-- `WORKING_DIR` 是默认工作目录，建议填你最常操作的项目目录
-- `ALLOWED_USER_IDS` 留空表示任何能找到这个机器人账号的人都可以使用
-  正式使用时建议填你自己的 Telegram 数字用户 ID
+- `CLI_TYPE` 仅支持 `codex` / `claude`
+- `CLI_PATH` 可以是命令名，也可以是绝对路径
+- `WORKING_DIR` 是默认工作目录，建议设为你最常操作的项目目录
 
-### 3. 启动
-
-直接启动：
+### 4. 启动
 
 ```powershell
 python -m bot
 ```
 
-或者在 Windows 上用托盘方式启动：
+Windows 上也可以使用：
 
 ```powershell
 .\start.bat
 ```
+
+说明：
+
+- `start.bat` 会优先使用 `pwsh`，没有时回退到 `powershell`
+- 启动时会请求管理员权限
+- 服务会在可见控制台中直接运行，不再使用托盘图标或隐藏窗口
+- 如果未配置公网穿透，控制台会提示可用的 `.env` 配置方式
 
 Linux 上可以使用：
 
@@ -134,344 +139,41 @@ Linux 上可以使用：
 bash start.sh
 ```
 
-### 4. 开始使用
+## 自动更新
 
-在 Telegram 里打开你的机器人，先发送：
+- 在 `.env` 中填写 `APP_UPDATE_REPOSITORY=owner/repo` 后，主 Bot 设置页可检查 GitHub Release
+- 更新包下载后不会立即覆盖当前运行目录，而是在下次通过 `start.bat` / `start.ps1` / `start.sh` 启动时应用
+- 下载完成后重启后生效
 
-```text
-/start
-```
+### 5. 打开 Web
 
-然后就可以直接发普通文本消息，例如：
-
-```text
-帮我看看当前目录里有哪些 Python 文件
-```
-
-## Telegram 使用方式
-
-Telegram 是最直接的入口。只要 Bot 已启动，你就可以像聊天一样驱动本机 CLI。
-
-### 常用命令
-
-- `/start`：显示欢迎信息
-- `/reset`：重置当前会话
-- `/kill`：终止当前运行中的任务
-- `/cd <路径>`：切换工作目录
-- `/pwd`：查看当前目录
-- `/ls`：列出当前目录内容
-- `/files`：打开文件浏览
-- `/history`：查看会话历史
-- `/upload`：查看上传文件说明
-- `/download <文件>`：下载文件
-- `/cat <文件>`：查看文件内容
-- `/head <文件>`：查看文件开头
-- `/exec <命令>`：执行 shell 命令
-- `/rm <路径>`：删除文件
-- `/codex_status`：查看 Codex 相关状态
-
-### 使用建议
-
-- 平时直接发自然语言即可，不一定要用命令
-- 如果 CLI 没有在系统 `PATH` 里，优先修正 `.env` 里的 `CLI_PATH`
-- 正式使用前建议限制 `ALLOWED_USER_IDS`
-
-## Web 使用方式
-
-如果你想在浏览器里使用聊天、文件、Git 和设置页面，可以启用 Web 界面。
-
-### 1. 安装前端依赖并构建
-
-首次启用 Web 前，先构建前端：
-
-```powershell
-cd front
-npm install
-npm run build
-```
-
-### 2. 在 `.env` 中启用 Web
-
-把下面这些配置加入 `.env`：
-
-```env
-WEB_ENABLED=true
-WEB_HOST=127.0.0.1
-WEB_PORT=8765
-WEB_API_TOKEN=改成你自己的网页登录口令
-```
-
-如果你想同时开启 Telegram 和 Web，请保持：
-
-```env
-TELEGRAM_ENABLED=true
-WEB_ENABLED=true
-```
-
-### 3. 启动服务
-
-同时启用 Telegram 和 Web：
-
-```powershell
-python -m bot
-```
-
-或者：
-
-```powershell
-.\start.bat
-```
-
-如果你只想开 Web，不开 Telegram：
-
-```env
-TELEGRAM_ENABLED=false
-WEB_ENABLED=true
-```
-
-在这种纯 Web 模式下：
-
-- `TELEGRAM_BOT_TOKEN` 可以留空
-- 不会启动 Telegram
-- Cloudflare Tunnel 公网地址仍会显示在 Web 页面并复制到本机剪贴板；如果同时配置了有效的主 Bot Token 和 `ALLOWED_USER_IDS`，也会尝试通过 Telegram 推送快捷隧道地址
-
-然后可以这样启动：
-
-```powershell
-python -m bot
-```
-
-或者使用仓库自带的 Web 模式启动器：
-
-```powershell
-.\start.bat web
-```
-
-Linux 上对应命令：
-
-```bash
-bash start.sh web
-```
-
-### 4. 打开页面
-
-在浏览器访问：
+默认访问地址：
 
 ```text
 http://127.0.0.1:8765
 ```
 
-登录口令就是 `WEB_API_TOKEN`。
+登录口令使用 `.env` 里的 `WEB_API_TOKEN`。
 
-### Web 里能做什么
+## Web 页面
 
-- Chat：网页聊天
-- Files：文件浏览与预览
-- Git：查看改动、暂存、提交、拉取、推送等
-- Settings：参数、隧道、运行状态等设置
+当前前端包含这些页面：
 
-## 推荐配置示例
+- 聊天
+- 文件
+- Git
+- 设置
+- Bot 管理
 
-如果你想同时使用 Telegram 和 Web，一个比较常见的 `.env` 例子如下：
-
-```env
-TELEGRAM_BOT_TOKEN=填入你的 Telegram Bot Token
-ALLOWED_USER_IDS=123456789
-
-CLI_TYPE=codex
-CLI_PATH=codex
-WORKING_DIR=C:\Users\YourName\project
-
-TELEGRAM_ENABLED=true
-WEB_ENABLED=true
-WEB_HOST=127.0.0.1
-WEB_PORT=8765
-WEB_API_TOKEN=change-this-password
-```
-
-## 可选功能
-
-### 语音转文字
-
-项目支持 Telegram 语音消息转文字，但这是可选功能。
-
-如果你要启用它，Python 依赖请额外安装：
+## 常用开发命令
 
 ```bash
-python -m pip install -r requirements-voice.txt
-```
-
-这个文件包含语音转写所需的可选 Python 依赖：
-
-- `openai-whisper`
-- `pydub`
-- `audioop-lts`（仅在 Python 3.13 及以上按条件安装）
-
-除此之外，还需要单独准备系统级依赖：
-
-- FFmpeg
-
-相关配置项：
-
-```env
-WHISPER_ENABLED=true
-WHISPER_MODEL=small
-WHISPER_LANGUAGE=zh
-WHISPER_DEVICE=cpu
-```
-
-如果这些依赖没有装，语音功能会被跳过，文字消息功能不受影响。
-
-### 异地访问 Web
-
-如果你想在异地设备上打开 Web 页面，推荐先看：
-
-- [docs/web-remote-access.md](docs/web-remote-access.md)
-
-当前建议是：
-
-- 长期个人自用：`Tailscale Personal + Tailscale Serve`
-- 临时调试：`Cloudflare Quick Tunnel`
-
-如果你想在手机上通过公网打开 Web 页面，也可以继续使用 Cloudflare Tunnel。
-
-先说结论：
-
-- Quick Tunnel 只建议用于临时调试
-- 正式部署推荐 Named Tunnel
-- Linux 上的详细安装与 systemd 方式，见 `docs/linux-deployment.md`
-
-先确保：
-
-- 你已经完成 Web 前端构建
-- 你本机安装了 `cloudflared`
-
-然后在 `.env` 里加入：
-
-```env
-WEB_ENABLED=true
-WEB_TUNNEL_MODE=cloudflare_quick
-WEB_TUNNEL_AUTOSTART=true
-WEB_TUNNEL_CLOUDFLARED_PATH=D:\Programs\cloudflared\cloudflared.exe
-```
-
-启动后，Web 设置页会显示公网地址。
-
-但需要注意：
-
-- `WEB_TUNNEL_MODE=cloudflare_quick` 只适合临时测试
-- `trycloudflare.com` quick tunnel 不支持 SSE
-- 本项目 Web chat 的流式回复依赖 SSE，所以 quick tunnel 不适合作为正式公网入口
-
-如果你已经有自己的固定公网地址，也可以直接配置：
-
-```env
-WEB_PUBLIC_URL=https://your-domain.example.com
-```
-
-如果你在 Linux 上使用 Cloudflare Named Tunnel 作为独立系统服务，建议应用侧配置：
-
-```env
-WEB_TUNNEL_MODE=disabled
-WEB_PUBLIC_URL=https://your-domain.example.com
-WEB_TUNNEL_CLOUDFLARED_PATH=/usr/bin/cloudflared
-```
-
-### 多 Bot
-
-仓库支持一个主 Bot 加多个托管子 Bot。
-
-`managed_bots.json` 是本地运行时配置文件，默认放在仓库根目录，但不再纳入 Git；首次添加/修改托管 Bot 时会自动写入本地文件。
-
-如果你只是自己单人使用，可以先忽略这部分，先把主 Bot 跑起来。
-
-## 常见问题
-
-### 1. 启动时报错“请设置 TELEGRAM_BOT_TOKEN”
-
-说明 `.env` 里的 `TELEGRAM_BOT_TOKEN` 没填对，或者程序没有读到 `.env`。
-
-优先检查：
-
-- `.env` 是否放在仓库根目录
-- `TELEGRAM_BOT_TOKEN` 是否真实有效
-
-### 2. Telegram 能发消息，但 CLI 没反应
-
-优先检查：
-
-- 你选择的 CLI 是否真的已经安装
-- 终端里是否能直接运行 `codex` / `claude` / `kimi`
-- `.env` 里的 `CLI_PATH` 是否正确
-
-### 3. Web 打不开或页面空白
-
-优先检查：
-
-- 是否已经执行过 `cd front && npm install && npm run build`
-- `.env` 里是否启用了 `WEB_ENABLED=true`
-- 访问地址是否正确，例如 `http://127.0.0.1:8765`
-
-### 4. 为什么不能直接双击 `front/dist/index.html`
-
-因为这个前端不是离线单文件页面。
-
-它依赖：
-
-- `/assets/...` 静态资源
-- 同源 `/api/...` 接口
-
-所以正确打开方式是让 Python Web 服务托管它，然后通过 `http://127.0.0.1:8765` 或公网地址访问。
-
-### 5. 我想同时开 Telegram 和 Web，应该怎么启动
-
-把 `.env` 设成：
-
-```env
-TELEGRAM_ENABLED=true
-WEB_ENABLED=true
-```
-
-然后使用：
-
-```powershell
-python -m bot
-```
-
-或者：
-
-```powershell
-.\start.bat
-```
-
-不要使用 `.\start.bat web`，因为那个模式会强制关闭 Telegram。
-
-### 6. Telegram 网络不通怎么办
-
-可以在 `.env` 中配置代理：
-
-```env
-PROXY_URL=http://127.0.0.1:7890
-```
-
-也支持 `https://` 和 `socks5://` 形式。
-
-## 测试与开发
-
-如果你是在修改项目本身，而不是仅仅把它跑起来，常用命令如下：
-
-```powershell
 python -m pytest tests -q
+cd front && npm test
+cd front && npm run build
 ```
 
-```powershell
-cd front
-npm test
-```
+## 相关文档
 
-## 说明
-
-- 当前一等支持平台是 Windows 与 Ubuntu/Debian Linux
-- 用户可见文本目前以中文为主
-- 仓库里即使存在 `venv/`，也不要默认假设它在你的机器上可直接使用
-- 最稳妥的方式仍然是使用你当前机器上的 Python 环境重新安装依赖
+- [docs/linux-deployment.md](docs/linux-deployment.md)
+- [docs/assistant-cron-plan.md](docs/assistant-cron-plan.md)

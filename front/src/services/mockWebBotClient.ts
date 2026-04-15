@@ -1,4 +1,5 @@
 import type {
+  AppUpdateStatus,
   BotOverview,
   BotSummary,
   ChatMessage,
@@ -110,11 +111,24 @@ export class MockWebBotClient implements WebBotClient {
   ]);
   private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
+  private updateStatus: AppUpdateStatus = {
+    currentVersion: "1.0.0",
+    updateEnabled: true,
+    updateChannel: "release",
+    lastCheckedAt: "",
+    latestVersion: "1.0.1",
+    latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.1",
+    latestNotes: "Bugfixes",
+    pendingUpdateVersion: "",
+    pendingUpdatePath: "",
+    pendingUpdateNotes: "",
+    pendingUpdatePlatform: "",
+    lastError: "",
+  };
   private readonly avatarAssets: AvatarAsset[] = [
     { name: "user-default.png", url: "/assets/avatars/user-default.png" },
     { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
     { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
-    { name: "kimi-teal.png", url: "/assets/avatars/kimi-teal.png" },
     { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
   ];
 
@@ -346,6 +360,42 @@ export class MockWebBotClient implements WebBotClient {
       port: (port || "").trim(),
     };
     return { ...this.gitProxySettings };
+  }
+
+  async getUpdateStatus(): Promise<AppUpdateStatus> {
+    return { ...this.updateStatus };
+  }
+
+  async setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus> {
+    this.updateStatus = {
+      ...this.updateStatus,
+      updateEnabled: enabled,
+    };
+    return { ...this.updateStatus };
+  }
+
+  async checkForUpdate(): Promise<AppUpdateStatus> {
+    this.updateStatus = {
+      ...this.updateStatus,
+      lastCheckedAt: "2026-04-15T10:00:00+08:00",
+      latestVersion: "1.0.1",
+      latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.1",
+      latestNotes: "Bugfixes",
+      lastError: "",
+    };
+    return { ...this.updateStatus };
+  }
+
+  async downloadUpdate(): Promise<AppUpdateStatus> {
+    this.updateStatus = {
+      ...this.updateStatus,
+      pendingUpdateVersion: this.updateStatus.latestVersion || "1.0.1",
+      pendingUpdatePath: ".updates/cli-bridge-windows-x64.zip",
+      pendingUpdateNotes: this.updateStatus.latestNotes || "Bugfixes",
+      pendingUpdatePlatform: "windows-x64",
+      lastError: "",
+    };
+    return { ...this.updateStatus };
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

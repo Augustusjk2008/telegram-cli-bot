@@ -428,7 +428,7 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
         )
 
 
-def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any], *, include_trace: bool) -> None:
+def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any], *, include_trace: bool = True) -> None:
     item_type = str(item.get("type") or "").strip()
     assistant_messages = turn["assistant_messages"]
     message = item.get("message") if isinstance(item.get("message"), dict) else {}
@@ -680,7 +680,7 @@ def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     turn = _new_turn_state()
-    _consume_claude_line(item, turn)
+    _consume_claude_line(item, turn, include_trace=True)
     return [dict(event) for event in turn["trace"]]
 
 

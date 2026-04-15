@@ -12,6 +12,7 @@ docs/superpowers/
 .env copy
 .venv/
 venv/
+.updates/
 .cloudflared_url
 .claude/settings.local.json
 tmp_bot_create_check/

@@ -1,9 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TerminalScreen } from "../screens/TerminalScreen";
 
 const createTerminalSessionMock = vi.hoisted(() => vi.fn());
+const terminalEventHandlers = vi.hoisted(() => ({
+  onWriteParsed: undefined as undefined | (() => void),
+  onScroll: undefined as undefined | (() => void),
+}));
 
 const terminalSessionMock = vi.hoisted(() => ({
   sendControl: vi.fn(),
@@ -17,8 +21,14 @@ const terminalSessionMock = vi.hoisted(() => ({
 vi.mock("../services/terminalSession", () => ({
   createTerminalSession: createTerminalSessionMock.mockImplementation((_container: HTMLElement, options: { onOpen?: () => void }) => ({
     term: {
-      onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
-      onScroll: vi.fn(() => ({ dispose: vi.fn() })),
+      onWriteParsed: vi.fn((handler: () => void) => {
+        terminalEventHandlers.onWriteParsed = handler;
+        return { dispose: vi.fn() };
+      }),
+      onScroll: vi.fn((handler: () => void) => {
+        terminalEventHandlers.onScroll = handler;
+        return { dispose: vi.fn() };
+      }),
       scrollToBottom: terminalSessionMock.scrollToBottom,
       textarea: document.createElement("textarea"),
     },
@@ -33,6 +43,8 @@ vi.mock("../services/terminalSession", () => ({
 
 beforeEach(() => {
   createTerminalSessionMock.mockClear();
+  terminalEventHandlers.onWriteParsed = undefined;
+  terminalEventHandlers.onScroll = undefined;
   terminalSessionMock.sendControl.mockReset();
   terminalSessionMock.sendText.mockReset();
   terminalSessionMock.fit.mockReset();
@@ -101,6 +113,10 @@ test("uses a smaller terminal font and a viewport that supports bidirectional dr
   );
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 test("removes helper copy and lets the user close the terminal session", async () => {
   const user = userEvent.setup();
 
@@ -122,6 +138,11 @@ test("removes helper copy and lets the user close the terminal session", async (
 });
 
 test("shows a jump-to-latest action after scrolling away from terminal output bottom", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
+
   render(
     <TerminalScreen
       authToken="123"
@@ -136,7 +157,45 @@ test("shows a jump-to-latest action after scrolling away from terminal output bo
   Object.defineProperty(viewport, "scrollHeight", { value: 500, writable: true });
   Object.defineProperty(viewport, "clientHeight", { value: 200, writable: true });
 
-  fireEvent.scroll(viewport);
+  await act(async () => {
+    fireEvent.scroll(viewport);
+  });
 
-  expect(screen.getByRole("button", { name: "回到最新输出" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "回到最新输出" })).toBeInTheDocument();
+});
+
+test("coalesces follow-scroll work for bursty terminal output into one animation frame", async () => {
+  const rafCallbacks: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
+  }));
+
+  render(
+    <TerminalScreen
+      authToken="123"
+      botAlias="main"
+      isVisible
+      preferredWorkingDir="C:\\workspace\\demo"
+    />,
+  );
+
+  await screen.findByTestId("terminal-viewport");
+
+  terminalSessionMock.scrollToBottom.mockClear();
+
+  act(() => {
+    terminalEventHandlers.onWriteParsed?.();
+    terminalEventHandlers.onWriteParsed?.();
+    terminalEventHandlers.onWriteParsed?.();
+  });
+
+  expect(terminalSessionMock.scrollToBottom).not.toHaveBeenCalled();
+
+  act(() => {
+    const callbacks = rafCallbacks.splice(0);
+    callbacks.forEach((callback) => callback(0));
+  });
+
+  expect(terminalSessionMock.scrollToBottom).toHaveBeenCalledTimes(1);
 });

@@ -28,8 +28,6 @@ from bot.config import (
     MANAGED_BOTS_FILE,
     RESTART_EXIT_CODE,
     SESSION_TIMEOUT,
-    TELEGRAM_ENABLED,
-    TELEGRAM_BOT_TOKEN,
     WORKING_DIR,
     is_supervised_restart,
     reexec_current_process,
@@ -37,6 +35,7 @@ from bot.config import (
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
+from bot.version import APP_VERSION
 from bot.web import WebApiServer
 
 logger = logging.getLogger(__name__)
@@ -162,9 +161,11 @@ def restore_system_sleep():
 async def run_all_bots():
     config.RESTART_REQUESTED = False
     config.RESTART_EVENT = asyncio.Event()
+    if not config.WEB_ENABLED:
+        raise RuntimeError("WEB_ENABLED 不能为 false")
+
     main_profile = BotProfile(
         alias="main",
-        token=TELEGRAM_BOT_TOKEN,
         cli_type=CLI_TYPE,
         cli_path=CLI_PATH,
         working_dir=WORKING_DIR,
@@ -172,28 +173,15 @@ async def run_all_bots():
     )
 
     manager = MultiBotManager(main_profile=main_profile, storage_file=MANAGED_BOTS_FILE)
-    web_server = WebApiServer(manager) if config.WEB_ENABLED else None
-
-    if TELEGRAM_ENABLED:
-        await manager.start_all()
-        await manager.start_watchdog()
-        logger.info("主Bot与已启用子Bot已启动")
-        logger.info("托管配置文件: %s", MANAGED_BOTS_FILE)
-    elif web_server is not None:
-        logger.info("Telegram 轮询已关闭，进入 Web API 本地模式")
-    else:
-        raise RuntimeError("TELEGRAM_ENABLED 和 WEB_ENABLED 不能同时为 false")
-
-    if web_server is not None:
-        await web_server.start()
-        logger.info("Web API 已附加到主进程")
-        _print_web_access_lines()
+    web_server = WebApiServer(manager)
+    await web_server.start()
+    logger.info("Web API 已附加到主进程")
+    _print_web_access_lines()
 
     try:
         await config.RESTART_EVENT.wait()
     finally:
-        if web_server is not None:
-            await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
+        await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
         await manager.shutdown_all()
         # 保存所有会话到持久化存储
         from bot.sessions import save_all_sessions
@@ -208,11 +196,6 @@ async def run_all_bots():
 def main():
     msgs = get_messages()
 
-    normalized_token = (TELEGRAM_BOT_TOKEN or "").strip()
-    if TELEGRAM_ENABLED and normalized_token in {"", "your_bot_token_here"}:
-        safe_print("错误: 请设置 TELEGRAM_BOT_TOKEN 环境变量")
-        sys.exit(1)
-
     try:
         validate_cli_type(CLI_TYPE)
     except ValueError as e:
@@ -221,7 +204,7 @@ def main():
 
     safe_print(msgs.get("startup", "banner"))
     safe_print(msgs.get("startup", "title"))
-    safe_print(msgs.get("startup", "version"))
+    safe_print(f"  版本: {APP_VERSION}")
     safe_print(msgs.get("startup", "banner"))
     safe_print()
     safe_print(msgs.get("startup", "loading_config"))
@@ -229,7 +212,6 @@ def main():
     safe_print(f"   工作目录: {WORKING_DIR}")
     safe_print(f"   会话超时: {SESSION_TIMEOUT}秒")
     safe_print(f"   托管配置: {MANAGED_BOTS_FILE}")
-    safe_print(f"   Telegram: {'开启' if TELEGRAM_ENABLED else '关闭'}")
     safe_print(f"   Web API: {'开启' if config.WEB_ENABLED else '关闭'}")
     safe_print(msgs.get("startup", "loaded"))
 

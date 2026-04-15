@@ -58,7 +58,7 @@ describe("RealWebBotClient", () => {
           data: [
             {
               alias: "main",
-              cli_type: "kimi",
+              cli_type: "codex",
               status: "running",
               is_processing: true,
               working_dir: "C:\\workspace\\demo",
@@ -74,7 +74,7 @@ describe("RealWebBotClient", () => {
     expect(bots).toEqual([
       {
         alias: "main",
-        cliType: "kimi",
+        cliType: "codex",
         status: "busy",
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
@@ -661,11 +661,11 @@ describe("RealWebBotClient", () => {
     await client.login("secret-token");
     const bot = await client.addBot({
       alias: "team3",
-      token: "333:abc",
       botMode: "cli",
       cliType: "codex",
       cliPath: "codex",
       workingDir: "C:\\workspace\\team3",
+      avatarName: "bot-default.png",
     });
 
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -678,11 +678,11 @@ describe("RealWebBotClient", () => {
         }),
         body: JSON.stringify({
           alias: "team3",
-          token: "333:abc",
           bot_mode: "cli",
           cli_type: "codex",
           cli_path: "codex",
           working_dir: "C:\\workspace\\team3",
+          avatar_name: "bot-default.png",
         }),
       }),
     );
@@ -884,6 +884,47 @@ describe("RealWebBotClient", () => {
       }),
     );
     expect(settings).toEqual({ port: "" });
+  });
+
+  test("getUpdateStatus maps backend update payload", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { user_id: 1001 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            current_version: "1.0.0",
+            update_enabled: true,
+            update_channel: "release",
+            last_checked_at: "2026-04-15T10:00:00+08:00",
+            last_available_version: "1.0.1",
+            last_available_release_url: "https://github.com/owner/repo/releases/tag/v1.0.1",
+            last_available_notes: "Bugfixes",
+            pending_update_version: "",
+            pending_update_path: "",
+            pending_update_notes: "",
+            pending_update_platform: "",
+            update_last_error: "",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const status = await client.getUpdateStatus();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/update",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer secret-token" }),
+      }),
+    );
+    expect(status.currentVersion).toBe("1.0.0");
+    expect(status.latestVersion).toBe("1.0.1");
   });
 
   test("requestJson reports a friendly error when the server returns HTML", async () => {

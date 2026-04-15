@@ -4,11 +4,10 @@ This file provides guidance to coding agents working in this repository.
 
 ## Project Snapshot
 
-Telegram CLI Bridge is a Windows-first Python Telegram bot that forwards user messages to local AI coding CLIs and exposes a Web management UI.
+CLI Bridge is a Windows-first Python Web control surface that forwards user messages to local AI coding CLIs.
 
 Current local CLI targets:
 
-- `kimi`
 - `claude`
 - `codex`
 
@@ -22,7 +21,11 @@ The repository supports one main bot plus multiple managed sub-bots loaded from 
 ## Commands
 
 ```bash
-# Start the Telegram bot
+# Linux install / startup
+bash install.sh
+bash start.sh
+
+# Start the Web runtime
 python -m bot
 
 # Run the backend test suite
@@ -32,6 +35,8 @@ python -m pytest tests -q
 python -m pytest tests/test_handlers/test_chat.py -q
 python -m pytest tests/test_web_api.py -q
 python -m pytest tests/test_assistant.py -q
+python -m pytest tests/test_updater.py -q
+python -m pytest tests/test_release_assets.py -q
 
 # Run frontend tests
 cd front && npm test
@@ -55,12 +60,12 @@ Do not assume the committed `venv/` is usable on every machine. Prefer the activ
 
 ### Multi-Bot Manager
 
-`bot/manager.py:MultiBotManager` is the central orchestrator.
+`bot/manager.py:MultiBotManager` is the central profile manager.
 
 - Main bot comes from `.env`
-- Managed bots come from `managed_bots.json`
-- Each bot owns its own `telegram.ext.Application`
-- A watchdog restarts polling when an application's updater stops unexpectedly
+- Managed bots come from local `managed_bots.json`
+- `managed_bots.example.json` is the public example file; do not commit the real `managed_bots.json`
+- Current runtime is Web-only; no per-bot Telegram application lifecycle remains
 
 ### Active Bot Modes
 
@@ -82,59 +87,21 @@ Each `UserSession` in `bot/models.py` tracks:
 - current working directory
 - conversation history in memory
 - processing state and active subprocess
-- per-CLI session ids for `codex`, `kimi`, and `claude`
+- per-CLI session ids for `codex` and `claude`
 
 Only CLI session ids are persisted to `.session_store.json`. Full chat history remains in memory.
 
 ### CLI Chat Flow
 
-- Telegram CLI chat path: `bot/handlers/chat.py`
+- Web / shared CLI chat path: `bot/web/api_service.py`
 - Command construction and CLI parameter handling: `bot/cli.py`, `bot/cli_params.py`
-- Supported CLI types: `kimi`, `claude`, `codex`
+- Supported CLI types: `claude`, `codex`
 
 Important behavior:
 
 - user text starting with `//` is rewritten to `/...` before sending to the CLI
 - Codex runs with JSON output and is parsed by `parse_codex_json_output()`
-- long Telegram replies are chunked with `split_text_into_chunks()`
-- Telegram output primarily uses HTML parse mode with fallback helpers for unsafe markup
-
-### Handler Registration
-
-`bot/handlers/__init__.py` wires handlers based on `bot_mode`.
-
-Current CLI-mode command surface includes:
-
-- `/start`, `/reset`, `/kill`, `/cd`, `/pwd`, `/files`, `/ls`, `/history`
-- `/exec`, `/rm`
-- `/upload`, `/download`, `/cat`, `/head`
-- `/codex_status`
-
-Main-bot-only admin surface includes:
-
-- `/restart`
-- `/bot_help`, `/bot_list`, `/bot_add`, `/bot_remove`, `/bot_start`, `/bot_stop`
-- `/bot_set_cli`, `/bot_set_workdir`, `/bot_kill`
-- `/system`
-- `/bot_params`, `/bot_params_set`, `/bot_params_reset`, `/bot_params_help`
-
-Assistant-mode command surface includes:
-
-- `/start`, `/reset`, `/files`, `/history`
-- `/memory`, `/memory_add`, `/memory_search`, `/memory_delete`, `/memory_clear`
-- `/tool_stats`
-
-### Voice
-
-`bot/handlers/voice.py` and `bot/whisper_service.py` provide optional voice transcription.
-
-Required optional dependencies:
-
-- `python -m pip install -r requirements-voice.txt`
-- Python 3.13+ 若提示 `audioop` 缺失，额外安装 `audioop-lts`
-- FFmpeg
-
-If those dependencies are missing, the voice handler is skipped and the rest of the bot still runs.
+- long Web chat replies are streamed and finalized through the Web API layer
 
 ### Web API And Frontend
 
@@ -157,8 +124,18 @@ Current Web capabilities include:
 - file browsing and file preview
 - Git overview, diff, stage/unstage, stage-all, commit, fetch/pull/push, stash/pop
 - CLI parameter editing
+- main-bot update status, manual check, and update download controls
 - tunnel status management
 - admin script execution and service restart hooks
+
+## Install And Update
+
+- Windows install entrypoints: `install.bat`, `install.ps1`
+- Linux install entrypoint: `install.sh`
+- Windows startup entrypoints: `start.bat`, `start.ps1`
+- Linux startup entrypoint: `start.sh`
+- Automatic update only checks GitHub Releases
+- Downloaded updates are applied on the next startup via `python -m bot.updater apply-pending --repo-root <repo>`
 
 ## Conventions
 
