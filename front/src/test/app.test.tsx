@@ -50,15 +50,21 @@ afterEach(() => {
 
 test("renders standalone login screen without backend", () => {
   render(<App />);
-  expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "火箭徽标" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Orbit Safe Claw" })).toBeInTheDocument();
+  expect(screen.getByText("你的随身智能体指挥中心")).toBeInTheDocument();
+  expect(screen.getByText("LOCAL AGENT CONTROL SURFACE")).toBeInTheDocument();
+  expect(screen.getByText("1.0")).toBeInTheDocument();
+  expect(screen.getByText("本地运行")).toBeInTheDocument();
+  expect(screen.getByText("双 CLI 支持")).toBeInTheDocument();
+  expect(screen.getByText("手机浏览器直接访问，无需任何 App。")).toBeInTheDocument();
+  expect(screen.queryByLabelText("火箭徽标")).not.toBeInTheDocument();
   expect(screen.queryByText("【志在空间 威震长空】")).not.toBeInTheDocument();
   expect(screen.queryByText("安全边界")).not.toBeInTheDocument();
   expect(screen.queryByText("自主可控")).not.toBeInTheDocument();
   expect(screen.queryByText("过程留痕")).not.toBeInTheDocument();
-  expect(screen.getByText("2026")).toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
-  expect(document.title).toBe("🦞Safe Claw");
+  expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
+  expect(document.title).toBe("Orbit Safe Claw");
   expect(document.documentElement.dataset.theme).toBe("deep-space");
 });
 
@@ -84,10 +90,10 @@ test("keeps rendering the login shell when storage reads and writes fail", () =>
 
   render(<App />);
 
-  expect(screen.getByRole("heading", { name: "🦞Safe Claw" })).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "火箭徽标" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Orbit Safe Claw" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("火箭徽标")).not.toBeInTheDocument();
   expect(screen.getByLabelText("访问口令")).toBeInTheDocument();
-  expect(document.title).toBe("🦞Safe Claw");
+  expect(document.title).toBe("Orbit Safe Claw");
   expect(document.documentElement.dataset.theme).toBe("deep-space");
 });
 
@@ -469,7 +475,7 @@ test("settings tab can update bot cli configuration", async () => {
   await user.click(screen.getByRole("button", { name: "登录" }));
   await screen.findByRole("button", { name: "聊天" });
 
-  expect(document.title).toBe("main - 🦞Safe Claw");
+  expect(document.title).toBe("main - Orbit Safe Claw");
 
   await user.click(screen.getByRole("button", { name: "设置" }));
   await user.selectOptions(await screen.findByLabelText("CLI 类型"), "claude");
@@ -669,7 +675,7 @@ test("bot manager can add rename and delete managed bots", async () => {
   });
   expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("Bot 管理 - 🦞Safe Claw");
+  expect(document.title).toBe("Bot 管理 - Orbit Safe Claw");
 
   await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
   await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
@@ -862,7 +868,7 @@ test("bot manager stays open even when a stored bot alias exists", async () => {
 
   expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("Bot 管理 - 🦞Safe Claw");
+  expect(document.title).toBe("Bot 管理 - Orbit Safe Claw");
 });
 
 test("bot manager highlights offline bots and blocks entering them", async () => {

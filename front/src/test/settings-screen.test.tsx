@@ -32,13 +32,19 @@ test("CLI type selector only shows codex and claude", async () => {
   expect(options).toEqual(["codex", "claude"]);
 });
 
-test("main settings show update controls", async () => {
+test("main settings merge update controls into the main bot operations card", async () => {
   const client = new MockWebBotClient();
 
   render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-  expect(await screen.findByText("版本更新")).toBeInTheDocument();
-  expect(screen.getByText("当前版本")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "立即检查" })).toBeInTheDocument();
+
+  const opsRegion = await screen.findByRole("region", { name: "主 Bot 运维" });
+  expect(within(opsRegion).getByRole("heading", { name: "运行配置" })).toBeInTheDocument();
+  expect(within(opsRegion).getByLabelText("CLI 类型")).toBeInTheDocument();
+  expect(within(opsRegion).getByLabelText("工作目录")).toBeInTheDocument();
+  expect(within(opsRegion).getByRole("heading", { name: "版本更新" })).toBeInTheDocument();
+  expect(within(opsRegion).getByText("当前版本")).toBeInTheDocument();
+  expect(within(opsRegion).getByRole("button", { name: "立即检查" })).toBeInTheDocument();
+  expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
 });
 
 test("assistant settings hide the update controls", async () => {

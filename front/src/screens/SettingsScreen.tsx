@@ -684,7 +684,22 @@ export function SettingsScreen({
         </div>
 
         {overview ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4">
+          <section
+            aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+            className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4"
+          >
+            <div className="space-y-1">
+              <h2
+                id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+                className="text-base font-semibold text-[var(--text)]"
+              >
+                {isMainBot ? "主 Bot 运维" : "Bot CLI 配置"}
+              </h2>
+              {isMainBot ? (
+                <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置和更新入口。</p>
+              ) : null}
+            </div>
+
             <div className="space-y-2">
               <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
               {overview.cliPath ? (
@@ -695,7 +710,7 @@ export function SettingsScreen({
             </div>
 
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
-              <h2 className="font-medium text-[var(--text)]">Bot CLI 配置</h2>
+              <h3 className="font-medium text-[var(--text)]">运行配置</h3>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="space-y-1">
                   <span className="text-sm text-[var(--text)]">CLI 类型</span>
@@ -703,12 +718,12 @@ export function SettingsScreen({
                     aria-label="CLI 类型"
                     value={cliTypeDraft}
                     onChange={(event) => setCliTypeDraft(event.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                >
-                  <option value="codex">codex</option>
-                  <option value="claude">claude</option>
-                </select>
-              </label>
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value="codex">codex</option>
+                    <option value="claude">claude</option>
+                  </select>
+                </label>
                 <label className="space-y-1">
                   <span className="text-sm text-[var(--text)]">CLI 路径</span>
                   <input
@@ -759,75 +774,77 @@ export function SettingsScreen({
                 )}
               </div>
             </div>
-          </div>
+
+            {isMainBot ? (
+              <div className="space-y-4 border-t border-[var(--border)] pt-4">
+                <h3 className="font-medium text-[var(--text)]">版本更新</h3>
+                <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
+                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                    <span className="text-[var(--text)]">当前版本</span>
+                    <span>{updateStatus?.currentVersion || "未知"}</span>
+                  </p>
+                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                    <span className="text-[var(--text)]">可用版本</span>
+                    <span>{updateStatus?.latestVersion || "暂无"}</span>
+                  </p>
+                </div>
+
+                <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
+                  <span>自动检查更新</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(updateStatus?.updateEnabled)}
+                    disabled={updateAction === "toggle"}
+                    onChange={(event) => void saveUpdateToggle(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+
+                <div className="space-y-2 text-xs text-[var(--muted)]">
+                  <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
+                  {updateStatus?.pendingUpdateVersion ? (
+                    <p>待应用更新: {updateStatus.pendingUpdateVersion}，重启后生效</p>
+                  ) : null}
+                  {updateStatus?.lastError ? (
+                    <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void checkForUpdate()}
+                    disabled={updateAction !== ""}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    {updateAction === "check" ? "检查中..." : "立即检查"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void downloadUpdate()}
+                    disabled={updateAction !== "" || !updateStatus?.latestVersion}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    {updateAction === "download" ? "下载中..." : "下载更新"}
+                  </button>
+                  {updateStatus?.latestReleaseUrl ? (
+                    <a
+                      href={updateStatus.latestReleaseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      查看发布说明
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </section>
         ) : null}
 
         {isMainBot ? (
           <>
-            <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-              <h2 className="text-base font-semibold text-[var(--text)]">版本更新</h2>
-              <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
-                <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                  <span className="text-[var(--text)]">当前版本</span>
-                  <span>{updateStatus?.currentVersion || "未知"}</span>
-                </p>
-                <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                  <span className="text-[var(--text)]">可用版本</span>
-                  <span>{updateStatus?.latestVersion || "暂无"}</span>
-                </p>
-              </div>
-
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
-                <span>自动检查更新</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(updateStatus?.updateEnabled)}
-                  disabled={updateAction === "toggle"}
-                  onChange={(event) => void saveUpdateToggle(event.target.checked)}
-                  className="h-4 w-4"
-                />
-              </label>
-
-              <div className="space-y-2 text-xs text-[var(--muted)]">
-                <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
-                {updateStatus?.pendingUpdateVersion ? (
-                  <p>待应用更新: {updateStatus.pendingUpdateVersion}，重启后生效</p>
-                ) : null}
-                {updateStatus?.lastError ? (
-                  <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
-                ) : null}
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void checkForUpdate()}
-                  disabled={updateAction !== ""}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  {updateAction === "check" ? "检查中..." : "立即检查"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void downloadUpdate()}
-                  disabled={updateAction !== "" || !updateStatus?.latestVersion}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  {updateAction === "download" ? "下载中..." : "下载更新"}
-                </button>
-                {updateStatus?.latestReleaseUrl ? (
-                  <a
-                    href={updateStatus.latestReleaseUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                  >
-                    查看发布说明
-                  </a>
-                ) : null}
-              </div>
-            </div>
-
             <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
               <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
               <div className="flex items-center gap-2">
