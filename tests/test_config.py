@@ -118,6 +118,19 @@ class TestConfigConstants:
         assert config.WEB_HOST == "127.0.0.1"
         assert config.WEB_PORT == 9999
 
+    def test_app_update_repository_defaults_to_project_release_repo(self, monkeypatch):
+        monkeypatch.delenv("APP_UPDATE_REPOSITORY", raising=False)
+
+        import importlib
+        import dotenv
+        import bot.config as config
+
+        monkeypatch.setattr(dotenv, "dotenv_values", lambda *args, **kwargs: {})
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
+        importlib.reload(config)
+
+        assert config.APP_UPDATE_REPOSITORY == "Augustusjk2008/telegram-cli-bot"
+
 
 class TestRestartMechanism:
     """测试重启机制"""

@@ -35,6 +35,9 @@ def _get_project_config(name: str, default: str = "") -> str:
         return str(dotenv_value)
     return default
 
+
+DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
+
 ALLOWED_USER_IDS: List[int] = []
 _allowed_raw = os.environ.get("ALLOWED_USER_IDS", "")
 for uid in _allowed_raw.split(","):
@@ -74,7 +77,10 @@ WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() ==
 # 可选：指定 cloudflared 的完整路径；若已在 PATH 中可留空。
 WEB_TUNNEL_CLOUDFLARED_PATH = os.environ.get("WEB_TUNNEL_CLOUDFLARED_PATH", "").strip()
 WEB_TUNNEL_STATE_FILE = os.environ.get("WEB_TUNNEL_STATE_FILE", ".web_tunnel_state.json").strip() or ".web_tunnel_state.json"
-APP_UPDATE_REPOSITORY = _get_project_config("APP_UPDATE_REPOSITORY", "").strip()
+APP_UPDATE_REPOSITORY = _get_project_config(
+    "APP_UPDATE_REPOSITORY",
+    DEFAULT_APP_UPDATE_REPOSITORY,
+).strip()
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"claude", "codex"}

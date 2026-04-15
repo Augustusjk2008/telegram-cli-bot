@@ -27,6 +27,21 @@ def test_install_sh_mentions_apt_node_check_only_and_cli_warning():
     assert ".env.example" in content
 
 
+def test_env_example_preconfigures_default_update_repository():
+    content = Path(".env.example").read_text(encoding="utf-8")
+
+    assert "APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot" in content
+
+
+def test_env_example_omits_unused_assistant_mode_settings():
+    content = Path(".env.example").read_text(encoding="utf-8")
+
+    assert "Assistant Mode Optional" not in content
+    assert "ANTHROPIC_API_KEY=" not in content
+    assert "ANTHROPIC_MODEL=" not in content
+    assert "ANTHROPIC_BASE_URL=" not in content
+
+
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_parses_in_windows_powershell():
     script_path = Path("install.ps1").resolve()

@@ -66,7 +66,7 @@ WEB_PORT=8765
 WEB_API_TOKEN=change-this-password
 ```
 
-主 Bot 设置页支持 GitHub Release 自动检查与下载更新；在 `.env` 中填写 `APP_UPDATE_REPOSITORY=owner/repo` 后即可启用。
+主 Bot 设置页支持 GitHub Release 自动检查与下载更新，下载后的更新会在下次启动或重启后生效。首次安装生成的 `.env` 已默认写入 `APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot`；如果你使用自己的 GitHub Releases 仓库，改成对应的 `owner/repo` 即可。
 
 常用开发命令：
 
