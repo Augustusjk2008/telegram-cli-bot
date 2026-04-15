@@ -33,6 +33,12 @@ from bot.config import (
 from bot.manager import MultiBotManager
 from bot.platform.runtime import get_default_shell
 from bot.platform.terminal import create_shell_process
+from bot.updater import (
+    check_for_updates,
+    download_latest_update,
+    get_update_status,
+    set_update_enabled,
+)
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
@@ -239,6 +245,7 @@ class WebApiServer:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._restart_task: asyncio.Task[None] | None = None
+        self._update_task: asyncio.Task[None] | None = None
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
         self._tunnel_service = tunnel_service or TunnelService(
@@ -881,6 +888,25 @@ class WebApiServer:
             raise WebApiError(400, "invalid_git_proxy_port", str(exc)) from exc
         return _json({"ok": True, "data": data})
 
+    async def admin_get_update(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        return _json({"ok": True, "data": get_update_status()})
+
+    async def admin_patch_update(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": set_update_enabled(bool(body.get("update_enabled", True)))})
+
+    async def admin_update_check(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        data = await asyncio.to_thread(check_for_updates)
+        return _json({"ok": True, "data": data})
+
+    async def admin_update_download(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        data = await asyncio.to_thread(download_latest_update)
+        return _json({"ok": True, "data": data})
+
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
         self._schedule_restart_request()
@@ -948,6 +974,15 @@ class WebApiServer:
         data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
         return _json({"ok": True, "data": data})
 
+    async def _auto_refresh_update_status(self) -> None:
+        status = get_update_status()
+        if not status.get("update_enabled"):
+            return
+        try:
+            await asyncio.to_thread(check_for_updates)
+        except Exception as exc:
+            logger.warning("自动检查更新失败: %s", exc)
+
     def _build_app(self) -> web.Application:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
         app.router.add_get("/api/health", self.health)
@@ -1014,6 +1049,10 @@ class WebApiServer:
         )
         app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
         app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)
+        app.router.add_get("/api/admin/update", self.admin_get_update)
+        app.router.add_patch("/api/admin/update", self.admin_patch_update)
+        app.router.add_post("/api/admin/update/check", self.admin_update_check)
+        app.router.add_post("/api/admin/update/download", self.admin_update_download)
         app.router.add_post("/api/admin/restart", self.admin_restart)
         app.router.add_get("/api/admin/tunnel", self.admin_tunnel)
         app.router.add_post("/api/admin/tunnel/start", self.admin_tunnel_start)
@@ -1050,6 +1089,8 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=WEB_HOST, port=WEB_PORT)
         await self._site.start()
+        if get_update_status().get("update_enabled"):
+            self._update_task = asyncio.create_task(self._auto_refresh_update_status())
         if self._tunnel_service.should_autostart():
             tunnel_snapshot = await self._tunnel_service.start()
             await self._notify_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
@@ -1070,6 +1111,10 @@ class WebApiServer:
         if self._restart_task is not None:
             await asyncio.gather(self._restart_task, return_exceptions=True)
             self._restart_task = None
+        if self._update_task is not None:
+            self._update_task.cancel()
+            await asyncio.gather(self._update_task, return_exceptions=True)
+            self._update_task = None
         terminal_tasks = list(self._terminal_tasks)
         self._terminal_tasks.clear()
         for task in terminal_tasks:

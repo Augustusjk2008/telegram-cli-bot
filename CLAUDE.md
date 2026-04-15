@@ -21,6 +21,10 @@ The repository supports one main bot plus multiple managed sub-bots loaded from 
 ## Commands
 
 ```bash
+# Linux install / startup
+bash install.sh
+bash start.sh
+
 # Start the Web runtime
 python -m bot
 
@@ -31,6 +35,8 @@ python -m pytest tests -q
 python -m pytest tests/test_handlers/test_chat.py -q
 python -m pytest tests/test_web_api.py -q
 python -m pytest tests/test_assistant.py -q
+python -m pytest tests/test_updater.py -q
+python -m pytest tests/test_release_assets.py -q
 
 # Run frontend tests
 cd front && npm test
@@ -57,7 +63,8 @@ Do not assume the committed `venv/` is usable on every machine. Prefer the activ
 `bot/manager.py:MultiBotManager` is the central profile manager.
 
 - Main bot comes from `.env`
-- Managed bots come from `managed_bots.json`
+- Managed bots come from local `managed_bots.json`
+- `managed_bots.example.json` is the public example file; do not commit the real `managed_bots.json`
 - Current runtime is Web-only; no per-bot Telegram application lifecycle remains
 
 ### Active Bot Modes
@@ -117,8 +124,18 @@ Current Web capabilities include:
 - file browsing and file preview
 - Git overview, diff, stage/unstage, stage-all, commit, fetch/pull/push, stash/pop
 - CLI parameter editing
+- main-bot update status, manual check, and update download controls
 - tunnel status management
 - admin script execution and service restart hooks
+
+## Install And Update
+
+- Windows install entrypoints: `install.bat`, `install.ps1`
+- Linux install entrypoint: `install.sh`
+- Windows startup entrypoints: `start.bat`, `start.ps1`
+- Linux startup entrypoint: `start.sh`
+- Automatic update only checks GitHub Releases
+- Downloaded updates are applied on the next startup via `python -m bot.updater apply-pending --repo-root <repo>`
 
 ## Conventions
 

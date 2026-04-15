@@ -15,9 +15,33 @@ _SETTINGS_LOCK = threading.Lock()
 _DEFAULT_SETTINGS = {
     "git_proxy_port": "",
     "bot_avatar_names": {},
+    "update_enabled": True,
+    "update_channel": "release",
+    "last_checked_at": "",
+    "last_available_version": "",
+    "last_available_release_url": "",
+    "last_available_notes": "",
+    "pending_update_version": "",
+    "pending_update_path": "",
+    "pending_update_notes": "",
+    "pending_update_platform": "",
+    "update_last_error": "",
 }
 _PORT_ERROR_MESSAGE = "代理端口必须是 1 到 65535 之间的整数"
 _DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
+
+_UPDATE_TEXT_FIELDS = (
+    "update_channel",
+    "last_checked_at",
+    "last_available_version",
+    "last_available_release_url",
+    "last_available_notes",
+    "pending_update_version",
+    "pending_update_path",
+    "pending_update_notes",
+    "pending_update_platform",
+    "update_last_error",
+)
 
 
 def _normalize_git_proxy_port(value: Any) -> str:
@@ -33,11 +57,27 @@ def _normalize_git_proxy_port(value: Any) -> str:
     return str(port_number)
 
 
+def _normalize_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _normalize_optional_text(value: Any, *, strip: bool = True) -> str:
+    text = str(value or "")
+    return text.strip() if strip else text
+
+
 def _sanitize_settings(raw: Any) -> dict[str, Any]:
-    settings = {
-        "git_proxy_port": "",
-        "bot_avatar_names": {},
-    }
+    settings = dict(_DEFAULT_SETTINGS)
     if not isinstance(raw, dict):
         return settings
 
@@ -46,6 +86,12 @@ def _sanitize_settings(raw: Any) -> dict[str, Any]:
     except ValueError:
         settings["git_proxy_port"] = ""
     settings["bot_avatar_names"] = _normalize_bot_avatar_names(raw.get("bot_avatar_names", {}))
+    settings["update_enabled"] = _normalize_bool(raw.get("update_enabled"), True)
+    settings["update_channel"] = _normalize_optional_text(raw.get("update_channel", "release")) or "release"
+    for key in _UPDATE_TEXT_FIELDS:
+        if key == "update_channel":
+            continue
+        settings[key] = _normalize_optional_text(raw.get(key, settings[key]), strip=False)
     return settings
 
 
@@ -83,6 +129,20 @@ def _serialize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     bot_avatar_names = _normalize_bot_avatar_names(settings.get("bot_avatar_names", {}))
     if bot_avatar_names:
         payload["bot_avatar_names"] = bot_avatar_names
+    update_enabled = _normalize_bool(settings.get("update_enabled"), True)
+    if not update_enabled:
+        payload["update_enabled"] = False
+
+    update_channel = _normalize_optional_text(settings.get("update_channel", "release")) or "release"
+    if update_channel != "release":
+        payload["update_channel"] = update_channel
+
+    for key in _UPDATE_TEXT_FIELDS:
+        if key == "update_channel":
+            continue
+        value = _normalize_optional_text(settings.get(key, ""), strip=False)
+        if value:
+            payload[key] = value
     return payload
 
 

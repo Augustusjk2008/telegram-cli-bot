@@ -202,3 +202,18 @@ export type GitActionResult = {
 export type GitProxySettings = {
   port: string;
 };
+
+export type AppUpdateStatus = {
+  currentVersion: string;
+  updateEnabled: boolean;
+  updateChannel: "release";
+  lastCheckedAt: string;
+  latestVersion: string;
+  latestReleaseUrl: string;
+  latestNotes: string;
+  pendingUpdateVersion: string;
+  pendingUpdatePath: string;
+  pendingUpdateNotes: string;
+  pendingUpdatePlatform: string;
+  lastError: string;
+};

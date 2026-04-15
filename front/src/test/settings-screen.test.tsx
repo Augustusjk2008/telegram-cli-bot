@@ -31,3 +31,19 @@ test("CLI type selector only shows codex and claude", async () => {
 
   expect(options).toEqual(["codex", "claude"]);
 });
+
+test("main settings show update controls", async () => {
+  const client = new MockWebBotClient();
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+  expect(await screen.findByText("版本更新")).toBeInTheDocument();
+  expect(screen.getByText("当前版本")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "立即检查" })).toBeInTheDocument();
+});
+
+test("assistant settings hide the update controls", async () => {
+  const client = new MockWebBotClient();
+
+  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
+  expect(screen.queryByText("版本更新")).not.toBeInTheDocument();
+});

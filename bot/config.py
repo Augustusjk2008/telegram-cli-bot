@@ -74,6 +74,7 @@ WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() ==
 # 可选：指定 cloudflared 的完整路径；若已在 PATH 中可留空。
 WEB_TUNNEL_CLOUDFLARED_PATH = os.environ.get("WEB_TUNNEL_CLOUDFLARED_PATH", "").strip()
 WEB_TUNNEL_STATE_FILE = os.environ.get("WEB_TUNNEL_STATE_FILE", ".web_tunnel_state.json").strip() or ".web_tunnel_state.json"
+APP_UPDATE_REPOSITORY = _get_project_config("APP_UPDATE_REPOSITORY", "").strip()
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"claude", "codex"}

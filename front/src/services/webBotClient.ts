@@ -9,6 +9,7 @@ import type {
   CreateBotInput,
   DirectoryListing,
   AvatarAsset,
+  AppUpdateStatus,
   GitActionResult,
   GitDiffPayload,
   GitProxySettings,
@@ -46,6 +47,10 @@ export interface WebBotClient {
   restartService(): Promise<void>;
   getGitProxySettings(): Promise<GitProxySettings>;
   updateGitProxySettings(port: string): Promise<GitProxySettings>;
+  getUpdateStatus(): Promise<AppUpdateStatus>;
+  setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus>;
+  checkForUpdate(): Promise<AppUpdateStatus>;
+  downloadUpdate(): Promise<AppUpdateStatus>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
   initGitRepository(botAlias: string): Promise<GitOverview>;
   getGitDiff(botAlias: string, path: string, staged?: boolean): Promise<GitDiffPayload>;

@@ -35,6 +35,7 @@ from bot.config import (
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
+from bot.version import APP_VERSION
 from bot.web import WebApiServer
 
 logger = logging.getLogger(__name__)
@@ -203,7 +204,7 @@ def main():
 
     safe_print(msgs.get("startup", "banner"))
     safe_print(msgs.get("startup", "title"))
-    safe_print(msgs.get("startup", "version"))
+    safe_print(f"  版本: {APP_VERSION}")
     safe_print(msgs.get("startup", "banner"))
     safe_print()
     safe_print(msgs.get("startup", "loading_config"))

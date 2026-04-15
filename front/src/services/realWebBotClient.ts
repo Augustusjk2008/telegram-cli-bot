@@ -1,4 +1,5 @@
 import type {
+  AppUpdateStatus,
   GitActionResult,
   GitCommitSummary,
   GitDiffPayload,
@@ -185,6 +186,21 @@ type RawGitActionResult = {
 
 type RawGitProxySettings = {
   port?: string;
+};
+
+type RawAppUpdateStatus = {
+  current_version: string;
+  update_enabled: boolean;
+  update_channel: "release";
+  last_checked_at?: string;
+  last_available_version?: string;
+  last_available_release_url?: string;
+  last_available_notes?: string;
+  pending_update_version?: string;
+  pending_update_path?: string;
+  pending_update_notes?: string;
+  pending_update_platform?: string;
+  update_last_error?: string;
 };
 
 type StreamEvent =
@@ -507,6 +523,23 @@ function mapGitActionResult(raw: RawGitActionResult): GitActionResult {
 function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
   return {
     port: raw.port || "",
+  };
+}
+
+function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
+  return {
+    currentVersion: raw.current_version || "",
+    updateEnabled: Boolean(raw.update_enabled),
+    updateChannel: raw.update_channel || "release",
+    lastCheckedAt: raw.last_checked_at || "",
+    latestVersion: raw.last_available_version || "",
+    latestReleaseUrl: raw.last_available_release_url || "",
+    latestNotes: raw.last_available_notes || "",
+    pendingUpdateVersion: raw.pending_update_version || "",
+    pendingUpdatePath: raw.pending_update_path || "",
+    pendingUpdateNotes: raw.pending_update_notes || "",
+    pendingUpdatePlatform: raw.pending_update_platform || "",
+    lastError: raw.update_last_error || "",
   };
 }
 
@@ -926,6 +959,36 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({ port }),
     });
     return mapGitProxySettings(data);
+  }
+
+  async getUpdateStatus(): Promise<AppUpdateStatus> {
+    const data = await this.requestJson<RawAppUpdateStatus>("/api/admin/update");
+    return mapAppUpdateStatus(data);
+  }
+
+  async setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus> {
+    const data = await this.requestJson<RawAppUpdateStatus>("/api/admin/update", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ update_enabled: enabled }),
+    });
+    return mapAppUpdateStatus(data);
+  }
+
+  async checkForUpdate(): Promise<AppUpdateStatus> {
+    const data = await this.requestJson<RawAppUpdateStatus>("/api/admin/update/check", {
+      method: "POST",
+    });
+    return mapAppUpdateStatus(data);
+  }
+
+  async downloadUpdate(): Promise<AppUpdateStatus> {
+    const data = await this.requestJson<RawAppUpdateStatus>("/api/admin/update/download", {
+      method: "POST",
+    });
+    return mapAppUpdateStatus(data);
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

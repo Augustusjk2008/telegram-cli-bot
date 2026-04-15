@@ -1,170 +1,162 @@
-param(
+﻿param(
     [ValidateSet("default", "web")]
     [string]$Mode = "default"
 )
 
-# CLI Bridge - Tray Startup Script
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+$ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-Set-Location $scriptDir
+$envPath = Join-Path $scriptDir ".env"
 $restartExitCode = 75
-$env:CLI_BRIDGE_SUPERVISOR = "1"
 
-if ($Mode -eq "web") {
-    $env:WEB_ENABLED = "true"
+function Write-Info {
+    param([string]$Message)
+
+    Write-Host ("[信息] {0}" -f $Message)
 }
 
-$serviceName = if ($Mode -eq "web") {
-    "CLI Bridge - Web Mode"
-} else {
-    "CLI Bridge"
+function Write-Warn {
+    param([string]$Message)
+
+    Write-Host ("[提示] {0}" -f $Message) -ForegroundColor Yellow
 }
 
-function Start-BotProcess {
+function Write-Fail {
+    param([string]$Message)
+
+    Write-Host ("[错误] {0}" -f $Message) -ForegroundColor Red
+}
+
+function Get-DotEnvValue {
     param(
-        [switch]$Hidden
+        [string]$Path,
+        [string]$Name
     )
 
-    $startParams = @{
-        FilePath = "python"
-        ArgumentList = @("-m", "bot")
-        WorkingDirectory = $scriptDir
-        PassThru = $true
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
     }
 
-    if ($Hidden) {
-        $startParams.WindowStyle = "Hidden"
-    }
+    $pattern = "^{0}=(.*)$" -f [regex]::Escape($Name)
+    foreach ($line in Get-Content -Path $Path) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            continue
+        }
+        if ($trimmed.StartsWith("#")) {
+            continue
+        }
+        if ($trimmed -match $pattern) {
+            $value = $Matches[1].Trim()
+            if (
+                $value.Length -ge 2 -and
+                (
+                    ($value.StartsWith('"') -and $value.EndsWith('"')) -or
+                    ($value.StartsWith("'") -and $value.EndsWith("'"))
+                )
+            ) {
+                return $value.Substring(1, $value.Length - 2)
+            }
 
-    return Start-Process @startParams
-}
-
-# Create tray icon
-$notifyIcon = New-Object System.Windows.Forms.NotifyIcon
-$iconPath = Join-Path $scriptDir "icon.ico"
-if (Test-Path $iconPath) {
-    $notifyIcon.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($iconPath)
-} else {
-    $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
-}
-$notifyIcon.Text = "$serviceName - Running"
-$notifyIcon.Visible = $true
-
-# Create context menu
-$contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
-
-# Show Console menu item
-$showConsoleMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Console"
-$showConsoleMenuItem.Add_Click({
-    if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
-        $sig = @'
-[DllImport("user32.dll")]
-public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-[DllImport("kernel32.dll")]
-public static extern IntPtr GetConsoleWindow();
-'@
-        $type = Add-Type -MemberDefinition $sig -Name WinAPI -PassThru
-        $hwnd = $type::GetConsoleWindow()
-        if ($hwnd -ne [IntPtr]::Zero) {
-            [void]$type::ShowWindow($hwnd, 9)  # SW_RESTORE
+            return $value
         }
     }
-})
-[void]$contextMenu.Items.Add($showConsoleMenuItem)
 
-$openFolderMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Open Project Folder"
-$openFolderMenuItem.Add_Click({ Start-Process explorer.exe $scriptDir })
-[void]$contextMenu.Items.Add($openFolderMenuItem)
-
-[void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-
-$statusMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Show Status"
-$statusMenuItem.Add_Click({
-    $statusText = if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
-        "Bot is running`nMode: $Mode`nPID: $($global:pythonProcess.Id)`nWorking Directory: $scriptDir"
-    } else {
-        "Bot process is not running`nMode: $Mode`nWorking Directory: $scriptDir"
-    }
-    [System.Windows.Forms.MessageBox]::Show($statusText, $serviceName, "OK", "Information")
-})
-[void]$contextMenu.Items.Add($statusMenuItem)
-
-$restartMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Restart Service"
-$restartMenuItem.Add_Click({
-    if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
-        $global:pythonProcess.Kill()
-        $global:pythonProcess.WaitForExit(5000)
-    }
-    Start-Sleep -Seconds 1
-    $global:pythonProcess = Start-BotProcess -Hidden
-    $notifyIcon.BalloonTipTitle = $serviceName
-    $notifyIcon.BalloonTipText = "Service restarted"
-    $notifyIcon.ShowBalloonTip(2000)
-})
-[void]$contextMenu.Items.Add($restartMenuItem)
-
-[void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-
-$exitMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem "Exit"
-$exitMenuItem.Add_Click({
-    $notifyIcon.Visible = $false
-    if ($global:pythonProcess -and !$global:pythonProcess.HasExited) {
-        $global:pythonProcess.Kill()
-        $global:pythonProcess.WaitForExit(5000)
-    }
-    [System.Windows.Forms.Application]::Exit()
-})
-[void]$contextMenu.Items.Add($exitMenuItem)
-
-$notifyIcon.ContextMenuStrip = $contextMenu
-
-$notifyIcon.Add_DoubleClick({
-    $sig = @'
-[DllImport("user32.dll")]
-public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-[DllImport("kernel32.dll")]
-public static extern IntPtr GetConsoleWindow();
-'@
-    $type = Add-Type -MemberDefinition $sig -Name WinAPI2 -PassThru -ErrorAction SilentlyContinue
-    if (!$type) { $type = [WinAPI2] }
-    $hwnd = $type::GetConsoleWindow()
-    if ($hwnd -ne [IntPtr]::Zero) {
-        [void]$type::ShowWindow($hwnd, 9)  # SW_RESTORE
-    }
-})
-
-# Start Python Bot in new console window
-$global:pythonProcess = Start-BotProcess
-
-$notifyIcon.BalloonTipTitle = $serviceName
-$notifyIcon.BalloonTipText = "Service started"
-$notifyIcon.ShowBalloonTip(2000)
-
-# Keep script running
-while ($true) {
-    while (!$global:pythonProcess.HasExited) {
-        Start-Sleep -Milliseconds 100
-        [System.Windows.Forms.Application]::DoEvents()
-    }
-
-    if ($global:pythonProcess.ExitCode -eq $restartExitCode) {
-        Start-Sleep -Seconds 1
-        $global:pythonProcess = Start-BotProcess
-        $notifyIcon.BalloonTipTitle = $serviceName
-        $notifyIcon.BalloonTipText = "Service restarted"
-        $notifyIcon.ShowBalloonTip(2000)
-        continue
-    }
-
-    $notifyIcon.BalloonTipTitle = $serviceName
-    $notifyIcon.BalloonTipText = "Service stopped!"
-    $notifyIcon.ShowBalloonTip(5000)
-    break
+    return $null
 }
 
-while ($true) {
-    Start-Sleep -Milliseconds 100
-    [System.Windows.Forms.Application]::DoEvents()
+function Get-PythonRuntime {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pythonCommand) {
+        if ($pythonCommand.Path) {
+            return [pscustomobject]@{
+                Command   = $pythonCommand.Path
+                Arguments = @()
+            }
+        }
+
+        return [pscustomobject]@{
+            Command   = $pythonCommand.Source
+            Arguments = @()
+        }
+    }
+
+    $pyCommand = Get-Command py -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pyCommand) {
+        if ($pyCommand.Path) {
+            return [pscustomobject]@{
+                Command   = $pyCommand.Path
+                Arguments = @("-3")
+            }
+        }
+
+        return [pscustomobject]@{
+            Command   = $pyCommand.Source
+            Arguments = @("-3")
+        }
+    }
+
+    return $null
+}
+
+function Show-TunnelHint {
+    param([string]$Path)
+
+    $webPublicUrl = Get-DotEnvValue -Path $Path -Name "WEB_PUBLIC_URL"
+    $webTunnelMode = Get-DotEnvValue -Path $Path -Name "WEB_TUNNEL_MODE"
+
+    if (
+        [string]::IsNullOrWhiteSpace($webPublicUrl) -and
+        (
+            [string]::IsNullOrWhiteSpace($webTunnelMode) -or
+            $webTunnelMode -eq "disabled"
+        )
+    ) {
+        Write-Warn "当前未配置公网访问。"
+        Write-Host "如需外网访问，可在 .env 中设置 WEB_TUNNEL_MODE=cloudflare_quick，或配置反向代理后填写 WEB_PUBLIC_URL。"
+    }
+}
+
+try {
+    Set-Location $scriptDir
+
+    if (-not (Test-Path -LiteralPath $envPath)) {
+        Write-Fail "未找到 .env，请先运行 install.bat 生成配置。"
+        exit 1
+    }
+
+    $pythonRuntime = Get-PythonRuntime
+    if (-not $pythonRuntime) {
+        Write-Fail "未找到 python 或 py -3，请先安装 Python 并加入 PATH。"
+        exit 127
+    }
+
+    $env:CLI_BRIDGE_SUPERVISOR = "1"
+    $env:WEB_ENABLED = "true"
+
+    Write-Info ("启动目录: {0}" -f $scriptDir)
+    Write-Info ("启动模式: {0}" -f $Mode)
+
+    & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"
+        exit $LASTEXITCODE
+    }
+
+    Show-TunnelHint -Path $envPath
+
+    while ($true) {
+        & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot"))
+        $exitCode = $LASTEXITCODE
+
+        if ($exitCode -ne $restartExitCode) {
+            exit $exitCode
+        }
+
+        Write-Info "收到重启请求，1 秒后重新启动。"
+        Start-Sleep -Seconds 1
+    }
+} catch {
+    Write-Fail $_.Exception.Message
+    exit 1
 }

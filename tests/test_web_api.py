@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
@@ -1184,6 +1185,74 @@ async def test_admin_git_proxy_route_rejects_invalid_port(
             assert resp.status == 400
             payload = await resp.json()
             assert payload["error"]["code"] == "invalid_git_proxy_port"
+
+
+@pytest.mark.asyncio
+async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    base_status = {
+        "current_version": "1.0.0",
+        "update_enabled": True,
+        "update_channel": "release",
+        "last_checked_at": "",
+        "last_available_version": "",
+        "last_available_release_url": "",
+        "last_available_notes": "",
+        "pending_update_version": "",
+        "pending_update_path": "",
+        "pending_update_notes": "",
+        "pending_update_platform": "",
+        "update_last_error": "",
+    }
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.get_update_status", return_value=base_status), \
+                 patch("bot.web.server.set_update_enabled", return_value={**base_status, "update_enabled": False}) as toggle_mock, \
+                 patch("bot.web.server.check_for_updates", return_value={**base_status, "last_available_version": "1.0.1"}) as check_mock, \
+                 patch("bot.web.server.download_latest_update", return_value={**base_status, "pending_update_version": "1.0.1"}) as download_mock:
+                resp = await client.get("/api/admin/update")
+                assert resp.status == 200
+                resp = await client.patch("/api/admin/update", json={"update_enabled": False})
+                assert resp.status == 200
+                resp = await client.post("/api/admin/update/check")
+                assert resp.status == 200
+                resp = await client.post("/api/admin/update/download")
+                assert resp.status == 200
+
+    toggle_mock.assert_called_once_with(False)
+    check_mock.assert_called_once()
+    download_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_web_server_start_schedules_auto_update_check_when_enabled(web_manager):
+    server = WebApiServer(web_manager)
+    created_coroutines: list[Any] = []
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        coro.close()
+        return MagicMock()
+
+    with patch("bot.web.server.get_update_status", return_value={"update_enabled": True}), \
+         patch("bot.web.server.asyncio.create_task", side_effect=fake_create_task) as create_task, \
+         patch.object(server, "_runner", None):
+        with patch.object(server, "_build_app", return_value=web.Application()):
+            with patch("bot.web.server.web.AppRunner") as runner_cls:
+                runner = AsyncMock()
+                runner_cls.return_value = runner
+                with patch("bot.web.server.web.TCPSite") as site_cls:
+                    site = AsyncMock()
+                    site_cls.return_value = site
+                    await server.start()
+
+    create_task.assert_called()
+    assert created_coroutines
 
 
 @pytest.mark.asyncio
