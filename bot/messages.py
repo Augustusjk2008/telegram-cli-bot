@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from bot.version import APP_VERSION
+
 logger = logging.getLogger(__name__)
 
 # 默认消息配置
@@ -196,7 +198,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
     "startup": {
         "banner": "═══════════════════════════════════════════════════",
         "title": "  🤖 CLI Bridge Bot",
-        "version": "  版本: 1.0.2",
+        "version": f"  版本: {APP_VERSION}",
         "loading_config": "📋 正在加载配置...",
         "loaded": "✅ 配置加载完成",
         "starting": "🚀 正在启动 Bot...",

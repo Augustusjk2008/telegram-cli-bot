@@ -29,6 +29,9 @@ import {
   DEMO_SYSTEM_SCRIPTS,
   DEMO_TEAM_WORKDIR,
 } from "../mocks/demoEnvironment";
+import { APP_VERSION } from "../theme";
+
+const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
@@ -113,12 +116,12 @@ export class MockWebBotClient implements WebBotClient {
   private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
   private updateStatus: AppUpdateStatus = {
-    currentVersion: "1.0.2",
+    currentVersion: APP_VERSION,
     updateEnabled: true,
     updateChannel: "release",
     lastCheckedAt: "",
-    latestVersion: "1.0.2",
-    latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.2",
+    latestVersion: APP_VERSION,
+    latestReleaseUrl: MOCK_RELEASE_URL,
     latestNotes: "Bugfixes",
     pendingUpdateVersion: "",
     pendingUpdatePath: "",
@@ -387,8 +390,8 @@ export class MockWebBotClient implements WebBotClient {
     this.updateStatus = {
       ...this.updateStatus,
       lastCheckedAt: "2026-04-15T10:00:00+08:00",
-      latestVersion: "1.0.2",
-      latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.2",
+      latestVersion: APP_VERSION,
+      latestReleaseUrl: MOCK_RELEASE_URL,
       latestNotes: "Bugfixes",
       lastError: "",
     };
@@ -398,7 +401,7 @@ export class MockWebBotClient implements WebBotClient {
   async downloadUpdate(): Promise<AppUpdateStatus> {
     this.updateStatus = {
       ...this.updateStatus,
-      pendingUpdateVersion: this.updateStatus.latestVersion || "1.0.2",
+      pendingUpdateVersion: this.updateStatus.latestVersion || APP_VERSION,
       pendingUpdatePath: ".updates/cli-bridge-windows-x64.zip",
       pendingUpdateNotes: this.updateStatus.latestNotes || "Bugfixes",
       pendingUpdatePlatform: "windows-x64",

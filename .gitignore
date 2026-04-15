@@ -8,6 +8,7 @@ managed_bots.json
 *.log
 docs/superpowers/
 .worktrees/
+.release-local/
 .env.copy
 .env copy
 .venv/
