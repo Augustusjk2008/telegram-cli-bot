@@ -112,7 +112,7 @@ export class MockWebBotClient implements WebBotClient {
   private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
   private updateStatus: AppUpdateStatus = {
-    currentVersion: "1.0.0",
+    currentVersion: "1.0.1",
     updateEnabled: true,
     updateChannel: "release",
     lastCheckedAt: "",

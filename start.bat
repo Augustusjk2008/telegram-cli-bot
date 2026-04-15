@@ -9,7 +9,7 @@ set "CLI_BRIDGE_START_ARGS=%*"
 set "CLI_BRIDGE_START_MODE=%~1"
 
 if not exist ".env" (
-    echo [错误] 未找到 .env，请先运行 install.bat 生成配置。
+    echo [ERROR] Missing .env. Run install.bat first.
     pause
     exit /b 1
 )
@@ -24,13 +24,13 @@ if not defined PS_EXE (
 )
 
 if not defined PS_EXE (
-    echo [错误] 未找到 pwsh 或 powershell，请先安装 PowerShell。
+    echo [ERROR] PowerShell was not found. Install pwsh or Windows PowerShell.
     pause
     exit /b 1
 )
 
 set "CLI_BRIDGE_PS_EXE=%PS_EXE%"
-echo [信息] 使用 %PS_EXE% 启动服务...
+echo [INFO] Starting service with %PS_EXE%...
 
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference = 'Stop';" ^
@@ -42,14 +42,14 @@ echo [信息] 使用 %PS_EXE% 启动服务...
   "$argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath);" ^
   "if ($mode) { $argumentList += @('-Mode', $mode) }" ^
   "if ($isAdmin) { & $hostExe @argumentList; exit $LASTEXITCODE }" ^
-  "Write-Host '[信息] 正在请求管理员权限...';" ^
+  "Write-Host '[INFO] Requesting administrator privileges...';" ^
   "$proc = Start-Process -FilePath $hostExe -Verb RunAs -WorkingDirectory (Split-Path -Parent $scriptPath) -ArgumentList $argumentList -Wait -PassThru;" ^
   "if ($null -eq $proc) { exit 1 }" ^
   "exit $proc.ExitCode"
 
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
-    echo [错误] 服务已退出，退出码: %EXIT_CODE%
+    echo [ERROR] Service exited with code: %EXIT_CODE%
     pause
 )
 exit /b %EXIT_CODE%
