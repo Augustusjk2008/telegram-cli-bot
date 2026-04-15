@@ -165,6 +165,10 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  private getBrowserPath(botAlias: string): string {
+    return this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+  }
+
   async login(password: string): Promise<SessionState> {
     return {
       currentBotAlias: "main",
@@ -232,11 +236,11 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getCurrentPath(botAlias: string): Promise<string> {
-    return this.currentPaths.get(botAlias) || this.workdirOverrides.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+    return this.getBotSummary(botAlias).workingDir;
   }
 
   async listFiles(botAlias: string): Promise<DirectoryListing> {
-    const currentPath = await this.getCurrentPath(botAlias);
+    const currentPath = this.getBrowserPath(botAlias);
     const botFiles = mockFiles[botAlias] || {};
     return {
       workingDir: currentPath,
@@ -245,8 +249,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async changeDirectory(botAlias: string, path: string): Promise<string> {
-    const currentPath = await this.getCurrentPath(botAlias);
-    const bot = this.getBotSummary(botAlias);
+    const currentPath = this.getBrowserPath(botAlias);
     let nextPath = currentPath;
     if (path === "..") {
       if (currentPath !== "/") {
@@ -254,17 +257,12 @@ export class MockWebBotClient implements WebBotClient {
         parts.pop();
         nextPath = parts.length ? `/${parts.join("/")}` : "/";
       }
+    } else if (path.startsWith("/")) {
+      nextPath = path;
     } else {
       nextPath = currentPath === "/" ? `/${path}` : `${currentPath}/${path}`;
     }
     this.currentPaths.set(botAlias, nextPath);
-    if (bot.botMode !== "assistant") {
-      this.workdirOverrides.set(botAlias, nextPath);
-      this.bots.set(botAlias, {
-        ...bot,
-        workingDir: nextPath,
-      });
-    }
     return nextPath;
   }
 
@@ -274,7 +272,7 @@ export class MockWebBotClient implements WebBotClient {
       throw new Error("文件夹名称不能为空");
     }
 
-    const currentPath = await this.getCurrentPath(botAlias);
+    const currentPath = this.getBrowserPath(botAlias);
     const botFiles = (mockFiles[botAlias] ||= {});
     const currentEntries = [...(botFiles[currentPath] || [])];
     if (currentEntries.some((entry) => entry.name === folderName)) {
@@ -301,7 +299,7 @@ export class MockWebBotClient implements WebBotClient {
       throw new Error("路径不能为空");
     }
 
-    const currentPath = await this.getCurrentPath(botAlias);
+    const currentPath = this.getBrowserPath(botAlias);
     const botFiles = (mockFiles[botAlias] ||= {});
     const currentEntries = [...(botFiles[currentPath] || [])];
     const target = currentEntries.find((entry) => entry.name === targetName);

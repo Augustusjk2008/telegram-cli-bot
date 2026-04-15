@@ -670,9 +670,8 @@ def get_working_directory(manager: MultiBotManager, alias: str, user_id: int) ->
 def change_working_directory(manager: MultiBotManager, alias: str, user_id: int, new_path: str) -> dict[str, Any]:
     if not new_path or not new_path.strip():
         _raise(400, "missing_path", "路径不能为空")
-    profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    current_dir = _get_browser_directory(session) if profile.bot_mode == "assistant" else session.working_dir
+    current_dir = _get_browser_directory(session)
     path = new_path.strip()
     if not os.path.isabs(path):
         path = os.path.join(current_dir, path)
@@ -680,24 +679,9 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
     if not os.path.isdir(path):
         _raise(404, "dir_not_found", f"目录不存在: {path}")
 
-    if profile.bot_mode == "assistant":
-        session.browse_dir = path
-        session.persist()
-        return {"working_dir": session.browse_dir}
-
-    if alias != manager.main_profile.alias:
-        try:
-            profile.working_dir = path
-            manager._save_profiles()
-            update_bot_working_dir(alias, path)
-        except Exception as exc:
-            _raise(500, "save_workdir_failed", str(exc))
-
-    session.clear_session_ids()
-    session.working_dir = path
     session.browse_dir = path
     session.persist()
-    return {"working_dir": session.working_dir}
+    return {"working_dir": session.browse_dir}
 
 
 def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int = 50) -> dict[str, Any]:

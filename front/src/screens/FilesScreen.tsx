@@ -66,7 +66,14 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   };
 
   const handleHome = async () => {
-    await loadListing();
+    try {
+      setError("");
+      const workingDir = await client.getCurrentPath(botAlias);
+      await client.changeDirectory(botAlias, workingDir);
+      await loadListing();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "返回工作目录失败");
+    }
   };
 
   const handleCreateDirectory = async () => {
@@ -103,6 +110,15 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : file.isDir ? "删除文件夹失败" : "删除文件失败");
+    }
+  };
+
+  const handleDownloadEntry = async (file: FileEntry) => {
+    try {
+      setError("");
+      await client.downloadFile(botAlias, file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "下载文件失败");
     }
   };
 
@@ -203,6 +219,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
             files={files}
             onDirClick={(name) => void handleDirClick(name)}
             onFileClick={(name) => void handleFileClick(name)}
+            onDownload={(file) => void handleDownloadEntry(file)}
             onDelete={(file) => void handleDeleteEntry(file)}
           />
         )}

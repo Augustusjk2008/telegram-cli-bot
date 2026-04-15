@@ -1,14 +1,15 @@
+import { Download, FileText, Folder, Trash2 } from "lucide-react";
 import { FileEntry } from "../services/types";
-import { FileText, Folder, Trash2 } from "lucide-react";
 
 type Props = {
   files: FileEntry[];
   onDirClick: (name: string) => void;
   onFileClick: (name: string) => void;
+  onDownload: (file: FileEntry) => void;
   onDelete: (file: FileEntry) => void;
 };
 
-export function FileList({ files, onDirClick, onFileClick, onDelete }: Props) {
+export function FileList({ files, onDirClick, onFileClick, onDownload, onDelete }: Props) {
   if (files.length === 0) {
     return <div className="text-center text-[var(--muted)] py-8">目录为空</div>;
   }
@@ -42,6 +43,17 @@ export function FileList({ files, onDirClick, onFileClick, onDelete }: Props) {
               </span>
             )}
           </button>
+          {!file.isDir ? (
+            <button
+              type="button"
+              aria-label={`下载 ${file.name}`}
+              title={`下载 ${file.name}`}
+              onClick={() => onDownload(file)}
+              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--accent)] hover:bg-[var(--surface-strong)]"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label={`删除 ${file.name}`}
