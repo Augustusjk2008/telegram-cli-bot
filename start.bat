@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 chcp 65001 >nul
 
 set "SCRIPT_DIR=%~dp0"
@@ -9,9 +9,27 @@ set "CLI_BRIDGE_START_ARGS=%*"
 set "CLI_BRIDGE_START_MODE=%~1"
 
 if not exist ".env" (
-    echo [ERROR] Missing .env. Run install.bat first.
-    pause
-    exit /b 1
+    echo [INFO] .env not found. Running install.bat...
+    if not exist "install.bat" (
+        echo [ERROR] Missing .env and install.bat was not found.
+        pause
+        exit /b 1
+    )
+
+    set "CLI_BRIDGE_INSTALLER_NO_PAUSE=1"
+    call "%SCRIPT_DIR%install.bat"
+    set "EXIT_CODE=!ERRORLEVEL!"
+    if not "!EXIT_CODE!"=="0" (
+        echo [ERROR] install.bat exited with code: !EXIT_CODE!
+        pause
+        exit /b !EXIT_CODE!
+    )
+
+    if not exist ".env" (
+        echo [ERROR] install.bat completed, but .env is still missing.
+        pause
+        exit /b 1
+    )
 )
 
 set "PS_EXE="

@@ -48,7 +48,13 @@ Linux：
 
 - 运行 `bash start.sh`
 
+如果目录里还没有 `.env`，Windows 的 `start.bat` / `start.ps1` 会先自动运行 `install.bat` 生成配置，再继续启动。
+
 默认 Web 地址是 `http://127.0.0.1:8765`，登录口令使用 `.env` 里的 `WEB_API_TOKEN`。
+
+如果 `.env` 里配置的 `WEB_PORT` 已被占用，启动时会自动尝试 `+1` 直到找到可用端口；控制台、健康检查接口和 Cloudflare quick tunnel 都会同步使用这个实际端口。
+
+如果启用了 `WEB_TUNNEL_MODE=cloudflare_quick` 且 tunnel 成功拉起，控制台会额外打印公网地址二维码，方便手机直接扫码打开。
 
 ## 其它说明
 

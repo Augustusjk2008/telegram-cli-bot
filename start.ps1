@@ -117,13 +117,51 @@ function Show-TunnelHint {
     }
 }
 
+function Ensure-EnvFile {
+    param(
+        [string]$Path,
+        [string]$RootDir
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return
+    }
+
+    $installBatPath = Join-Path $RootDir "install.bat"
+    if (-not (Test-Path -LiteralPath $installBatPath)) {
+        throw "未找到 .env，且 install.bat 不存在。"
+    }
+
+    Write-Warn "未找到 .env，正在运行 install.bat 生成配置。"
+
+    $previousNoPause = $env:CLI_BRIDGE_INSTALLER_NO_PAUSE
+    $installExitCode = 1
+
+    try {
+        $env:CLI_BRIDGE_INSTALLER_NO_PAUSE = "1"
+        & $installBatPath
+        $installExitCode = $LASTEXITCODE
+    } finally {
+        if ($null -ne $previousNoPause) {
+            $env:CLI_BRIDGE_INSTALLER_NO_PAUSE = $previousNoPause
+        } else {
+            Remove-Item Env:CLI_BRIDGE_INSTALLER_NO_PAUSE -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($installExitCode -ne 0) {
+        throw ("install.bat 执行失败，退出码: {0}" -f $installExitCode)
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "install.bat 执行完成，但仍未生成 .env。"
+    }
+}
+
 try {
     Set-Location $scriptDir
 
-    if (-not (Test-Path -LiteralPath $envPath)) {
-        Write-Fail "未找到 .env，请先运行 install.bat 生成配置。"
-        exit 1
-    }
+    Ensure-EnvFile -Path $envPath -RootDir $scriptDir
 
     $pythonRuntime = Get-PythonRuntime
     if (-not $pythonRuntime) {

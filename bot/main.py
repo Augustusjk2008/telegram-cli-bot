@@ -37,6 +37,7 @@ from bot.messages import get_messages
 from bot.models import BotProfile
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
+from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +89,10 @@ def _format_http_host(host: str) -> str:
     return normalized
 
 
-def _get_web_access_lines():
+def _get_web_access_lines(bind: RuntimeWebBind):
     """生成启动成功后展示给用户的 Web 访问地址。"""
-    host = str(getattr(config, "WEB_HOST", "") or "").strip() or "127.0.0.1"
-    port = int(getattr(config, "WEB_PORT", 8765))
+    host = bind.host
+    port = bind.actual_port
 
     if host in {"0.0.0.0"}:
         lines = [f"   本机: http://127.0.0.1:{port}"]
@@ -108,8 +109,11 @@ def _get_web_access_lines():
     return [f"   http://{_format_http_host(host)}:{port}"]
 
 
-def _print_web_access_lines():
-    lines = _get_web_access_lines()
+def _print_web_access_lines(bind: RuntimeWebBind):
+    if bind.port_changed:
+        safe_print(f"WEB_PORT {bind.configured_port} 已被占用，自动改用 {bind.actual_port}")
+
+    lines = _get_web_access_lines(bind)
     if not lines:
         return
     safe_print("可访问地址:")
@@ -173,10 +177,11 @@ async def run_all_bots():
     )
 
     manager = MultiBotManager(main_profile=main_profile, storage_file=MANAGED_BOTS_FILE)
-    web_server = WebApiServer(manager)
+    runtime_bind = resolve_runtime_web_bind(config.WEB_HOST, config.WEB_PORT)
+    web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
     await web_server.start()
     logger.info("Web API 已附加到主进程")
-    _print_web_access_lines()
+    _print_web_access_lines(runtime_bind)
 
     try:
         await config.RESTART_EVENT.wait()

@@ -240,8 +240,17 @@ async def cors_middleware(request: web.Request, handler):
 class WebApiServer:
     """可嵌入现有进程的 Web API 服务器。"""
 
-    def __init__(self, manager: MultiBotManager, tunnel_service: TunnelService | None = None):
+    def __init__(
+        self,
+        manager: MultiBotManager,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        tunnel_service: TunnelService | None = None,
+    ):
         self.manager = manager
+        self._host = str(host or WEB_HOST or "").strip() or "127.0.0.1"
+        self._port = int(port if port is not None else WEB_PORT)
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._restart_task: asyncio.Task[None] | None = None
@@ -249,8 +258,8 @@ class WebApiServer:
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
         self._tunnel_service = tunnel_service or TunnelService(
-            host=WEB_HOST,
-            port=WEB_PORT,
+            host=self._host,
+            port=self._port,
             mode=WEB_TUNNEL_MODE,
             autostart=WEB_TUNNEL_AUTOSTART,
             public_url=WEB_PUBLIC_URL,
@@ -357,6 +366,29 @@ class WebApiServer:
         logger.warning("复制 Web 公网地址到剪贴板失败: 未找到可用的剪贴板命令")
         return False
 
+    def _build_public_url_qr_text(self, public_url: str) -> str:
+        import qrcode
+
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(public_url)
+        qr.make(fit=True)
+        matrix = qr.get_matrix()
+        return "\n".join("".join("##" if cell else "  " for cell in row) for row in matrix)
+
+    def _print_public_url_qr(self, public_url: str) -> bool:
+        value = str(public_url or "").strip()
+        if not value:
+            return False
+
+        try:
+            print(f"[INFO] Quick tunnel URL: {value}")
+            print(self._build_public_url_qr_text(value))
+            return True
+        except Exception as exc:
+            logger.warning("打印 quick tunnel 二维码失败: %s", exc)
+            print(f"[INFO] Quick tunnel URL: {value}")
+            return False
+
     async def _notify_tunnel_public_url(self, snapshot: dict[str, Any], *, reason: str) -> bool:
         if snapshot.get("status") != "running":
             return False
@@ -370,7 +402,8 @@ class WebApiServer:
         copied = self._copy_text_to_clipboard(public_url)
         if copied:
             logger.info("已复制 Web 公网地址到剪贴板 reason=%s url=%s", reason, public_url)
-        return copied
+        qr_printed = self._print_public_url_qr(public_url)
+        return copied or qr_printed
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -378,8 +411,8 @@ class WebApiServer:
                 "ok": True,
                 "service": "telegram-cli-bridge-web",
                 "web_enabled": True,
-                "host": WEB_HOST,
-                "port": WEB_PORT,
+                "host": self._host,
+                "port": self._port,
             }
         )
 
@@ -1087,7 +1120,7 @@ class WebApiServer:
         app = self._build_app()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host=WEB_HOST, port=WEB_PORT)
+        self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
         await self._site.start()
         if get_update_status().get("update_enabled"):
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
@@ -1095,7 +1128,7 @@ class WebApiServer:
             tunnel_snapshot = await self._tunnel_service.start()
             await self._notify_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
             logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
-        local_url = TunnelService._build_local_url(WEB_HOST, WEB_PORT)
+        local_url = TunnelService._build_local_url(self._host, self._port)
         logger.info(
             "Web API 已启动: %s (token=%s, allowed_origins=%s)",
             local_url,
