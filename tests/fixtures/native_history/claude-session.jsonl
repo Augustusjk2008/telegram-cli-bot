@@ -1,4 +1,0 @@
-{"type":"user","message":{"role":"user","content":[{"type":"text","text":"查看最近变更"}]}}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我先查看 git 状态。"},{"type":"tool_use","id":"toolu_1","name":"bash","input":{"command":"git status --short"}}]}}
-{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":" M bot/web/api_service.py"}]}}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"最近有 1 个文件修改。"}]}}

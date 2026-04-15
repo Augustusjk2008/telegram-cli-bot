@@ -24,6 +24,21 @@ export function ChatComposer({ onSend, disabled, compact = false }: Props) {
         placeholder="输入消息" 
         rows={1} 
         disabled={disabled}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || !event.shiftKey || event.nativeEvent.isComposing) {
+            return;
+          }
+          event.preventDefault();
+          const form = event.currentTarget.form;
+          if (!form) {
+            return;
+          }
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            return;
+          }
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }}
         className={compact
           ? "flex-1 resize-none rounded-lg border border-[var(--border)] p-2 bg-[var(--surface)] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
           : "flex-1 resize-none rounded-lg border border-[var(--border)] p-2 bg-[var(--surface)] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"}

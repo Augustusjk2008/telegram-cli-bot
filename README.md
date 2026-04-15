@@ -9,6 +9,8 @@
 
 ## 如何下载与安装
 
+推荐使用 GitHub Releases 的正式发布包：
+
 Windows：
 
 1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
@@ -20,6 +22,20 @@ Linux：
 1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
 2. 下载最新的 `orbit-safe-claw-linux-x64-<version>.tar.gz`
 3. 解压后进入目录，运行 `bash install.sh`
+
+如果你只是想直接拉取最新源码快照，也可以继续用一行命令：
+
+Windows：
+
+```powershell
+$zip="$env:TEMP\\orbit-safe-claw.zip"; Invoke-WebRequest "https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.zip" -OutFile $zip; Expand-Archive $zip -DestinationPath . -Force; Set-Location .\telegram-cli-bot-master; .\install.bat
+```
+
+Linux：
+
+```bash
+curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz | tar -xz && cd telegram-cli-bot-master && bash install.sh
+```
 
 ## 如何运行
 
@@ -75,8 +91,3 @@ python -m pytest tests -q
 cd front && npm test
 cd front && npm run build
 ```
-
-相关文档：
-
-- [docs/linux-deployment.md](docs/linux-deployment.md)
-- [docs/assistant-cron-plan.md](docs/assistant-cron-plan.md)

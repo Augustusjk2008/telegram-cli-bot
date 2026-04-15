@@ -17,3 +17,7 @@ venv/
 .claude/settings.local.json
 tmp_bot_create_check/
 .web_tunnel_state.json
+test/
+tests/
+/AGENTS.md
+/CLAUDE.md
