@@ -196,7 +196,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
     "startup": {
         "banner": "═══════════════════════════════════════════════════",
         "title": "  🤖 CLI Bridge Bot",
-        "version": "  版本: 1.0.1",
+        "version": "  版本: 1.0.2",
         "loading_config": "📋 正在加载配置...",
         "loaded": "✅ 配置加载完成",
         "starting": "🚀 正在启动 Bot...",

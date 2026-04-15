@@ -112,12 +112,12 @@ export class MockWebBotClient implements WebBotClient {
   private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
   private updateStatus: AppUpdateStatus = {
-    currentVersion: "1.0.1",
+    currentVersion: "1.0.2",
     updateEnabled: true,
     updateChannel: "release",
     lastCheckedAt: "",
-    latestVersion: "1.0.1",
-    latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.1",
+    latestVersion: "1.0.2",
+    latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.2",
     latestNotes: "Bugfixes",
     pendingUpdateVersion: "",
     pendingUpdatePath: "",
@@ -386,8 +386,8 @@ export class MockWebBotClient implements WebBotClient {
     this.updateStatus = {
       ...this.updateStatus,
       lastCheckedAt: "2026-04-15T10:00:00+08:00",
-      latestVersion: "1.0.1",
-      latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.1",
+      latestVersion: "1.0.2",
+      latestReleaseUrl: "https://github.com/example/cli-bridge/releases/tag/v1.0.2",
       latestNotes: "Bugfixes",
       lastError: "",
     };
@@ -397,7 +397,7 @@ export class MockWebBotClient implements WebBotClient {
   async downloadUpdate(): Promise<AppUpdateStatus> {
     this.updateStatus = {
       ...this.updateStatus,
-      pendingUpdateVersion: this.updateStatus.latestVersion || "1.0.1",
+      pendingUpdateVersion: this.updateStatus.latestVersion || "1.0.2",
       pendingUpdatePath: ".updates/cli-bridge-windows-x64.zip",
       pendingUpdateNotes: this.updateStatus.latestNotes || "Bugfixes",
       pendingUpdatePlatform: "windows-x64",
