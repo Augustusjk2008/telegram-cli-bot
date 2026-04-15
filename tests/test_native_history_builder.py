@@ -1,7 +1,13 @@
 from pathlib import Path
 
 from bot.models import BotProfile, UserSession
-from bot.web.native_history_adapter import create_stream_trace_state, load_native_transcript, consume_stream_trace_chunk
+from bot.web.native_history_adapter import (
+    _consume_claude_line,
+    _new_turn_state,
+    consume_stream_trace_chunk,
+    create_stream_trace_state,
+    load_native_transcript,
+)
 from bot.web.native_history_builder import build_web_chat_history, merge_native_turns_with_overlay
 from bot.web.native_history_locator import LocatedTranscript
 
@@ -43,6 +49,26 @@ def test_consume_stream_trace_chunk_maps_claude_events_without_type_error():
     assert [event["kind"] for event in events] == ["commentary", "tool_call"]
     assert events[1]["raw_type"] == "tool_use"
     assert events[1]["summary"] == "git status --short"
+
+
+def test_consume_claude_line_remains_backward_compatible_without_include_trace_kwarg():
+    turn = _new_turn_state()
+
+    _consume_claude_line(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "我先检查最近变更。"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "git status --short"}},
+                ]
+            },
+        },
+        turn,
+    )
+
+    assert [event["kind"] for event in turn["trace"]] == ["commentary", "tool_call"]
+    assert turn["assistant_messages"] == ["我先检查最近变更。"]
 
 
 def test_build_web_chat_history_maps_payload_style_codex_rollout_and_ignores_reasoning(tmp_path: Path):

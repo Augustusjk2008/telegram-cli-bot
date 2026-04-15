@@ -1907,6 +1907,95 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trace_error(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root-claude-stream"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"assistant","session_id":"session-1","message":{"content":[{"type":"text","text":"我先检查最近变更。"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git status --short"}}]}}\n',
+                '{"type":"result","subtype":"success","session_id":"session-1","result":"最近有 1 个文件修改。"}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(False, False, "hash-current"),
+         ), \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value=AssistantPromptPayload(
+                 prompt_text="assistant payload",
+                 managed_prompt_hash_seen="hash-current",
+             ),
+         ), \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
+         patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.list_pending_capture_ids", return_value=["cap_1"]), \
+         patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
+         patch("bot.web.api_service.finalize_compaction", return_value=False), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=MagicMock(enabled=False, prompt_text="assistant payload")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "assistant1", 1001, "查看最近变更")]
+
+    trace_events = [event for event in events if event["type"] == "trace"]
+    done_event = next(event for event in events if event["type"] == "done")
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+
+    assert [event["event"]["kind"] for event in trace_events] == ["commentary", "tool_call"]
+    assert trace_events[1]["event"]["summary"] == "git status --short"
+    assert done_event["message"]["role"] == "assistant"
+    assert done_event["message"]["content"] == "最近有 1 个文件修改。"
+    assert session.claude_session_initialized is True
+    assert session.managed_prompt_hash_seen == "hash-current"
+
+
+@pytest.mark.asyncio
 async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotManager, temp_dir: Path):
     workdir = temp_dir / "assistant-cli"
     workdir.mkdir()
