@@ -4,8 +4,13 @@ import { BotIdentity } from "../components/BotIdentity";
 import { FileList } from "../components/FileList";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileEntry } from "../services/types";
+import type { FileEntry, FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import {
+  getFilePreviewStatusText,
+  isFilePreviewFullyLoaded,
+  isFilePreviewTooLarge,
+} from "../utils/filePreview";
 
 type Props = {
   botAlias: string;
@@ -22,6 +27,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [previewContent, setPreviewContent] = useState("");
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
 
   async function loadListing() {
     setLoading(true);
@@ -92,6 +98,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       if (previewName === file.name) {
         setPreviewName("");
         setPreviewContent("");
+        setPreviewResult(null);
       }
       await loadListing();
     } catch (err) {
@@ -102,18 +109,22 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const loadPreview = async (name: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     try {
-      const content = mode === "full"
+      const result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
       setPreviewName(name);
-      setPreviewMode(mode);
-      setPreviewContent(content || "文件为空");
+      setPreviewMode(result.mode === "cat" ? "full" : "preview");
+      setPreviewResult(result);
+      setPreviewContent(result.content || "文件为空");
     } catch (err) {
       setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
     } finally {
       setPreviewLoading(false);
     }
   };
+
+  const previewStatusText = getFilePreviewStatusText(previewResult);
+  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
 
   const handleFileClick = async (name: string) => {
     await loadPreview(name, "preview");
@@ -206,8 +217,10 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           onClose={() => {
             setPreviewName("");
             setPreviewContent("");
+            setPreviewResult(null);
           }}
-          onLoadFull={previewMode !== "full" ? () => void loadPreview(previewName, "full") : undefined}
+          statusText={previewStatusText}
+          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
       ) : null}

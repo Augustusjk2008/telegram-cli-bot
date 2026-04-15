@@ -16,12 +16,18 @@ import type {
   ChatMessage,
   ChatMessageMetaInfo,
   ChatTraceEvent,
+  FileReadResult,
   RunningReply,
   SystemScript,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { buildResumePrompt } from "../utils/chatResume";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
+import {
+  getFilePreviewStatusText,
+  isFilePreviewFullyLoaded,
+  isFilePreviewTooLarge,
+} from "../utils/filePreview";
 
 type Props = {
   botAlias: string;
@@ -380,6 +386,7 @@ export function ChatScreen({
   const [previewContent, setPreviewContent] = useState("");
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [restoredReply, setRestoredReply] = useState<RunningReply | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -443,6 +450,7 @@ export function ChatScreen({
     setStreamStartedAtMs(null);
     setPreviewName("");
     setPreviewContent("");
+    setPreviewResult(null);
     setBotOverview(null);
     setRestoredReply(null);
     setCopiedMessageId("");
@@ -578,18 +586,22 @@ export function ChatScreen({
     setPreviewLoading(true);
     setError("");
     try {
-      const content = mode === "full"
+      const result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
       setPreviewName(name);
-      setPreviewMode(mode);
-      setPreviewContent(content || "文件为空");
+      setPreviewMode(result.mode === "cat" ? "full" : "preview");
+      setPreviewResult(result);
+      setPreviewContent(result.content || "文件为空");
     } catch (err) {
       setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
     } finally {
       setPreviewLoading(false);
     }
   }, [botAlias, client]);
+
+  const previewStatusText = getFilePreviewStatusText(previewResult);
+  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
 
   const handleFileLinkClick = useCallback((href: string) => {
     const nextPath = resolvePreviewFilePath(href, workingDirRef.current);
@@ -943,11 +955,13 @@ export function ChatScreen({
           content={previewContent}
           mode={previewMode}
           loading={previewLoading}
+          statusText={previewStatusText}
           onClose={() => {
             setPreviewName("");
             setPreviewContent("");
+            setPreviewResult(null);
           }}
-          onLoadFull={previewMode !== "full" ? () => void loadPreview(previewName, "full") : undefined}
+          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
       ) : null}

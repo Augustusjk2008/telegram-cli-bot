@@ -8,6 +8,7 @@ import type {
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
+  FileReadResult,
   AvatarAsset,
   AppUpdateStatus,
   GitActionResult,
@@ -38,8 +39,8 @@ export interface WebBotClient {
   changeDirectory(botAlias: string, path: string): Promise<string>;
   createDirectory(botAlias: string, name: string): Promise<void>;
   deletePath(botAlias: string, path: string): Promise<void>;
-  readFile(botAlias: string, filename: string): Promise<string>;
-  readFileFull(botAlias: string, filename: string): Promise<string>;
+  readFile(botAlias: string, filename: string): Promise<FileReadResult>;
+  readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string): Promise<void>;
   resetSession(botAlias: string): Promise<void>;

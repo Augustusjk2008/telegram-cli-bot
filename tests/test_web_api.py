@@ -434,6 +434,26 @@ def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
     assert content["content"] == "line1"
 
 
+def test_read_file_preview_marks_small_file_as_full_content(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "tiny.txt", b"line1\n")
+
+    content = read_file_content(web_manager, "main", 1001, "tiny.txt", mode="head", lines=80)
+
+    assert content["content"] == "line1"
+    assert content["file_size_bytes"] == len(b"line1\n")
+    assert content["is_full_content"] is True
+
+
+def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
+
+    content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=1)
+
+    assert content["content"] == "line1"
+    assert content["file_size_bytes"] == len(b"line1\nline2\n")
+    assert content["is_full_content"] is False
+
+
 def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()

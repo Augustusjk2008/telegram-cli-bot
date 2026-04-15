@@ -52,26 +52,41 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     deletePath: async () => undefined,
     readFile: async (_botAlias: string, filename: string) => {
       if (filename === "README.md") {
-        return [
-          "# Markdown Title",
-          "",
-          "- item 1",
-          "- item 2",
-          "",
-          "| Name | Value |",
-          "| --- | --- |",
-          "| Cell | 42 |",
-          "",
-          "![Architecture](assets/diagram.png)",
-          "",
-          "```ts",
-          "const answer = 42;",
+        return {
+          content: [
+            "# Markdown Title",
+            "",
+            "- item 1",
+            "- item 2",
+            "",
+            "| Name | Value |",
+            "| --- | --- |",
+            "| Cell | 42 |",
+            "",
+            "![Architecture](assets/diagram.png)",
+            "",
+            "```ts",
+            "const answer = 42;",
           "```",
-        ].join("\n");
+        ].join("\n"),
+          mode: "head",
+          fileSizeBytes: 512,
+          isFullContent: false,
+        };
       }
-      return "# Raw Heading\n\n- should stay literal";
+      return {
+        content: "# Raw Heading\n\n- should stay literal",
+        mode: "head",
+        fileSizeBytes: 128,
+        isFullContent: false,
+      };
     },
-    readFileFull: async (_botAlias: string, filename: string) => `FULL:${filename}`,
+    readFileFull: async (_botAlias: string, filename: string) => ({
+      content: `FULL:${filename}`,
+      mode: "cat",
+      fileSizeBytes: 128,
+      isFullContent: true,
+    }),
     uploadFile: async () => undefined,
     downloadFile: async () => undefined,
     resetSession: async () => undefined,
@@ -253,7 +268,12 @@ test("keeps non-markdown files in plain-text preview mode", async () => {
 
 test("can load full file content from preview modal", async () => {
   const user = userEvent.setup();
-  const readFullSpy = vi.fn(async () => "完整内容\n第二行");
+  const readFullSpy = vi.fn(async () => ({
+    content: "完整内容\n第二行",
+    mode: "cat",
+    fileSizeBytes: 128,
+    isFullContent: true,
+  }));
   const client = createClient();
   client.readFileFull = readFullSpy;
 
@@ -264,6 +284,53 @@ test("can load full file content from preview modal", async () => {
 
   expect(readFullSpy).toHaveBeenCalledWith("main", "notes.txt");
   expect(await screen.findByText((content) => content.includes("完整内容"))).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+  expect(screen.getByText("已加载全文")).toBeInTheDocument();
+});
+
+test("hides the full-read button when preview already contains the whole small file", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "tiny.txt", isDir: false, size: 18, updatedAt: "2026-04-09T10:00:00Z" }],
+    }),
+    readFile: async () => ({
+      content: "tiny file content",
+      mode: "head",
+      fileSizeBytes: 18,
+      isFullContent: true,
+    }),
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 tiny.txt" }));
+
+  expect(await screen.findByText("已加载全文")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+});
+
+test("shows a download-only warning for files larger than 200KB", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "big.log", isDir: false, size: 205 * 1024, updatedAt: "2026-04-09T10:00:00Z" }],
+    }),
+    readFile: async () => ({
+      content: "preview line 1\npreview line 2",
+      mode: "head",
+      fileSizeBytes: 205 * 1024,
+      isFullContent: false,
+    }),
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 big.log" }));
+
+  expect(await screen.findByText("文件超过200KB，请下载后读取全文")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
 });
 

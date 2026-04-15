@@ -1047,6 +1047,9 @@ describe("RealWebBotClient", () => {
           ok: true,
           data: {
             content: "full file content",
+            mode: "cat",
+            file_size_bytes: 123,
+            is_full_content: true,
           },
         }),
       });
@@ -1063,7 +1066,13 @@ describe("RealWebBotClient", () => {
         }),
       }),
     );
-    expect(content).toBe("full file content");
+    expect(content).toEqual({
+      content: "full file content",
+      mode: "cat",
+      workingDir: "",
+      fileSizeBytes: 123,
+      isFullContent: true,
+    });
   });
 
   test("listSystemScripts returns available admin scripts", async () => {

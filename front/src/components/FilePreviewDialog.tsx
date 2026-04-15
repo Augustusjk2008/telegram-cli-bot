@@ -5,6 +5,7 @@ type Props = {
   content: string;
   mode: "preview" | "full";
   loading?: boolean;
+  statusText?: string;
   onClose: () => void;
   onLoadFull?: () => void;
   onDownload?: () => void;
@@ -16,6 +17,7 @@ export function FilePreviewDialog({
   content,
   mode,
   loading = false,
+  statusText = "",
   onClose,
   onLoadFull,
   onDownload,
@@ -48,26 +50,31 @@ export function FilePreviewDialog({
             {content}
           </pre>
         )}
-        <div className="mt-4 flex justify-end gap-2">
-          {mode !== "full" && onLoadFull ? (
-            <button
-              type="button"
-              onClick={onLoadFull}
-              disabled={loading}
-              className="rounded-lg border border-[var(--border)] px-4 py-2 hover:bg-[var(--surface-strong)] disabled:opacity-60"
-            >
-              {loading ? "读取中..." : "全文读取"}
-            </button>
-          ) : null}
-          {onDownload ? (
-            <button
-              type="button"
-              onClick={onDownload}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white"
-            >
-              下载
-            </button>
-          ) : null}
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="min-h-[1.25rem] text-sm text-[var(--muted)]">
+            {statusText}
+          </div>
+          <div className="flex justify-end gap-2">
+            {mode !== "full" && onLoadFull ? (
+              <button
+                type="button"
+                onClick={onLoadFull}
+                disabled={loading}
+                className="rounded-lg border border-[var(--border)] px-4 py-2 hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {loading ? "读取中..." : "全文读取"}
+              </button>
+            ) : null}
+            {onDownload ? (
+              <button
+                type="button"
+                onClick={onDownload}
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white"
+              >
+                下载
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

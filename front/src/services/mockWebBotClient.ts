@@ -323,12 +323,22 @@ export class MockWebBotClient implements WebBotClient {
     }
   }
 
-  async readFile(botAlias: string, filename: string): Promise<string> {
-    return `Mock preview for ${filename}\n\nThis is a local preview.`;
+  async readFile(botAlias: string, filename: string) {
+    return {
+      content: `Mock preview for ${filename}\n\nThis is a local preview.`,
+      mode: "head" as const,
+      fileSizeBytes: 1024,
+      isFullContent: false,
+    };
   }
 
-  async readFileFull(botAlias: string, filename: string): Promise<string> {
-    return `Mock full content for ${filename}\n\nThis is the full file content.`;
+  async readFileFull(botAlias: string, filename: string) {
+    return {
+      content: `Mock full content for ${filename}\n\nThis is the full file content.`,
+      mode: "cat" as const,
+      fileSizeBytes: 1024,
+      isFullContent: true,
+    };
   }
 
   async uploadFile(botAlias: string, file: File): Promise<void> {

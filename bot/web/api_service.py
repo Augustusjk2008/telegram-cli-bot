@@ -1856,13 +1856,17 @@ def read_file_content(
         with open(file_path, "r", encoding="utf-8") as handle:
             if mode == "head":
                 content_lines = []
+                truncated = False
                 for index, line in enumerate(handle):
                     if index >= lines:
+                        truncated = True
                         break
                     content_lines.append(line.rstrip("\n"))
                 content = "\n".join(content_lines)
+                is_full_content = not truncated
             else:
                 content = handle.read()
+                is_full_content = True
     except UnicodeDecodeError:
         _raise(400, "unsupported_encoding", "文件不是文本文件或编码不支持")
     except Exception as exc:
@@ -1873,6 +1877,8 @@ def read_file_content(
         "mode": mode,
         "content": content,
         "working_dir": browser_dir,
+        "file_size_bytes": file_size,
+        "is_full_content": is_full_content,
     }
 
 

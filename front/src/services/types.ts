@@ -106,6 +106,16 @@ export type FileEntry = {
   updatedAt?: string;
 };
 
+export type FileReadMode = "head" | "cat";
+
+export type FileReadResult = {
+  content: string;
+  mode: FileReadMode;
+  workingDir?: string;
+  fileSizeBytes?: number;
+  isFullContent?: boolean;
+};
+
 export type SessionState = {
   currentBotAlias: string;
   currentPath: string;

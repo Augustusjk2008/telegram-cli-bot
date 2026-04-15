@@ -19,6 +19,8 @@ import type {
   DirectoryListing,
   AvatarAsset,
   FileEntry,
+  FileReadMode,
+  FileReadResult,
   RunningReply,
   SessionState,
   SystemScript,
@@ -102,6 +104,14 @@ type RawFileEntry = {
   is_dir: boolean;
   size?: number;
   updated_at?: string;
+};
+
+type RawFileReadResult = {
+  content: string;
+  mode?: FileReadMode;
+  working_dir?: string;
+  file_size_bytes?: number;
+  is_full_content?: boolean;
 };
 
 type RawSystemScript = {
@@ -840,24 +850,36 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async readFile(botAlias: string, filename: string): Promise<string> {
+  async readFile(botAlias: string, filename: string): Promise<FileReadResult> {
     const params = new URLSearchParams({
       filename,
       mode: "head",
       lines: "80",
     });
-    const data = await this.requestJson<{ content: string }>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
-    return data.content;
+    const data = await this.requestJson<RawFileReadResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
+    return {
+      content: data.content || "",
+      mode: data.mode || "head",
+      workingDir: data.working_dir || "",
+      fileSizeBytes: data.file_size_bytes,
+      isFullContent: data.is_full_content,
+    };
   }
 
-  async readFileFull(botAlias: string, filename: string): Promise<string> {
+  async readFileFull(botAlias: string, filename: string): Promise<FileReadResult> {
     const params = new URLSearchParams({
       filename,
       mode: "cat",
       lines: "0",
     });
-    const data = await this.requestJson<{ content: string }>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
-    return data.content;
+    const data = await this.requestJson<RawFileReadResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
+    return {
+      content: data.content || "",
+      mode: data.mode || "cat",
+      workingDir: data.working_dir || "",
+      fileSizeBytes: data.file_size_bytes,
+      isFullContent: data.is_full_content ?? true,
+    };
   }
 
   async uploadFile(botAlias: string, file: File): Promise<void> {

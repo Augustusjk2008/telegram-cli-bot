@@ -1,7 +1,5 @@
 import {
-  APP_KICKER,
-  APP_NAME,
-  APP_SELLING_POINTS,
+  APP_LOGIN_NAME,
   APP_TAGLINE,
   APP_VERSION,
 } from "../theme";
@@ -40,38 +38,29 @@ export function LoginScreen({ onLogin, isLoading, error }: Props) {
         <div className="grid w-full gap-5 lg:grid-cols-[1.16fr_0.84fr]">
           <section className="relative overflow-hidden border border-[var(--accent-outline)] bg-[var(--surface-overlay)] px-5 py-6 shadow-[var(--shadow-card)] sm:px-7 sm:py-7">
             <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,transparent,var(--accent),transparent)] opacity-80" />
-            <div className="relative space-y-6">
-              <div className="inline-flex items-center border border-[var(--accent-outline)] bg-[var(--bg)] px-3 py-1 font-mono text-[11px] tracking-[0.32em] text-[var(--accent-strong)]">
-                {APP_KICKER}
+            <div className="relative flex h-full flex-col justify-center gap-6">
+              <div className="space-y-4">
+                <h1 className="text-[1.8rem] font-black tracking-[0.03em] text-[var(--text)] sm:text-[2.3rem] lg:text-[2.7rem]">
+                  {APP_LOGIN_NAME}
+                </h1>
+                <p className="max-w-2xl text-lg font-semibold text-[var(--accent)] sm:text-xl">
+                  {APP_TAGLINE}
+                </p>
+                <p className="max-w-xl text-sm leading-7 text-[var(--muted)]">
+                  深空风格的本地主控台入口，登录后即可进入 Bot、CLI 与工作目录的统一控制面。
+                </p>
               </div>
 
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-3">
-                  <h1 className="text-4xl font-black tracking-[0.04em] text-[var(--text)] sm:text-5xl">
-                    {APP_NAME}
-                  </h1>
-                  <p className="max-w-2xl text-lg font-semibold text-[var(--accent)] sm:text-xl">
-                    {APP_TAGLINE}
-                  </p>
-                  <p className="max-w-xl text-sm leading-7 text-[var(--muted)]">
-                    网页即入口，本地即控制面。
-                  </p>
-                </div>
-                <div className="border border-[var(--accent-outline)] bg-[var(--bg)] px-3 py-2 font-mono text-sm text-[var(--accent-strong)]">
-                  {APP_VERSION}
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-3">
-                {APP_SELLING_POINTS.map((item) => (
-                  <article key={item.title} className="border border-[var(--border)] bg-[var(--surface)] px-4 py-4">
-                    <div className="font-mono text-[10px] tracking-[0.24em] text-[var(--accent-strong)]">
-                      {item.kicker}
-                    </div>
-                    <h2 className="mt-3 text-base font-bold text-[var(--text)]">{item.title}</h2>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{item.description}</p>
-                  </article>
-                ))}
+              <div
+                className="h-px w-full max-w-sm opacity-80"
+                style={{
+                  background:
+                    "linear-gradient(90deg, var(--accent-strong), rgba(122, 246, 214, 0.18), transparent)",
+                }}
+              />
+              <div className="flex items-center gap-3 text-xs font-mono tracking-[0.18em] text-[var(--accent-strong)]">
+                <span className="h-2 w-2 bg-[var(--accent)] shadow-[0_0_16px_var(--accent)]" />
+                <span>{`AUTH GATE ${APP_VERSION}`}</span>
               </div>
             </div>
           </section>

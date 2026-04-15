@@ -47,8 +47,18 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       changeDirectory: async () => "C:\\workspace",
       createDirectory: async () => undefined,
       deletePath: async () => undefined,
-      readFile: async () => "",
-      readFileFull: async () => "",
+      readFile: async () => ({
+        content: "",
+        mode: "head",
+        fileSizeBytes: 0,
+        isFullContent: true,
+      }),
+      readFileFull: async () => ({
+        content: "",
+        mode: "cat",
+        fileSizeBytes: 0,
+        isFullContent: true,
+      }),
       uploadFile: async () => undefined,
     downloadFile: async () => undefined,
     resetSession: async () => undefined,
@@ -932,7 +942,12 @@ test("shows compact system script titles without verbose metadata", async () => 
 
 test("opens a file preview dialog when clicking a local markdown file link", async () => {
   const user = userEvent.setup();
-  const readSpy = vi.fn(async () => "# README\n\n文件预览");
+  const readSpy = vi.fn(async () => ({
+    content: "# README\n\n文件预览",
+    mode: "head" as const,
+    fileSizeBytes: 128,
+    isFullContent: true,
+  }));
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [{
       id: "assistant-1",
@@ -955,7 +970,12 @@ test("opens a file preview dialog when clicking a local markdown file link", asy
 
 test("opens a file preview dialog when clicking a local absolute file link outside the working dir", async () => {
   const user = userEvent.setup();
-  const readSpy = vi.fn(async () => "外部文件预览");
+  const readSpy = vi.fn(async () => ({
+    content: "外部文件预览",
+    mode: "head" as const,
+    fileSizeBytes: 128,
+    isFullContent: true,
+  }));
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [{
       id: "assistant-1",

@@ -5,27 +5,10 @@ export type ChatBodyLineHeightName = "tight" | "normal" | "relaxed";
 export type ChatBodyParagraphSpacingName = "tight" | "normal" | "relaxed";
 
 export const APP_NAME = "Orbit Safe Claw";
-export const APP_YEAR = "2026";
-export const APP_VERSION = "1.0";
+export const APP_LOGIN_NAME = "Orbit Safe Claw 🦞";
+export const APP_VERSION = "1.0.0";
 export const APP_TAGLINE = "你的随身智能体指挥中心";
 export const APP_KICKER = "LOCAL AGENT CONTROL SURFACE";
-export const APP_SELLING_POINTS = [
-  {
-    kicker: "LOCAL",
-    title: "本地运行",
-    description: "工作目录、CLI、运行状态都留在自己的机器上。",
-  },
-  {
-    kicker: "CLI",
-    title: "双 CLI 支持",
-    description: "统一接入 codex 与 claude，切换路径保持一致。",
-  },
-  {
-    kicker: "MOBILE WEB",
-    title: "手机即入口",
-    description: "手机浏览器直接访问，无需任何 App。",
-  },
-] as const;
 export const UI_THEME_STORAGE_KEY = "web-ui-theme";
 export const CHAT_BODY_FONT_FAMILY_STORAGE_KEY = "web-chat-body-font-family";
 export const CHAT_BODY_FONT_SIZE_STORAGE_KEY = "web-chat-body-font-size";
