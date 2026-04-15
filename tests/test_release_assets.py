@@ -24,3 +24,5 @@ def test_readme_mentions_linux_entrypoints_and_update_flow():
     assert "start.sh" in readme
     assert "GitHub Release" in readme
     assert "重启后生效" in readme
+    assert "releases/latest" in readme
+    assert "archive/refs/heads/master" not in readme

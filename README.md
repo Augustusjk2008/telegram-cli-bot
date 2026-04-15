@@ -11,15 +11,15 @@
 
 Windows：
 
-```powershell
-$zip="$env:TEMP\\orbit-safe-claw.zip"; Invoke-WebRequest "https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.zip" -OutFile $zip; Expand-Archive $zip -DestinationPath . -Force; Set-Location .\telegram-cli-bot-master; .\install.bat
-```
+1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
+2. 下载最新的 `orbit-safe-claw-windows-x64-<version>.zip`
+3. 解压后进入目录，运行 `install.bat`
 
 Linux：
 
-```bash
-curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz | tar -xz && cd telegram-cli-bot-master && bash install.sh
-```
+1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
+2. 下载最新的 `orbit-safe-claw-linux-x64-<version>.tar.gz`
+3. 解压后进入目录，运行 `bash install.sh`
 
 ## 如何运行
 
