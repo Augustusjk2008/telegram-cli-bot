@@ -144,18 +144,78 @@ def _normalize_custom_tool_output(value: Any) -> tuple[str, Any]:
     return summary, parsed
 
 
-def _extract_claude_user_text(item: dict[str, Any]) -> str:
+def _extract_claude_message_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
     message = item.get("message") if isinstance(item.get("message"), dict) else {}
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    return [block for block in content if isinstance(block, dict)]
+
+
+def _extract_claude_user_text(item: dict[str, Any]) -> str:
     parts: list[str] = []
-    for block in message.get("content") or []:
-        if not isinstance(block, dict):
-            continue
+    for block in _extract_claude_message_blocks(item):
         if str(block.get("type") or "").strip() != "text":
             continue
         text = _stringify_value(block.get("text"))
         if text:
             parts.append(text)
     return "\n".join(parts).strip()
+
+
+def _is_claude_skill_injection_text(text: Any) -> bool:
+    value = _stringify_value(text)
+    if not value:
+        return False
+    return (
+        value.startswith("Base directory for this skill:")
+        or ("## Checklist" in value and "## Process Flow" in value)
+        or (value.startswith("# ") and "Visual Companion" in value)
+    )
+
+
+def _is_claude_system_injection_text(text: Any) -> bool:
+    value = _stringify_value(text)
+    if not value:
+        return False
+    return (
+        value.startswith("<system-reminder>")
+        or value.startswith("# AGENTS.md instructions for ")
+        or "<environment_context>" in value
+    )
+
+
+def _new_claude_parser_state() -> dict[str, Any]:
+    return {
+        "last_tool_use_name_by_id": {},
+        "expect_injection_after_skill": False,
+    }
+
+
+def _remember_claude_tool_use(state: dict[str, Any], *, call_id: str, tool_name: str) -> None:
+    normalized_call_id = _stringify_value(call_id)
+    normalized_tool_name = _stringify_value(tool_name)
+    if not normalized_call_id or not normalized_tool_name:
+        return
+    state["last_tool_use_name_by_id"][normalized_call_id] = normalized_tool_name
+
+
+def _is_skill_tool_result(state: dict[str, Any], tool_use_id: Any) -> bool:
+    normalized_id = _stringify_value(tool_use_id)
+    if not normalized_id:
+        return False
+    return state.get("last_tool_use_name_by_id", {}).get(normalized_id) == "Skill"
+
+
+def _classify_claude_user_text(item: dict[str, Any], parser_state: dict[str, Any]) -> str:
+    user_text = _extract_claude_user_text(item)
+    if not user_text:
+        return ""
+    if parser_state.get("expect_injection_after_skill") and _is_claude_skill_injection_text(user_text):
+        return "skill_injection"
+    if _is_claude_system_injection_text(user_text):
+        return "system_injection"
+    return "real_user_text"
 
 
 def _is_codex_instruction_message(text: Any) -> bool:
@@ -428,11 +488,17 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
         )
 
 
-def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any], *, include_trace: bool = True) -> None:
+def _consume_claude_line(
+    item: dict[str, Any],
+    turn: dict[str, Any],
+    *,
+    include_trace: bool = True,
+    parser_state: dict[str, Any] | None = None,
+) -> None:
+    parser_state = parser_state or _new_claude_parser_state()
     item_type = str(item.get("type") or "").strip()
     assistant_messages = turn["assistant_messages"]
-    message = item.get("message") if isinstance(item.get("message"), dict) else {}
-    content = message.get("content") if isinstance(message.get("content"), list) else []
+    content = _extract_claude_message_blocks(item)
 
     if item_type == "assistant":
         for block in content:
@@ -460,6 +526,11 @@ def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any], *, include_
                         payload=payload,
                     ),
                     include_trace=include_trace,
+                )
+                _remember_claude_tool_use(
+                    parser_state,
+                    call_id=_stringify_value(block.get("id")),
+                    tool_name=name,
                 )
                 continue
             _append_trace_event(
@@ -500,6 +571,10 @@ def _consume_claude_line(item: dict[str, Any], turn: dict[str, Any], *, include_
                 ),
                 include_trace=include_trace,
             )
+            if _is_skill_tool_result(parser_state, block.get("tool_use_id")):
+                summary_text = summary or "工具调用已返回"
+                if summary_text.startswith("Launching skill:"):
+                    parser_state["expect_injection_after_skill"] = True
         return
 
     _append_trace_event(
@@ -527,6 +602,7 @@ def load_native_transcript(
     turns: list[dict[str, Any]] = []
     current_turn: dict[str, Any] | None = None
     turn_index = 0
+    claude_parser_state = _new_claude_parser_state() if provider == "claude" else None
 
     for raw_line in transcript_path.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
@@ -555,13 +631,18 @@ def load_native_transcript(
             continue
 
         if provider == "claude" and item_type == "user":
+            classification = _classify_claude_user_text(item, claude_parser_state or {})
             user_text = _extract_claude_user_text(item)
-            if user_text:
+            if classification == "real_user_text" and user_text:
                 finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
                 if finalized is not None:
                     turns.append(finalized)
                     turn_index += 1
                 current_turn = _new_turn_state(user_text, timestamp)
+                if claude_parser_state is not None:
+                    claude_parser_state["expect_injection_after_skill"] = False
+            elif classification == "skill_injection" and claude_parser_state is not None:
+                claude_parser_state["expect_injection_after_skill"] = False
 
         if current_turn is None:
             current_turn = _new_turn_state(created_at=timestamp)
@@ -570,7 +651,12 @@ def load_native_transcript(
         if provider == "codex":
             _consume_codex_line(item, current_turn, include_trace=include_trace)
         else:
-            _consume_claude_line(item, current_turn, include_trace=include_trace)
+            _consume_claude_line(
+                item,
+                current_turn,
+                include_trace=include_trace,
+                parser_state=claude_parser_state,
+            )
 
     finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
     if finalized is not None:

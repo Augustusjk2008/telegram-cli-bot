@@ -335,9 +335,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               traceCount={traceCount}
               toolCallCount={item.meta?.toolCallCount}
               processCount={item.meta?.processCount}
-              elapsedSeconds={canCopyAssistantMessage ? item.elapsedSeconds : undefined}
-              copyLabel={canCopyAssistantMessage ? (isCopied ? "已复制" : "复制") : undefined}
-              onCopy={canCopyAssistantMessage ? (() => void onCopyMessage(item)) : undefined}
+              elapsedSeconds={item.elapsedSeconds}
               isLoading={Boolean(traceLoadState?.loading)}
               loadError={traceLoadState?.error}
               onLoadTrace={() => void onLoadTrace(item.id)}
