@@ -10,6 +10,7 @@ import type {
   DirectoryListing,
   FileReadResult,
   AvatarAsset,
+  AppUpdateDownloadProgress,
   AppUpdateStatus,
   GitActionResult,
   GitDiffPayload,
@@ -51,6 +52,7 @@ export interface WebBotClient {
   getUpdateStatus(): Promise<AppUpdateStatus>;
   setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus>;
   checkForUpdate(): Promise<AppUpdateStatus>;
+  downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus>;
   downloadUpdate(): Promise<AppUpdateStatus>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
   initGitRepository(botAlias: string): Promise<GitOverview>;

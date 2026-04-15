@@ -75,6 +75,7 @@ from .api_service import (
     start_managed_bot,
     stop_managed_bot,
     stream_system_script,
+    stream_update_download,
     stream_chat,
     update_cli_params,
     update_bot_avatar,
@@ -937,8 +938,40 @@ class WebApiServer:
 
     async def admin_update_download(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
-        data = await asyncio.to_thread(download_latest_update)
+        repo_root = Path(__file__).resolve().parents[2]
+        data = await asyncio.to_thread(download_latest_update, repo_root)
         return _json({"ok": True, "data": data})
+
+    async def admin_update_download_stream(self, request: web.Request) -> web.StreamResponse:
+        await self._with_auth(request)
+        await self._parse_json(request)
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        client_disconnected = False
+        async for event in stream_update_download():
+            if client_disconnected:
+                continue
+            try:
+                await response.write(_format_sse(event["type"], event))
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                client_disconnected = True
+                logger.info("更新下载 SSE 客户端已断开，继续在后台下载")
+
+        if not client_disconnected:
+            try:
+                await response.write_eof()
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                logger.info("更新下载 SSE 客户端在结束前断开")
+        return response
 
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_auth(request)
@@ -1086,6 +1119,7 @@ class WebApiServer:
         app.router.add_patch("/api/admin/update", self.admin_patch_update)
         app.router.add_post("/api/admin/update/check", self.admin_update_check)
         app.router.add_post("/api/admin/update/download", self.admin_update_download)
+        app.router.add_post("/api/admin/update/download/stream", self.admin_update_download_stream)
         app.router.add_post("/api/admin/restart", self.admin_restart)
         app.router.add_get("/api/admin/tunnel", self.admin_tunnel)
         app.router.add_post("/api/admin/tunnel/start", self.admin_tunnel_start)

@@ -67,6 +67,7 @@ from bot.sessions import (
     sessions_lock,
     update_bot_working_dir,
 )
+from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.native_history_builder import build_web_chat_history, finalize_web_chat_turn, get_web_chat_trace
@@ -1938,6 +1939,58 @@ async def stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]
         yield {"type": "error", "code": exc.code, "message": exc.message}
     except Exception as exc:  # pragma: no cover - defensive
         yield {"type": "error", "code": "script_stream_failed", "message": str(exc)}
+
+
+async def _stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:
+    target_repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
+    event_queue: queue.Queue[Any] = queue.Queue()
+    worker_done = threading.Event()
+
+    def on_progress(progress: dict[str, Any]) -> None:
+        event_queue.put(
+            {
+                "type": "progress",
+                **progress,
+            }
+        )
+
+    def run_download() -> None:
+        try:
+            status = download_latest_update(
+                repo_root=target_repo_root,
+                progress_callback=on_progress,
+            )
+            event_queue.put(
+                {
+                    "type": "done",
+                    "status": status,
+                }
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            event_queue.put(exc)
+        finally:
+            worker_done.set()
+
+    threading.Thread(target=run_download, daemon=True).start()
+
+    while not worker_done.is_set() or not event_queue.empty():
+        try:
+            item = event_queue.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:
+    try:
+        async for event in _stream_update_download(repo_root):
+            yield event
+    except Exception as exc:  # pragma: no cover - defensive
+        yield {"type": "error", "code": "update_download_failed", "message": str(exc)}
 
 
 async def add_managed_bot(

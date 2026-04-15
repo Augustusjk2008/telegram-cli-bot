@@ -1,4 +1,5 @@
 import type {
+  AppUpdateDownloadProgress,
   AppUpdateStatus,
   GitActionResult,
   GitCommitSummary,
@@ -213,13 +214,29 @@ type RawAppUpdateStatus = {
   update_last_error?: string;
 };
 
+type RawAppUpdateDownloadProgress = {
+  phase?: string;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  percent?: number;
+};
+
 type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
+  | RawAppUpdateDownloadProgress & { type: "progress" }
   | { type: "status"; elapsed_seconds?: number; preview_text?: string }
   | { type: "trace"; event?: RawChatTraceEvent }
   | { type: "log"; text?: string }
-  | { type: "done"; output?: string; elapsed_seconds?: number; script_name?: string; success?: boolean; message?: RawHistoryItem }
+  | {
+      type: "done";
+      output?: string;
+      elapsed_seconds?: number;
+      script_name?: string;
+      success?: boolean;
+      message?: RawHistoryItem;
+      status?: RawAppUpdateStatus;
+    }
   | { type: "error"; message?: string; code?: string };
 
 function mapStatus(status: string, isProcessing = false): BotStatus {
@@ -550,6 +567,15 @@ function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
     pendingUpdateNotes: raw.pending_update_notes || "",
     pendingUpdatePlatform: raw.pending_update_platform || "",
     lastError: raw.update_last_error || "",
+  };
+}
+
+function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpdateDownloadProgress {
+  return {
+    phase: raw.phase || "",
+    downloadedBytes: Number(raw.downloaded_bytes || 0),
+    ...(typeof raw.total_bytes === "number" ? { totalBytes: raw.total_bytes } : {}),
+    ...(typeof raw.percent === "number" ? { percent: raw.percent } : {}),
   };
 }
 
@@ -1011,6 +1037,67 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapAppUpdateStatus(data);
+  }
+
+  async downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus> {
+    const response = await fetch("/api/admin/update/download/stream", {
+      method: "POST",
+      headers: this.headers({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({}),
+    });
+
+    if (!response.ok || !response.body) {
+      let message = "下载更新失败";
+      try {
+        const payload = (await response.json()) as JsonEnvelope<unknown>;
+        message = payload.error?.message || message;
+      } catch {
+        // ignore parse failures
+      }
+      throw new Error(message);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalStatus: AppUpdateStatus | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        const block = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+
+        const event = parseSseBlock(block);
+        if (!event) {
+          separatorIndex = buffer.indexOf("\n\n");
+          continue;
+        }
+
+        if (event.type === "progress") {
+          onProgress(mapAppUpdateDownloadProgress(event));
+        } else if (event.type === "done" && event.status) {
+          finalStatus = mapAppUpdateStatus(event.status);
+        } else if (event.type === "error") {
+          throw new Error(event.message || "下载更新失败");
+        }
+
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+    }
+
+    if (!finalStatus) {
+      throw new Error("更新下载已中断");
+    }
+    return finalStatus;
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

@@ -227,3 +227,10 @@ export type AppUpdateStatus = {
   pendingUpdatePlatform: string;
   lastError: string;
 };
+
+export type AppUpdateDownloadProgress = {
+  phase: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+};

@@ -1,4 +1,5 @@
 import type {
+  AppUpdateDownloadProgress,
   AppUpdateStatus,
   BotOverview,
   BotSummary,
@@ -404,6 +405,23 @@ export class MockWebBotClient implements WebBotClient {
       lastError: "",
     };
     return { ...this.updateStatus };
+  }
+
+  async downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus> {
+    onProgress({
+      phase: "starting",
+      downloadedBytes: 0,
+      totalBytes: 1024,
+      percent: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    onProgress({
+      phase: "downloading",
+      downloadedBytes: 1024,
+      totalBytes: 1024,
+      percent: 100,
+    });
+    return this.downloadUpdate();
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

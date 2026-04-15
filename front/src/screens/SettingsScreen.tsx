@@ -3,7 +3,16 @@ import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square }
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AppUpdateStatus, AvatarAsset, BotOverview, CliParamField, CliParamsPayload, GitProxySettings, TunnelSnapshot } from "../services/types";
+import type {
+  AppUpdateDownloadProgress,
+  AppUpdateStatus,
+  AvatarAsset,
+  BotOverview,
+  CliParamField,
+  CliParamsPayload,
+  GitProxySettings,
+  TunnelSnapshot,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import {
@@ -114,6 +123,7 @@ export function SettingsScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
+  const [updateDownloadProgress, setUpdateDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
@@ -141,6 +151,7 @@ export function SettingsScreen({
   const buildLogViewportRef = useRef<HTMLDivElement | null>(null);
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
+  const isUpdateDownloading = updateAction === "download";
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +215,20 @@ export function SettingsScreen({
     }
     buildLogViewportRef.current.scrollTop = buildLogViewportRef.current.scrollHeight;
   }, [buildLogLines, buildLogSummary, showBuildLog]);
+
+  useEffect(() => {
+    if (!isUpdateDownloading) {
+      return;
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [isUpdateDownloading]);
 
   const syncCliParams = (payload: CliParamsPayload) => {
     setCliParams(payload);
@@ -381,8 +406,15 @@ export function SettingsScreen({
     setUpdateAction("download");
     setError("");
     setNotice("");
+    setUpdateDownloadProgress({
+      phase: "starting",
+      downloadedBytes: 0,
+      percent: 0,
+    });
     try {
-      const nextStatus = await client.downloadUpdate();
+      const nextStatus = await client.downloadUpdateStream((event) => {
+        setUpdateDownloadProgress(event);
+      });
       setUpdateStatus(nextStatus);
       setNotice(nextStatus.pendingUpdateVersion
         ? `更新 ${nextStatus.pendingUpdateVersion} 已下载，将在下次启动时应用`
@@ -390,6 +422,7 @@ export function SettingsScreen({
     } catch (err) {
       setError(err instanceof Error ? err.message : "下载更新失败");
     } finally {
+      setUpdateDownloadProgress(null);
       setUpdateAction("");
     }
   };
@@ -809,6 +842,21 @@ export function SettingsScreen({
                     <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
                   ) : null}
                 </div>
+
+                {isUpdateDownloading ? (
+                  <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    <p>下载进行中，请不要刷新或离开当前页面。</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>下载进度</span>
+                      <span>{typeof updateDownloadProgress?.percent === "number" ? `${updateDownloadProgress.percent}%` : "准备中"}</span>
+                    </div>
+                    {typeof updateDownloadProgress?.totalBytes === "number" ? (
+                      <p className="text-xs text-amber-800">
+                        {updateDownloadProgress.downloadedBytes} / {updateDownloadProgress.totalBytes} bytes
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="flex flex-wrap gap-2">
                   <button

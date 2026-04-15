@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import tarfile
 import urllib.request
 import zipfile
@@ -17,6 +18,7 @@ from bot.config import APP_UPDATE_REPOSITORY
 from bot.version import APP_VERSION
 
 UPDATE_CACHE_DIR_NAME = ".updates"
+DOWNLOAD_CHUNK_SIZE = 64 * 1024
 PROTECTED_UPDATE_PATHS = {
     ".env",
     "managed_bots.json",
@@ -73,13 +75,23 @@ def check_for_updates() -> dict[str, Any]:
     return get_update_status()
 
 
-def download_latest_update(repo_root: Path | None = None) -> dict[str, Any]:
+def download_latest_update(
+    repo_root: Path | None = None,
+    progress_callback: Any | None = None,
+) -> dict[str, Any]:
     release = _fetch_latest_release()
     asset = _select_release_asset(release.get("assets", []))
     cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
     cache_root.mkdir(parents=True, exist_ok=True)
     target_path = cache_root / asset["name"]
-    _download_file(asset["browser_download_url"], target_path)
+    if progress_callback is None:
+        _download_file(asset["browser_download_url"], target_path)
+    else:
+        _download_file(
+            asset["browser_download_url"],
+            target_path,
+            progress_callback=progress_callback,
+        )
 
     settings = app_settings._load_settings()
     settings["last_checked_at"] = _now_iso()
@@ -101,6 +113,7 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
     pending_path = str(settings.get("pending_update_path") or "").strip()
     if not pending_path:
         return {"applied": False, "reason": "no_pending_update"}
+    pending_version = _normalize_tag_name(settings.get("pending_update_version"))
 
     package_path = Path(pending_path)
     if not package_path.is_absolute():
@@ -120,6 +133,19 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
         target_path.write_bytes(data)
         extracted_files += 1
 
+    build_success, build_output = _build_updated_frontend(repo_root)
+    if not build_success:
+        settings["update_last_error"] = build_output
+        app_settings._save_settings(settings)
+        return {
+            "applied": False,
+            "reason": "frontend_build_failed",
+            "frontend_built": False,
+            "files_written": extracted_files,
+            "package_path": str(package_path),
+            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+        }
+
     settings["pending_update_version"] = ""
     settings["pending_update_path"] = ""
     settings["pending_update_notes"] = ""
@@ -128,7 +154,8 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
     app_settings._save_settings(settings)
     return {
         "applied": True,
-        "version": _normalize_tag_name(settings.get("last_available_version") or settings.get("pending_update_version")),
+        "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+        "frontend_built": True,
         "files_written": extracted_files,
         "package_path": str(package_path),
     }
@@ -160,7 +187,11 @@ def _select_release_asset(assets: list[dict[str, Any]]) -> dict[str, Any]:
     raise RuntimeError("未找到当前平台的 release 包")
 
 
-def _download_file(url: str, target: Path) -> None:
+def _download_file(
+    url: str,
+    target: Path,
+    progress_callback: Any | None = None,
+) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_suffix(target.suffix + ".tmp")
     request = urllib.request.Request(
@@ -170,9 +201,90 @@ def _download_file(url: str, target: Path) -> None:
             "User-Agent": f"cli-bridge/{APP_VERSION}",
         },
     )
+    if temp_path.exists():
+        temp_path.unlink()
     with urllib.request.urlopen(request, timeout=60) as response:
-        temp_path.write_bytes(response.read())
+        total_bytes = _parse_content_length(response.headers.get("Content-Length"))
+        _emit_download_progress(
+            progress_callback,
+            phase="starting",
+            downloaded_bytes=0,
+            total_bytes=total_bytes,
+        )
+        downloaded_bytes = 0
+        with temp_path.open("wb") as handle:
+            while True:
+                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                downloaded_bytes += len(chunk)
+                _emit_download_progress(
+                    progress_callback,
+                    phase="downloading",
+                    downloaded_bytes=downloaded_bytes,
+                    total_bytes=total_bytes,
+                )
     temp_path.replace(target)
+
+
+def _parse_content_length(raw_value: Any) -> int | None:
+    try:
+        length = int(str(raw_value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return length if length >= 0 else None
+
+
+def _emit_download_progress(
+    progress_callback: Any | None,
+    *,
+    phase: str,
+    downloaded_bytes: int,
+    total_bytes: int | None,
+) -> None:
+    if progress_callback is None:
+        return
+    percent = 0
+    if total_bytes and total_bytes > 0:
+        percent = min(100, int(downloaded_bytes * 100 / total_bytes))
+    progress_callback(
+        {
+            "phase": phase,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+            "percent": percent,
+        }
+    )
+
+
+def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
+    if not (repo_root / "front").exists():
+        return True, "未检测到前端目录，跳过构建"
+
+    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
+    script_path = (repo_root / "scripts" / script_name).resolve()
+    if not script_path.exists():
+        return False, f"未找到前端构建脚本: {script_path}"
+
+    command = [str(script_path)] if os.name == "nt" else ["bash", str(script_path)]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except Exception as exc:
+        return False, f"执行前端构建失败: {exc}"
+
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip()).strip()
+    if result.returncode != 0:
+        return False, output or f"前端构建失败，退出码 {result.returncode}"
+    return True, output or "Web 前端构建完成"
 
 
 def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
