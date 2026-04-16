@@ -14,6 +14,8 @@ $script:TotalSteps = if ($CheckOnly) { 6 } else { 10 }
 $script:Warnings = New-Object System.Collections.Generic.List[string]
 $script:Summary = [ordered]@{}
 $script:WingetAvailable = $false
+$script:CloudflaredDownloadUrl = "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-windows-amd64.exe"
+$script:CodexDownloadUrl = "https://github.com/openai/codex/releases/download/rust-v0.121.0/codex-x86_64-pc-windows-msvc.exe"
 
 function Write-Step {
     param([string]$Message)
@@ -288,6 +290,49 @@ function Download-File {
     return $target
 }
 
+function Install-RepoExecutable {
+    param(
+        [string]$DisplayName,
+        [string]$Url,
+        [string]$RelativeDirectory,
+        [string]$TargetFileName
+    )
+
+    $targetDir = Join-Path $script:RootDir $RelativeDirectory
+    [void](New-Item -ItemType Directory -Path $targetDir -Force)
+
+    $sourceFileName = [System.IO.Path]::GetFileName(([Uri]$Url).AbsolutePath)
+    if ([string]::IsNullOrWhiteSpace($sourceFileName)) {
+        $sourceFileName = $TargetFileName
+    }
+
+    $downloadedPath = Download-File -Url $Url -FileName $sourceFileName
+    $targetPath = Join-Path $targetDir $TargetFileName
+    Move-Item -LiteralPath $downloadedPath -Destination $targetPath -Force
+
+    $resolvedPath = (Resolve-Path -LiteralPath $targetPath).Path
+    Write-Info ("{0} 已安装到 {1}" -f $DisplayName, $resolvedPath)
+    return $resolvedPath
+}
+
+function Add-UserPathEntry {
+    param([string]$PathEntry)
+
+    $normalizedEntry = [string]$PathEntry
+    if ([string]::IsNullOrWhiteSpace($normalizedEntry)) {
+        return
+    }
+
+    $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $entries = @($currentUserPath -split ";" | Where-Object { $_ })
+    if ($entries -contains $normalizedEntry) {
+        return
+    }
+
+    $newUserPath = (@($entries + $normalizedEntry) | Where-Object { $_ }) -join ";"
+    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+}
+
 function Get-PythonInstallerUrl {
     $page = Invoke-WebRequest -UseBasicParsing -Uri "https://www.python.org/downloads/windows/"
     $match = [regex]::Match($page.Content, "https://www\.python\.org/ftp/python/([0-9]+\.[0-9]+\.[0-9]+)/python-\1-amd64\.exe")
@@ -514,10 +559,21 @@ function Update-EnvFromTemplate {
 }
 
 function Configure-EnvFile {
-    param([object]$CliInfo)
+    param(
+        [object]$CliInfo,
+        [object]$TunnelConfig
+    )
 
     $envPath = Join-Path $script:RootDir ".env"
     $templatePath = Join-Path $script:RootDir ".env.example"
+
+    if (-not $TunnelConfig) {
+        $TunnelConfig = [pscustomobject]@{
+            Mode            = "disabled"
+            PublicUrl       = ""
+            CloudflaredPath = ""
+        }
+    }
 
     if (-not (Test-Path -LiteralPath $templatePath)) {
         throw "未找到 .env.example，无法生成 .env。"
@@ -538,18 +594,21 @@ function Configure-EnvFile {
     $token = Read-TextWithDefault -Prompt "WEB_API_TOKEN（回车使用自动生成值）" -DefaultValue $token
 
     Update-EnvFromTemplate -TemplatePath $templatePath -DestinationPath $envPath -Replacements @{
-        "CLI_TYPE"      = $selectedCli.Type
-        "CLI_PATH"      = $selectedCli.Path
-        "WORKING_DIR"   = $workingDir
-        "WEB_ENABLED"   = "true"
-        "WEB_HOST"      = "0.0.0.0"
-        "WEB_PORT"      = "8765"
-        "WEB_API_TOKEN" = $token
+        "CLI_TYPE"                    = $selectedCli.Type
+        "CLI_PATH"                    = $selectedCli.Path
+        "WORKING_DIR"                 = $workingDir
+        "WEB_ENABLED"                 = "true"
+        "WEB_HOST"                    = "0.0.0.0"
+        "WEB_PORT"                    = "8765"
+        "WEB_API_TOKEN"               = $token
+        "WEB_PUBLIC_URL"              = $TunnelConfig.PublicUrl
+        "WEB_TUNNEL_MODE"             = $TunnelConfig.Mode
+        "WEB_TUNNEL_CLOUDFLARED_PATH" = $TunnelConfig.CloudflaredPath
     }
 
     Write-Info (".env 已写入，默认 CLI: {0}" -f $selectedCli.Type)
     Write-Info ("WEB_API_TOKEN: {0}" -f $token)
-    Save-Summary -Key ".env" -Value ("已生成（CLI={0}）" -f $selectedCli.Type)
+    Save-Summary -Key ".env" -Value ("已生成（CLI={0}，Tunnel={1}）" -f $selectedCli.Type, $TunnelConfig.Mode)
 }
 
 function Show-CliWarning {
@@ -557,6 +616,79 @@ function Show-CliWarning {
     Write-Host "请先安装 Codex CLI 或 Claude Code CLI，并完成登录。"
     Write-Host "安装完成后，在 PowerShell / cmd 中确认可以运行 codex --version 或 claude --version。"
     Write-Host "然后重新运行安装器，或手动修改 .env 中的 CLI_TYPE / CLI_PATH。"
+}
+
+function Ensure-OptionalCodexInstall {
+    param([object]$CliInfo)
+
+    if ($CliInfo.Codex -or $CliInfo.Claude) {
+        return $CliInfo
+    }
+
+    $choice = Read-Choice -Prompt "未检测到 codex / claude：1) 自动安装 codex  2) 跳过" -Choices @("1", "2") -DefaultChoice "1"
+    if ($choice -ne "1") {
+        return $CliInfo
+    }
+
+    $codexPath = Install-RepoExecutable -DisplayName "Codex CLI" -Url $script:CodexDownloadUrl -RelativeDirectory "tools\\codex" -TargetFileName "codex.exe"
+    Add-UserPathEntry -PathEntry (Split-Path -Parent $codexPath)
+    Refresh-ProcessPath
+
+    Save-Summary -Key "本地 CLI" -Value "codex"
+    return [pscustomobject]@{
+        Codex  = [pscustomobject]@{
+            Name    = "codex"
+            Path    = $codexPath
+            Version = ""
+        }
+        Claude = $CliInfo.Claude
+    }
+}
+
+function Resolve-TunnelConfiguration {
+    $enableChoice = Read-Choice -Prompt "是否启用 cloudflared：1) 不启用  2) 启用" -Choices @("1", "2") -DefaultChoice "1"
+    if ($enableChoice -ne "2") {
+        return [pscustomobject]@{
+            Mode            = "disabled"
+            PublicUrl       = ""
+            CloudflaredPath = ""
+        }
+    }
+
+    $publicUrl = Read-TextWithDefault -Prompt "如已有公网地址可填写 WEB_PUBLIC_URL（回车默认 cloudflare_quick）" -DefaultValue ""
+    if (-not [string]::IsNullOrWhiteSpace($publicUrl)) {
+        return [pscustomobject]@{
+            Mode            = "disabled"
+            PublicUrl       = $publicUrl.Trim()
+            CloudflaredPath = ""
+        }
+    }
+
+    $existingCloudflared = Get-CommandPath -Name "cloudflared"
+    if ($existingCloudflared) {
+        return [pscustomobject]@{
+            Mode            = "cloudflare_quick"
+            PublicUrl       = ""
+            CloudflaredPath = ""
+        }
+    }
+
+    $installChoice = Read-Choice -Prompt "未检测到 cloudflared，是否自动安装 cloudflared：1) 安装  2) 跳过" -Choices @("1", "2") -DefaultChoice "1"
+    if ($installChoice -eq "1") {
+        $cloudflaredPath = Install-RepoExecutable -DisplayName "cloudflared" -Url $script:CloudflaredDownloadUrl -RelativeDirectory "tools\\cloudflared" -TargetFileName "cloudflared.exe"
+        return [pscustomobject]@{
+            Mode            = "cloudflare_quick"
+            PublicUrl       = ""
+            CloudflaredPath = $cloudflaredPath
+        }
+    }
+
+    Write-Warn "cloudflared 未安装，已保留 cloudflare_quick 配置；后续需手动安装 cloudflared。"
+    return [pscustomobject]@{
+        Mode            = "cloudflare_quick"
+        PublicUrl       = ""
+        CloudflaredPath = ""
+    }
 }
 
 function Show-SummaryReport {
@@ -573,6 +705,10 @@ function Show-SummaryReport {
             Write-Host ("- {0}" -f $_)
         }
     }
+}
+
+if ($env:CLI_BRIDGE_INSTALLER_TEST_SKIP_MAIN -eq "1") {
+    return
 }
 
 try {
@@ -631,6 +767,8 @@ try {
         exit 0
     }
 
+    $cliInfo = Ensure-OptionalCodexInstall -CliInfo $cliInfo
+
     Write-Step "安装后端依赖"
     $pythonCommand = $pythonInfo.Command
     $pythonPrefixArgs = @($pythonInfo.PrefixArgs)
@@ -650,8 +788,10 @@ try {
     Invoke-CheckedCommand -FilePath $npmCommand -Arguments @("run", "build") -FailureMessage "前端构建失败" -WorkingDirectory (Join-Path $script:RootDir "front")
     Save-Summary -Key "前端构建" -Value "已完成"
 
+    $tunnelConfig = Resolve-TunnelConfiguration
+
     Write-Step "配置 .env"
-    Configure-EnvFile -CliInfo $cliInfo
+    Configure-EnvFile -CliInfo $cliInfo -TunnelConfig $tunnelConfig
 
     Show-SummaryReport
     exit 0
