@@ -7,9 +7,10 @@ type Props = {
   onFileClick: (name: string) => void;
   onDownload: (file: FileEntry) => void;
   onDelete: (file: FileEntry) => void;
+  allowDelete?: boolean;
 };
 
-export function FileList({ files, onDirClick, onFileClick, onDownload, onDelete }: Props) {
+export function FileList({ files, onDirClick, onFileClick, onDownload, onDelete, allowDelete = true }: Props) {
   if (files.length === 0) {
     return <div className="text-center text-[var(--muted)] py-8">目录为空</div>;
   }
@@ -54,15 +55,17 @@ export function FileList({ files, onDirClick, onFileClick, onDownload, onDelete 
               <Download className="w-4 h-4" />
             </button>
           ) : null}
-          <button
-            type="button"
-            aria-label={`删除 ${file.name}`}
-            title={`删除 ${file.name}`}
-            onClick={() => onDelete(file)}
-            className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-red-600 hover:bg-red-50"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {allowDelete ? (
+            <button
+              type="button"
+              aria-label={`删除 ${file.name}`}
+              title={`删除 ${file.name}`}
+              onClick={() => onDelete(file)}
+              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          ) : null}
         </li>
       ))}
     </ul>

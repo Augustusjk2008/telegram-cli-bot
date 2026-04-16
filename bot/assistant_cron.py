@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from bot.config import WEB_DEFAULT_USER_ID
 from bot.assistant_cron_store import (
     append_job_run_audit,
     list_job_definitions,
@@ -21,11 +21,6 @@ from bot.assistant_home import AssistantHome
 from bot.assistant_runtime import AssistantRunRequest
 
 
-def synthetic_user_id_for_job(assistant_id: str, job_id: str) -> int:
-    digest = hashlib.sha256(f"{assistant_id}:{job_id}".encode("utf-8")).digest()
-    return -int.from_bytes(digest[:8], "big", signed=False)
-
-
 class AssistantCronService:
     def __init__(
         self,
@@ -34,11 +29,13 @@ class AssistantCronService:
         bot_alias: str,
         coordinator,
         now_func: Callable[[], datetime] | None = None,
+        web_user_id: int = WEB_DEFAULT_USER_ID,
     ) -> None:
         self.assistant_home = assistant_home
         self.bot_alias = bot_alias
         self.coordinator = coordinator
         self.now_func = now_func or (lambda: datetime.now(tz=ZoneInfo("Asia/Shanghai")))
+        self.web_user_id = web_user_id
         self._watch_tasks: set[asyncio.Task[None]] = set()
         self._loop_task: asyncio.Task[None] | None = None
         self._reload_event = asyncio.Event()
@@ -172,7 +169,7 @@ class AssistantCronService:
             run_id=f"run_{uuid.uuid4().hex[:12]}",
             source="manual" if trigger_source == "manual" else "cron",
             bot_alias=self.bot_alias,
-            user_id=synthetic_user_id_for_job(self.assistant_home.assistant_id, job.id),
+            user_id=self.web_user_id,
             text=job.task.prompt,
             interactive=False,
             job_id=job.id,

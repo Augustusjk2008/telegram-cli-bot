@@ -16,6 +16,7 @@ import type {
   TunnelSnapshot,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { dispatchAssistantCronRunEnqueued } from "../utils/assistantCronEvents";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
@@ -601,18 +602,25 @@ export function SettingsScreen({
     setNotice("");
     try {
       const result = await client.runAssistantCronJob(botAlias, job.id);
+      const queuedAt = new Date().toISOString();
       setAssistantCronJobs((prev) => prev.map((item) => (
         item.id === job.id
           ? { ...item, pending: true, pendingRunId: result.runId, lastStatus: result.status }
           : item
       )));
+      dispatchAssistantCronRunEnqueued({
+        botAlias,
+        runId: result.runId,
+        prompt: job.task.prompt,
+        queuedAt,
+      });
       try {
         const runs = await client.listAssistantCronRuns(botAlias, job.id, 3);
         setAssistantCronRuns((prev) => ({ ...prev, [job.id]: runs }));
       } catch {
         // ignore refresh failures for mock/local fallback
       }
-      setNotice(`任务已入队: ${result.runId}`);
+      setNotice(`任务已投递到聊天会话: ${result.runId}`);
     } catch (err) {
       setError(getErrorMessage(err, "手动触发 Automation 失败"));
     } finally {

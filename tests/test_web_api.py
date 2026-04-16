@@ -8,8 +8,10 @@ import struct
 import subprocess
 import time
 import zlib
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiohttp import web
@@ -17,6 +19,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
 from bot.assistant_context import AssistantPromptPayload
+from bot.assistant_cron import AssistantCronService
+from bot.assistant_cron_store import save_job_runtime_state
+from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
 from bot.assistant_docs import ManagedPromptSyncResult
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_state import save_assistant_runtime_state
@@ -229,6 +234,155 @@ def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBot
     assert session.codex_session_id == "thread-old"
     assert session.claude_session_id == "claude-old"
     assert session.claude_session_initialized is True
+
+
+def test_change_working_directory_from_windows_drive_root_opens_drive_picker(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.browse_dir = "H:\\"
+
+    original_join = api_service.os.path.join
+    original_abspath = api_service.os.path.abspath
+    original_expanduser = api_service.os.path.expanduser
+    original_isdir = api_service.os.path.isdir
+
+    def fake_join(*parts):
+        if parts == ("H:\\", ".."):
+            return "__joined_parent__"
+        return original_join(*parts)
+
+    def fake_abspath(value):
+        if value == "__joined_parent__":
+            return value
+        return original_abspath(value)
+
+    def fake_expanduser(value):
+        if value == "__joined_parent__":
+            return value
+        return original_expanduser(value)
+
+    def fake_isdir(value):
+        if value in {"H:\\", "C:\\", "D:\\"}:
+            return True
+        return original_isdir(value)
+
+    monkeypatch.setattr(api_service.os.path, "join", fake_join)
+    monkeypatch.setattr(api_service.os.path, "abspath", fake_abspath)
+    monkeypatch.setattr(api_service.os.path, "expanduser", fake_expanduser)
+    monkeypatch.setattr(api_service.os.path, "isdir", fake_isdir)
+
+    result = change_working_directory(web_manager, "main", 1001, "..")
+
+    assert result["working_dir"] == "盘符列表"
+    assert result["is_virtual_root"] is True
+    assert session.browse_dir == "::windows-drives::"
+
+
+def test_get_directory_listing_returns_windows_drive_picker_entries(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.browse_dir = "::windows-drives::"
+
+    monkeypatch.setattr(
+        api_service.os.path,
+        "isdir",
+        lambda value: value in {"C:\\", "H:\\", "Z:\\"},
+    )
+
+    listing = get_directory_listing(web_manager, "main", 1001)
+
+    assert listing["working_dir"] == "盘符列表"
+    assert listing["is_virtual_root"] is True
+    assert listing["entries"] == [
+        {"name": "C:\\", "is_dir": True},
+        {"name": "H:\\", "is_dir": True},
+        {"name": "Z:\\", "is_dir": True},
+    ]
+
+
+class _FakeAssistantRuntimeCoordinator:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def submit_background(self, request):
+        self.requests.append(request)
+        return {"run_id": request.run_id, "status": "queued"}
+
+    async def wait_for_run(self, run_id: str):
+        return {"run_id": run_id, "elapsed_seconds": 0}
+
+
+def _build_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
+    return AssistantCronJob.from_dict(
+        {
+            "id": job_id,
+            "enabled": True,
+            "title": "测试任务",
+            "schedule": {
+                "type": "interval",
+                "every_seconds": 300,
+                "timezone": "Asia/Shanghai",
+                "misfire_policy": "skip",
+            },
+            "task": {"prompt": prompt},
+            "execution": {"timeout_seconds": 600},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_assistant_cron_run_targets_visible_web_user_session(temp_dir: Path):
+    home = bootstrap_assistant_home(temp_dir)
+    coordinator = _FakeAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+        web_user_id=1001,
+    )
+    await service.save_job(_build_assistant_cron_job("email_recvbox_check", "检查最新邮件并总结重点"))
+
+    result = await service.run_job_now("email_recvbox_check")
+    await service.stop()
+
+    assert result["status"] == "queued"
+    assert len(coordinator.requests) == 1
+    assert coordinator.requests[0].user_id == 1001
+    assert coordinator.requests[0].text == "检查最新邮件并总结重点"
+    assert coordinator.requests[0].bot_alias == "assistant1"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_assistant_cron_run_targets_visible_web_user_session(temp_dir: Path):
+    now = datetime(2026, 4, 16, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    home = bootstrap_assistant_home(temp_dir)
+    coordinator = _FakeAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+        web_user_id=1001,
+        now_func=lambda: now,
+    )
+    job = _build_assistant_cron_job("daily_digest", "汇总今天的重要动态")
+    await service.save_job(job)
+    save_job_runtime_state(
+        home,
+        job.id,
+        AssistantCronJobState(next_run_at=(now - timedelta(seconds=1)).isoformat()),
+    )
+
+    results = await service.enqueue_due_jobs()
+    await service.stop()
+
+    assert len(results) == 1
+    assert len(coordinator.requests) == 1
+    assert coordinator.requests[0].user_id == 1001
+    assert coordinator.requests[0].text == "汇总今天的重要动态"
 
 
 def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: MultiBotManager):

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import logging
+import ntpath
 import os
 import queue
 import re
@@ -87,6 +88,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
+_WINDOWS_DRIVES_DISPLAY_ROOT = "盘符列表"
+_WINDOWS_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[\\/]*$")
+_WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 class WebApiError(Exception):
@@ -384,6 +389,89 @@ def _get_browser_directory(session: UserSession) -> str:
     if isinstance(session.browse_dir, str) and session.browse_dir.strip():
         return session.browse_dir
     return session.working_dir
+
+
+def _is_windows_drives_virtual_root(path: str) -> bool:
+    return str(path or "").strip() == _WINDOWS_DRIVES_VIRTUAL_ROOT
+
+
+def _is_windows_drive_root(path: str) -> bool:
+    return bool(_WINDOWS_DRIVE_ROOT_RE.fullmatch(str(path or "").strip()))
+
+
+def _looks_like_windows_path(path: str) -> bool:
+    value = str(path or "").strip()
+    return bool(_WINDOWS_STYLE_PATH_RE.match(value) or _is_windows_drive_root(value))
+
+
+def _normalize_windows_drive_root(path: str) -> str:
+    value = str(path or "").strip().replace("/", "\\")
+    if not _is_windows_drive_root(value):
+        _raise(400, "invalid_drive_root", f"无效盘符路径: {path}")
+    return f"{value[0].upper()}:\\"
+
+
+def _display_browser_directory(path: str) -> str:
+    if _is_windows_drives_virtual_root(path):
+        return _WINDOWS_DRIVES_DISPLAY_ROOT
+    return path
+
+
+def _build_directory_listing_response(
+    working_dir: str,
+    entries: list[dict[str, Any]],
+    *,
+    is_virtual_root: bool = False,
+) -> dict[str, Any]:
+    return {
+        "working_dir": _display_browser_directory(working_dir),
+        "entries": entries,
+        "is_virtual_root": is_virtual_root,
+    }
+
+
+def _list_windows_drive_entries() -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for drive_code in range(ord("A"), ord("Z") + 1):
+        drive_root = f"{chr(drive_code)}:\\"
+        if os.path.isdir(drive_root):
+            entries.append({"name": drive_root, "is_dir": True})
+    return _build_directory_listing_response(
+        _WINDOWS_DRIVES_VIRTUAL_ROOT,
+        entries,
+        is_virtual_root=True,
+    )
+
+
+def _require_real_browser_directory(browser_dir: str) -> str:
+    if _is_windows_drives_virtual_root(browser_dir):
+        _raise(409, "virtual_directory_unsupported", "当前视图仅用于切换盘符，不能直接执行文件操作")
+    return browser_dir
+
+
+def _resolve_browser_target_path(current_dir: str, new_path: str) -> str:
+    path = str(new_path or "").strip()
+    if not path:
+        _raise(400, "missing_path", "路径不能为空")
+
+    if _is_windows_drives_virtual_root(current_dir):
+        if path in {"..", "."}:
+            return _WINDOWS_DRIVES_VIRTUAL_ROOT
+        return _normalize_windows_drive_root(path)
+
+    if _is_windows_drive_root(current_dir) and path == "..":
+        return _WINDOWS_DRIVES_VIRTUAL_ROOT
+
+    if _looks_like_windows_path(current_dir) or _looks_like_windows_path(path):
+        candidate = path
+        if not ntpath.isabs(candidate):
+            candidate = ntpath.join(current_dir, candidate)
+        return ntpath.abspath(ntpath.expanduser(candidate))
+
+    candidate = path
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(current_dir, candidate)
+    return os.path.abspath(os.path.expanduser(candidate))
 
 
 def _build_session_ids(session: UserSession) -> dict[str, Any]:
@@ -720,16 +808,15 @@ def _list_directory_entries(working_dir: str) -> dict[str, Any]:
         if entry.is_file():
             item["size"] = entry.stat().st_size
         entries.append(item)
-    return {
-        "working_dir": working_dir,
-        "entries": entries,
-    }
+    return _build_directory_listing_response(working_dir, entries)
 
 
 def get_directory_listing(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _get_browser_directory(session)
+    if _is_windows_drives_virtual_root(browser_dir):
+        return _list_windows_drive_entries()
     try:
         return _list_directory_entries(browser_dir)
     except FileNotFoundError:
@@ -741,7 +828,7 @@ def get_directory_listing(manager: MultiBotManager, alias: str, user_id: int) ->
 def create_directory(manager: MultiBotManager, alias: str, user_id: int, name: str) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _get_browser_directory(session)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     directory_name, target_path = _resolve_new_directory_path(browser_dir, name)
 
     if os.path.exists(target_path):
@@ -764,7 +851,7 @@ def create_directory(manager: MultiBotManager, alias: str, user_id: int, name: s
 def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _get_browser_directory(session)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     target_path = _resolve_safe_path(browser_dir, path)
 
     if os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(browser_dir)):
@@ -795,20 +882,18 @@ def get_working_directory(manager: MultiBotManager, alias: str, user_id: int) ->
 
 
 def change_working_directory(manager: MultiBotManager, alias: str, user_id: int, new_path: str) -> dict[str, Any]:
-    if not new_path or not new_path.strip():
-        _raise(400, "missing_path", "路径不能为空")
     session = get_session_for_alias(manager, alias, user_id)
     current_dir = _get_browser_directory(session)
-    path = new_path.strip()
-    if not os.path.isabs(path):
-        path = os.path.join(current_dir, path)
-    path = os.path.abspath(os.path.expanduser(path))
-    if not os.path.isdir(path):
+    path = _resolve_browser_target_path(current_dir, new_path)
+    if not _is_windows_drives_virtual_root(path) and not os.path.isdir(path):
         _raise(404, "dir_not_found", f"目录不存在: {path}")
 
     session.browse_dir = path
     session.persist()
-    return {"working_dir": session.browse_dir}
+    return {
+        "working_dir": _display_browser_directory(session.browse_dir),
+        "is_virtual_root": _is_windows_drives_virtual_root(session.browse_dir),
+    }
 
 
 def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int = 50) -> dict[str, Any]:
@@ -1955,7 +2040,7 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
         _raise(400, "file_too_large", msg("upload", "file_too_large"))
 
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _get_browser_directory(session)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     file_path = _resolve_safe_path(browser_dir, filename)
     with open(file_path, "wb") as handle:
         handle.write(data)
@@ -1968,7 +2053,7 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
 
 def get_file_metadata(manager: MultiBotManager, alias: str, user_id: int, filename: str) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _get_browser_directory(session)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     file_path = _resolve_safe_path(browser_dir, filename)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
@@ -1989,7 +2074,7 @@ def read_file_content(
     lines: int = 20,
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _get_browser_directory(session)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     file_path = _resolve_safe_path(browser_dir, filename)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")

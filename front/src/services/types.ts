@@ -127,6 +127,7 @@ export type SessionState = {
 export type DirectoryListing = {
   workingDir: string;
   entries: FileEntry[];
+  isVirtualRoot?: boolean;
 };
 
 export type CliParamField = {

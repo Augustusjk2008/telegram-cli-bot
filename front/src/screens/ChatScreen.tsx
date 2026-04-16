@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
@@ -21,6 +21,11 @@ import type {
   SystemScript,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import {
+  ASSISTANT_CRON_RUN_ENQUEUED_EVENT,
+  isAssistantCronRunEnqueuedEvent,
+  type AssistantCronRunEnqueuedDetail,
+} from "../utils/assistantCronEvents";
 import { buildResumePrompt } from "../utils/chatResume";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import {
@@ -63,6 +68,14 @@ function restoredSystemId(botAlias: string) {
 
 function restoredAssistantId(botAlias: string) {
   return `restored-assistant-${botAlias}`;
+}
+
+function pendingCronUserId(runId: string) {
+  return `assistant-cron-user-${runId}`;
+}
+
+function pendingCronAssistantId(runId: string) {
+  return `assistant-cron-assistant-${runId}`;
 }
 
 function mergeRunningReply(items: ChatMessage[], botAlias: string, runningReply?: RunningReply | null) {
@@ -136,6 +149,61 @@ function mergeRestoredReply(items: ChatMessage[], botAlias: string, runningReply
   });
 
   return nextItems;
+}
+
+function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRunEnqueuedDetail[]) {
+  if (pendingRuns.length === 0) {
+    return items;
+  }
+
+  const nextItems = items.filter((item) => (
+    !pendingRuns.some((pendingRun) => (
+      item.id === pendingCronUserId(pendingRun.runId) || item.id === pendingCronAssistantId(pendingRun.runId)
+    ))
+  ));
+
+  for (const pendingRun of pendingRuns) {
+    const hasUserMessage = nextItems.some((item) => item.role === "user" && item.text === pendingRun.prompt);
+    if (!hasUserMessage) {
+      nextItems.push({
+        id: pendingCronUserId(pendingRun.runId),
+        role: "user",
+        text: pendingRun.prompt,
+        createdAt: pendingRun.queuedAt,
+        state: "done",
+      });
+    }
+
+    nextItems.push({
+      id: pendingCronAssistantId(pendingRun.runId),
+      role: "assistant",
+      text: "",
+      createdAt: pendingRun.queuedAt,
+      state: "streaming",
+    });
+  }
+
+  return nextItems;
+}
+
+function resolvePendingCronRuns(
+  pendingRuns: AssistantCronRunEnqueuedDetail[],
+  items: ChatMessage[],
+  runningReply?: RunningReply | null,
+) {
+  if (pendingRuns.length === 0) {
+    return pendingRuns;
+  }
+
+  return pendingRuns.filter((pendingRun) => {
+    if (runningReply?.userText === pendingRun.prompt) {
+      return false;
+    }
+
+    const hasPromptUserMessage = items.some((item) => item.role === "user" && item.text === pendingRun.prompt);
+    const hasAssistantResult = items.some((item) => item.role === "assistant" && item.state !== "streaming");
+    return !(hasPromptUserMessage && hasAssistantResult);
+  });
 }
 
 function resolveStreamStartMs(runningReply?: RunningReply | null, elapsedSeconds?: number) {
@@ -387,6 +455,7 @@ export function ChatScreen({
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [restoredReply, setRestoredReply] = useState<RunningReply | null>(null);
+  const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -394,15 +463,33 @@ export function ChatScreen({
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
+  const loadingRef = useRef(loading);
+  const isStreamingRef = useRef(isStreaming);
+  const streamModeRef = useRef(streamMode);
   const itemsRef = useRef<ChatMessage[]>([]);
   const traceLoadStateRef = useRef<Record<string, { loading: boolean; error?: string }>>({});
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
   const restoredReplyRef = useRef<RunningReply | null>(null);
+  const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
+  const assistantPollTimerRef = useRef<number | null>(null);
+  const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
+  useEffect(() => {
+    streamModeRef.current = streamMode;
+  }, [streamMode]);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -423,6 +510,105 @@ export function ChatScreen({
   useEffect(() => {
     restoredReplyRef.current = restoredReply;
   }, [restoredReply]);
+
+  useEffect(() => {
+    pendingCronRunsRef.current = pendingCronRuns;
+  }, [pendingCronRuns]);
+
+  const stopAssistantPoll = useCallback(() => {
+    if (assistantPollTimerRef.current !== null) {
+      window.clearTimeout(assistantPollTimerRef.current);
+      assistantPollTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleAssistantPoll = useCallback((delayMs = 1000) => {
+    stopAssistantPoll();
+    assistantPollTimerRef.current = window.setTimeout(() => {
+      assistantPollTimerRef.current = null;
+      void pollAssistantStateRef.current?.();
+    }, delayMs);
+  }, [stopAssistantPoll]);
+
+  pollAssistantStateRef.current = async () => {
+    try {
+      const overview = await client.getBotOverview(botAlias);
+      const messages = await client.listMessages(botAlias);
+
+      setBotOverview(overview);
+      setWorkingDir(overview.workingDir || "");
+
+      const nextPendingRuns = resolvePendingCronRuns(
+        pendingCronRunsRef.current,
+        messages,
+        overview.runningReply,
+      );
+      if (nextPendingRuns.length !== pendingCronRunsRef.current.length) {
+        setPendingCronRuns(nextPendingRuns);
+      }
+
+      if (overview.isProcessing) {
+        setIsStreaming(true);
+        setRestoredReply(null);
+        setStreamMode("poll");
+        setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(overview.runningReply));
+        setItems(mergeRunningReply(messages, botAlias, overview.runningReply));
+      } else if (overview.runningReply) {
+        const nextItems = mergePendingCronRuns(
+          mergeRestoredReply(messages, botAlias, overview.runningReply),
+          nextPendingRuns,
+        );
+        setItems(nextItems);
+        setRestoredReply(overview.runningReply);
+        if (nextPendingRuns.length > 0) {
+          setIsStreaming(true);
+          setStreamMode("poll");
+          setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs({
+            startedAt: nextPendingRuns[0]?.queuedAt || overview.runningReply.startedAt,
+            updatedAt: nextPendingRuns[0]?.queuedAt || overview.runningReply.updatedAt,
+          }));
+        } else {
+          setIsStreaming(false);
+          setStreamMode("");
+          setStreamStartedAtMs(null);
+        }
+      } else if (nextPendingRuns.length > 0) {
+        setItems(mergePendingCronRuns(messages, nextPendingRuns));
+        setRestoredReply(null);
+        setIsStreaming(true);
+        setStreamMode("poll");
+        setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs({
+          startedAt: nextPendingRuns[0].queuedAt,
+          updatedAt: nextPendingRuns[0].queuedAt,
+        }));
+      } else {
+        const previousCount = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-")).length;
+        setItems(messages);
+        setRestoredReply(null);
+        setIsStreaming(false);
+        setStreamMode("");
+        setStreamStartedAtMs(null);
+        if (!isVisibleRef.current && messages.length > previousCount) {
+          onUnreadResult?.(botAlias);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "恢复任务状态失败");
+      setIsStreaming(false);
+      setStreamMode("");
+      setStreamStartedAtMs(null);
+    } finally {
+      const shouldContinue = isVisibleRef.current && (
+        streamModeRef.current === "poll"
+        || (Boolean(botOverviewRef.current?.botMode) && botOverviewRef.current?.botMode === "assistant" && !loadingRef.current && !isStreamingRef.current)
+      );
+      if (shouldContinue) {
+        scheduleAssistantPoll();
+      } else {
+        stopAssistantPoll();
+      }
+    }
+  };
 
   function appendSystemMessage(text: string) {
     setItems((prev) => [
@@ -451,6 +637,7 @@ export function ChatScreen({
     setPreviewResult(null);
     setBotOverview(null);
     setRestoredReply(null);
+    setPendingCronRuns([]);
     setCopiedMessageId("");
     setTraceLoadState({});
     shouldStickToBottomRef.current = true;
@@ -475,6 +662,11 @@ export function ChatScreen({
           setItems(messages);
         }
         setLoading(false);
+        if (overview.isProcessing || overview.botMode === "assistant") {
+          scheduleAssistantPoll();
+        } else {
+          stopAssistantPoll();
+        }
       })
       .catch((err: Error) => {
         if (cancelled) return;
@@ -484,8 +676,46 @@ export function ChatScreen({
 
     return () => {
       cancelled = true;
+      stopAssistantPoll();
     };
-  }, [botAlias, client]);
+  }, [botAlias, client, scheduleAssistantPoll, stopAssistantPoll]);
+
+  useEffect(() => {
+    const handleAssistantCronRunEnqueued = (event: Event) => {
+      if (!isAssistantCronRunEnqueuedEvent(event)) {
+        return;
+      }
+
+      const detail = event.detail;
+      if (!detail || detail.botAlias !== botAlias) {
+        return;
+      }
+
+      setError("");
+      setRestoredReply(null);
+      forceAutoScrollRef.current = true;
+      shouldStickToBottomRef.current = true;
+      setPendingCronRuns((prev) => {
+        if (prev.some((item) => item.runId === detail.runId)) {
+          return prev;
+        }
+        return [...prev, detail];
+      });
+      setItems((prev) => mergePendingCronRuns(prev, [detail]));
+      setIsStreaming(true);
+      setStreamMode("poll");
+      setStreamStartedAtMs(resolveStreamStartMs({
+        startedAt: detail.queuedAt,
+        updatedAt: detail.queuedAt,
+      }));
+      scheduleAssistantPoll();
+    };
+
+    window.addEventListener(ASSISTANT_CRON_RUN_ENQUEUED_EVENT, handleAssistantCronRunEnqueued);
+    return () => {
+      window.removeEventListener(ASSISTANT_CRON_RUN_ENQUEUED_EVENT, handleAssistantCronRunEnqueued);
+    };
+  }, [botAlias, scheduleAssistantPoll]);
 
   useEffect(() => {
     if (!isStreaming || !streamStartedAtMs) {
@@ -506,55 +736,16 @@ export function ChatScreen({
     };
   }, [isStreaming, streamStartedAtMs]);
 
-  useEffect(() => {
-    if (streamMode !== "poll") {
+  const isAssistantBot = botOverview?.botMode === "assistant";
+
+  useLayoutEffect(() => {
+    const shouldPoll = streamMode === "poll" || (Boolean(isAssistantBot) && isVisible && !loading && !isStreaming);
+    if (!shouldPoll) {
+      stopAssistantPoll();
       return;
     }
-
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const overview = await client.getBotOverview(botAlias);
-        if (cancelled) return;
-        setBotOverview(overview);
-        setWorkingDir(overview.workingDir || "");
-
-        if (overview.isProcessing) {
-          setIsStreaming(true);
-          setRestoredReply(null);
-          setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(overview.runningReply));
-          setItems((prev) => mergeRunningReply(prev, botAlias, overview.runningReply));
-          return;
-        }
-
-        const messages = await client.listMessages(botAlias);
-        if (cancelled) return;
-        setItems(messages);
-        setRestoredReply(null);
-        setIsStreaming(false);
-        setStreamMode("");
-        setStreamStartedAtMs(null);
-        if (!isVisibleRef.current) {
-          onUnreadResult?.(botAlias);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "恢复任务状态失败");
-        setIsStreaming(false);
-        setStreamMode("");
-        setStreamStartedAtMs(null);
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [botAlias, client, streamMode]);
+    scheduleAssistantPoll();
+  }, [isAssistantBot, isStreaming, isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
 
   const lastItem = items[items.length - 1];
 

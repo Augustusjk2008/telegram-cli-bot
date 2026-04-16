@@ -21,6 +21,7 @@ type Props = {
 export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotClient() }: Props) {
   const [currentPath, setCurrentPath] = useState("/");
   const [files, setFiles] = useState<FileEntry[]>([]);
+  const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [previewName, setPreviewName] = useState("");
@@ -36,6 +37,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       const listing = await client.listFiles(botAlias);
       setCurrentPath(listing.workingDir);
       setFiles(listing.entries);
+      setIsVirtualRoot(Boolean(listing.isVirtualRoot));
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载目录失败");
     } finally {
@@ -150,7 +152,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     <main className="flex flex-col h-full bg-[var(--bg)]">
       <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)] flex items-center justify-between">
         <div className="flex items-center gap-2 overflow-hidden">
-          {currentPath !== "/" && currentPath !== "." ? (
+          {currentPath !== "/" && currentPath !== "." && !isVirtualRoot ? (
             <button onClick={() => void handleBack()} className="p-1 rounded-md hover:bg-[var(--border)]">
               <ChevronLeft className="w-5 h-5" />
             </button>
@@ -180,29 +182,33 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           >
             <House className="w-5 h-5" />
           </button>
-          <button
-            type="button"
-            aria-label="新建文件夹"
-            title="新建文件夹"
-            onClick={() => void handleCreateDirectory()}
-            className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
-          >
-            <FolderPlus className="w-5 h-5" />
-          </button>
-          <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
-            <Upload className="w-5 h-5" />
-            <input
-              type="file"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                void client.uploadFile(botAlias, file)
-                  .then(() => loadListing())
-                  .catch((err: Error) => setError(err.message || "上传失败"));
-              }}
-            />
-          </label>
+          {!isVirtualRoot ? (
+            <button
+              type="button"
+              aria-label="新建文件夹"
+              title="新建文件夹"
+              onClick={() => void handleCreateDirectory()}
+              className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+            >
+              <FolderPlus className="w-5 h-5" />
+            </button>
+          ) : null}
+          {!isVirtualRoot ? (
+            <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
+              <Upload className="w-5 h-5" />
+              <input
+                type="file"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  void client.uploadFile(botAlias, file)
+                    .then(() => loadListing())
+                    .catch((err: Error) => setError(err.message || "上传失败"));
+                }}
+              />
+            </label>
+          ) : null}
         </div>
       </header>
 
@@ -221,6 +227,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
             onFileClick={(name) => void handleFileClick(name)}
             onDownload={(file) => void handleDownloadEntry(file)}
             onDelete={(file) => void handleDeleteEntry(file)}
+            allowDelete={!isVirtualRoot}
           />
         )}
       </section>

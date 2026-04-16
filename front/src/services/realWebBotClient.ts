@@ -346,8 +346,8 @@ function mapFileEntry(raw: RawFileEntry): FileEntry {
   return {
     name: raw.name,
     isDir: raw.is_dir,
-    size: raw.size,
-    updatedAt: raw.updated_at,
+    ...(typeof raw.size === "number" ? { size: raw.size } : {}),
+    ...(raw.updated_at ? { updatedAt: raw.updated_at } : {}),
   };
 }
 
@@ -941,10 +941,11 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async listFiles(botAlias: string): Promise<DirectoryListing> {
-    const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[] }>(`/api/bots/${encodeURIComponent(botAlias)}/ls`);
+    const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[]; is_virtual_root?: boolean }>(`/api/bots/${encodeURIComponent(botAlias)}/ls`);
     return {
       workingDir: data.working_dir,
       entries: data.entries.map(mapFileEntry),
+      ...(data.is_virtual_root ? { isVirtualRoot: true } : {}),
     };
   }
 
