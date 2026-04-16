@@ -184,7 +184,7 @@ try {
     & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"
-        exit $LASTEXITCODE
+        Write-Warn "更新未成功应用，继续启动当前程序。"
     }
 
     Show-TunnelHint -Path $envPath

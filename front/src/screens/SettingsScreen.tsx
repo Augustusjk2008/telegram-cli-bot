@@ -156,7 +156,6 @@ export function SettingsScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
-  const [updateDownloadProgress, setUpdateDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
@@ -191,6 +190,11 @@ export function SettingsScreen({
   const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const [serviceAction, setServiceAction] = useState<"" | "restart_service" | "build_frontend">("");
+  const [showUpdateLog, setShowUpdateLog] = useState(false);
+  const [updateLogLines, setUpdateLogLines] = useState<string[]>([]);
+  const [updateLogStatus, setUpdateLogStatus] = useState<BuildLogStatus>("idle");
+  const [updateLogSummary, setUpdateLogSummary] = useState("");
+  const updateLogViewportRef = useRef<HTMLDivElement | null>(null);
   const [showBuildLog, setShowBuildLog] = useState(false);
   const [buildLogLines, setBuildLogLines] = useState<string[]>([]);
   const [buildLogStatus, setBuildLogStatus] = useState<BuildLogStatus>("idle");
@@ -331,6 +335,13 @@ export function SettingsScreen({
       cancelled = true;
     };
   }, [botAlias, client, isMainBot]);
+
+  useEffect(() => {
+    if (!showUpdateLog || !updateLogViewportRef.current) {
+      return;
+    }
+    updateLogViewportRef.current.scrollTop = updateLogViewportRef.current.scrollHeight;
+  }, [showUpdateLog, updateLogLines, updateLogSummary]);
 
   useEffect(() => {
     if (!showBuildLog || !buildLogViewportRef.current) {
@@ -683,23 +694,30 @@ export function SettingsScreen({
     setUpdateAction("download");
     setError("");
     setNotice("");
-    setUpdateDownloadProgress({
-      phase: "starting",
-      downloadedBytes: 0,
-      percent: 0,
-    });
+    setShowUpdateLog(true);
+    setUpdateLogLines([]);
+    setUpdateLogStatus("running");
+    setUpdateLogSummary("");
     try {
       const nextStatus = await client.downloadUpdateStream((event) => {
-        setUpdateDownloadProgress(event);
+        if (event.message) {
+          setUpdateLogLines((prev) => [...prev, event.message as string]);
+        }
       });
       setUpdateStatus(nextStatus);
-      setNotice(nextStatus.pendingUpdateVersion
-        ? `更新 ${nextStatus.pendingUpdateVersion} 已下载，将在下次启动时应用`
-        : "更新包已下载");
+      setUpdateLogStatus("success");
+      setUpdateLogSummary(
+        nextStatus.pendingUpdateVersion
+          ? `更新 ${nextStatus.pendingUpdateVersion} 已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要使用页面里的重启服务。`
+          : "更新包已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要使用页面里的重启服务。",
+      );
+      setNotice("更新包下载完成，请关闭当前程序后重新运行 start.bat");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "下载更新失败");
+      const message = err instanceof Error ? err.message : "下载更新失败";
+      setUpdateLogStatus("error");
+      setUpdateLogSummary(message);
+      setError(message);
     } finally {
-      setUpdateDownloadProgress(null);
       setUpdateAction("");
     }
   };
@@ -815,6 +833,14 @@ export function SettingsScreen({
       ? "构建成功"
       : buildLogStatus === "error"
         ? "构建失败"
+        : "等待开始";
+
+  const updateLogStatusText = updateLogStatus === "running"
+    ? "下载中"
+    : updateLogStatus === "success"
+      ? "下载成功"
+      : updateLogStatus === "error"
+        ? "下载失败"
         : "等待开始";
 
   const copyTunnelUrl = async () => {
@@ -1310,21 +1336,6 @@ export function SettingsScreen({
                   ) : null}
                 </div>
 
-                {isUpdateDownloading ? (
-                  <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                    <p>下载进行中，请不要刷新或离开当前页面。</p>
-                    <div className="flex items-center justify-between gap-3">
-                      <span>下载进度</span>
-                      <span>{typeof updateDownloadProgress?.percent === "number" ? `${updateDownloadProgress.percent}%` : "准备中"}</span>
-                    </div>
-                    {typeof updateDownloadProgress?.totalBytes === "number" ? (
-                      <p className="text-xs text-amber-800">
-                        {updateDownloadProgress.downloadedBytes} / {updateDownloadProgress.totalBytes} bytes
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -1691,6 +1702,42 @@ export function SettingsScreen({
                 : "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"}
               >
                 {buildLogSummary}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {showUpdateLog ? (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true" aria-labelledby="update-log-title">
+          <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-2xl w-full shadow-[var(--shadow-card)] space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <h2 id="update-log-title" className="text-lg font-bold text-[var(--text)]">更新日志</h2>
+                <p className="text-sm text-[var(--muted)]">状态: {updateLogStatusText}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUpdateLog(false)}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div
+              ref={updateLogViewportRef}
+              className="h-72 overflow-y-auto rounded-xl bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all"
+            >
+              {updateLogLines.length > 0 ? updateLogLines.join("\n") : "等待更新输出..."}
+            </div>
+
+            {updateLogSummary ? (
+              <div className={updateLogStatus === "success"
+                ? "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+                : "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"}
+              >
+                {updateLogSummary}
               </div>
             ) : null}
           </div>

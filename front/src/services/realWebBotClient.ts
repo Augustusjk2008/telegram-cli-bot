@@ -224,6 +224,7 @@ type RawAppUpdateDownloadProgress = {
   downloaded_bytes?: number;
   total_bytes?: number;
   percent?: number;
+  message?: string;
 };
 
 type RawAssistantCronSchedule = {
@@ -630,6 +631,7 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
     downloadedBytes: Number(raw.downloaded_bytes || 0),
     ...(typeof raw.total_bytes === "number" ? { totalBytes: raw.total_bytes } : {}),
     ...(typeof raw.percent === "number" ? { percent: raw.percent } : {}),
+    ...(raw.message ? { message: raw.message } : {}),
   };
 }
 

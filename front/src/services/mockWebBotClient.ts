@@ -427,17 +427,17 @@ export class MockWebBotClient implements WebBotClient {
 
   async downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus> {
     onProgress({
-      phase: "starting",
+      phase: "log",
       downloadedBytes: 0,
-      totalBytes: 1024,
-      percent: 0,
+      message: "开始下载更新包",
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
     onProgress({
-      phase: "downloading",
+      phase: "log",
       downloadedBytes: 1024,
       totalBytes: 1024,
       percent: 100,
+      message: "下载完成",
     });
     return this.downloadUpdate();
   }

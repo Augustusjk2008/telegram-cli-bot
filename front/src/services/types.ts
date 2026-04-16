@@ -233,6 +233,7 @@ export type AppUpdateDownloadProgress = {
   downloadedBytes: number;
   totalBytes?: number;
   percent?: number;
+  message?: string;
 };
 
 export type AssistantCronScheduleType = "daily" | "interval";

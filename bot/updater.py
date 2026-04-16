@@ -75,15 +75,31 @@ def check_for_updates() -> dict[str, Any]:
     return get_update_status()
 
 
+def _build_url_opener():
+    proxy_url = app_settings.get_git_proxy_url()
+    if proxy_url:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler(
+                {
+                    "http": proxy_url,
+                    "https": proxy_url,
+                }
+            )
+        )
+    return urllib.request.build_opener()
+
+
 def download_latest_update(
     repo_root: Path | None = None,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
+    _emit_download_log(progress_callback, "正在检查最新版本信息")
     release = _fetch_latest_release()
     asset = _select_release_asset(release.get("assets", []))
     cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
     cache_root.mkdir(parents=True, exist_ok=True)
     target_path = cache_root / asset["name"]
+    _emit_download_log(progress_callback, f"找到更新包: {asset['name']}")
     if progress_callback is None:
         _download_file(asset["browser_download_url"], target_path)
     else:
@@ -104,6 +120,7 @@ def download_latest_update(
     settings["pending_update_platform"] = "windows-x64" if os.name == "nt" else "linux-x64"
     settings["update_last_error"] = ""
     app_settings._save_settings(settings)
+    _emit_download_log(progress_callback, f"更新包已保存到: {target_path}")
     return get_update_status()
 
 
@@ -173,7 +190,8 @@ def _fetch_latest_release() -> dict[str, Any]:
             "User-Agent": f"cli-bridge/{APP_VERSION}",
         },
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
+    opener = _build_url_opener()
+    with opener.open(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -203,8 +221,10 @@ def _download_file(
     )
     if temp_path.exists():
         temp_path.unlink()
-    with urllib.request.urlopen(request, timeout=60) as response:
+    opener = _build_url_opener()
+    with opener.open(request, timeout=60) as response:
         total_bytes = _parse_content_length(response.headers.get("Content-Length"))
+        _emit_download_log(progress_callback, f"开始下载更新包: {target.name}", total_bytes=total_bytes)
         _emit_download_progress(
             progress_callback,
             phase="starting",
@@ -212,6 +232,7 @@ def _download_file(
             total_bytes=total_bytes,
         )
         downloaded_bytes = 0
+        last_logged_percent = -10
         with temp_path.open("wb") as handle:
             while True:
                 chunk = response.read(DOWNLOAD_CHUNK_SIZE)
@@ -225,7 +246,23 @@ def _download_file(
                     downloaded_bytes=downloaded_bytes,
                     total_bytes=total_bytes,
                 )
+                percent = _calculate_progress_percent(downloaded_bytes, total_bytes)
+                if total_bytes and percent >= last_logged_percent + 10:
+                    _emit_download_log(
+                        progress_callback,
+                        f"已下载 {downloaded_bytes} / {total_bytes} bytes ({percent}%)",
+                        downloaded_bytes=downloaded_bytes,
+                        total_bytes=total_bytes,
+                    )
+                    last_logged_percent = percent
     temp_path.replace(target)
+    final_size = target.stat().st_size if target.exists() else 0
+    _emit_download_log(
+        progress_callback,
+        f"下载完成: {target.name} ({final_size} bytes)",
+        downloaded_bytes=final_size,
+        total_bytes=final_size or None,
+    )
 
 
 def _parse_content_length(raw_value: Any) -> int | None:
@@ -234,6 +271,12 @@ def _parse_content_length(raw_value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return length if length >= 0 else None
+
+
+def _calculate_progress_percent(downloaded_bytes: int, total_bytes: int | None) -> int:
+    if total_bytes and total_bytes > 0:
+        return min(100, int(downloaded_bytes * 100 / total_bytes))
+    return 0
 
 
 def _emit_download_progress(
@@ -245,15 +288,33 @@ def _emit_download_progress(
 ) -> None:
     if progress_callback is None:
         return
-    percent = 0
-    if total_bytes and total_bytes > 0:
-        percent = min(100, int(downloaded_bytes * 100 / total_bytes))
+    percent = _calculate_progress_percent(downloaded_bytes, total_bytes)
     progress_callback(
         {
             "phase": phase,
             "downloaded_bytes": downloaded_bytes,
             "total_bytes": total_bytes,
             "percent": percent,
+        }
+    )
+
+
+def _emit_download_log(
+    progress_callback: Any | None,
+    message: str,
+    *,
+    downloaded_bytes: int = 0,
+    total_bytes: int | None = None,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(
+        {
+            "phase": "log",
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+            "percent": _calculate_progress_percent(downloaded_bytes, total_bytes),
+            "message": message,
         }
     )
 
