@@ -61,10 +61,11 @@
 Windows 安装器需要支持以下交互：
 
 1. 先问是否启用 `cloudflared`
-2. 如果启用，再问是否输入已有公网地址
-3. 如果用户没有提供地址，再问是否自动安装 `cloudflared`
-4. 如果同意安装，则自动下载指定版本到仓库内工具目录
-5. `.env` 中写入对应的 tunnel 配置
+2. 如果启用，则默认使用 `cloudflare_quick`
+3. 在默认 quick tunnel 之外，允许用户可选填写已有公网地址作为覆盖
+4. 如果未填写地址且系统中没有可用的 `cloudflared`，再问是否自动安装 `cloudflared`
+5. 如果同意安装，则自动下载指定版本到仓库内工具目录
+6. `.env` 中写入对应的 tunnel 配置
 
 ### Download Source
 
@@ -91,6 +92,8 @@ Windows 安装器需要支持以下交互：
   - `WEB_TUNNEL_MODE=cloudflare_quick`
   - 若使用仓库内下载版，则写入 `WEB_TUNNEL_CLOUDFLARED_PATH=<绝对路径>`
   - 若系统 PATH 中已有 `cloudflared`，则可保持为空
+
+启用 `cloudflared` 时，空输入应直接落到 `cloudflare_quick`，而不是回退到 `disabled`。
 
 ### Non-Interactive Default
 
