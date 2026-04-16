@@ -365,10 +365,15 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
     item_type = str(item.get("type") or "").strip()
     assistant_messages = turn["assistant_messages"]
 
+    if item_type == "compacted":
+        return
+
     if item_type == "response_item":
         payload = _resolve_payload(item)
         payload_type = str(payload.get("type") or "").strip()
         payload_phase = _stringify_value(payload.get("phase")).lower()
+        if payload_type == "compacted":
+            return
         if payload_type == "reasoning":
             return
         if payload_type == "message":

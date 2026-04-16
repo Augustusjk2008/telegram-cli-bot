@@ -1489,7 +1489,7 @@ async def test_admin_update_download_stream_returns_sse_events(web_manager, monk
 
 
 @pytest.mark.asyncio
-async def test_web_server_start_schedules_auto_update_check_when_enabled(web_manager):
+async def test_web_server_start_schedules_auto_update_refresh_when_enabled(web_manager):
     server = WebApiServer(web_manager)
     created_coroutines: list[Any] = []
 
@@ -1512,6 +1512,40 @@ async def test_web_server_start_schedules_auto_update_check_when_enabled(web_man
 
     create_task.assert_called()
     assert created_coroutines
+
+
+@pytest.mark.asyncio
+async def test_auto_refresh_update_status_downloads_latest_update_when_enabled(web_manager):
+    server = WebApiServer(web_manager)
+    repo_root = Path(__file__).resolve().parents[1]
+
+    with patch(
+        "bot.web.server.get_update_status",
+        return_value={
+            "update_enabled": True,
+            "current_version": "1.0.5",
+            "pending_update_version": "",
+        },
+    ), patch(
+        "bot.web.server.check_for_updates",
+        return_value={
+            "update_enabled": True,
+            "current_version": "1.0.5",
+            "last_available_version": "1.0.6",
+            "pending_update_version": "",
+        },
+    ) as check_mock, patch(
+        "bot.web.server.download_latest_update",
+        return_value={
+            "update_enabled": True,
+            "current_version": "1.0.5",
+            "pending_update_version": "1.0.6",
+        },
+    ) as download_mock:
+        await server._auto_refresh_update_status()
+
+    check_mock.assert_called_once_with()
+    download_mock.assert_called_once_with(repo_root)
 
 
 @pytest.mark.asyncio

@@ -187,20 +187,14 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
-  const [updateAction, setUpdateAction] = useState<"" | "toggle" | "check" | "download">("");
+  const [updateAction, setUpdateAction] = useState<"" | "toggle" | "download">("");
   const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
-  const [serviceAction, setServiceAction] = useState<"" | "restart_service" | "build_frontend">("");
   const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [updateLogLines, setUpdateLogLines] = useState<string[]>([]);
   const [updateLogStatus, setUpdateLogStatus] = useState<BuildLogStatus>("idle");
   const [updateLogSummary, setUpdateLogSummary] = useState("");
   const updateLogViewportRef = useRef<HTMLDivElement | null>(null);
-  const [showBuildLog, setShowBuildLog] = useState(false);
-  const [buildLogLines, setBuildLogLines] = useState<string[]>([]);
-  const [buildLogStatus, setBuildLogStatus] = useState<BuildLogStatus>("idle");
-  const [buildLogSummary, setBuildLogSummary] = useState("");
-  const buildLogViewportRef = useRef<HTMLDivElement | null>(null);
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
   const isAssistantBot = overview?.botMode === "assistant";
@@ -343,13 +337,6 @@ export function SettingsScreen({
     }
     updateLogViewportRef.current.scrollTop = updateLogViewportRef.current.scrollHeight;
   }, [showUpdateLog, updateLogLines, updateLogSummary]);
-
-  useEffect(() => {
-    if (!showBuildLog || !buildLogViewportRef.current) {
-      return;
-    }
-    buildLogViewportRef.current.scrollTop = buildLogViewportRef.current.scrollHeight;
-  }, [buildLogLines, buildLogSummary, showBuildLog]);
 
   useEffect(() => {
     if (!isAssistantBot) {
@@ -675,24 +662,9 @@ export function SettingsScreen({
     try {
       const nextStatus = await client.setUpdateEnabled(enabled);
       setUpdateStatus(nextStatus);
-      setNotice(enabled ? "已启用自动检查更新" : "已关闭自动检查更新");
+      setNotice(enabled ? "已启用自动下载更新" : "已关闭自动下载更新");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存更新设置失败");
-    } finally {
-      setUpdateAction("");
-    }
-  };
-
-  const checkForUpdate = async () => {
-    setUpdateAction("check");
-    setError("");
-    setNotice("");
-    try {
-      const nextStatus = await client.checkForUpdate();
-      setUpdateStatus(nextStatus);
-      setNotice(nextStatus.latestVersion ? `已检查更新，最新版本 ${nextStatus.latestVersion}` : "已完成更新检查");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "检查更新失败");
     } finally {
       setUpdateAction("");
     }
@@ -716,8 +688,8 @@ export function SettingsScreen({
       setUpdateLogStatus("success");
       setUpdateLogSummary(
         nextStatus.pendingUpdateVersion
-          ? `更新 ${nextStatus.pendingUpdateVersion} 已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要使用页面里的重启服务。`
-          : "更新包已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要使用页面里的重启服务。",
+          ? `更新 ${nextStatus.pendingUpdateVersion} 已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要在页面里重启程序。`
+          : "更新包已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要在页面里重启程序。",
       );
       setNotice("更新包下载完成，请关闭当前程序后重新运行 start.bat");
     } catch (err) {
@@ -788,60 +760,6 @@ export function SettingsScreen({
       setTunnelAction("");
     }
   };
-
-  const restartService = async () => {
-    setServiceAction("restart_service");
-    setError("");
-    setNotice("");
-    try {
-      await client.restartService();
-      setNotice("已请求重启服务，请稍后刷新页面");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重启服务失败");
-    } finally {
-      setServiceAction("");
-    }
-  };
-
-  const buildFrontend = async () => {
-    setServiceAction("build_frontend");
-    setError("");
-    setNotice("");
-    setShowBuildLog(true);
-    setBuildLogLines([]);
-    setBuildLogStatus("running");
-    setBuildLogSummary("");
-    try {
-      const result = await client.runSystemScriptStream("build_web_frontend", (line) => {
-        setBuildLogLines((prev) => [...prev, line]);
-      });
-      if (!result.success) {
-        const message = result.output || "前端构建失败";
-        setBuildLogStatus("error");
-        setBuildLogSummary("前端构建失败");
-        setError(message);
-        return;
-      }
-      setBuildLogStatus("success");
-      setBuildLogSummary("前端构建成功");
-      setNotice("前端构建完成");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "前端构建失败";
-      setBuildLogStatus("error");
-      setBuildLogSummary("前端构建失败");
-      setError(message);
-    } finally {
-      setServiceAction("");
-    }
-  };
-
-  const buildLogStatusText = buildLogStatus === "running"
-    ? "构建中"
-    : buildLogStatus === "success"
-      ? "构建成功"
-      : buildLogStatus === "error"
-        ? "构建失败"
-        : "等待开始";
 
   const updateLogStatusText = updateLogStatus === "running"
     ? "下载中"
@@ -1324,7 +1242,7 @@ export function SettingsScreen({
                 </div>
 
                 <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
-                  <span>自动检查更新</span>
+                  <span>自动下载更新</span>
                   <input
                     type="checkbox"
                     checked={Boolean(updateStatus?.updateEnabled)}
@@ -1345,14 +1263,6 @@ export function SettingsScreen({
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void checkForUpdate()}
-                    disabled={updateAction !== ""}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                  >
-                    {updateAction === "check" ? "检查中..." : "立即检查"}
-                  </button>
                   <button
                     type="button"
                     onClick={() => void downloadUpdate()}
@@ -1404,28 +1314,6 @@ export function SettingsScreen({
               <p className="text-xs text-[var(--muted)]">
                 当前状态: {gitProxySettings?.port ? `127.0.0.1:${gitProxySettings.port}` : "直连"}
               </p>
-            </div>
-
-            <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-              <h2 className="text-base font-semibold text-[var(--text)]">服务管理</h2>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void buildFrontend()}
-                  disabled={serviceAction !== ""}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  {serviceAction === "build_frontend" ? "构建中..." : "重建前端"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void restartService()}
-                  disabled={serviceAction !== ""}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  {serviceAction === "restart_service" ? "重启中..." : "重启服务"}
-                </button>
-              </div>
             </div>
           </>
         ) : null}
@@ -1676,42 +1564,6 @@ export function SettingsScreen({
                 {actionLoading === "kill" ? "终止中..." : "确定终止"}
               </button>
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showBuildLog ? (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true" aria-labelledby="build-log-title">
-          <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-2xl w-full shadow-[var(--shadow-card)] space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <h2 id="build-log-title" className="text-lg font-bold text-[var(--text)]">前端构建日志</h2>
-                <p className="text-sm text-[var(--muted)]">状态: {buildLogStatusText}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowBuildLog(false)}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-              >
-                关闭
-              </button>
-            </div>
-
-            <div
-              ref={buildLogViewportRef}
-              className="h-72 overflow-y-auto rounded-xl bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all"
-            >
-              {buildLogLines.length > 0 ? buildLogLines.join("\n") : "等待构建输出..."}
-            </div>
-
-            {buildLogSummary ? (
-              <div className={buildLogStatus === "success"
-                ? "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-                : "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"}
-              >
-                {buildLogSummary}
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}

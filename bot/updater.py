@@ -124,13 +124,24 @@ def download_latest_update(
     return get_update_status()
 
 
-def apply_pending_update(repo_root: Path) -> dict[str, Any]:
+def _emit_apply_log(log_callback: Any | None, message: str) -> None:
+    if log_callback is None:
+        return
+    log_callback(str(message))
+
+
+def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> dict[str, Any]:
     repo_root = Path(repo_root).resolve()
     settings = app_settings._load_settings()
     pending_path = str(settings.get("pending_update_path") or "").strip()
     if not pending_path:
+        _emit_apply_log(log_callback, "没有待应用的更新。")
         return {"applied": False, "reason": "no_pending_update"}
     pending_version = _normalize_tag_name(settings.get("pending_update_version"))
+    if pending_version:
+        _emit_apply_log(log_callback, f"开始应用待更新版本: {pending_version}")
+    else:
+        _emit_apply_log(log_callback, "开始应用待更新版本。")
 
     package_path = Path(pending_path)
     if not package_path.is_absolute():
@@ -138,6 +149,7 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
     if not package_path.exists():
         settings["update_last_error"] = f"更新包不存在: {package_path}"
         app_settings._save_settings(settings)
+        _emit_apply_log(log_callback, settings["update_last_error"])
         return {"applied": False, "reason": "missing_package", "path": str(package_path)}
 
     extracted_files = 0
@@ -145,15 +157,21 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
         if _is_protected_update_path(relative_path):
             continue
 
+        _emit_apply_log(log_callback, f"正在更新: {relative_path}")
         target_path = repo_root / relative_path
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(data)
         extracted_files += 1
 
+    _emit_apply_log(log_callback, "正在重建前端资源...")
     build_success, build_output = _build_updated_frontend(repo_root)
     if not build_success:
         settings["update_last_error"] = build_output
         app_settings._save_settings(settings)
+        if build_output:
+            for line in str(build_output).splitlines():
+                if line.strip():
+                    _emit_apply_log(log_callback, line)
         return {
             "applied": False,
             "reason": "frontend_build_failed",
@@ -162,6 +180,11 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
             "package_path": str(package_path),
             "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
         }
+    if build_output:
+        for line in str(build_output).splitlines():
+            if line.strip():
+                _emit_apply_log(log_callback, line)
+    _emit_apply_log(log_callback, "前端资源重建完成。")
 
     settings["pending_update_version"] = ""
     settings["pending_update_path"] = ""
@@ -169,6 +192,7 @@ def apply_pending_update(repo_root: Path) -> dict[str, Any]:
     settings["pending_update_platform"] = ""
     settings["update_last_error"] = ""
     app_settings._save_settings(settings)
+    _emit_apply_log(log_callback, "更新应用完成。")
     return {
         "applied": True,
         "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
@@ -420,8 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "apply-pending":
-        result = apply_pending_update(Path(args.repo_root).resolve())
-        print(json.dumps(result, ensure_ascii=False))
+        result = apply_pending_update(Path(args.repo_root).resolve(), log_callback=print)
         return 0 if result.get("applied") or result.get("reason") == "no_pending_update" else 1
     return 1
 

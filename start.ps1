@@ -181,6 +181,7 @@ try {
         exit $LASTEXITCODE
     }
 
+    Write-Info "正在检查并应用待更新版本..."
     & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"

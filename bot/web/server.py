@@ -1100,9 +1100,20 @@ class WebApiServer:
         if not status.get("update_enabled"):
             return
         try:
-            await asyncio.to_thread(check_for_updates)
+            checked_status = await asyncio.to_thread(check_for_updates)
+            latest_version = str(checked_status.get("last_available_version") or "").strip()
+            current_version = str(checked_status.get("current_version") or "").strip()
+            pending_version = str(
+                checked_status.get("pending_update_version")
+                or status.get("pending_update_version")
+                or ""
+            ).strip()
+            if latest_version and latest_version != current_version and latest_version != pending_version:
+                repo_root = Path(__file__).resolve().parents[2]
+                logger.info("检测到新版本 %s，开始后台下载更新包", latest_version)
+                await asyncio.to_thread(download_latest_update, repo_root)
         except Exception as exc:
-            logger.warning("自动检查更新失败: %s", exc)
+            logger.warning("自动后台下载更新失败: %s", exc)
 
     def _build_app(self) -> web.Application:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
