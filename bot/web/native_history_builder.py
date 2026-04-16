@@ -69,7 +69,12 @@ def _drop_active_native_turn(provider: str, session, native_turns: list[dict[str
 
         summary_kind = str(last_turn.get("meta", {}).get("summary_kind") or "")
         if summary_kind == "final":
-            break
+            last_trace = list(last_turn.get("meta", {}).get("trace") or [])
+            has_only_commentary = bool(last_trace) and all(
+                str(item.get("kind") or "") == "commentary" for item in last_trace
+            )
+            if not has_only_commentary:
+                break
 
         last_user_text = str(last_turn.get("user_text") or "").strip()
         if last_user_text and last_user_text != running_user_text:

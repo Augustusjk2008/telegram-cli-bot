@@ -447,7 +447,13 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
             return
         message = _stringify_value(payload.get("message"))
         if message:
-            if payload_type == "agent_message" and payload_phase == "commentary":
+            if payload_type == "agent_message":
+                existing_trace = turn.get("trace") or []
+                if not turn.get("assistant_messages") and not any(
+                    item.get("kind") == "commentary" and item.get("summary") == message
+                    for item in existing_trace
+                ):
+                    _append_assistant_text(assistant_messages, message)
                 _append_trace_event(
                     turn,
                     _trace_event(
@@ -458,9 +464,6 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
                     ),
                     include_trace=include_trace,
                 )
-                return
-            if payload_type == "agent_message":
-                _append_assistant_text(assistant_messages, message)
                 return
             _append_assistant_text(assistant_messages, message)
             _append_trace_event(
