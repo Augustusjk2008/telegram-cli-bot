@@ -17,6 +17,7 @@ from .runtime import get_runtime_platform
 logger = logging.getLogger(__name__)
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 SCRIPT_EXEC_TIMEOUT = 60
+EXPOSED_SYSTEM_SCRIPT_NAMES = {"codex_switch_source"}
 
 
 def allowed_script_extensions() -> set[str]:
@@ -142,8 +143,13 @@ def list_available_scripts() -> list[tuple[str, str, str, Path]]:
 
     scripts = []
     for item in SCRIPTS_DIR.iterdir():
-        if item.is_file() and item.suffix.lower() in allowed_script_extensions():
-            scripts.append((item.stem, get_script_display_name(item), get_script_description(item), item))
+        if not item.is_file():
+            continue
+        if item.suffix.lower() not in allowed_script_extensions():
+            continue
+        if item.stem not in EXPOSED_SYSTEM_SCRIPT_NAMES:
+            continue
+        scripts.append((item.stem, get_script_display_name(item), get_script_description(item), item))
 
     scripts.sort(key=lambda row: row[0])
     return scripts

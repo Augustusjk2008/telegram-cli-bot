@@ -1,3 +1,5 @@
+:: Codex 换源
+:: 切换 Codex 当前配置与备份配置
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul

@@ -45,6 +45,7 @@ from bot.web.api_service import (
     get_working_directory,
     kill_user_process,
     list_bots,
+    list_system_scripts,
     read_file_content,
     run_chat,
     run_cli_chat,
@@ -211,6 +212,29 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
     assert items[0]["alias"] == "main"
     assert items[0]["avatar_name"] == "bot-default.png"
     assert next(item for item in items if item["alias"] == "team2")["avatar_name"] == "claude-blue.png"
+
+
+def test_list_system_scripts_only_exposes_codex_switch_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    allowed_script = tmp_path / "codex_switch_source.bat"
+    hidden_script = tmp_path / "network_traffic.ps1"
+    allowed_script.write_text(":: Codex 换源\n", encoding="utf-8")
+    hidden_script.write_text("# 网络流量\n", encoding="utf-8")
+
+    monkeypatch.setattr("bot.platform.scripts.SCRIPTS_DIR", tmp_path)
+    monkeypatch.setattr("bot.platform.scripts.allowed_script_extensions", lambda: {".bat", ".ps1"})
+
+    payload = list_system_scripts()
+
+    assert payload == {
+        "items": [
+            {
+                "script_name": "codex_switch_source",
+                "display_name": "Codex 换源",
+                "description": "Codex 换源",
+                "path": str(allowed_script),
+            }
+        ]
+    }
 
 
 def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
