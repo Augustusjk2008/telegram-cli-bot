@@ -63,6 +63,8 @@ from .api_service import (
     get_working_directory,
     kill_user_process,
     list_bots,
+    list_assistant_cron_jobs,
+    list_assistant_cron_runs,
     list_system_scripts,
     read_file_content,
     remove_managed_bot,
@@ -70,6 +72,7 @@ from .api_service import (
     reset_user_session,
     reset_cli_params,
     run_chat,
+    run_assistant_cron_job_now,
     run_system_script,
     save_uploaded_file,
     start_managed_bot,
@@ -77,7 +80,10 @@ from .api_service import (
     stream_system_script,
     stream_update_download,
     stream_chat,
+    create_assistant_cron_job,
+    delete_assistant_cron_job,
     update_cli_params,
+    update_assistant_cron_job,
     update_bot_avatar,
     update_bot_cli,
     rename_managed_bot,
@@ -1040,6 +1046,55 @@ class WebApiServer:
         data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
         return _json({"ok": True, "data": data})
 
+    async def admin_assistant_cron_jobs(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": list_assistant_cron_jobs(self.manager, alias)})
+
+    async def admin_assistant_cron_job_create(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await create_assistant_cron_job(self.manager, alias, body)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_cron_job_update(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        job_id = request.match_info["job_id"]
+        body = await self._parse_json(request)
+        data = await update_assistant_cron_job(self.manager, alias, job_id, body)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_cron_job_delete(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        job_id = request.match_info["job_id"]
+        data = await delete_assistant_cron_job(self.manager, alias, job_id)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_cron_job_run(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        job_id = request.match_info["job_id"]
+        data = await run_assistant_cron_job_now(self.manager, alias, job_id)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_cron_job_runs(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        alias = self._manager_alias(request)
+        job_id = request.match_info["job_id"]
+        limit = request.query.get("limit", "").strip()
+        if limit:
+            try:
+                resolved_limit = int(limit)
+            except ValueError as exc:
+                raise WebApiError(400, "invalid_limit", "limit 必须是整数") from exc
+        else:
+            resolved_limit = 20
+        data = list_assistant_cron_runs(self.manager, alias, job_id, limit=resolved_limit)
+        return _json({"ok": True, "data": data})
+
     async def _auto_refresh_update_status(self) -> None:
         status = get_update_status()
         if not status.get("update_enabled"):
@@ -1112,6 +1167,24 @@ class WebApiServer:
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/upgrades/{proposal_id}/apply",
             self.admin_assistant_upgrade_apply,
+        )
+        app.router.add_get("/api/admin/bots/{alias}/assistant/cron/jobs", self.admin_assistant_cron_jobs)
+        app.router.add_post("/api/admin/bots/{alias}/assistant/cron/jobs", self.admin_assistant_cron_job_create)
+        app.router.add_patch(
+            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}",
+            self.admin_assistant_cron_job_update,
+        )
+        app.router.add_delete(
+            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}",
+            self.admin_assistant_cron_job_delete,
+        )
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}/run",
+            self.admin_assistant_cron_job_run,
+        )
+        app.router.add_get(
+            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}/runs",
+            self.admin_assistant_cron_job_runs,
         )
         app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
         app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)

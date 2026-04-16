@@ -6,6 +6,8 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
+  AssistantCronJob,
+  AssistantCronRun,
   AvatarAsset,
   BotOverview,
   CliParamField,
@@ -100,6 +102,37 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function cronScheduleText(job: AssistantCronJob) {
+  if (job.schedule.type === "daily") {
+    return `每天 ${job.schedule.time || "00:00"} (${job.schedule.timezone})`;
+  }
+  return `每 ${job.schedule.everySeconds || 0} 秒`;
+}
+
+function cronStatusText(job: AssistantCronJob) {
+  if (job.pending) {
+    return "排队中";
+  }
+  if (job.lastStatus === "success") {
+    return "成功";
+  }
+  if (job.lastStatus === "error") {
+    return "失败";
+  }
+  if (job.lastStatus === "queued") {
+    return "已入队";
+  }
+  return job.lastStatus || "未运行";
+}
+
+function summarizePrompt(prompt: string, limit = 72) {
+  const value = (prompt || "").trim();
+  if (value.length <= limit) {
+    return value;
+  }
+  return `${value.slice(0, limit).trimEnd()}...`;
+}
+
 export function SettingsScreen({
   botAlias,
   botAvatarName,
@@ -133,6 +166,20 @@ export function SettingsScreen({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [workdirDraft, setWorkdirDraft] = useState("");
+  const [assistantCronJobs, setAssistantCronJobs] = useState<AssistantCronJob[]>([]);
+  const [assistantCronRuns, setAssistantCronRuns] = useState<Record<string, AssistantCronRun[]>>({});
+  const [assistantCronLoading, setAssistantCronLoading] = useState(false);
+  const [assistantCronCreating, setAssistantCronCreating] = useState(false);
+  const [assistantCronEditingJobId, setAssistantCronEditingJobId] = useState("");
+  const [assistantCronSavingEdit, setAssistantCronSavingEdit] = useState(false);
+  const [assistantCronRunningJobId, setAssistantCronRunningJobId] = useState("");
+  const [assistantCronDeletingJobId, setAssistantCronDeletingJobId] = useState("");
+  const [assistantCronDraftId, setAssistantCronDraftId] = useState("");
+  const [assistantCronDraftTitle, setAssistantCronDraftTitle] = useState("");
+  const [assistantCronDraftScheduleType, setAssistantCronDraftScheduleType] = useState<"daily" | "interval">("daily");
+  const [assistantCronDraftTime, setAssistantCronDraftTime] = useState("09:00");
+  const [assistantCronDraftEverySeconds, setAssistantCronDraftEverySeconds] = useState("3600");
+  const [assistantCronDraftPrompt, setAssistantCronDraftPrompt] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
@@ -151,7 +198,83 @@ export function SettingsScreen({
   const buildLogViewportRef = useRef<HTMLDivElement | null>(null);
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
+  const isAssistantBot = overview?.botMode === "assistant";
   const isUpdateDownloading = updateAction === "download";
+  const isAssistantCronEditing = assistantCronEditingJobId !== "";
+
+  const resetAssistantAutomationDraft = () => {
+    setAssistantCronEditingJobId("");
+    setAssistantCronDraftId("");
+    setAssistantCronDraftTitle("");
+    setAssistantCronDraftScheduleType("daily");
+    setAssistantCronDraftTime("09:00");
+    setAssistantCronDraftEverySeconds("3600");
+    setAssistantCronDraftPrompt("");
+  };
+
+  const startEditingAssistantAutomation = (job: AssistantCronJob) => {
+    setError("");
+    setNotice("");
+    setAssistantCronEditingJobId(job.id);
+    setAssistantCronDraftId(job.id);
+    setAssistantCronDraftTitle(job.title);
+    setAssistantCronDraftScheduleType(job.schedule.type);
+    setAssistantCronDraftTime(job.schedule.time || "09:00");
+    setAssistantCronDraftEverySeconds(String(job.schedule.everySeconds || 3600));
+    setAssistantCronDraftPrompt(job.task.prompt);
+  };
+
+  const buildAssistantAutomationPayload = () => {
+    const title = assistantCronDraftTitle.trim();
+    const prompt = assistantCronDraftPrompt.trim();
+    if (!title) {
+      throw new Error("任务标题不能为空");
+    }
+    if (!prompt) {
+      throw new Error("任务提示词不能为空");
+    }
+    if (assistantCronDraftScheduleType === "daily") {
+      const time = assistantCronDraftTime.trim();
+      if (!time) {
+        throw new Error("每日时间不能为空");
+      }
+      return {
+        title,
+        schedule: {
+          type: "daily" as const,
+          time,
+          timezone: "Asia/Shanghai",
+          misfirePolicy: "once" as const,
+        },
+        task: {
+          prompt,
+        },
+        execution: {
+          timeoutSeconds: 1800,
+        },
+      };
+    }
+
+    const everySeconds = Number(assistantCronDraftEverySeconds);
+    if (!Number.isInteger(everySeconds) || everySeconds <= 0) {
+      throw new Error("间隔秒数必须是正整数");
+    }
+    return {
+      title,
+      schedule: {
+        type: "interval" as const,
+        everySeconds,
+        timezone: "Asia/Shanghai",
+        misfirePolicy: "skip" as const,
+      },
+      task: {
+        prompt,
+      },
+      execution: {
+        timeoutSeconds: 1800,
+      },
+    };
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +338,53 @@ export function SettingsScreen({
     }
     buildLogViewportRef.current.scrollTop = buildLogViewportRef.current.scrollHeight;
   }, [buildLogLines, buildLogSummary, showBuildLog]);
+
+  useEffect(() => {
+    if (!isAssistantBot) {
+      setAssistantCronJobs([]);
+      setAssistantCronRuns({});
+      setAssistantCronLoading(false);
+      resetAssistantAutomationDraft();
+      return;
+    }
+
+    let cancelled = false;
+    setAssistantCronLoading(true);
+
+    client.listAssistantCronJobs(botAlias)
+      .then(async (jobs) => {
+        if (cancelled) {
+          return;
+        }
+        setAssistantCronJobs(jobs);
+        const runsEntries = await Promise.all(
+          jobs.map(async (job) => {
+            try {
+              const runs = await client.listAssistantCronRuns(botAlias, job.id, 3);
+              return [job.id, runs] as const;
+            } catch {
+              return [job.id, []] as const;
+            }
+          }),
+        );
+        if (cancelled) {
+          return;
+        }
+        setAssistantCronRuns(Object.fromEntries(runsEntries));
+        setAssistantCronLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setAssistantCronLoading(false);
+        setError(getErrorMessage(err, "加载 Automation 失败"));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [botAlias, client, isAssistantBot]);
 
   useEffect(() => {
     if (!isUpdateDownloading) {
@@ -347,6 +517,113 @@ export function SettingsScreen({
       setError(err instanceof Error ? err.message : "更新工作目录失败");
     } finally {
       setSavingWorkdir(false);
+    }
+  };
+
+  const reloadAssistantAutomation = async () => {
+    const jobs = await client.listAssistantCronJobs(botAlias);
+    setAssistantCronJobs(jobs);
+    const runsEntries = await Promise.all(
+      jobs.map(async (job) => {
+        try {
+          const runs = await client.listAssistantCronRuns(botAlias, job.id, 3);
+          return [job.id, runs] as const;
+        } catch {
+          return [job.id, []] as const;
+        }
+      }),
+    );
+    setAssistantCronRuns(Object.fromEntries(runsEntries));
+  };
+
+  const createAssistantAutomation = async () => {
+    const jobId = assistantCronDraftId.trim();
+    if (!jobId) {
+      setError("任务 ID 不能为空");
+      return;
+    }
+
+    setAssistantCronCreating(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = buildAssistantAutomationPayload();
+      await client.createAssistantCronJob(botAlias, {
+        id: jobId,
+        enabled: true,
+        ...payload,
+      });
+      await reloadAssistantAutomation();
+      resetAssistantAutomationDraft();
+      setNotice("Automation 任务已创建");
+    } catch (err) {
+      setError(getErrorMessage(err, "创建 Automation 任务失败"));
+    } finally {
+      setAssistantCronCreating(false);
+    }
+  };
+
+  const saveAssistantAutomationEdit = async () => {
+    if (!assistantCronEditingJobId) {
+      return;
+    }
+
+    setAssistantCronSavingEdit(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = buildAssistantAutomationPayload();
+      await client.updateAssistantCronJob(botAlias, assistantCronEditingJobId, payload);
+      await reloadAssistantAutomation();
+      resetAssistantAutomationDraft();
+      setNotice("Automation 任务已更新");
+    } catch (err) {
+      setError(getErrorMessage(err, "更新 Automation 任务失败"));
+    } finally {
+      setAssistantCronSavingEdit(false);
+    }
+  };
+
+  const runAssistantAutomation = async (job: AssistantCronJob) => {
+    setAssistantCronRunningJobId(job.id);
+    setError("");
+    setNotice("");
+    try {
+      const result = await client.runAssistantCronJob(botAlias, job.id);
+      setAssistantCronJobs((prev) => prev.map((item) => (
+        item.id === job.id
+          ? { ...item, pending: true, pendingRunId: result.runId, lastStatus: result.status }
+          : item
+      )));
+      try {
+        const runs = await client.listAssistantCronRuns(botAlias, job.id, 3);
+        setAssistantCronRuns((prev) => ({ ...prev, [job.id]: runs }));
+      } catch {
+        // ignore refresh failures for mock/local fallback
+      }
+      setNotice(`任务已入队: ${result.runId}`);
+    } catch (err) {
+      setError(getErrorMessage(err, "手动触发 Automation 失败"));
+    } finally {
+      setAssistantCronRunningJobId("");
+    }
+  };
+
+  const deleteAssistantAutomation = async (job: AssistantCronJob) => {
+    setAssistantCronDeletingJobId(job.id);
+    setError("");
+    setNotice("");
+    try {
+      await client.deleteAssistantCronJob(botAlias, job.id);
+      await reloadAssistantAutomation();
+      if (assistantCronEditingJobId === job.id) {
+        resetAssistantAutomationDraft();
+      }
+      setNotice("Automation 任务已删除");
+    } catch (err) {
+      setError(getErrorMessage(err, "删除 Automation 任务失败"));
+    } finally {
+      setAssistantCronDeletingJobId("");
     }
   };
 
@@ -807,6 +1084,196 @@ export function SettingsScreen({
                 )}
               </div>
             </div>
+
+            {isAssistantBot ? (
+              <div className="space-y-4 border-t border-[var(--border)] pt-4">
+                <div className="space-y-1">
+                  <h3 className="font-medium text-[var(--text)]">Automation 定时任务</h3>
+                  <p className="text-xs text-[var(--muted)]">定时任务会和人工对话共用 assistant 串行执行队列。</p>
+                </div>
+
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 space-y-3">
+                  <h4 className="font-medium text-[var(--text)]">{isAssistantCronEditing ? "编辑任务" : "新建任务"}</h4>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="space-y-1">
+                      <span className="text-sm text-[var(--text)]">任务 ID</span>
+                      <input
+                        aria-label="任务 ID"
+                        type="text"
+                        value={assistantCronDraftId}
+                        disabled={isAssistantCronEditing}
+                        onChange={(event) => setAssistantCronDraftId(event.target.value)}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                        placeholder="daily_repo_review"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-sm text-[var(--text)]">任务标题</span>
+                      <input
+                        aria-label="任务标题"
+                        type="text"
+                        value={assistantCronDraftTitle}
+                        onChange={(event) => setAssistantCronDraftTitle(event.target.value)}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                        placeholder="Daily Repo Review"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-sm text-[var(--text)]">调度类型</span>
+                      <select
+                        aria-label="调度类型"
+                        value={assistantCronDraftScheduleType}
+                        onChange={(event) => setAssistantCronDraftScheduleType(event.target.value as "daily" | "interval")}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                      >
+                        <option value="daily">daily</option>
+                        <option value="interval">interval</option>
+                      </select>
+                    </label>
+                    {assistantCronDraftScheduleType === "daily" ? (
+                      <label className="space-y-1">
+                        <span className="text-sm text-[var(--text)]">每日时间</span>
+                        <input
+                          aria-label="每日时间"
+                          type="text"
+                          value={assistantCronDraftTime}
+                          onChange={(event) => setAssistantCronDraftTime(event.target.value)}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          placeholder="09:00"
+                        />
+                      </label>
+                    ) : (
+                      <label className="space-y-1">
+                        <span className="text-sm text-[var(--text)]">间隔秒数</span>
+                        <input
+                          aria-label="间隔秒数"
+                          type="number"
+                          min={1}
+                          value={assistantCronDraftEverySeconds}
+                          onChange={(event) => setAssistantCronDraftEverySeconds(event.target.value)}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                  <label className="space-y-1 block">
+                    <span className="text-sm text-[var(--text)]">任务提示词</span>
+                    <textarea
+                      aria-label="任务提示词"
+                      rows={3}
+                      value={assistantCronDraftPrompt}
+                      onChange={(event) => setAssistantCronDraftPrompt(event.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                      placeholder="请检查当前仓库状态并输出简短日报。"
+                    />
+                  </label>
+
+                  {isAssistantCronEditing ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void saveAssistantAutomationEdit()}
+                        disabled={assistantCronSavingEdit}
+                        className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                      >
+                        <Save className="h-4 w-4" />
+                        {assistantCronSavingEdit ? "保存中..." : "保存修改"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetAssistantAutomationDraft}
+                        disabled={assistantCronSavingEdit}
+                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      >
+                        取消编辑
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void createAssistantAutomation()}
+                      disabled={assistantCronCreating}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                    >
+                      <Save className="h-4 w-4" />
+                      {assistantCronCreating ? "创建中..." : "创建任务"}
+                    </button>
+                  )}
+                </div>
+
+                {assistantCronLoading ? (
+                  <p className="text-sm text-[var(--muted)]">加载 Automation...</p>
+                ) : assistantCronJobs.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-3 text-sm text-[var(--muted)]">
+                    暂无 Automation 任务
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {assistantCronJobs.map((job) => (
+                      <article key={job.id} className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 space-y-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="space-y-1">
+                            <h4 className="font-medium text-[var(--text)]">{job.title}</h4>
+                            <p className="text-xs text-[var(--muted)]">{job.id}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              aria-label={`编辑 ${job.title}`}
+                              onClick={() => startEditingAssistantAutomation(job)}
+                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                            >
+                              编辑
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`立即运行 ${job.title}`}
+                              onClick={() => void runAssistantAutomation(job)}
+                              disabled={assistantCronRunningJobId === job.id}
+                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              {assistantCronRunningJobId === job.id ? "入队中..." : "立即运行"}
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`删除 ${job.title}`}
+                              onClick={() => void deleteAssistantAutomation(job)}
+                              disabled={assistantCronDeletingJobId === job.id}
+                              className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                            >
+                              {assistantCronDeletingJobId === job.id ? "删除中..." : "删除"}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2 text-xs text-[var(--muted)] sm:grid-cols-2">
+                          <p><span className="text-[var(--text)]">调度:</span> {cronScheduleText(job)}</p>
+                          <p><span className="text-[var(--text)]">下次运行:</span> {job.nextRunAt || "待计算"}</p>
+                          <p><span className="text-[var(--text)]">状态:</span> {cronStatusText(job)}</p>
+                          <p><span className="text-[var(--text)]">合并次数:</span> {job.coalescedCount}</p>
+                        </div>
+
+                        <p className="text-xs text-[var(--muted)]">
+                          <span className="text-[var(--text)]">提示词:</span> {summarizePrompt(job.task.prompt)}
+                        </p>
+
+                        {assistantCronRuns[job.id]?.length ? (
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)] space-y-2">
+                            <p className="font-medium text-[var(--text)]">最近运行</p>
+                            {assistantCronRuns[job.id].map((run) => (
+                              <p key={run.runId || `${job.id}-${run.status}`}>
+                                {run.status || "unknown"} · {run.runId || "pending"} · {run.triggerSource || "manual"}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             {isMainBot ? (
               <div className="space-y-4 border-t border-[var(--border)] pt-4">

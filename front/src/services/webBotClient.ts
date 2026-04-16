@@ -5,6 +5,11 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  AssistantCronJob,
+  AssistantCronRun,
+  AssistantCronRunRequestResult,
+  CreateAssistantCronJobInput,
+  UpdateAssistantCronJobInput,
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
@@ -73,6 +78,12 @@ export interface WebBotClient {
   removeBot(botAlias: string): Promise<void>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
+  listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]>;
+  createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob>;
+  updateAssistantCronJob(botAlias: string, jobId: string, input: UpdateAssistantCronJobInput): Promise<AssistantCronJob>;
+  deleteAssistantCronJob(botAlias: string, jobId: string): Promise<void>;
+  runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult>;
+  listAssistantCronRuns(botAlias: string, jobId: string, limit?: number): Promise<AssistantCronRun[]>;
   listAvatarAssets(): Promise<AvatarAsset[]>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;

@@ -1,6 +1,10 @@
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
+  AssistantCronJob,
+  AssistantCronRun,
+  AssistantCronRunRequestResult,
+  CreateAssistantCronJobInput,
   GitActionResult,
   GitCommitSummary,
   GitDiffPayload,
@@ -27,6 +31,7 @@ import type {
   SystemScript,
   SystemScriptResult,
   TunnelSnapshot,
+  UpdateAssistantCronJobInput,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
@@ -219,6 +224,55 @@ type RawAppUpdateDownloadProgress = {
   downloaded_bytes?: number;
   total_bytes?: number;
   percent?: number;
+};
+
+type RawAssistantCronSchedule = {
+  type: "daily" | "interval";
+  time?: string;
+  timezone?: string;
+  every_seconds?: number;
+  misfire_policy?: "skip" | "once";
+};
+
+type RawAssistantCronTask = {
+  prompt: string;
+};
+
+type RawAssistantCronExecution = {
+  timeout_seconds?: number;
+};
+
+type RawAssistantCronJob = {
+  id: string;
+  enabled: boolean;
+  title: string;
+  schedule: RawAssistantCronSchedule;
+  task: RawAssistantCronTask;
+  execution: RawAssistantCronExecution;
+  next_run_at?: string;
+  last_status?: string;
+  last_error?: string;
+  last_success_at?: string;
+  pending?: boolean;
+  pending_run_id?: string;
+  coalesced_count?: number;
+};
+
+type RawAssistantCronRun = {
+  run_id?: string;
+  job_id?: string;
+  trigger_source?: string;
+  scheduled_at?: string;
+  enqueued_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  status?: string;
+  elapsed_seconds?: number;
+  queue_wait_seconds?: number;
+  timed_out?: boolean;
+  prompt_excerpt?: string;
+  output_excerpt?: string;
+  error?: string;
 };
 
 type StreamEvent =
@@ -576,6 +630,53 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
     downloadedBytes: Number(raw.downloaded_bytes || 0),
     ...(typeof raw.total_bytes === "number" ? { totalBytes: raw.total_bytes } : {}),
     ...(typeof raw.percent === "number" ? { percent: raw.percent } : {}),
+  };
+}
+
+function mapAssistantCronJob(raw: RawAssistantCronJob): AssistantCronJob {
+  return {
+    id: raw.id,
+    enabled: Boolean(raw.enabled),
+    title: raw.title || raw.id,
+    schedule: {
+      type: raw.schedule.type,
+      time: raw.schedule.time,
+      timezone: raw.schedule.timezone || "Asia/Shanghai",
+      everySeconds: raw.schedule.every_seconds,
+      misfirePolicy: raw.schedule.misfire_policy || "skip",
+    },
+    task: {
+      prompt: raw.task.prompt || "",
+    },
+    execution: {
+      timeoutSeconds: Number(raw.execution.timeout_seconds || 1800),
+    },
+    nextRunAt: raw.next_run_at || "",
+    lastStatus: raw.last_status || "",
+    lastError: raw.last_error || "",
+    lastSuccessAt: raw.last_success_at || "",
+    pending: Boolean(raw.pending),
+    pendingRunId: raw.pending_run_id || "",
+    coalescedCount: Number(raw.coalesced_count || 0),
+  };
+}
+
+function mapAssistantCronRun(raw: RawAssistantCronRun): AssistantCronRun {
+  return {
+    runId: raw.run_id || "",
+    jobId: raw.job_id || "",
+    triggerSource: raw.trigger_source || "",
+    scheduledAt: raw.scheduled_at || "",
+    enqueuedAt: raw.enqueued_at || "",
+    startedAt: raw.started_at || "",
+    finishedAt: raw.finished_at || "",
+    status: raw.status || "",
+    elapsedSeconds: Number(raw.elapsed_seconds || 0),
+    queueWaitSeconds: Number(raw.queue_wait_seconds || 0),
+    timedOut: Boolean(raw.timed_out),
+    promptExcerpt: raw.prompt_excerpt || "",
+    outputExcerpt: raw.output_excerpt || "",
+    error: raw.error || "",
   };
 }
 
@@ -1220,6 +1321,120 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({ avatar_name: avatarName }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]> {
+    const data = await this.requestJson<{ items: RawAssistantCronJob[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs`,
+    );
+    return (data.items || []).map(mapAssistantCronJob);
+  }
+
+  async createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob> {
+    const data = await this.requestJson<{ job: RawAssistantCronJob }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: input.id,
+          enabled: input.enabled,
+          title: input.title,
+          schedule: {
+            type: input.schedule.type,
+            time: input.schedule.time,
+            timezone: input.schedule.timezone,
+            every_seconds: input.schedule.everySeconds,
+            misfire_policy: input.schedule.misfirePolicy,
+          },
+          task: {
+            prompt: input.task.prompt,
+          },
+          execution: {
+            timeout_seconds: input.execution.timeoutSeconds,
+          },
+        }),
+      },
+    );
+    return mapAssistantCronJob(data.job);
+  }
+
+  async updateAssistantCronJob(
+    botAlias: string,
+    jobId: string,
+    input: UpdateAssistantCronJobInput,
+  ): Promise<AssistantCronJob> {
+    const data = await this.requestJson<{ job: RawAssistantCronJob }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.schedule ? {
+            schedule: {
+              ...(input.schedule.type ? { type: input.schedule.type } : {}),
+              ...(input.schedule.time ? { time: input.schedule.time } : {}),
+              ...(input.schedule.timezone ? { timezone: input.schedule.timezone } : {}),
+              ...(typeof input.schedule.everySeconds === "number"
+                ? { every_seconds: input.schedule.everySeconds }
+                : {}),
+              ...(input.schedule.misfirePolicy ? { misfire_policy: input.schedule.misfirePolicy } : {}),
+            },
+          } : {}),
+          ...(input.task ? {
+            task: {
+              ...(input.task.prompt ? { prompt: input.task.prompt } : {}),
+            },
+          } : {}),
+          ...(input.execution ? {
+            execution: {
+              ...(typeof input.execution.timeoutSeconds === "number"
+                ? { timeout_seconds: input.execution.timeoutSeconds }
+                : {}),
+            },
+          } : {}),
+        }),
+      },
+    );
+    return mapAssistantCronJob(data.job);
+  }
+
+  async deleteAssistantCronJob(botAlias: string, jobId: string): Promise<void> {
+    await this.requestJson(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+  }
+
+  async runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult> {
+    const data = await this.requestJson<{ run_id: string; status: string }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs/${encodeURIComponent(jobId)}/run`,
+      {
+        method: "POST",
+      },
+    );
+    return {
+      runId: data.run_id,
+      status: data.status,
+    };
+  }
+
+  async listAssistantCronRuns(botAlias: string, jobId: string, limit = 5): Promise<AssistantCronRun[]> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+    });
+    const data = await this.requestJson<{ items: RawAssistantCronRun[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs/${encodeURIComponent(jobId)}/runs?${params.toString()}`,
+    );
+    return (data.items || []).map(mapAssistantCronRun);
   }
 
   async addBot(input: CreateBotInput): Promise<BotSummary> {

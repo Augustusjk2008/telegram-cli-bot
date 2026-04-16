@@ -22,6 +22,16 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 from xml.etree import ElementTree
 
+from bot.assistant_cron_store import (
+    delete_job_definition,
+    delete_job_run_audit,
+    delete_job_runtime_state,
+    list_job_definitions,
+    load_job_runtime_state,
+    read_job_definition,
+    read_job_run_audit,
+)
+from bot.assistant_cron_types import AssistantCronJob
 from bot.assistant_compaction import (
     finalize_compaction,
     list_pending_capture_ids,
@@ -33,6 +43,7 @@ from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_proposals import list_proposals, set_proposal_status
+from bot.assistant_runtime import AssistantRunRequest
 from bot.assistant_upgrade import apply_approved_upgrade
 from bot.assistant_state import (
     attach_assistant_persist_hook,
@@ -295,6 +306,39 @@ def _assistant_home_or_raise(manager: MultiBotManager, alias: str):
     return bootstrap_assistant_home(profile.working_dir)
 
 
+def _assistant_cron_service_or_raise(manager: MultiBotManager, alias: str):
+    profile = get_profile_or_raise(manager, alias)
+    if profile.bot_mode != "assistant":
+        _raise(409, "unsupported_bot_mode", "仅 assistant Bot 支持定时任务")
+    service = manager.assistant_cron_service
+    if service is None or service.bot_alias != profile.alias:
+        _raise(503, "assistant_cron_unavailable", "assistant cron 服务尚未启动")
+    return service
+
+
+def _deep_merge_dict(base: dict[str, Any], patch_payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in patch_payload.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _build_assistant_cron_job_item(job: AssistantCronJob, *, state: Any) -> dict[str, Any]:
+    return {
+        **job.to_dict(),
+        "next_run_at": state.next_run_at,
+        "last_status": state.last_status,
+        "last_error": state.last_error,
+        "last_success_at": state.last_success_at,
+        "pending": bool(state.pending_run_id or state.current_run_id),
+        "pending_run_id": state.pending_run_id or state.current_run_id,
+        "coalesced_count": state.coalesced_count,
+    }
+
+
 def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
     alias = (alias or "").strip().lower()
     if alias == manager.main_profile.alias:
@@ -501,6 +545,88 @@ async def apply_assistant_upgrade(
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
         _raise(500, "assistant_upgrade_failed", detail or "应用 upgrade 失败")
+
+
+def list_assistant_cron_jobs(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    service = _assistant_cron_service_or_raise(manager, alias)
+    items = []
+    for job in list_job_definitions(service.assistant_home):
+        state = load_job_runtime_state(service.assistant_home, job.id)
+        items.append(_build_assistant_cron_job_item(job, state=state))
+    return {"items": items}
+
+
+async def create_assistant_cron_job(manager: MultiBotManager, alias: str, payload: dict[str, Any]) -> dict[str, Any]:
+    service = _assistant_cron_service_or_raise(manager, alias)
+    try:
+        job = AssistantCronJob.from_dict(payload)
+        try:
+            read_job_definition(service.assistant_home, job.id)
+        except FileNotFoundError:
+            pass
+        else:
+            _raise(409, "cron_job_exists", f"job `{job.id}` 已存在")
+        saved = await service.save_job(job)
+    except ValueError as exc:
+        _raise(400, "invalid_cron_job", str(exc))
+    state = load_job_runtime_state(service.assistant_home, saved.id)
+    return {"job": _build_assistant_cron_job_item(saved, state=state)}
+
+
+async def update_assistant_cron_job(
+    manager: MultiBotManager,
+    alias: str,
+    job_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    service = _assistant_cron_service_or_raise(manager, alias)
+    try:
+        current = read_job_definition(service.assistant_home, job_id)
+    except FileNotFoundError:
+        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
+
+    merged = _deep_merge_dict(current.to_dict(), payload)
+    merged["id"] = job_id
+    try:
+        saved = await service.save_job(AssistantCronJob.from_dict(merged))
+    except ValueError as exc:
+        _raise(400, "invalid_cron_job", str(exc))
+    state = load_job_runtime_state(service.assistant_home, saved.id)
+    return {"job": _build_assistant_cron_job_item(saved, state=state)}
+
+
+async def delete_assistant_cron_job(manager: MultiBotManager, alias: str, job_id: str) -> dict[str, Any]:
+    service = _assistant_cron_service_or_raise(manager, alias)
+    if not delete_job_definition(service.assistant_home, job_id):
+        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
+    delete_job_runtime_state(service.assistant_home, job_id)
+    delete_job_run_audit(service.assistant_home, job_id)
+    return {"removed": True, "job_id": job_id}
+
+
+async def run_assistant_cron_job_now(manager: MultiBotManager, alias: str, job_id: str) -> dict[str, Any]:
+    service = _assistant_cron_service_or_raise(manager, alias)
+    try:
+        return await service.run_job_now(job_id)
+    except FileNotFoundError:
+        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
+
+
+def list_assistant_cron_runs(
+    manager: MultiBotManager,
+    alias: str,
+    job_id: str,
+    *,
+    limit: int = 20,
+) -> dict[str, Any]:
+    service = _assistant_cron_service_or_raise(manager, alias)
+    try:
+        read_job_definition(service.assistant_home, job_id)
+    except FileNotFoundError:
+        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
+    items = read_job_run_audit(service.assistant_home, job_id, limit=max(1, limit))
+    items.reverse()
+    return {"items": items}
 
 
 def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
@@ -1723,6 +1849,11 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
 
 async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
+    if profile.bot_mode == "assistant":
+        if manager.assistant_runtime is None:
+            _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
+        request = build_assistant_run_request(alias, user_id, user_text)
+        return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
         return await run_cli_chat(manager, alias, user_id, user_text)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
@@ -1731,6 +1862,13 @@ async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text
 async def stream_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
+        if profile.bot_mode == "assistant":
+            if manager.assistant_runtime is None:
+                _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
+            request = build_assistant_run_request(alias, user_id, user_text)
+            async for event in manager.assistant_runtime.stream_interactive(request):
+                yield event
+            return
         if _supports_cli_runtime(profile):
             async for event in _stream_cli_chat(manager, alias, user_id, user_text):
                 yield event
@@ -1784,6 +1922,29 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
         "returncode": result.returncode,
         "working_dir": session.working_dir,
     }
+
+
+def build_assistant_run_request(alias: str, user_id: int, user_text: str) -> AssistantRunRequest:
+    return AssistantRunRequest(
+        run_id=f"run_{uuid.uuid4().hex[:12]}",
+        source="web",
+        bot_alias=alias,
+        user_id=user_id,
+        text=user_text,
+        interactive=True,
+    )
+
+
+async def execute_assistant_run_request(manager: MultiBotManager, request: AssistantRunRequest) -> dict[str, Any]:
+    return await run_cli_chat(manager, request.bot_alias, request.user_id, request.text)
+
+
+async def stream_assistant_run_request(
+    manager: MultiBotManager,
+    request: AssistantRunRequest,
+) -> AsyncIterator[dict[str, Any]]:
+    async for event in _stream_cli_chat(manager, request.bot_alias, request.user_id, request.text):
+        yield event
 
 
 def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:

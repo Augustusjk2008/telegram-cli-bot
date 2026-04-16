@@ -6,12 +6,15 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from bot import app_settings
+from bot.assistant_cron import AssistantCronService
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import coerce_param_value
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
@@ -33,6 +36,10 @@ class MultiBotManager:
         self.bot_id_to_alias: Dict[int, str] = {}
         self._watchdog_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self.assistant_runtime: AssistantRuntimeCoordinator | None = None
+        self.assistant_cron_service: Any | None = None
+        self._assistant_result_executor: Callable[[AssistantRunRequest], Awaitable[dict[str, Any]]] | None = None
+        self._assistant_stream_executor: Callable[[AssistantRunRequest], AsyncIterator[dict[str, Any]]] | None = None
 
         self._load_profiles()
         self._apply_persisted_avatar_names()
@@ -155,6 +162,63 @@ class MultiBotManager:
     def _count_assistant_profiles(self) -> int:
         return sum(1 for profile in self.managed_profiles.values() if profile.bot_mode == "assistant")
 
+    def assistant_alias(self) -> str | None:
+        if self.main_profile.bot_mode == "assistant":
+            return self.main_profile.alias
+        for alias, profile in self.managed_profiles.items():
+            if profile.bot_mode == "assistant":
+                return alias
+        return None
+
+    async def _ensure_assistant_runtime(self) -> None:
+        if self._assistant_result_executor is None:
+            return
+        if self.assistant_alias() is None:
+            if self.assistant_runtime is not None:
+                await self.assistant_runtime.stop()
+                self.assistant_runtime = None
+            return
+        if self.assistant_runtime is not None:
+            return
+        self.assistant_runtime = AssistantRuntimeCoordinator(
+            result_executor=self._assistant_result_executor,
+            stream_executor=self._assistant_stream_executor,
+        )
+        await self.assistant_runtime.start()
+
+    async def _ensure_assistant_cron_service(self) -> None:
+        assistant_alias = self.assistant_alias()
+        if assistant_alias is None or self.assistant_runtime is None:
+            if self.assistant_cron_service is not None:
+                await self.assistant_cron_service.stop()
+                self.assistant_cron_service = None
+            return
+
+        profile = self.get_profile(assistant_alias)
+        assistant_home = bootstrap_assistant_home(profile.working_dir)
+        current_service = self.assistant_cron_service
+        if (
+            current_service is not None
+            and current_service.bot_alias == assistant_alias
+            and current_service.assistant_home.root == assistant_home.root
+            and current_service.coordinator is self.assistant_runtime
+        ):
+            return
+
+        if current_service is not None:
+            await current_service.stop()
+
+        self.assistant_cron_service = AssistantCronService(
+            assistant_home=assistant_home,
+            bot_alias=assistant_alias,
+            coordinator=self.assistant_runtime,
+        )
+        await self.assistant_cron_service.start()
+
+    async def _ensure_assistant_services(self) -> None:
+        await self._ensure_assistant_runtime()
+        await self._ensure_assistant_cron_service()
+
     async def _start_profile(self, profile: BotProfile, is_main: bool = False) -> object | None:
         existing = self.applications.get(profile.alias)
         if existing is not None:
@@ -179,13 +243,34 @@ class MultiBotManager:
     async def start_all(self) -> None:
         return None
 
+    async def start_background_services(
+        self,
+        *,
+        result_executor: Callable[[AssistantRunRequest], Awaitable[dict[str, Any]]],
+        stream_executor: Callable[[AssistantRunRequest], AsyncIterator[dict[str, Any]]] | None = None,
+    ) -> None:
+        self._assistant_result_executor = result_executor
+        self._assistant_stream_executor = stream_executor
+        await self._ensure_assistant_services()
+
     async def start_watchdog(self) -> None:
         self._watchdog_task = None
 
     async def stop_watchdog(self) -> None:
         self._watchdog_task = None
 
+    async def stop_background_services(self) -> None:
+        if self.assistant_cron_service is not None:
+            stop = getattr(self.assistant_cron_service, "stop", None)
+            if callable(stop):
+                await stop()
+            self.assistant_cron_service = None
+        if self.assistant_runtime is not None:
+            await self.assistant_runtime.stop()
+            self.assistant_runtime = None
+
     async def shutdown_all(self) -> None:
+        await self.stop_background_services()
         await self.stop_watchdog()
         for alias in list(self.applications.keys()):
             await self._stop_application(alias)
@@ -253,6 +338,7 @@ class MultiBotManager:
             app_settings.update_bot_avatar_name(normalized_alias, profile.avatar_name)
             self._save_profiles()
             await self._start_profile(profile, is_main=False)
+            await self._ensure_assistant_services()
             return profile
 
     async def set_bot_avatar(self, alias: str, avatar_name: str) -> None:
@@ -278,6 +364,7 @@ class MultiBotManager:
             del self.managed_profiles[normalized_alias]
             app_settings.remove_bot_avatar_name(normalized_alias)
             self._save_profiles()
+            await self._ensure_assistant_services()
 
     async def start_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -355,6 +442,7 @@ class MultiBotManager:
             update_bot_alias(normalized_alias, normalized_new_alias)
             app_settings.rename_bot_avatar_name(normalized_alias, normalized_new_alias)
             self._save_profiles()
+            await self._ensure_assistant_services()
             return profile
 
     async def set_bot_workdir(self, alias: str, working_dir: str) -> None:

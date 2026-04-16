@@ -1,6 +1,10 @@
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
+  AssistantCronJob,
+  AssistantCronRun,
+  AssistantCronRunRequestResult,
+  CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
   ChatMessage,
@@ -19,6 +23,7 @@ import type {
   SystemScript,
   SystemScriptResult,
   TunnelSnapshot,
+  UpdateAssistantCronJobInput,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
@@ -135,6 +140,8 @@ export class MockWebBotClient implements WebBotClient {
     { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
     { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
   ];
+  private assistantCronJobs = new Map<string, AssistantCronJob[]>();
+  private assistantCronRuns = new Map<string, AssistantCronRun[]>();
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -171,6 +178,14 @@ export class MockWebBotClient implements WebBotClient {
 
   private getBrowserPath(botAlias: string): string {
     return this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
+  }
+
+  private cronRunKey(botAlias: string, jobId: string): string {
+    return `${botAlias}:${jobId}`;
+  }
+
+  private getAssistantCronJobs(botAlias: string): AssistantCronJob[] {
+    return [...(this.assistantCronJobs.get(botAlias) || [])];
   }
 
   async login(password: string): Promise<SessionState> {
@@ -602,6 +617,110 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
+  async listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]> {
+    return this.getAssistantCronJobs(botAlias);
+  }
+
+  async createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob> {
+    const current = this.getAssistantCronJobs(botAlias);
+    const job: AssistantCronJob = {
+      ...input,
+      nextRunAt: input.schedule.type === "daily"
+        ? "2026-04-17T09:00:00+08:00"
+        : "2026-04-16T10:00:00+08:00",
+      lastStatus: "",
+      lastError: "",
+      lastSuccessAt: "",
+      pending: false,
+      pendingRunId: "",
+      coalescedCount: 0,
+    };
+    this.assistantCronJobs.set(botAlias, [...current.filter((item) => item.id !== job.id), job]);
+    return job;
+  }
+
+  async updateAssistantCronJob(
+    botAlias: string,
+    jobId: string,
+    input: UpdateAssistantCronJobInput,
+  ): Promise<AssistantCronJob> {
+    const current = this.getAssistantCronJobs(botAlias);
+    const existing = current.find((item) => item.id === jobId);
+    if (!existing) {
+      throw new Error("任务不存在");
+    }
+    const updated: AssistantCronJob = {
+      ...existing,
+      ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
+      ...(input.title ? { title: input.title } : {}),
+      schedule: {
+        ...existing.schedule,
+        ...(input.schedule || {}),
+      },
+      task: {
+        ...existing.task,
+        ...(input.task || {}),
+      },
+      execution: {
+        ...existing.execution,
+        ...(input.execution || {}),
+      },
+    };
+    this.assistantCronJobs.set(
+      botAlias,
+      current.map((item) => (item.id === jobId ? updated : item)),
+    );
+    return updated;
+  }
+
+  async deleteAssistantCronJob(botAlias: string, jobId: string): Promise<void> {
+    this.assistantCronJobs.set(
+      botAlias,
+      this.getAssistantCronJobs(botAlias).filter((item) => item.id !== jobId),
+    );
+    this.assistantCronRuns.delete(this.cronRunKey(botAlias, jobId));
+  }
+
+  async runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult> {
+    const runId = `run_${Date.now()}`;
+    const runs = this.assistantCronRuns.get(this.cronRunKey(botAlias, jobId)) || [];
+    this.assistantCronRuns.set(this.cronRunKey(botAlias, jobId), [
+      {
+        runId,
+        jobId,
+        triggerSource: "manual",
+        scheduledAt: new Date().toISOString(),
+        enqueuedAt: new Date().toISOString(),
+        startedAt: "",
+        finishedAt: "",
+        status: "queued",
+        elapsedSeconds: 0,
+        queueWaitSeconds: 0,
+        timedOut: false,
+        promptExcerpt: "",
+        outputExcerpt: "",
+        error: "",
+      },
+      ...runs,
+    ]);
+    this.assistantCronJobs.set(
+      botAlias,
+      this.getAssistantCronJobs(botAlias).map((item) =>
+        item.id === jobId
+          ? { ...item, pending: true, pendingRunId: runId, lastStatus: "queued" }
+          : item,
+      ),
+    );
+    return {
+      runId,
+      status: "queued",
+    };
+  }
+
+  async listAssistantCronRuns(botAlias: string, jobId: string, limit = 5): Promise<AssistantCronRun[]> {
+    return (this.assistantCronRuns.get(this.cronRunKey(botAlias, jobId)) || []).slice(0, limit);
+  }
+
   async addBot(input: CreateBotInput): Promise<BotSummary> {
     const alias = input.alias.trim().toLowerCase();
     const bot: BotSummary = {
@@ -619,6 +738,9 @@ export class MockWebBotClient implements WebBotClient {
     this.bots.set(alias, bot);
     this.currentPaths.set(alias, bot.workingDir);
     this.workdirOverrides.set(alias, bot.workingDir);
+    if (bot.botMode === "assistant" && !this.assistantCronJobs.has(alias)) {
+      this.assistantCronJobs.set(alias, []);
+    }
     return this.getBotSummary(alias);
   }
 
@@ -633,6 +755,14 @@ export class MockWebBotClient implements WebBotClient {
     this.moveKey(this.currentPaths, botAlias, alias);
     this.moveKey(this.workdirOverrides, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
+    this.moveKey(this.assistantCronJobs, botAlias, alias);
+    for (const [key, value] of Array.from(this.assistantCronRuns.entries())) {
+      if (!key.startsWith(`${botAlias}:`)) {
+        continue;
+      }
+      this.assistantCronRuns.delete(key);
+      this.assistantCronRuns.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
+    }
     return this.getBotSummary(alias);
   }
 
@@ -644,6 +774,12 @@ export class MockWebBotClient implements WebBotClient {
     this.currentPaths.delete(botAlias);
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);
+    this.assistantCronJobs.delete(botAlias);
+    for (const key of Array.from(this.assistantCronRuns.keys())) {
+      if (key.startsWith(`${botAlias}:`)) {
+        this.assistantCronRuns.delete(key);
+      }
+    }
   }
 
   async startBot(botAlias: string): Promise<BotSummary> {

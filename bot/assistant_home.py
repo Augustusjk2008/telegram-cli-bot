@@ -9,16 +9,19 @@ import yaml
 ASSISTANT_SCHEMA_VERSION = 1
 REQUIRED_DIRS = (
     "state/users",
+    "state/cron",
     "inbox/captures",
     "memory/working",
     "memory/knowledge",
     "memory/skills",
+    "automation/jobs",
     "proposals",
     "upgrades/pending",
     "upgrades/approved",
     "upgrades/applied",
     "evals/runs",
     "audit",
+    "audit/cron",
     "indexes",
     "prompts",
 )

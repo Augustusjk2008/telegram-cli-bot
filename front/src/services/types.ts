@@ -234,3 +234,77 @@ export type AppUpdateDownloadProgress = {
   totalBytes?: number;
   percent?: number;
 };
+
+export type AssistantCronScheduleType = "daily" | "interval";
+export type AssistantCronMisfirePolicy = "skip" | "once";
+
+export type AssistantCronSchedule = {
+  type: AssistantCronScheduleType;
+  time?: string;
+  timezone: string;
+  everySeconds?: number;
+  misfirePolicy: AssistantCronMisfirePolicy;
+};
+
+export type AssistantCronTask = {
+  prompt: string;
+};
+
+export type AssistantCronExecution = {
+  timeoutSeconds: number;
+};
+
+export type AssistantCronJob = {
+  id: string;
+  enabled: boolean;
+  title: string;
+  schedule: AssistantCronSchedule;
+  task: AssistantCronTask;
+  execution: AssistantCronExecution;
+  nextRunAt: string;
+  lastStatus: string;
+  lastError: string;
+  lastSuccessAt: string;
+  pending: boolean;
+  pendingRunId: string;
+  coalescedCount: number;
+};
+
+export type CreateAssistantCronJobInput = {
+  id: string;
+  enabled: boolean;
+  title: string;
+  schedule: AssistantCronSchedule;
+  task: AssistantCronTask;
+  execution: AssistantCronExecution;
+};
+
+export type UpdateAssistantCronJobInput = Partial<{
+  enabled: boolean;
+  title: string;
+  schedule: Partial<AssistantCronSchedule>;
+  task: Partial<AssistantCronTask>;
+  execution: Partial<AssistantCronExecution>;
+}>;
+
+export type AssistantCronRun = {
+  runId: string;
+  jobId: string;
+  triggerSource: string;
+  scheduledAt: string;
+  enqueuedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  status: string;
+  elapsedSeconds: number;
+  queueWaitSeconds: number;
+  timedOut: boolean;
+  promptExcerpt: string;
+  outputExcerpt: string;
+  error: string;
+};
+
+export type AssistantCronRunRequestResult = {
+  runId: string;
+  status: string;
+};
