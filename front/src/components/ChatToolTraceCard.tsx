@@ -91,7 +91,6 @@ function collapseText(value: string, maxLines = MAX_PREVIEW_LINES, maxChars = MA
 export function ChatToolTraceCard({ event, index }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const title = event.title || event.toolName || (event.kind === "tool_result" ? "工具返回" : "工具调用");
   const payloadText = useMemo(() => renderPayload(event.payload), [event.payload]);
   const summary = useMemo(() => resolveSummary(event, payloadText), [event, payloadText]);
   const collapsedSummary = useMemo(() => collapseText(summary), [summary]);
@@ -108,7 +107,6 @@ export function ChatToolTraceCard({ event, index }: Props) {
             <Wrench className="h-3.5 w-3.5" />
             <span>{label}</span>
           </div>
-          <div className="mt-1 text-sm font-medium text-slate-800">{title}</div>
         </div>
         {event.toolName ? (
           <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">

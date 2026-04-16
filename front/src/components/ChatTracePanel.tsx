@@ -36,7 +36,6 @@ function ChatTracePanelInner({
   traceCount,
   toolCallCount,
   processCount,
-  elapsedSeconds,
   copyLabel,
   onCopy,
   isLoading = false,
@@ -63,7 +62,7 @@ function ChatTracePanelInner({
   }
 
   const buttonLabel = `${expanded ? "收起" : "展开"}过程详情`;
-  const showActions = typeof elapsedSeconds === "number" || Boolean(copyLabel && onCopy);
+  const showActions = Boolean(copyLabel && onCopy);
   let toolIndex = 0;
 
   return (
@@ -142,9 +141,6 @@ function ChatTracePanelInner({
           })}
           {showActions ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2">
-              {typeof elapsedSeconds === "number" ? (
-                <div className="text-xs text-slate-600">用时 {elapsedSeconds} 秒</div>
-              ) : null}
               {copyLabel && onCopy ? (
                 <button
                   type="button"

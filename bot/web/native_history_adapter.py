@@ -284,8 +284,32 @@ def _append_trace_event(turn: dict[str, Any], event: dict[str, Any], *, include_
     if summary:
         turn["last_trace_summary"] = summary
 
-    if include_trace:
-        turn["trace"].append(event)
+    turn["trace"].append(event)
+
+
+def _is_trace_summary_redundant(summary_text: str, event_summary: str) -> bool:
+    final_summary = _stringify_value(summary_text)
+    trace_summary = _stringify_value(event_summary)
+    if not final_summary or not trace_summary:
+        return False
+    if final_summary == trace_summary:
+        return True
+    return final_summary.startswith(trace_summary) and len(final_summary) > len(trace_summary)
+
+
+def _prune_redundant_summary_trace(trace: list[dict[str, Any]], summary_text: str) -> list[dict[str, Any]]:
+    if not trace:
+        return []
+
+    pruned = [dict(item) for item in trace]
+    while pruned:
+        kind = str(pruned[-1].get("kind") or "")
+        if kind != "commentary":
+            break
+        if not _is_trace_summary_redundant(summary_text, pruned[-1].get("summary")):
+            break
+        pruned.pop()
+    return pruned
 
 
 def _finalize_turn(
@@ -305,11 +329,14 @@ def _finalize_turn(
         return None
 
     assistant_messages = turn.get("assistant_messages") or []
-    trace = [dict(item) for item in turn.get("trace") or []]
     has_final_output = bool(assistant_messages)
     summary_text = assistant_messages[-1] if has_final_output else ""
     if not summary_text:
         summary_text = _stringify_value(turn.get("last_trace_summary"))
+    trace = _prune_redundant_summary_trace(turn.get("trace") or [], summary_text)
+    trace_count = len(trace)
+    tool_call_count = sum(1 for item in trace if str(item.get("kind") or "") == "tool_call")
+    process_count = sum(1 for item in trace if str(item.get("kind") or "") not in {"tool_call", "tool_result"})
 
     return {
         "id": f"{provider}-{session_id}-{turn_index}",
@@ -322,9 +349,9 @@ def _finalize_turn(
             "completion_state": "completed",
             "summary_kind": "final" if has_final_output else "partial_preview",
             "trace_version": 1,
-            "trace_count": int(turn.get("trace_count") or len(trace)),
-            "tool_call_count": int(turn.get("tool_call_count") or 0),
-            "process_count": int(turn.get("process_count") or 0),
+            "trace_count": trace_count,
+            "tool_call_count": tool_call_count,
+            "process_count": process_count,
             **({"trace": trace} if include_trace and trace else {}),
             "native_source": {
                 "provider": provider,
@@ -448,12 +475,6 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
         message = _stringify_value(payload.get("message"))
         if message:
             if payload_type == "agent_message":
-                existing_trace = turn.get("trace") or []
-                if not turn.get("assistant_messages") and not any(
-                    item.get("kind") == "commentary" and item.get("summary") == message
-                    for item in existing_trace
-                ):
-                    _append_assistant_text(assistant_messages, message)
                 _append_trace_event(
                     turn,
                     _trace_event(

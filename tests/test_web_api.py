@@ -2103,7 +2103,9 @@ async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trac
 
 
 @pytest.mark.asyncio
-async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotManager, temp_dir: Path):
+async def test_run_chat_requires_assistant_runtime_for_assistant_mode(
+    web_manager: MultiBotManager, temp_dir: Path
+):
     workdir = temp_dir / "assistant-cli"
     workdir.mkdir()
     web_manager.managed_profiles["assistant1"] = BotProfile(
@@ -2116,15 +2118,43 @@ async def test_run_chat_routes_assistant_mode_to_cli_chat(web_manager: MultiBotM
         bot_mode="assistant",
     )
 
-    with patch(
-        "bot.web.api_service.run_cli_chat",
-        new_callable=AsyncMock,
-        return_value={"output": "cli result", "elapsed_seconds": 1},
-    ) as cli_mock:
-        data = await run_chat(web_manager, "assistant1", 1001, "hello")
+    with pytest.raises(WebApiError) as exc_info:
+        await run_chat(web_manager, "assistant1", 1001, "hello")
 
-    cli_mock.assert_awaited_once_with(web_manager, "assistant1", 1001, "hello")
-    assert data["output"] == "cli result"
+    assert exc_info.value.status == 503
+    assert exc_info.value.code == "assistant_runtime_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_routes_assistant_mode_to_assistant_runtime(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-cli"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    runtime = MagicMock()
+    runtime.submit_interactive = AsyncMock(
+        return_value={"output": "assistant runtime result", "elapsed_seconds": 1},
+    )
+    web_manager.assistant_runtime = runtime
+
+    data = await run_chat(web_manager, "assistant1", 1001, "hello")
+
+    runtime.submit_interactive.assert_awaited_once()
+    request = runtime.submit_interactive.await_args.args[0]
+    assert request.bot_alias == "assistant1"
+    assert request.user_id == 1001
+    assert request.text == "hello"
+    assert request.interactive is True
+    assert data["output"] == "assistant runtime result"
 
 
 @pytest.mark.asyncio

@@ -95,10 +95,7 @@ def sync_managed_prompt_files(
     template_text = _load_template(resolved_template_path)
     memory_block = _build_memory_block(home)
     managed_text = _compose_managed_prompt(template_text, memory_block)
-    hash_memory_block = _build_hash_memory_block(home)
-    managed_hash_text = _compose_managed_prompt(template_text, hash_memory_block)
-
-    managed_prompt_hash = compute_managed_prompt_hash(managed_hash_text, managed_hash_text)
+    managed_prompt_hash = compute_managed_prompt_hash(managed_text, managed_text)
 
     return ManagedPromptSyncResult(
         agents_changed=_write_if_changed(home.agents_path, managed_text),
