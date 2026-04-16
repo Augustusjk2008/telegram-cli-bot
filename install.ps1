@@ -575,6 +575,10 @@ function Show-SummaryReport {
     }
 }
 
+if ($env:CLI_BRIDGE_INSTALLER_TEST_SKIP_MAIN -eq "1") {
+    return
+}
+
 try {
     Write-Step "检查仓库文件"
     foreach ($requiredPath in @("requirements.txt", "front\\package.json", ".env.example")) {
