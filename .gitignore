@@ -19,6 +19,8 @@ venv/
 tmp_bot_create_check/
 .web_tunnel_state.json
 test/
+!front/src/test/
+!front/src/test/**
 tests/
 /AGENTS.md
 /CLAUDE.md

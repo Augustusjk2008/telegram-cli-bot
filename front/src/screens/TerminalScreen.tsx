@@ -14,6 +14,7 @@ type Props = {
   preferredWorkingDir: string;
   themeName?: UiThemeName;
   isImmersive?: boolean;
+  embedded?: boolean;
   onToggleImmersive?: () => void;
 };
 
@@ -63,6 +64,7 @@ export function TerminalScreen({
   preferredWorkingDir,
   themeName = DEFAULT_UI_THEME,
   isImmersive = false,
+  embedded = false,
   onToggleImmersive,
 }: Props) {
   const layoutHandleRef = useRef<number | null>(null);
@@ -480,7 +482,7 @@ export function TerminalScreen({
         ) : null}
       </section>
 
-      {isVisible && onToggleImmersive ? (
+      {!embedded && isVisible && onToggleImmersive ? (
         <button
           type="button"
           onClick={onToggleImmersive}
@@ -491,64 +493,66 @@ export function TerminalScreen({
         </button>
       ) : null}
 
-      <div className="grid grid-cols-4 gap-2 border-t border-[var(--border)] bg-[var(--surface)] p-3 pb-safe">
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\u0003")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          Ctrl+C
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\t")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          Tab
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\u001b")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          Esc
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.focus()}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          键盘
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\u001b[A")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          ↑
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\u001b[B")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          ↓
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\u001b[D")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          ←
-        </button>
-        <button
-          type="button"
-          onClick={() => sessionRef.current?.sendControl("\u001b[C")}
-          className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
-        >
-          →
-        </button>
-      </div>
+      {!embedded ? (
+        <div className="grid grid-cols-4 gap-2 border-t border-[var(--border)] bg-[var(--surface)] p-3 pb-safe">
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\u0003")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            Ctrl+C
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\t")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            Tab
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\u001b")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            Esc
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.focus()}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            键盘
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\u001b[A")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\u001b[B")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\u001b[D")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            onClick={() => sessionRef.current?.sendControl("\u001b[C")}
+            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+          >
+            →
+          </button>
+        </div>
+      ) : null}
     </main>
   );
 }

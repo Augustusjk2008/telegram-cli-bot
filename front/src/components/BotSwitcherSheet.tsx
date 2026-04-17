@@ -6,7 +6,7 @@ import { StatusPill } from "./StatusPill";
 type Props = {
   bots: BotSummary[];
   currentAlias: string;
-  onSelect: (alias: string) => void;
+  onSelect: (alias: string) => boolean | Promise<boolean>;
   onManage: () => void;
   onClose: () => void;
 };
@@ -40,12 +40,14 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClo
               <button
                 key={bot.alias}
                 disabled={isOffline}
-                onClick={() => {
+                onClick={async () => {
                   if (isOffline) {
                     return;
                   }
-                  onSelect(bot.alias);
-                  onClose();
+                  const shouldClose = await onSelect(bot.alias);
+                  if (shouldClose !== false) {
+                    onClose();
+                  }
                 }}
                 className={`w-full flex items-center justify-between p-4 rounded-xl border ${
                   isOffline

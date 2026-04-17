@@ -4,8 +4,15 @@
  */
 
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
 import { clsx } from "clsx";
+import { MobileShell, type AppTab } from "./MobileShell";
+import {
+  readStoredViewMode,
+  readViewportWidth,
+  resolveEffectiveLayoutMode,
+  storeViewMode,
+  type ViewMode,
+} from "./layoutMode";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
@@ -17,6 +24,7 @@ import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
+import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
 import {
   APP_NAME,
@@ -164,11 +172,14 @@ export function App() {
   const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
   const [chatBodyLineHeight, setChatBodyLineHeight] = useState<ChatBodyLineHeightName>(() => readStoredChatBodyLineHeight());
   const [chatBodyParagraphSpacing, setChatBodyParagraphSpacing] = useState<ChatBodyParagraphSpacingName>(() => readStoredChatBodyParagraphSpacing());
+  const [viewMode, setViewMode] = useState<ViewMode>(() => readStoredViewMode());
+  const [viewportWidth, setViewportWidth] = useState(() => readViewportWidth());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentTab, setCurrentTab] = useState<"chat" | "files" | "terminal" | "git" | "settings">("chat");
+  const [currentTab, setCurrentTab] = useState<AppTab>("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
   const [showBotManager, setShowBotManager] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [desktopHasDirtyTabs, setDesktopHasDirtyTabs] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
   const [loginError, setLoginError] = useState("");
@@ -180,6 +191,7 @@ export function App() {
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
   const displayBots = useMemo(() => applyUnreadStatus(bots, unreadBots), [bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
+  const effectiveLayoutMode = resolveEffectiveLayoutMode(viewMode, viewportWidth);
   const currentBotSummary = useMemo(() => {
     if (!currentBot) {
       return null;
@@ -193,6 +205,22 @@ export function App() {
     storeBotAlias(alias);
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
+  }
+
+  function commitBotSelection(alias: string | null) {
+    handleSelectBot(alias);
+  }
+
+  function requestBotSelection(alias: string | null) {
+    if (effectiveLayoutMode === "desktop" && desktopHasDirtyTabs) {
+      const confirmed = window.confirm("当前桌面工作台有未保存文件，切换 Bot 会丢失这些修改。确定继续吗？");
+      if (!confirmed) {
+        return false;
+      }
+    }
+    commitBotSelection(alias);
+    setCurrentTab("chat");
+    return true;
   }
 
   async function openBotSwitcher() {
@@ -212,6 +240,21 @@ export function App() {
     }
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
+
+  useEffect(() => {
+    storeViewMode(viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setViewportWidth(readViewportWidth());
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -500,102 +543,68 @@ export function App() {
     );
   }
 
-  return (
-    <div className="flex min-w-0 flex-col h-[100dvh] w-full bg-[var(--bg)] shadow-xl overflow-hidden relative">
-      {!hideOuterChrome ? (
-        <header className="flex items-center justify-between p-3 bg-[var(--surface-strong)] border-b border-[var(--border)] shrink-0">
-          <button
-            onClick={() => {
-              void openBotSwitcher();
-            }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-[var(--border)] transition-colors"
-          >
-            <Menu className="w-5 h-5" />
-            <span className="font-semibold">{currentBot}</span>
-          </button>
-        </header>
-      ) : null}
+  const switcher = showSwitcher ? (
+    <BotSwitcherSheet
+      bots={displayBots}
+      currentAlias={currentBot}
+      onSelect={(alias) => {
+        return requestBotSelection(alias);
+      }}
+      onManage={() => {
+        setShowBotManager(true);
+        setShowSwitcher(false);
+        setIsChatImmersive(false);
+        setIsTerminalImmersive(false);
+      }}
+      onClose={() => setShowSwitcher(false)}
+    />
+  ) : null;
 
-      <div className="flex-1 overflow-hidden relative">
-        {activeScreen}
-      </div>
-
-      {!hideOuterChrome ? (
-        <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
-          <button
-            onClick={() => {
-              setCurrentTab("chat");
-              setIsTerminalImmersive(false);
-            }}
-            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "chat" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-          >
-            <MessageSquare className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-medium">聊天</span>
-          </button>
-          <button
-            onClick={() => {
-              setCurrentTab("files");
-              setIsChatImmersive(false);
-              setIsTerminalImmersive(false);
-            }}
-            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "files" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-          >
-            <Folder className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-medium">文件</span>
-          </button>
-          <button
-            onClick={() => {
-              setCurrentTab("terminal");
-              setIsChatImmersive(false);
-            }}
-            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "terminal" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-          >
-            <SquareTerminal className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-medium">终端</span>
-          </button>
-          <button
-            onClick={() => {
-              setCurrentTab("git");
-              setIsChatImmersive(false);
-              setIsTerminalImmersive(false);
-            }}
-            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "git" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-          >
-            <GitBranch className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-medium">Git</span>
-          </button>
-          <button
-            onClick={() => {
-              setCurrentTab("settings");
-              setIsChatImmersive(false);
-              setIsTerminalImmersive(false);
-            }}
-            className={clsx("flex flex-col items-center p-2 rounded-xl min-w-[64px]", currentTab === "settings" ? "text-[var(--accent)]" : "text-[var(--muted)]")}
-          >
-            <Settings className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-medium">设置</span>
-          </button>
-        </nav>
-      ) : null}
-
-      {showSwitcher ? (
-        <BotSwitcherSheet
-          bots={displayBots}
-          currentAlias={currentBot}
-          onSelect={(alias) => {
-            handleSelectBot(alias);
-            setCurrentTab("chat");
-            setIsTerminalImmersive(false);
+  if (effectiveLayoutMode === "desktop") {
+    return (
+      <>
+        <DesktopWorkbench
+          authToken={readStoredToken()}
+          botAlias={currentBot}
+          botAvatarName={currentBotSummary?.avatarName}
+          userAvatarName={userAvatarName}
+          client={client}
+          themeName={themeName}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          onOpenBotSwitcher={() => {
+            void openBotSwitcher();
           }}
-          onManage={() => {
-            setShowBotManager(true);
-            setShowSwitcher(false);
-            setIsChatImmersive(false);
-            setIsTerminalImmersive(false);
-          }}
-          onClose={() => setShowSwitcher(false)}
+          onDirtyTabsChange={setDesktopHasDirtyTabs}
         />
-      ) : null}
-    </div>
+        {switcher}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <MobileShell
+        currentBot={currentBot}
+        currentTab={currentTab}
+        hideOuterChrome={hideOuterChrome}
+        activeScreen={activeScreen}
+        viewMode={viewMode}
+        onOpenBotSwitcher={() => {
+          void openBotSwitcher();
+        }}
+        onViewModeChange={setViewMode}
+        onTabChange={(tab) => {
+          setCurrentTab(tab);
+          if (tab !== "chat") {
+            setIsChatImmersive(false);
+          }
+          if (tab !== "terminal") {
+            setIsTerminalImmersive(false);
+          }
+        }}
+      />
+      {switcher}
+    </>
   );
 }

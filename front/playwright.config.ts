@@ -10,6 +10,10 @@ export default defineConfig({
   },
   webServer: {
     command: 'npm run dev',
+    env: {
+      ...process.env,
+      VITE_USE_MOCK: 'true',
+    },
     url: 'http://localhost:3000',
     reuseExistingServer: true,
   },

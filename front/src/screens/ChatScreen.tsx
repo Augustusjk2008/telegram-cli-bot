@@ -41,6 +41,7 @@ type Props = {
   userAvatarName?: string;
   isVisible?: boolean;
   isImmersive?: boolean;
+  embedded?: boolean;
   onToggleImmersive?: () => void;
   onUnreadResult?: (botAlias: string) => void;
 };
@@ -513,6 +514,7 @@ export function ChatScreen({
   userAvatarName,
   isVisible = true,
   isImmersive = false,
+  embedded = false,
   onToggleImmersive,
   onUnreadResult,
 }: Props) {
@@ -1123,10 +1125,12 @@ export function ChatScreen({
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
+  const showTopChrome = !embedded && !isImmersive;
+  const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
 
   return (
     <main className="relative flex flex-col h-full">
-      {!isImmersive ? (
+      {showTopChrome ? (
         <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
           <BotIdentity
             alias={botAlias}
@@ -1142,7 +1146,7 @@ export function ChatScreen({
           ) : null}
         </header>
       ) : null}
-      {!isImmersive ? (
+      {showTopChrome ? (
         <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div className="flex gap-2 overflow-x-auto pb-1">
             {botAlias === "main" ? (
@@ -1240,7 +1244,7 @@ export function ChatScreen({
         ))}
         <div ref={bottomAnchorRef} aria-hidden="true" />
       </section>
-      {isVisible && onToggleImmersive ? (
+      {showImmersiveButton ? (
         <button
           type="button"
           onClick={onToggleImmersive}
@@ -1250,7 +1254,7 @@ export function ChatScreen({
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
-      <ChatComposer onSend={handleSend} disabled={isStreaming || loading} compact={isImmersive} />
+      <ChatComposer onSend={handleSend} disabled={isStreaming || loading} compact={isImmersive || embedded} />
 
       {previewName ? (
         <FilePreviewDialog
