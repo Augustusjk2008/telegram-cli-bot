@@ -756,6 +756,13 @@ export function ChatScreen({
     if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
       return;
     }
+    if (scrollContainerRef.current) {
+      try {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      } catch {
+        // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
+      }
+    }
     if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
       bottomAnchorRef.current.scrollIntoView({ block: "end" });
     }
