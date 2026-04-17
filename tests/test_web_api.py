@@ -46,10 +46,13 @@ from bot.web.api_service import (
     kill_user_process,
     list_bots,
     list_system_scripts,
+    create_text_file,
     read_file_content,
+    rename_path,
     run_chat,
     run_cli_chat,
     save_uploaded_file,
+    write_file_content,
 )
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.web import api_service
@@ -638,6 +641,104 @@ def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager:
     assert content["is_full_content"] is False
 
 
+def test_write_file_content_updates_text_and_returns_version(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
+    previous = read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)
+
+    result = write_file_content(
+        web_manager,
+        "main",
+        1001,
+        "notes.txt",
+        "line1\nline2\n",
+        expected_mtime_ns=previous["last_modified_ns"],
+    )
+
+    content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)
+
+    assert result["path"] == "notes.txt"
+    assert result["file_size_bytes"] == len("line1\nline2\n".encode("utf-8"))
+    assert isinstance(result["last_modified_ns"], int)
+    assert result["last_modified_ns"] >= previous["last_modified_ns"]
+    assert content["content"] == "line1\nline2\n"
+    assert content["last_modified_ns"] == result["last_modified_ns"]
+
+
+def test_write_file_content_rejects_absolute_path_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    outside_dir = temp_dir / "outside"
+    outside_dir.mkdir()
+    target = outside_dir / "notes.txt"
+    target.write_text("outside\n", encoding="utf-8")
+
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        write_file_content(web_manager, "main", 1001, str(target), "changed\n")
+
+    assert exc_info.value.code == "unsafe_write_path"
+    assert target.read_text(encoding="utf-8") == "outside\n"
+
+
+def test_write_file_content_rejects_relative_escape_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    outside_file = temp_dir / "notes.txt"
+    outside_file.write_text("outside\n", encoding="utf-8")
+
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        write_file_content(web_manager, "main", 1001, "../notes.txt", "changed\n")
+
+    assert exc_info.value.code == "unsafe_write_path"
+    assert outside_file.read_text(encoding="utf-8") == "outside\n"
+
+
+def test_write_file_content_rejects_stale_version(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
+    previous = read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)
+    write_file_content(web_manager, "main", 1001, "notes.txt", "line2\n", expected_mtime_ns=previous["last_modified_ns"])
+
+    with pytest.raises(WebApiError) as exc_info:
+        write_file_content(web_manager, "main", 1001, "notes.txt", "line3\n", expected_mtime_ns=previous["last_modified_ns"])
+
+    assert exc_info.value.code == "file_version_conflict"
+    assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line2\n"
+
+
+def test_write_file_content_rejects_content_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
+
+    with pytest.raises(WebApiError) as exc_info:
+        write_file_content(web_manager, "main", 1001, "notes.txt", "a" * (512 * 1024 + 1))
+
+    assert exc_info.value.code == "file_too_large_for_editor"
+    assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line1\n"
+
+
+def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager, temp_dir: Path):
+    binary_bytes = b"\xff\xfe\xfd\x00"
+    save_uploaded_file(web_manager, "main", 1001, "notes.bin", binary_bytes)
+
+    with pytest.raises(WebApiError) as exc_info:
+        write_file_content(web_manager, "main", 1001, "notes.bin", "changed\n")
+
+    assert exc_info.value.code == "not_text_file"
+    assert (temp_dir / "notes.bin").read_bytes() == binary_bytes
+
+
+def test_write_file_content_rejects_existing_file_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"a" * (512 * 1024 + 1))
+
+    with pytest.raises(WebApiError) as exc_info:
+        write_file_content(web_manager, "main", 1001, "notes.txt", "changed\n")
+
+    assert exc_info.value.code == "file_too_large_for_editor"
+    assert (temp_dir / "notes.txt").stat().st_size == 512 * 1024 + 1
+
+
 def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -648,6 +749,86 @@ def test_create_directory_creates_folder_in_current_browser_dir(web_manager: Mul
     assert result["name"] == "docs"
     assert result["created_path"] == str(workspace / "docs")
     assert (workspace / "docs").is_dir()
+
+
+def test_create_text_file_creates_file_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = create_text_file(web_manager, "main", 1001, "notes.md", "# hello\n")
+
+    target = workspace / "notes.md"
+
+    assert target.read_text(encoding="utf-8") == "# hello\n"
+    assert result["path"] == "notes.md"
+    assert result["file_size_bytes"] == len("# hello\n".encode("utf-8"))
+    assert isinstance(result["last_modified_ns"], int)
+
+
+def test_create_text_file_rejects_existing_target(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.md").write_text("old\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        create_text_file(web_manager, "main", 1001, "notes.md", "# hello\n")
+
+    assert exc_info.value.code == "file_already_exists"
+    assert (workspace / "notes.md").read_text(encoding="utf-8") == "old\n"
+
+
+def test_create_text_file_rejects_content_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        create_text_file(web_manager, "main", 1001, "notes.md", "a" * (512 * 1024 + 1))
+
+    assert exc_info.value.code == "file_too_large_for_editor"
+    assert not (workspace / "notes.md").exists()
+
+
+def test_create_text_file_rejects_path_like_filename(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        create_text_file(web_manager, "main", 1001, "docs/notes.md", "")
+
+    assert exc_info.value.code == "invalid_filename"
+
+
+def test_rename_path_renames_file_in_place(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    source = workspace / "notes.md"
+    source.write_text("# hello\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = rename_path(web_manager, "main", 1001, "notes.md", "draft.md")
+
+    assert result["old_path"] == "notes.md"
+    assert result["path"] == "draft.md"
+    assert not source.exists()
+    assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
+
+
+def test_rename_path_rejects_path_outside_current_directory_shape(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    target = workspace / "docs"
+    target.mkdir(parents=True)
+    (target / "notes.md").write_text("# hello\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        rename_path(web_manager, "main", 1001, "docs/notes.md", "draft.md")
+
+    assert exc_info.value.code == "invalid_rename_path"
+    assert (target / "notes.md").exists()
 
 
 def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiBotManager, temp_dir: Path):
@@ -964,6 +1145,83 @@ async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch:
             payload = await resp.json()
             assert payload["data"]["name"] == "docs"
             assert (workspace / "docs").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_write_file_route_updates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.md"
+    target.write_text("# hello\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+
+    previous = read_file_content(web_manager, "main", 1001, "notes.md", mode="cat", lines=0)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post(
+                "/api/bots/main/files/write",
+                json={
+                    "path": "notes.md",
+                    "content": "# updated\n",
+                    "expected_mtime_ns": previous["last_modified_ns"],
+                },
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["path"] == "notes.md"
+    assert target.read_text(encoding="utf-8") == "# updated\n"
+
+
+@pytest.mark.asyncio
+async def test_create_text_file_route_creates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/create", json={"filename": "notes.md", "content": "# hello\n"})
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["path"] == "notes.md"
+    assert (workspace / "notes.md").read_text(encoding="utf-8") == "# hello\n"
+
+
+@pytest.mark.asyncio
+async def test_rename_path_route_renames_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.md").write_text("# hello\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/rename", json={"path": "notes.md", "new_name": "draft.md"})
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["old_path"] == "notes.md"
+    assert payload["data"]["path"] == "draft.md"
+    assert not (workspace / "notes.md").exists()
+    assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
 
 
 @pytest.mark.asyncio

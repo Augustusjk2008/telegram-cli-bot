@@ -15,10 +15,13 @@ import type {
   CreateBotInput,
   DirectoryListing,
   AvatarAsset,
+  FileCreateResult,
   GitActionResult,
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  FileRenameResult,
+  FileWriteResult,
   PublicHostInfo,
   SessionState,
   SystemScript,
@@ -143,6 +146,8 @@ export class MockWebBotClient implements WebBotClient {
   ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
+  private fileContents = new Map<string, string>();
+  private fileVersions = new Map<string, number>();
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -183,6 +188,34 @@ export class MockWebBotClient implements WebBotClient {
 
   private cronRunKey(botAlias: string, jobId: string): string {
     return `${botAlias}:${jobId}`;
+  }
+
+  private fileKey(botAlias: string, browserPath: string, filename: string): string {
+    return `${botAlias}:${browserPath}:${filename}`;
+  }
+
+  private getFileContent(botAlias: string, browserPath: string, filename: string): string {
+    const key = this.fileKey(botAlias, browserPath, filename);
+    if (this.fileContents.has(key)) {
+      return this.fileContents.get(key) || "";
+    }
+    return `Mock full content for ${filename}\n\nThis is the full file content.`;
+  }
+
+  private getFileVersion(botAlias: string, browserPath: string, filename: string): number {
+    const key = this.fileKey(botAlias, browserPath, filename);
+    if (!this.fileVersions.has(key)) {
+      this.fileVersions.set(key, Date.now() * 1_000_000);
+    }
+    return this.fileVersions.get(key) || Date.now() * 1_000_000;
+  }
+
+  private setFileState(botAlias: string, browserPath: string, filename: string, content: string): number {
+    const key = this.fileKey(botAlias, browserPath, filename);
+    const version = Date.now() * 1_000_000 + Math.floor(Math.random() * 1_000);
+    this.fileContents.set(key, content);
+    this.fileVersions.set(key, version);
+    return version;
   }
 
   private getAssistantCronJobs(botAlias: string): AssistantCronJob[] {
@@ -351,20 +384,125 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async readFile(botAlias: string, filename: string) {
+    const browserPath = this.getBrowserPath(botAlias);
+    const content = this.getFileContent(botAlias, browserPath, filename);
     return {
-      content: `Mock preview for ${filename}\n\nThis is a local preview.`,
+      content,
       mode: "head" as const,
-      fileSizeBytes: 1024,
-      isFullContent: false,
+      fileSizeBytes: new TextEncoder().encode(content).length,
+      isFullContent: true,
+      lastModifiedNs: this.getFileVersion(botAlias, browserPath, filename),
     };
   }
 
   async readFileFull(botAlias: string, filename: string) {
+    const browserPath = this.getBrowserPath(botAlias);
+    const content = this.getFileContent(botAlias, browserPath, filename);
     return {
-      content: `Mock full content for ${filename}\n\nThis is the full file content.`,
+      content,
       mode: "cat" as const,
-      fileSizeBytes: 1024,
+      fileSizeBytes: new TextEncoder().encode(content).length,
       isFullContent: true,
+      lastModifiedNs: this.getFileVersion(botAlias, browserPath, filename),
+    };
+  }
+
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: number): Promise<FileWriteResult> {
+    const browserPath = this.getBrowserPath(botAlias);
+    const currentVersion = this.getFileVersion(botAlias, browserPath, path);
+    if (expectedMtimeNs !== undefined && expectedMtimeNs !== currentVersion) {
+      throw new Error("文件已被修改，请重新打开后再试");
+    }
+
+    const nextVersion = this.setFileState(botAlias, browserPath, path, content);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const currentEntries = [...(botFiles[browserPath] || [])];
+    botFiles[browserPath] = currentEntries.map((entry) =>
+      entry.name === path
+        ? {
+            ...entry,
+            size: new TextEncoder().encode(content).length,
+            updatedAt: new Date().toISOString(),
+          }
+        : entry,
+    );
+
+    return {
+      path,
+      fileSizeBytes: new TextEncoder().encode(content).length,
+      lastModifiedNs: nextVersion,
+    };
+  }
+
+  async createTextFile(botAlias: string, filename: string, content = ""): Promise<FileCreateResult> {
+    const fileName = filename.trim();
+    if (!fileName) {
+      throw new Error("文件名不能为空");
+    }
+
+    const browserPath = this.getBrowserPath(botAlias);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const currentEntries = [...(botFiles[browserPath] || [])];
+    if (currentEntries.some((entry) => entry.name === fileName)) {
+      throw new Error("文件已存在");
+    }
+
+    currentEntries.push({
+      name: fileName,
+      isDir: false,
+      size: new TextEncoder().encode(content).length,
+      updatedAt: new Date().toISOString(),
+    });
+    currentEntries.sort((left, right) => {
+      if (left.isDir !== right.isDir) {
+        return left.isDir ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, "zh-CN");
+    });
+    botFiles[browserPath] = currentEntries;
+
+    const nextVersion = this.setFileState(botAlias, browserPath, fileName, content);
+    return {
+      path: fileName,
+      fileSizeBytes: new TextEncoder().encode(content).length,
+      lastModifiedNs: nextVersion,
+    };
+  }
+
+  async renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult> {
+    const browserPath = this.getBrowserPath(botAlias);
+    const nextName = newName.trim();
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const currentEntries = [...(botFiles[browserPath] || [])];
+    if (currentEntries.some((entry) => entry.name === nextName)) {
+      throw new Error("目标已存在");
+    }
+
+    const source = currentEntries.find((entry) => entry.name === path);
+    if (!source || source.isDir) {
+      throw new Error("文件不存在");
+    }
+
+    botFiles[browserPath] = currentEntries.map((entry) =>
+      entry.name === path
+        ? {
+            ...entry,
+            name: nextName,
+            updatedAt: new Date().toISOString(),
+          }
+        : entry,
+    );
+
+    const content = this.getFileContent(botAlias, browserPath, path);
+    const version = this.getFileVersion(botAlias, browserPath, path);
+    this.fileContents.delete(this.fileKey(botAlias, browserPath, path));
+    this.fileVersions.delete(this.fileKey(botAlias, browserPath, path));
+    this.fileContents.set(this.fileKey(botAlias, browserPath, nextName), content);
+    this.fileVersions.set(this.fileKey(botAlias, browserPath, nextName), version);
+
+    return {
+      oldPath: path,
+      path: nextName,
     };
   }
 

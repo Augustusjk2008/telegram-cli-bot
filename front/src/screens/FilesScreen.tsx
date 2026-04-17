@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, FolderPlus, House, Upload } from "lucide-react";
+import { ChevronLeft, FilePlus, FolderPlus, House, Upload } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
+import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
+import { FileNameDialog } from "../components/FileNameDialog";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileEntry, FileReadResult } from "../services/types";
@@ -29,6 +31,23 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
+  const [editorPath, setEditorPath] = useState("");
+  const [editorContent, setEditorContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorError, setEditorError] = useState("");
+  const [editorStatusText, setEditorStatusText] = useState("");
+  const [editorLastModifiedNs, setEditorLastModifiedNs] = useState<number | undefined>(undefined);
+  const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
+  const [pendingFileName, setPendingFileName] = useState("");
+  const [createFileBusy, setCreateFileBusy] = useState(false);
+  const [createFileError, setCreateFileError] = useState("");
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameTargetPath, setRenameTargetPath] = useState("");
+  const [renameValue, setRenameValue] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState("");
 
   async function loadListing() {
     setLoading(true);
@@ -48,6 +67,9 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   useEffect(() => {
     void loadListing();
   }, [botAlias, client]);
+
+  const isEditorOpen = Boolean(editorPath);
+  const isDirty = isEditorOpen && editorContent !== savedContent;
 
   const handleDirClick = async (name: string) => {
     try {
@@ -148,11 +170,170 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     await loadPreview(name, "preview");
   };
 
+  const clearEditor = () => {
+    setEditorPath("");
+    setEditorContent("");
+    setSavedContent("");
+    setEditorLoading(false);
+    setEditorSaving(false);
+    setEditorError("");
+    setEditorStatusText("");
+    setEditorLastModifiedNs(undefined);
+  };
+
+  const handleOpenEditor = async (name: string) => {
+    setError("");
+    setEditorError("");
+    setEditorStatusText("");
+    setEditorLoading(true);
+    try {
+      const result = await client.readFileFull(botAlias, name);
+      setPreviewName("");
+      setPreviewContent("");
+      setPreviewResult(null);
+      setEditorPath(name);
+      setEditorContent(result.content || "");
+      setSavedContent(result.content || "");
+      setEditorLastModifiedNs(result.lastModifiedNs);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "读取文件失败";
+      setEditorError(message);
+      setError(message);
+      if (previewName === name) {
+        setPreviewName("");
+        setPreviewContent("");
+        setPreviewResult(null);
+      }
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const handleEditorChange = (value: string) => {
+    setEditorContent(value);
+    setEditorStatusText("");
+  };
+
+  const handleCloseEditor = () => {
+    if (isDirty && !window.confirm("文件尚未保存，确定放弃修改吗？")) {
+      return;
+    }
+    clearEditor();
+  };
+
+  const handleSaveEditor = async () => {
+    if (!editorPath) {
+      return;
+    }
+
+    setEditorSaving(true);
+    setEditorError("");
+    try {
+      const result = await client.writeFile(botAlias, editorPath, editorContent, editorLastModifiedNs);
+      setSavedContent(editorContent);
+      setEditorLastModifiedNs(result.lastModifiedNs);
+      setEditorStatusText("已保存");
+      if (previewName === editorPath) {
+        setPreviewContent(editorContent || "文件为空");
+        setPreviewResult((current) => current
+          ? {
+              ...current,
+              content: editorContent,
+              mode: "cat",
+              isFullContent: true,
+              fileSizeBytes: result.fileSizeBytes,
+              lastModifiedNs: result.lastModifiedNs,
+            }
+          : current);
+      }
+      await loadListing();
+    } catch (err) {
+      setEditorError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setEditorSaving(false);
+    }
+  };
+
+  const handleOpenCreateFileDialog = () => {
+    setPendingFileName("");
+    setCreateFileError("");
+    setShowCreateFileDialog(true);
+  };
+
+  const handleCloseCreateFileDialog = () => {
+    if (createFileBusy) {
+      return;
+    }
+    setShowCreateFileDialog(false);
+    setPendingFileName("");
+    setCreateFileError("");
+  };
+
+  const handleCreateFile = async () => {
+    setCreateFileBusy(true);
+    setCreateFileError("");
+    try {
+      const result = await client.createTextFile(botAlias, pendingFileName.trim(), "");
+      setShowCreateFileDialog(false);
+      setPendingFileName("");
+      setEditorPath(result.path);
+      setEditorContent("");
+      setSavedContent("");
+      setEditorError("");
+      setEditorStatusText("");
+      setEditorLastModifiedNs(result.lastModifiedNs);
+      await loadListing();
+    } catch (err) {
+      setCreateFileError(err instanceof Error ? err.message : "新建文件失败");
+    } finally {
+      setCreateFileBusy(false);
+    }
+  };
+
+  const handleOpenRenameDialog = (path: string) => {
+    setRenameTargetPath(path);
+    setRenameValue(path);
+    setRenameError("");
+    setShowRenameDialog(true);
+  };
+
+  const handleCloseRenameDialog = () => {
+    if (renameBusy) {
+      return;
+    }
+    setShowRenameDialog(false);
+    setRenameTargetPath("");
+    setRenameValue("");
+    setRenameError("");
+  };
+
+  const handleRenameFile = async () => {
+    setRenameBusy(true);
+    setRenameError("");
+    try {
+      const result = await client.renamePath(botAlias, renameTargetPath, renameValue.trim());
+      setShowRenameDialog(false);
+      setRenameTargetPath("");
+      setRenameValue("");
+      if (previewName === result.oldPath) {
+        setPreviewName(result.path);
+      }
+      if (editorPath === result.oldPath) {
+        setEditorPath(result.path);
+      }
+      await loadListing();
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "重命名失败");
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
   return (
     <main className="flex flex-col h-full bg-[var(--bg)]">
       <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)] flex items-center justify-between">
         <div className="flex items-center gap-2 overflow-hidden">
-          {currentPath !== "/" && currentPath !== "." && !isVirtualRoot ? (
+          {currentPath !== "/" && currentPath !== "." && !isVirtualRoot && !isEditorOpen ? (
             <button onClick={() => void handleBack()} className="p-1 rounded-md hover:bg-[var(--border)]">
               <ChevronLeft className="w-5 h-5" />
             </button>
@@ -172,65 +353,96 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
             <p className="truncate text-xs text-[var(--muted)]">{currentPath}</p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Home"
-            title="回到工作目录"
-            onClick={() => void handleHome()}
-            className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
-          >
-            <House className="w-5 h-5" />
-          </button>
-          {!isVirtualRoot ? (
+        {!isEditorOpen ? (
+          <div className="flex items-center gap-1">
             <button
               type="button"
-              aria-label="新建文件夹"
-              title="新建文件夹"
-              onClick={() => void handleCreateDirectory()}
+              aria-label="Home"
+              title="回到工作目录"
+              onClick={() => void handleHome()}
               className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
             >
-              <FolderPlus className="w-5 h-5" />
+              <House className="w-5 h-5" />
             </button>
-          ) : null}
-          {!isVirtualRoot ? (
-            <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
-              <Upload className="w-5 h-5" />
-              <input
-                type="file"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (!file) return;
-                  void client.uploadFile(botAlias, file)
-                    .then(() => loadListing())
-                    .catch((err: Error) => setError(err.message || "上传失败"));
-                }}
-              />
-            </label>
-          ) : null}
-        </div>
-      </header>
-
-      <section className="flex-1 overflow-y-auto p-4">
-        {error ? (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+            {!isVirtualRoot ? (
+              <button
+                type="button"
+                aria-label="新建文件"
+                title="新建文件"
+                onClick={() => void handleOpenCreateFileDialog()}
+                className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+              >
+                <FilePlus className="w-5 h-5" />
+              </button>
+            ) : null}
+            {!isVirtualRoot ? (
+              <button
+                type="button"
+                aria-label="新建文件夹"
+                title="新建文件夹"
+                onClick={() => void handleCreateDirectory()}
+                className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+              >
+                <FolderPlus className="w-5 h-5" />
+              </button>
+            ) : null}
+            {!isVirtualRoot ? (
+              <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
+                <Upload className="w-5 h-5" />
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    void client.uploadFile(botAlias, file)
+                      .then(() => loadListing())
+                      .catch((err: Error) => setError(err.message || "上传失败"));
+                  }}
+                />
+              </label>
+            ) : null}
           </div>
         ) : null}
-        {loading ? (
-          <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
-        ) : (
-          <FileList
-            files={files}
-            onDirClick={(name) => void handleDirClick(name)}
-            onFileClick={(name) => void handleFileClick(name)}
-            onDownload={(file) => void handleDownloadEntry(file)}
-            onDelete={(file) => void handleDeleteEntry(file)}
-            allowDelete={!isVirtualRoot}
-          />
-        )}
-      </section>
+      </header>
+
+      {isEditorOpen ? (
+        <FileEditorSurface
+          path={editorPath}
+          value={editorContent}
+          loading={editorLoading}
+          saving={editorSaving}
+          dirty={isDirty}
+          canSave={isDirty}
+          statusText={editorStatusText}
+          error={editorError}
+          onChange={handleEditorChange}
+          onSave={() => void handleSaveEditor()}
+          onClose={handleCloseEditor}
+        />
+      ) : (
+        <section className="flex-1 overflow-y-auto p-4">
+          {error ? (
+            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
+          {loading ? (
+            <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
+          ) : (
+            <FileList
+              files={files}
+              onDirClick={(name) => void handleDirClick(name)}
+              onFileClick={(name) => void handleFileClick(name)}
+              onEdit={(file) => void handleOpenEditor(file.name)}
+              onRename={(file) => void handleOpenRenameDialog(file.name)}
+              onDownload={(file) => void handleDownloadEntry(file)}
+              onDelete={(file) => void handleDeleteEntry(file)}
+              allowDelete={!isVirtualRoot}
+            />
+          )}
+        </section>
+      )}
 
       {previewName ? (
         <FilePreviewDialog
@@ -245,7 +457,34 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           }}
           statusText={previewStatusText}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
+          onEdit={() => void handleOpenEditor(previewName)}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
+        />
+      ) : null}
+      {showCreateFileDialog ? (
+        <FileNameDialog
+          title="新建文件"
+          label="文件名"
+          value={pendingFileName}
+          confirmText="创建"
+          busy={createFileBusy}
+          error={createFileError}
+          onChange={setPendingFileName}
+          onConfirm={() => void handleCreateFile()}
+          onClose={handleCloseCreateFileDialog}
+        />
+      ) : null}
+      {showRenameDialog ? (
+        <FileNameDialog
+          title="重命名文件"
+          label="文件名"
+          value={renameValue}
+          confirmText="重命名"
+          busy={renameBusy}
+          error={renameError}
+          onChange={setRenameValue}
+          onConfirm={() => void handleRenameFile()}
+          onClose={handleCloseRenameDialog}
         />
       ) : null}
     </main>

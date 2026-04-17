@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
 import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
@@ -417,7 +417,7 @@ export function App() {
 
   const hideOuterChrome = (currentTab === "chat" && isChatImmersive)
     || (currentTab === "terminal" && isTerminalImmersive);
-  let activeScreen: JSX.Element | null = null;
+  let activeScreen: ReactNode = null;
 
   if (currentTab === "chat") {
     activeScreen = (

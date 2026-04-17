@@ -1,16 +1,18 @@
-import { Download, FileText, Folder, Trash2 } from "lucide-react";
+import { Download, FileText, Folder, Pencil, SquarePen, Trash2 } from "lucide-react";
 import { FileEntry } from "../services/types";
 
 type Props = {
   files: FileEntry[];
   onDirClick: (name: string) => void;
   onFileClick: (name: string) => void;
+  onEdit?: (file: FileEntry) => void;
+  onRename?: (file: FileEntry) => void;
   onDownload: (file: FileEntry) => void;
   onDelete: (file: FileEntry) => void;
   allowDelete?: boolean;
 };
 
-export function FileList({ files, onDirClick, onFileClick, onDownload, onDelete, allowDelete = true }: Props) {
+export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onDownload, onDelete, allowDelete = true }: Props) {
   if (files.length === 0) {
     return <div className="text-center text-[var(--muted)] py-8">目录为空</div>;
   }
@@ -44,6 +46,28 @@ export function FileList({ files, onDirClick, onFileClick, onDownload, onDelete,
               </span>
             )}
           </button>
+          {!file.isDir && onEdit ? (
+            <button
+              type="button"
+              aria-label={`编辑 ${file.name}`}
+              title={`编辑 ${file.name}`}
+              onClick={() => onEdit(file)}
+              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--accent)] hover:bg-[var(--surface-strong)]"
+            >
+              <SquarePen className="w-4 h-4" />
+            </button>
+          ) : null}
+          {!file.isDir && onRename ? (
+            <button
+              type="button"
+              aria-label={`重命名 ${file.name}`}
+              title={`重命名 ${file.name}`}
+              onClick={() => onRename(file)}
+              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--accent)] hover:bg-[var(--surface-strong)]"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          ) : null}
           {!file.isDir ? (
             <button
               type="button"

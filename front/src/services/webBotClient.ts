@@ -13,7 +13,10 @@ import type {
   CliParamsPayload,
   CreateBotInput,
   DirectoryListing,
+  FileCreateResult,
   FileReadResult,
+  FileRenameResult,
+  FileWriteResult,
   AvatarAsset,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
@@ -49,6 +52,9 @@ export interface WebBotClient {
   deletePath(botAlias: string, path: string): Promise<void>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
+  writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: number): Promise<FileWriteResult>;
+  createTextFile(botAlias: string, filename: string, content?: string): Promise<FileCreateResult>;
+  renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string): Promise<void>;
   resetSession(botAlias: string): Promise<void>;

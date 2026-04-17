@@ -51,6 +51,7 @@ from .api_service import (
     build_bot_summary,
     change_working_directory,
     create_directory,
+    create_text_file,
     delete_path,
     execute_shell_command,
     get_directory_listing,
@@ -69,6 +70,7 @@ from .api_service import (
     list_assistant_cron_runs,
     list_system_scripts,
     read_file_content,
+    rename_path,
     remove_managed_bot,
     reject_assistant_proposal,
     reset_user_session,
@@ -90,6 +92,7 @@ from .api_service import (
     update_bot_cli,
     rename_managed_bot,
     update_bot_workdir,
+    write_file_content,
 )
 from .git_service import (
     commit_git_changes,
@@ -850,6 +853,34 @@ class WebApiServer:
         data = create_directory(self.manager, alias, auth.user_id, body.get("name", ""))
         return _json({"ok": True, "data": data})
 
+    async def write_file_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = write_file_content(
+            self.manager,
+            alias,
+            auth.user_id,
+            body.get("path", ""),
+            body.get("content", ""),
+            expected_mtime_ns=body.get("expected_mtime_ns"),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def create_text_file_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = create_text_file(self.manager, alias, auth.user_id, body.get("filename", ""), body.get("content", ""))
+        return _json({"ok": True, "data": data})
+
+    async def rename_path_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = rename_path(self.manager, alias, auth.user_id, body.get("path", ""), body.get("new_name", ""))
+        return _json({"ok": True, "data": data})
+
     async def delete_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -1226,6 +1257,9 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/git/stash/pop", self.post_git_stash_pop)
         app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
         app.router.add_post("/api/bots/{alias}/files/mkdir", self.create_directory_view)
+        app.router.add_post("/api/bots/{alias}/files/write", self.write_file_view)
+        app.router.add_post("/api/bots/{alias}/files/create", self.create_text_file_view)
+        app.router.add_post("/api/bots/{alias}/files/rename", self.rename_path_view)
         app.router.add_post("/api/bots/{alias}/files/delete", self.delete_path_view)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)

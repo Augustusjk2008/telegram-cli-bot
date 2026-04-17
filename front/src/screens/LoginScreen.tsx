@@ -13,12 +13,9 @@ type Props = {
 };
 
 export function LoginScreen({ onLogin, isLoading, error, hostInfo }: Props) {
-  const hostInfoItems = [
-    { label: "用户名", value: hostInfo?.username || "读取中..." },
-    { label: "操作系统", value: hostInfo?.operatingSystem || "读取中..." },
-    { label: "硬件平台", value: hostInfo?.hardwarePlatform || "读取中..." },
-    { label: "规格", value: hostInfo?.hardwareSpec || "读取中..." },
-  ];
+  const hostSummary = hostInfo
+    ? `${hostInfo.username} @ ${hostInfo.operatingSystem} · ${hostInfo.hardwarePlatform} · ${hostInfo.hardwareSpec}`
+    : "读取主机信息中...";
 
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[var(--bg)] px-4 py-5 sm:px-6 sm:py-6">
@@ -55,27 +52,9 @@ export function LoginScreen({ onLogin, isLoading, error, hostInfo }: Props) {
                 <p className="max-w-2xl text-lg font-semibold text-[var(--accent)] sm:text-xl">
                   {APP_TAGLINE}
                 </p>
-                <div className="max-w-2xl">
-                  <div className="inline-flex items-center gap-2 border border-[var(--accent-outline)] bg-[rgba(3,13,22,0.45)] px-3 py-1 text-[11px] font-mono tracking-[0.22em] text-[var(--accent-strong)]">
-                    <span className="h-2 w-2 bg-[var(--accent)] shadow-[0_0_16px_var(--accent)]" />
-                    <span>主机信息</span>
-                  </div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    {hostInfoItems.map((item) => (
-                      <div
-                        key={item.label}
-                        className="border border-[var(--accent-outline)] bg-[rgba(3,13,22,0.45)] px-4 py-3"
-                      >
-                        <div className="text-[11px] font-mono tracking-[0.16em] text-[var(--accent-strong)]">
-                          {item.label}
-                        </div>
-                        <div className="mt-2 break-all text-sm leading-6 text-[var(--text)]">
-                          {item.value}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <p className="max-w-2xl break-all text-sm leading-6 text-[var(--muted)]">
+                  {hostSummary}
+                </p>
               </div>
 
               <div

@@ -8,6 +8,7 @@ type Props = {
   statusText?: string;
   onClose: () => void;
   onLoadFull?: () => void;
+  onEdit?: () => void;
   onDownload?: () => void;
   onFileLinkClick?: (href: string) => void;
 };
@@ -20,6 +21,7 @@ export function FilePreviewDialog({
   statusText = "",
   onClose,
   onLoadFull,
+  onEdit,
   onDownload,
   onFileLinkClick,
 }: Props) {
@@ -63,6 +65,15 @@ export function FilePreviewDialog({
                 className="rounded-lg border border-[var(--border)] px-4 py-2 hover:bg-[var(--surface-strong)] disabled:opacity-60"
               >
                 {loading ? "读取中..." : "全文读取"}
+              </button>
+            ) : null}
+            {onEdit ? (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="rounded-lg border border-[var(--border)] px-4 py-2 hover:bg-[var(--surface-strong)]"
+              >
+                编辑
               </button>
             ) : null}
             {onDownload ? (

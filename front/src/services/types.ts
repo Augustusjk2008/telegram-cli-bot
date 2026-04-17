@@ -114,6 +114,24 @@ export type FileReadResult = {
   workingDir?: string;
   fileSizeBytes?: number;
   isFullContent?: boolean;
+  lastModifiedNs?: number;
+};
+
+export type FileWriteResult = {
+  path: string;
+  fileSizeBytes: number;
+  lastModifiedNs: number;
+};
+
+export type FileCreateResult = {
+  path: string;
+  fileSizeBytes: number;
+  lastModifiedNs: number;
+};
+
+export type FileRenameResult = {
+  oldPath: string;
+  path: string;
 };
 
 export type PublicHostInfo = {

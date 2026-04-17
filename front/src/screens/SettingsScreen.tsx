@@ -291,9 +291,14 @@ export function SettingsScreen({
       .then(([overviewResult, cliParamsResult, tunnelResult, gitProxyResult, updateResult, avatarAssetsResult]) => {
         if (cancelled) return;
 
-        if (overviewResult.status !== "fulfilled" || cliParamsResult.status !== "fulfilled") {
-          const reason = overviewResult.status !== "fulfilled" ? overviewResult.reason : cliParamsResult.reason;
-          setError(getErrorMessage(reason, "加载设置失败"));
+        if (overviewResult.status !== "fulfilled") {
+          setError(getErrorMessage(overviewResult.reason, "加载设置失败"));
+          setLoading(false);
+          return;
+        }
+
+        if (cliParamsResult.status !== "fulfilled") {
+          setError(getErrorMessage(cliParamsResult.reason, "加载设置失败"));
           setLoading(false);
           return;
         }
