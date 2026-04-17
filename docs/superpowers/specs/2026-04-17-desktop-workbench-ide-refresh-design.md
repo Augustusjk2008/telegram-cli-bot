@@ -19,7 +19,7 @@ The change is deliberately desktop-only. Mobile screens, backend APIs, and the e
   - center editor
   - bottom terminal
   - right AI chat
-- Use a VSCode-like deep dark visual system for desktop workbench mode.
+- Make the desktop workbench feel like an IDE while preserving the current theme palette system.
 - Add stronger desktop shell structure:
   - title bar
   - activity rail
@@ -39,13 +39,14 @@ The change is deliberately desktop-only. Mobile screens, backend APIs, and the e
 - No split editors.
 - No backend API changes.
 - No rewrite of chat or terminal business logic.
-- No attempt to make the whole application adopt the new IDE theme outside the desktop workbench.
+- No forced replacement of the existing theme palette system.
 
 ## User Decisions Captured In This Design
 
-- Desktop workbench should move toward a VSCode-like visual language.
+- Desktop workbench should move toward a VSCode-like shell and interaction language.
 - The desktop shell should keep the current four-pane structure rather than collapsing terminal and chat into one shared panel.
 - The work should cover the whole desktop workbench, not just the file area.
+- The current application color themes should be preserved.
 
 ## User Experience
 
@@ -189,15 +190,15 @@ The status bar should be informational, always visible, and low height.
 
 ## Visual System
 
-### Desktop-Only IDE Token Scope
+### Theme Preservation
 
-Do not globally replace the existing application themes. Instead, scope a desktop-only IDE token layer to the workbench root.
+Do not introduce a desktop-only replacement theme. The desktop workbench should preserve the current application theme system and derive its IDE shell styling from the active theme.
 
 Recommended approach:
 
-- keep existing global tokens and theme selection machinery
-- add a workbench-specific token scope at the desktop workbench root
-- override only the desktop workbench internals with IDE-oriented values
+- keep the existing global tokens and theme selection machinery
+- add only the minimum workbench-specific aliases needed for shell structure
+- map those aliases back to the active theme instead of forcing a new dark palette
 
 Recommended token categories:
 
@@ -213,7 +214,7 @@ Recommended token categories:
 - terminal dock background
 - editor canvas background
 
-This lets the desktop workbench stay VSCode-like even if the rest of the application still supports broader themes.
+These values should still read as the currently selected theme, just with denser IDE-style structure and hierarchy.
 
 ### Shape And Density
 
@@ -228,7 +229,7 @@ Rules:
 - thinner separators
 - reduced internal padding in embedded desktop panes
 
-The result should feel dense and tool-like, not decorative.
+The result should feel dense and tool-like, not decorative, while still matching the active theme.
 
 ## Architecture
 
@@ -392,9 +393,9 @@ The new shell must not break the existing desktop persistence and resize tests.
 
 The user explicitly wants the broader desktop workbench improved, but not replaced with a different docking model. Keeping the current four-pane arrangement delivers the IDE feel while preserving the existing state and resize logic.
 
-### Why Use A Desktop-Scoped Theme Layer
+### Why Keep The Existing Theme System
 
-The rest of the application still serves mobile and non-workbench screens. A workbench-scoped IDE token layer avoids destabilizing those screens while giving desktop the stronger visual identity the user asked for.
+The user wants the workbench structure and interaction model to move toward an IDE, but does not want the existing color themes discarded. Preserving the current theme system keeps visual continuity across the application and narrows implementation risk to shell structure and density changes.
 
 ### Why Reuse Embedded Chat And Terminal Logic
 
