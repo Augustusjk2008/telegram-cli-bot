@@ -162,9 +162,11 @@ def test_install_ps1_check_only_mode_warns_when_no_cli():
     output = result.stdout + result.stderr
 
     assert result.returncode == 0, output
-    assert "[警告]" in output
-    assert "codex" in output.lower()
-    assert "claude" in output.lower()
+    # PowerShell 5.1 redirected output can mangle non-ASCII warning prefixes on some hosts.
+    lowered_output = output.lower()
+    assert "codex --version" in lowered_output
+    assert "claude --version" in lowered_output
+    assert "cli_type / cli_path" in lowered_output
 
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
