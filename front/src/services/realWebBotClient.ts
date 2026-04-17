@@ -26,6 +26,7 @@ import type {
   FileEntry,
   FileReadMode,
   FileReadResult,
+  PublicHostInfo,
   RunningReply,
   SessionState,
   SystemScript,
@@ -60,6 +61,22 @@ type RawBotSummary = {
 type RawAvatarAsset = {
   name: string;
   url: string;
+};
+
+type RawPublicHostInfo = {
+  username?: string;
+  operating_system?: string;
+  hardware_platform?: string;
+  hardware_spec?: string;
+};
+
+type RawHealthResponse = {
+  ok?: boolean;
+  service?: string;
+  web_enabled?: boolean;
+  host?: string;
+  port?: number;
+  host_info?: RawPublicHostInfo;
 };
 
 type RawHistoryItem = {
@@ -551,6 +568,15 @@ function mapAvatarAsset(raw: RawAvatarAsset): AvatarAsset {
   };
 }
 
+function mapPublicHostInfo(raw?: RawPublicHostInfo | null): PublicHostInfo {
+  return {
+    username: raw?.username || "未知",
+    operatingSystem: raw?.operating_system || "未知",
+    hardwarePlatform: raw?.hardware_platform || "未知",
+    hardwareSpec: raw?.hardware_spec || "未知",
+  };
+}
+
 function mapGitChangedFile(raw: RawGitChangedFile) {
   return {
     path: raw.path,
@@ -767,6 +793,25 @@ export class RealWebBotClient implements WebBotClient {
       throw new Error(payload.error?.message || "请求失败");
     }
     return payload.data;
+  }
+
+  async getPublicHostInfo(): Promise<PublicHostInfo> {
+    const response = await fetch("/api/health", {
+      cache: "no-store",
+      headers: this.headers(),
+    });
+    if (!response.ok) {
+      throw new Error("读取主机信息失败");
+    }
+
+    let payload: RawHealthResponse;
+    try {
+      payload = (await response.json()) as RawHealthResponse;
+    } catch {
+      throw new Error("主机信息响应无法解析");
+    }
+
+    return mapPublicHostInfo(payload.host_info);
   }
 
   async login(token: string): Promise<SessionState> {

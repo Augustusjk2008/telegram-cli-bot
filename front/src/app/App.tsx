@@ -9,7 +9,7 @@ import { clsx } from "clsx";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import type { BotSummary } from "../services/types";
+import type { BotSummary, PublicHostInfo } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -173,6 +173,7 @@ export function App() {
   const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [publicHostInfo, setPublicHostInfo] = useState<PublicHostInfo | null>(null);
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
@@ -211,6 +212,28 @@ export function App() {
     }
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    client.getPublicHostInfo()
+      .then((hostInfo) => {
+        if (cancelled) {
+          return;
+        }
+        setPublicHostInfo(hostInfo);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setPublicHostInfo(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   useLayoutEffect(() => {
     applyUiTheme(themeName);
@@ -385,7 +408,7 @@ export function App() {
   }
 
   if (!isLoggedIn) {
-    return <LoginScreen onLogin={handleLogin} isLoading={loginLoading} error={loginError} />;
+    return <LoginScreen onLogin={handleLogin} isLoading={loginLoading} error={loginError} hostInfo={publicHostInfo} />;
   }
 
   if (showBotManager || !currentBot) {

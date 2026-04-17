@@ -21,6 +21,7 @@ import type {
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  PublicHostInfo,
   SessionState,
   SystemScript,
   SystemScriptResult,
@@ -28,6 +29,7 @@ import type {
 } from "./types";
 
 export interface WebBotClient {
+  getPublicHostInfo(): Promise<PublicHostInfo>;
   login(token: string): Promise<SessionState>;
   listBots(): Promise<BotSummary[]>;
   getBotOverview(botAlias: string): Promise<BotOverview>;

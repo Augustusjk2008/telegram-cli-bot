@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { ChevronDown, ChevronRight, ListTree, LoaderCircle } from "lucide-react";
 import type { ChatTraceEvent } from "../services/types";
 import { ChatToolTraceCard } from "./ChatToolTraceCard";
@@ -12,6 +12,8 @@ type Props = {
   elapsedSeconds?: number;
   copyLabel?: string;
   onCopy?: () => void;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   isLoading?: boolean;
   loadError?: string;
   onLoadTrace?: () => void;
@@ -38,11 +40,12 @@ function ChatTracePanelInner({
   processCount,
   copyLabel,
   onCopy,
+  expanded,
+  onToggleExpanded,
   isLoading = false,
   loadError = "",
   onLoadTrace,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
   const events = trace || [];
   const summary = useMemo(() => ({
     traceCount: typeof traceCount === "number" ? traceCount : events.length,
@@ -74,7 +77,7 @@ function ChatTracePanelInner({
         type="button"
         aria-label={buttonLabel}
         aria-expanded={expanded}
-        onClick={() => setExpanded((prev) => !prev)}
+        onClick={onToggleExpanded}
         className="flex w-full items-center justify-between gap-3 text-left"
       >
         <span className="flex min-w-0 items-center gap-2">

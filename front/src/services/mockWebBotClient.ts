@@ -19,6 +19,7 @@ import type {
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  PublicHostInfo,
   SessionState,
   SystemScript,
   SystemScriptResult,
@@ -186,6 +187,15 @@ export class MockWebBotClient implements WebBotClient {
 
   private getAssistantCronJobs(botAlias: string): AssistantCronJob[] {
     return [...(this.assistantCronJobs.get(botAlias) || [])];
+  }
+
+  async getPublicHostInfo(): Promise<PublicHostInfo> {
+    return {
+      username: "demo",
+      operatingSystem: "Windows 11",
+      hardwarePlatform: "AMD64",
+      hardwareSpec: "16 逻辑核心 · 32 GB 内存",
+    };
   }
 
   async login(password: string): Promise<SessionState> {

@@ -116,6 +116,13 @@ export type FileReadResult = {
   isFullContent?: boolean;
 };
 
+export type PublicHostInfo = {
+  username: string;
+  operatingSystem: string;
+  hardwarePlatform: string;
+  hardwareSpec: string;
+};
+
 export type SessionState = {
   currentBotAlias: string;
   currentPath: string;

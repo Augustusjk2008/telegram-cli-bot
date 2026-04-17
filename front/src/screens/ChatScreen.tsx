@@ -262,6 +262,20 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
+function getMessageClientStateKey(item: ChatMessage) {
+  const provider = item.meta?.nativeSource?.provider || "";
+  const sessionId = item.meta?.nativeSource?.sessionId || "";
+  if (item.role === "assistant" && (provider || sessionId) && item.createdAt) {
+    return [
+      item.role,
+      provider,
+      sessionId,
+      item.createdAt,
+    ].join("|");
+  }
+  return `${item.role}|${item.id}`;
+}
+
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent): ChatMessage {
   return {
     ...item,
@@ -293,6 +307,67 @@ function updateMessageById(
   return nextItems;
 }
 
+function updateMessageByClientStateKey(
+  items: ChatMessage[],
+  messageClientStateKey: string,
+  updater: (item: ChatMessage) => ChatMessage,
+) {
+  const index = items.findIndex((item) => getMessageClientStateKey(item) === messageClientStateKey);
+  if (index < 0) {
+    return items;
+  }
+
+  const current = items[index];
+  const next = updater(current);
+  if (next === current) {
+    return items;
+  }
+
+  const nextItems = items.slice();
+  nextItems[index] = next;
+  return nextItems;
+}
+
+function updateMessageByIdOrClientStateKey(
+  items: ChatMessage[],
+  messageId: string,
+  messageClientStateKey: string,
+  updater: (item: ChatMessage) => ChatMessage,
+) {
+  const updatedById = updateMessageById(items, messageId, updater);
+  if (updatedById !== items) {
+    return updatedById;
+  }
+  return updateMessageByClientStateKey(items, messageClientStateKey, updater);
+}
+
+function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
+  if (previousItems.length === 0 || nextItems.length === 0) {
+    return nextItems;
+  }
+
+  const previousById = new Map(previousItems.map((item) => [item.id, item]));
+  const previousByClientStateKey = new Map(previousItems.map((item) => [getMessageClientStateKey(item), item]));
+
+  return nextItems.map((item) => {
+    const previousItem = previousById.get(item.id) || previousByClientStateKey.get(getMessageClientStateKey(item));
+    if (!previousItem) {
+      return item;
+    }
+
+    const mergedMeta = mergeMessageMeta(previousItem.meta, item.meta);
+    const nextElapsedSeconds = typeof item.elapsedSeconds === "number" ? item.elapsedSeconds : previousItem.elapsedSeconds;
+    const nextState = item.state ?? previousItem.state;
+
+    return {
+      ...item,
+      ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
+      ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
+      ...(mergedMeta ? { meta: mergedMeta } : {}),
+    };
+  });
+}
+
 type ChatMessageRowProps = {
   item: ChatMessage;
   previousRole: string;
@@ -303,9 +378,11 @@ type ChatMessageRowProps = {
   restoredReplyActive: boolean;
   isStreaming: boolean;
   isCopied: boolean;
+  tracePanelExpanded: boolean;
   traceLoadState?: { loading: boolean; error?: string };
   onFileLinkClick: (href: string) => void;
   onLoadTrace: (messageId: string) => void;
+  onToggleTracePanel: () => void;
   onCopyMessage: (item: ChatMessage) => void;
   onResumeContinue: () => void;
 };
@@ -320,9 +397,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   restoredReplyActive,
   isStreaming,
   isCopied,
+  tracePanelExpanded,
   traceLoadState,
   onFileLinkClick,
   onLoadTrace,
+  onToggleTracePanel,
   onCopyMessage,
   onResumeContinue,
 }: ChatMessageRowProps) {
@@ -404,6 +483,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
               toolCallCount={item.meta?.toolCallCount}
               processCount={item.meta?.processCount}
               elapsedSeconds={item.elapsedSeconds}
+              expanded={tracePanelExpanded}
+              onToggleExpanded={onToggleTracePanel}
               isLoading={Boolean(traceLoadState?.loading)}
               loadError={traceLoadState?.error}
               onLoadTrace={() => void onLoadTrace(item.id)}
@@ -457,6 +538,7 @@ export function ChatScreen({
   const [restoredReply, setRestoredReply] = useState<RunningReply | null>(null);
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [copiedMessageId, setCopiedMessageId] = useState("");
+  const [expandedTracePanels, setExpandedTracePanels] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -552,13 +634,13 @@ export function ChatScreen({
         setRestoredReply(null);
         setStreamMode("poll");
         setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(overview.runningReply));
-        setItems(mergeRunningReply(messages, botAlias, overview.runningReply));
+        setItems((prev) => mergeMessagesPreservingClientState(prev, mergeRunningReply(messages, botAlias, overview.runningReply)));
       } else if (overview.runningReply) {
         const nextItems = mergePendingCronRuns(
           mergeRestoredReply(messages, botAlias, overview.runningReply),
           nextPendingRuns,
         );
-        setItems(nextItems);
+        setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
         setRestoredReply(overview.runningReply);
         if (nextPendingRuns.length > 0) {
           setIsStreaming(true);
@@ -573,7 +655,7 @@ export function ChatScreen({
           setStreamStartedAtMs(null);
         }
       } else if (nextPendingRuns.length > 0) {
-        setItems(mergePendingCronRuns(messages, nextPendingRuns));
+        setItems((prev) => mergeMessagesPreservingClientState(prev, mergePendingCronRuns(messages, nextPendingRuns)));
         setRestoredReply(null);
         setIsStreaming(true);
         setStreamMode("poll");
@@ -583,7 +665,7 @@ export function ChatScreen({
         }));
       } else {
         const previousCount = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-")).length;
-        setItems(messages);
+        setItems((prev) => mergeMessagesPreservingClientState(prev, messages));
         setRestoredReply(null);
         setIsStreaming(false);
         setStreamMode("");
@@ -639,6 +721,7 @@ export function ChatScreen({
     setRestoredReply(null);
     setPendingCronRuns([]);
     setCopiedMessageId("");
+    setExpandedTracePanels({});
     setTraceLoadState({});
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
@@ -813,10 +896,11 @@ export function ChatScreen({
     if (!currentMessage || currentMessage.role !== "assistant") {
       return;
     }
+    const messageClientStateKey = getMessageClientStateKey(currentMessage);
     if ((currentMessage.meta?.trace || []).length > 0) {
       return;
     }
-    if ((traceLoadStateRef.current[messageId]?.loading)) {
+    if ((traceLoadStateRef.current[messageClientStateKey]?.loading)) {
       return;
     }
     if (!(currentMessage.meta?.traceCount || 0)) {
@@ -825,14 +909,14 @@ export function ChatScreen({
 
     setTraceLoadState((prev) => ({
       ...prev,
-      [messageId]: {
+      [messageClientStateKey]: {
         loading: true,
       },
     }));
 
     try {
       const traceDetails = await client.getMessageTrace(botAlias, messageId);
-      setItems((prev) => updateMessageById(prev, messageId, (item) => ({
+      setItems((prev) => updateMessageByIdOrClientStateKey(prev, messageId, messageClientStateKey, (item) => ({
         ...item,
         meta: mergeMessageMeta(item.meta, {
           trace: traceDetails.trace,
@@ -844,14 +928,14 @@ export function ChatScreen({
       })));
       setTraceLoadState((prev) => ({
         ...prev,
-        [messageId]: {
+        [messageClientStateKey]: {
           loading: false,
         },
       }));
     } catch (err) {
       setTraceLoadState((prev) => ({
         ...prev,
-        [messageId]: {
+        [messageClientStateKey]: {
           loading: false,
           error: err instanceof Error ? err.message : "加载过程详情失败",
         },
@@ -954,6 +1038,8 @@ export function ChatScreen({
     setError("");
     try {
       await client.resetSession(botAlias);
+      setExpandedTracePanels({});
+      setTraceLoadState({});
       setItems([]);
       appendSystemMessage("当前会话已重置");
     } catch (err) {
@@ -1124,9 +1210,30 @@ export function ChatScreen({
             restoredReplyActive={Boolean(restoredReply)}
             isStreaming={isStreaming}
             isCopied={copiedMessageId === item.id}
-            traceLoadState={traceLoadState[item.id]}
+            tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
+            traceLoadState={traceLoadState[getMessageClientStateKey(item)]}
             onFileLinkClick={handleFileLinkClick}
             onLoadTrace={loadMessageTrace}
+            onToggleTracePanel={() => {
+              const messageClientStateKey = getMessageClientStateKey(item);
+              setExpandedTracePanels((prev) => {
+                const nextExpanded = !prev[messageClientStateKey];
+                if (nextExpanded) {
+                  return {
+                    ...prev,
+                    [messageClientStateKey]: true,
+                  };
+                }
+
+                if (!prev[messageClientStateKey]) {
+                  return prev;
+                }
+
+                const nextState = { ...prev };
+                delete nextState[messageClientStateKey];
+                return nextState;
+              });
+            }}
             onCopyMessage={handleCopyMessage}
             onResumeContinue={handleResumeContinue}
           />

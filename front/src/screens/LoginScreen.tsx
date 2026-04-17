@@ -3,14 +3,23 @@ import {
   APP_TAGLINE,
   APP_VERSION,
 } from "../theme";
+import type { PublicHostInfo } from "../services/types";
 
 type Props = {
   onLogin?: (token: string) => Promise<void> | void;
   isLoading?: boolean;
   error?: string;
+  hostInfo?: PublicHostInfo | null;
 };
 
-export function LoginScreen({ onLogin, isLoading, error }: Props) {
+export function LoginScreen({ onLogin, isLoading, error, hostInfo }: Props) {
+  const hostInfoItems = [
+    { label: "用户名", value: hostInfo?.username || "读取中..." },
+    { label: "操作系统", value: hostInfo?.operatingSystem || "读取中..." },
+    { label: "硬件平台", value: hostInfo?.hardwarePlatform || "读取中..." },
+    { label: "规格", value: hostInfo?.hardwareSpec || "读取中..." },
+  ];
+
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[var(--bg)] px-4 py-5 sm:px-6 sm:py-6">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -46,9 +55,27 @@ export function LoginScreen({ onLogin, isLoading, error }: Props) {
                 <p className="max-w-2xl text-lg font-semibold text-[var(--accent)] sm:text-xl">
                   {APP_TAGLINE}
                 </p>
-                <p className="max-w-xl text-sm leading-7 text-[var(--muted)]">
-                  深空风格的本地主控台入口，登录后即可进入 Bot、CLI 与工作目录的统一控制面。
-                </p>
+                <div className="max-w-2xl">
+                  <div className="inline-flex items-center gap-2 border border-[var(--accent-outline)] bg-[rgba(3,13,22,0.45)] px-3 py-1 text-[11px] font-mono tracking-[0.22em] text-[var(--accent-strong)]">
+                    <span className="h-2 w-2 bg-[var(--accent)] shadow-[0_0_16px_var(--accent)]" />
+                    <span>主机信息</span>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {hostInfoItems.map((item) => (
+                      <div
+                        key={item.label}
+                        className="border border-[var(--accent-outline)] bg-[rgba(3,13,22,0.45)] px-4 py-3"
+                      >
+                        <div className="text-[11px] font-mono tracking-[0.16em] text-[var(--accent-strong)]">
+                          {item.label}
+                        </div>
+                        <div className="mt-2 break-all text-sm leading-6 text-[var(--text)]">
+                          {item.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div
@@ -74,7 +101,7 @@ export function LoginScreen({ onLogin, isLoading, error }: Props) {
               </div>
               <h2 className="mt-3 text-2xl font-bold text-[var(--text)]">接入控制台</h2>
               <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                输入访问口令，继续管理本地主 Bot 与子 Bot。
+                输入访问口令，管理本地主 Bot 与子 Bot。
               </p>
 
               <form

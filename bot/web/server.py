@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 import logging
 import os
+import platform
 import subprocess
 import sys
 import threading
@@ -124,6 +126,81 @@ def _normalize_origin(origin: str) -> str:
 def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
+
+
+def _get_total_memory_bytes() -> int | None:
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            memory_status = _MemoryStatusEx()
+            memory_status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory_status)):
+                return int(memory_status.ullTotalPhys)
+
+        if hasattr(os, "sysconf"):
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            page_count = os.sysconf("SC_PHYS_PAGES")
+            if isinstance(page_size, int) and isinstance(page_count, int) and page_size > 0 and page_count > 0:
+                return int(page_size * page_count)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+    return None
+
+
+def _format_memory_label(total_memory_bytes: int | None) -> str:
+    if not total_memory_bytes or total_memory_bytes <= 0:
+        return "内存未知"
+
+    total_gb = total_memory_bytes / (1024 ** 3)
+    rounded = round(total_gb, 1)
+    if abs(rounded - round(rounded)) < 0.05:
+        return f"{int(round(rounded))} GB 内存"
+    return f"{rounded:.1f} GB 内存"
+
+
+def _build_public_host_info() -> dict[str, str]:
+    username = (
+        str(os.environ.get("USERNAME") or "").strip()
+        or str(os.environ.get("USER") or "").strip()
+    )
+    if not username:
+        try:
+            username = getpass.getuser().strip()
+        except Exception:
+            username = ""
+
+    system = str(platform.system() or "").strip() or "未知系统"
+    release = str(platform.release() or "").strip()
+    operating_system = " ".join(part for part in [system, release] if part).strip() or system
+
+    hardware_platform = str(platform.machine() or "").strip() or "未知平台"
+    logical_cores = os.cpu_count()
+    hardware_spec_parts: list[str] = []
+    if isinstance(logical_cores, int) and logical_cores > 0:
+        hardware_spec_parts.append(f"{logical_cores} 逻辑核心")
+    hardware_spec_parts.append(_format_memory_label(_get_total_memory_bytes()))
+
+    return {
+        "username": username or "未知用户",
+        "operating_system": operating_system,
+        "hardware_platform": hardware_platform,
+        "hardware_spec": " · ".join(part for part in hardware_spec_parts if part) or "规格未知",
+    }
 
 
 class _TerminalOutputPump:
@@ -420,6 +497,7 @@ class WebApiServer:
                 "web_enabled": True,
                 "host": self._host,
                 "port": self._port,
+                "host_info": _build_public_host_info(),
             }
         )
 
