@@ -138,6 +138,62 @@ function Get-DirtyStatusLines {
     return @($result.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
+function Test-WorktreeRegistered {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$WorktreePath
+    )
+
+    $resolvedPath = Resolve-FullPath -Path $WorktreePath
+    $entries = Get-WorktreeEntries -RepoRoot $RepoRoot
+    return [bool]($entries | Where-Object { $_.Path -eq $resolvedPath } | Select-Object -First 1)
+}
+
+function Remove-WorktreeDirectoryIfLeftover {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    for ($index = 0; $index -lt 3; $index++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        } catch {
+            Start-Sleep -Seconds 1
+        }
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            return
+        }
+    }
+}
+
+function Remove-WorktreeSafely {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$WorktreePath
+    )
+
+    try {
+        Invoke-Git -Arguments @("-C", $RepoRoot, "worktree", "remove", $WorktreePath) | Out-Null
+    } catch {
+        $removeError = $_
+        $stillRegistered = Test-WorktreeRegistered -RepoRoot $RepoRoot -WorktreePath $WorktreePath
+        if ($stillRegistered) {
+            throw $removeError
+        }
+    }
+
+    Remove-WorktreeDirectoryIfLeftover -Path $WorktreePath
+
+    if (Test-Path -LiteralPath $WorktreePath) {
+        throw (
+            "Git 已移除 worktree 记录，但目录仍被其它进程占用: {0}`n请关闭占用该目录的终端、编辑器、隧道进程（如 cloudflared）后，再手动删除该空目录。" -f $WorktreePath
+        )
+    }
+}
+
 function Get-StashRefByMessage {
     param(
         [Parameter(Mandatory = $true)][string]$TargetPath,
@@ -230,7 +286,7 @@ try {
     Invoke-Git -Arguments @("-C", $targetEntry.Path, "merge", "--no-edit", $sourceEntry.Branch) | Out-Null
 
     Write-Info ("正在删除 worktree: {0}" -f $sourceEntry.Path)
-    Invoke-Git -Arguments @("-C", $repoRoot, "worktree", "remove", $sourceEntry.Path) | Out-Null
+    Remove-WorktreeSafely -RepoRoot $repoRoot -WorktreePath $sourceEntry.Path
     Invoke-Git -Arguments @("-C", $repoRoot, "worktree", "prune") | Out-Null
 
     if ($DeleteBranch) {

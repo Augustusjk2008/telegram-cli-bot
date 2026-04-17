@@ -59,6 +59,59 @@ log_warn() {
   printf '[提示] %s\n' "$1" >&2
 }
 
+worktree_registered() {
+  local repo_root="$1"
+  local worktree_path="$2"
+  local resolved_path
+
+  resolved_path="$(resolve_full_path "$worktree_path")"
+  while IFS= read -r line; do
+    if [[ "$line" == worktree\ * ]]; then
+      if [[ "$(resolve_full_path "${line#worktree }")" == "$resolved_path" ]]; then
+        return 0
+      fi
+    fi
+  done < <(git -C "$repo_root" worktree list --porcelain)
+
+  return 1
+}
+
+remove_leftover_worktree_dir() {
+  local worktree_path="$1"
+  local attempt
+
+  if [[ ! -e "$worktree_path" ]]; then
+    return 0
+  fi
+
+  for attempt in 1 2 3; do
+    rm -rf "$worktree_path" 2>/dev/null || true
+    if [[ ! -e "$worktree_path" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+remove_worktree_safely() {
+  local repo_root="$1"
+  local worktree_path="$2"
+
+  if ! git -C "$repo_root" worktree remove "$worktree_path"; then
+    if worktree_registered "$repo_root" "$worktree_path"; then
+      return 1
+    fi
+  fi
+
+  remove_leftover_worktree_dir "$worktree_path" || {
+    echo "[错误] Git 已移除 worktree 记录，但目录仍被其它进程占用: $worktree_path" >&2
+    echo "[错误] 请关闭占用该目录的终端、编辑器、隧道进程（如 cloudflared）后，再手动删除该空目录。" >&2
+    return 1
+  }
+}
+
 resolve_full_path() {
   python - "$1" <<'PY'
 import os
@@ -212,7 +265,7 @@ log_info "正在将 $SOURCE_ENTRY_BRANCH 合并到 $TARGET_BRANCH"
 git -C "$TARGET_WORKTREE" merge --no-edit "$SOURCE_ENTRY_BRANCH"
 
 log_info "正在删除 worktree: $SOURCE_ENTRY_WORKTREE"
-git -C "$REPO_ROOT" worktree remove "$SOURCE_ENTRY_WORKTREE"
+remove_worktree_safely "$REPO_ROOT" "$SOURCE_ENTRY_WORKTREE"
 git -C "$REPO_ROOT" worktree prune >/dev/null
 
 if [[ "$DELETE_BRANCH" -eq 1 ]]; then
