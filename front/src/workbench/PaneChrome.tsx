@@ -23,7 +23,7 @@ export function PaneChrome({
     <section
       data-testid={testId}
       data-collapsed={collapsed ? "true" : "false"}
-      className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]"
+      className="flex min-h-0 min-w-0 flex-col overflow-hidden border border-[var(--border)] bg-[var(--surface)]"
     >
       <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
         <h2 className="truncate text-sm font-semibold text-[var(--text)]">{title}</h2>

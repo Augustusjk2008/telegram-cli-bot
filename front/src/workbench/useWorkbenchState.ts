@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { DEFAULT_DESKTOP_PANE_STATE, type DesktopPaneKey, type DesktopPaneState } from "./workbenchTypes";
+import { clampPaneState, DEFAULT_DESKTOP_PANE_STATE, type DesktopPaneKey, type DesktopPaneState } from "./workbenchTypes";
 
 export const WORKBENCH_PANE_STATE_STORAGE_KEY = "web-workbench-pane-state";
 
@@ -44,8 +44,25 @@ export function useWorkbenchState() {
     });
   }
 
+  function resizePane(
+    key: "filesWidthPx" | "chatWidthPx" | "editorHeightPx",
+    nextValue: number,
+    options?: { containerWidthPx?: number; containerHeightPx?: number },
+  ) {
+    setPaneState((current) => ({
+      ...clampPaneState(
+        {
+          ...current,
+          [key]: nextValue,
+        },
+        options,
+      ),
+    }));
+  }
+
   return {
     paneState,
     togglePane,
+    resizePane,
   };
 }

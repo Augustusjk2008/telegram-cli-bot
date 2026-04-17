@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ViewMode } from "../app/layoutMode";
 import type { WebBotClient } from "../services/webBotClient";
@@ -8,11 +8,13 @@ import { ChatPane } from "./ChatPane";
 import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
 import { PaneChrome } from "./PaneChrome";
+import { PaneResizer } from "./PaneResizer";
 import { TerminalPane } from "./TerminalPane";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileBrowser } from "./useFileBrowser";
 import { WorkbenchHeader } from "./WorkbenchHeader";
 import { useWorkbenchState } from "./useWorkbenchState";
+import { clampPaneState, COLLAPSED_SIDEBAR_SIZE_PX, MIN_TERMINAL_HEIGHT_PX, PANE_RESIZER_SIZE_PX } from "./workbenchTypes";
 
 type Props = {
   authToken?: string;
@@ -39,13 +41,50 @@ export function DesktopWorkbench({
   onOpenBotSwitcher,
   onDirtyTabsChange,
 }: Props) {
-  const { paneState, togglePane } = useWorkbenchState();
+  const { paneState, togglePane, resizePane } = useWorkbenchState();
   const browser = useFileBrowser({ botAlias, client });
   const tabs = useEditorTabs({ botAlias, client });
+  const columnsRef = useRef<HTMLDivElement | null>(null);
+  const centerRowsRef = useRef<HTMLDivElement | null>(null);
+  const [layoutBounds, setLayoutBounds] = useState({
+    columnsWidthPx: 1440,
+    centerHeightPx: 900,
+  });
+
+  const layoutState = clampPaneState(paneState, {
+    containerWidthPx: layoutBounds.columnsWidthPx,
+    containerHeightPx: layoutBounds.centerHeightPx,
+  });
+
+  const columnTemplate = layoutState.filesCollapsed
+    ? `${COLLAPSED_SIDEBAR_SIZE_PX}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.chatWidthPx}px`
+    : `${layoutState.filesWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.chatWidthPx}px`;
+
+  const centerRowTemplate = layoutState.editorCollapsed
+    ? `auto ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr)`
+    : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
 
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);
   }, [onDirtyTabsChange, tabs.hasDirtyTabs]);
+
+  useEffect(() => {
+    const updateLayoutBounds = () => {
+      const nextColumnsWidthPx = columnsRef.current?.getBoundingClientRect().width ?? 0;
+      const nextCenterHeightPx = centerRowsRef.current?.getBoundingClientRect().height ?? 0;
+
+      setLayoutBounds((current) => ({
+        columnsWidthPx: nextColumnsWidthPx > 0 ? nextColumnsWidthPx : current.columnsWidthPx,
+        centerHeightPx: nextCenterHeightPx > 0 ? nextCenterHeightPx : current.centerHeightPx,
+      }));
+    };
+
+    updateLayoutBounds();
+    window.addEventListener("resize", updateLayoutBounds);
+    return () => {
+      window.removeEventListener("resize", updateLayoutBounds);
+    };
+  }, []);
 
   return (
     <div data-testid="desktop-workbench-root" className="grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)] bg-[var(--bg)]">
@@ -56,21 +95,15 @@ export function DesktopWorkbench({
         onOpenBotSwitcher={() => onOpenBotSwitcher?.()}
       />
       <div
-        className={clsx(
-          "grid min-h-0 gap-3 p-3",
-          paneState.filesCollapsed && paneState.chatCollapsed
-            ? "grid-cols-[4.5rem_minmax(0,1fr)_4.5rem]"
-            : paneState.filesCollapsed
-              ? "grid-cols-[4.5rem_minmax(0,1fr)_24rem]"
-              : paneState.chatCollapsed
-                ? "grid-cols-[20rem_minmax(0,1fr)_4.5rem]"
-                : "grid-cols-[20rem_minmax(0,1fr)_24rem]",
-        )}
+        data-testid="desktop-workbench-columns"
+        ref={columnsRef}
+        className={clsx("grid min-h-0 p-3")}
+        style={{ gridTemplateColumns: columnTemplate }}
       >
         <PaneChrome
           testId="desktop-pane-files"
           title="文件"
-          collapsed={paneState.filesCollapsed}
+          collapsed={layoutState.filesCollapsed}
           collapseLabel="折叠左侧文件区"
           expandLabel="展开左侧文件区"
           onToggleCollapsed={() => togglePane("files")}
@@ -91,23 +124,26 @@ export function DesktopWorkbench({
             }}
           />
         </PaneChrome>
+        <PaneResizer
+          ariaLabel="调整文件区宽度"
+          axis="x"
+          onResizeDelta={(deltaPx) =>
+            resizePane("filesWidthPx", layoutState.filesWidthPx + deltaPx, {
+              containerWidthPx: layoutBounds.columnsWidthPx,
+              containerHeightPx: layoutBounds.centerHeightPx,
+            })}
+        />
 
         <div
-          className={clsx(
-            "grid min-h-0 gap-3",
-            paneState.editorCollapsed && paneState.terminalCollapsed
-              ? "grid-rows-[auto_auto]"
-              : paneState.editorCollapsed
-                ? "grid-rows-[auto_minmax(0,1fr)]"
-                : paneState.terminalCollapsed
-                  ? "grid-rows-[minmax(0,1fr)_auto]"
-                  : "grid-rows-[minmax(0,1fr)_minmax(16rem,0.72fr)]",
-          )}
+          data-testid="desktop-workbench-center-rows"
+          ref={centerRowsRef}
+          className="grid min-h-0"
+          style={{ gridTemplateRows: centerRowTemplate }}
         >
           <PaneChrome
             testId="desktop-pane-editor"
             title="编辑器"
-            collapsed={paneState.editorCollapsed}
+            collapsed={layoutState.editorCollapsed}
             collapseLabel="折叠编辑区"
             expandLabel="展开编辑区"
             onToggleCollapsed={() => togglePane("editor")}
@@ -122,10 +158,19 @@ export function DesktopWorkbench({
               onSaveActiveTab={() => void tabs.saveActiveTab()}
             />
           </PaneChrome>
+          <PaneResizer
+            ariaLabel="调整编辑器高度"
+            axis="y"
+            onResizeDelta={(deltaPx) =>
+              resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
+                containerWidthPx: layoutBounds.columnsWidthPx,
+                containerHeightPx: layoutBounds.centerHeightPx,
+              })}
+          />
           <PaneChrome
             testId="desktop-pane-terminal"
             title="终端"
-            collapsed={paneState.terminalCollapsed}
+            collapsed={layoutState.terminalCollapsed}
             collapseLabel="折叠终端区"
             expandLabel="展开终端区"
             onToggleCollapsed={() => togglePane("terminal")}
@@ -139,11 +184,20 @@ export function DesktopWorkbench({
             />
           </PaneChrome>
         </div>
+        <PaneResizer
+          ariaLabel="调整聊天区宽度"
+          axis="x"
+          onResizeDelta={(deltaPx) =>
+            resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
+              containerWidthPx: layoutBounds.columnsWidthPx,
+              containerHeightPx: layoutBounds.centerHeightPx,
+            })}
+        />
 
         <PaneChrome
           testId="desktop-pane-chat"
           title="AI 聊天"
-          collapsed={paneState.chatCollapsed}
+          collapsed={layoutState.chatCollapsed}
           collapseLabel="折叠右侧聊天区"
           expandLabel="展开右侧聊天区"
           onToggleCollapsed={() => togglePane("chat")}
