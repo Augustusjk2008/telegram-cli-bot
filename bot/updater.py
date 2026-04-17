@@ -93,32 +93,39 @@ def download_latest_update(
     repo_root: Path | None = None,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
-    _emit_download_log(progress_callback, "正在检查最新版本信息")
-    release = _fetch_latest_release()
-    asset = _select_release_asset(release.get("assets", []))
-    cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
-    cache_root.mkdir(parents=True, exist_ok=True)
-    target_path = cache_root / asset["name"]
-    _emit_download_log(progress_callback, f"找到更新包: {asset['name']}")
-    if progress_callback is None:
-        _download_file(asset["browser_download_url"], target_path)
-    else:
-        _download_file(
-            asset["browser_download_url"],
-            target_path,
-            progress_callback=progress_callback,
-        )
-
     settings = app_settings._load_settings()
     settings["last_checked_at"] = _now_iso()
-    settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
-    settings["last_available_release_url"] = str(release.get("html_url") or "")
-    settings["last_available_notes"] = str(release.get("body") or "")
+    settings["update_last_error"] = ""
+    _emit_download_log(progress_callback, "正在检查最新版本信息")
+
+    try:
+        release = _fetch_latest_release()
+        settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
+        settings["last_available_release_url"] = str(release.get("html_url") or "")
+        settings["last_available_notes"] = str(release.get("body") or "")
+
+        asset = _select_release_asset(release.get("assets", []))
+        cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
+        cache_root.mkdir(parents=True, exist_ok=True)
+        target_path = cache_root / asset["name"]
+        _emit_download_log(progress_callback, f"找到更新包: {asset['name']}")
+        if progress_callback is None:
+            _download_file(asset["browser_download_url"], target_path)
+        else:
+            _download_file(
+                asset["browser_download_url"],
+                target_path,
+                progress_callback=progress_callback,
+            )
+    except Exception as exc:
+        settings["update_last_error"] = str(exc)
+        app_settings._save_settings(settings)
+        raise
+
     settings["pending_update_version"] = _normalize_tag_name(release["tag_name"])
     settings["pending_update_path"] = str(target_path)
     settings["pending_update_notes"] = str(release.get("body") or "")
     settings["pending_update_platform"] = "windows-x64" if os.name == "nt" else "linux-x64"
-    settings["update_last_error"] = ""
     app_settings._save_settings(settings)
     _emit_download_log(progress_callback, f"更新包已保存到: {target_path}")
     return get_update_status()
@@ -152,8 +159,22 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
         _emit_apply_log(log_callback, settings["update_last_error"])
         return {"applied": False, "reason": "missing_package", "path": str(package_path)}
 
+    try:
+        package_entries = _iter_package_entries(package_path)
+    except Exception as exc:
+        settings["update_last_error"] = str(exc)
+        _clear_pending_update(settings)
+        app_settings._save_settings(settings)
+        _emit_apply_log(log_callback, settings["update_last_error"])
+        return {
+            "applied": False,
+            "reason": "invalid_package",
+            "package_path": str(package_path),
+            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+        }
+
     extracted_files = 0
-    for relative_path, data in _iter_package_entries(package_path):
+    for relative_path, data in package_entries:
         if _is_protected_update_path(relative_path):
             continue
 
@@ -186,10 +207,7 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
                 _emit_apply_log(log_callback, line)
     _emit_apply_log(log_callback, "前端资源重建完成。")
 
-    settings["pending_update_version"] = ""
-    settings["pending_update_path"] = ""
-    settings["pending_update_notes"] = ""
-    settings["pending_update_platform"] = ""
+    _clear_pending_update(settings)
     settings["update_last_error"] = ""
     app_settings._save_settings(settings)
     _emit_apply_log(log_callback, "更新应用完成。")
@@ -279,6 +297,18 @@ def _download_file(
                         total_bytes=total_bytes,
                     )
                     last_logged_percent = percent
+    if total_bytes is not None and downloaded_bytes != total_bytes:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise RuntimeError(f"更新包下载不完整: 期望 {total_bytes} bytes，实际 {downloaded_bytes} bytes")
+
+    try:
+        _validate_package_file(temp_path, package_name=target.name)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
     temp_path.replace(target)
     final_size = target.stat().st_size if target.exists() else 0
     _emit_download_log(
@@ -373,10 +403,15 @@ def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
 
 
 def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
-    if zipfile.is_zipfile(package_path):
+    if _is_zip_package(package_path):
+        if not zipfile.is_zipfile(package_path):
+            raise RuntimeError(_format_invalid_package_message(package_path))
         return _iter_zip_entries(package_path)
-    if package_path.name.endswith(".tar.gz"):
-        return _iter_tar_entries(package_path)
+    if _is_tar_gz_package(package_path):
+        try:
+            return _iter_tar_entries(package_path)
+        except (OSError, tarfile.TarError) as exc:
+            raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
     raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
 
 
@@ -409,6 +444,64 @@ def _iter_tar_entries(package_path: Path) -> list[tuple[str, bytes]]:
     return entries
 
 
+def _validate_package_file(package_path: Path, package_name: str | None = None) -> None:
+    effective_name = str(package_name or package_path.name)
+    if _is_zip_package_name(effective_name):
+        if not zipfile.is_zipfile(package_path):
+            raise RuntimeError(_format_invalid_package_message(package_path, package_name=effective_name))
+        try:
+            with zipfile.ZipFile(package_path) as archive:
+                bad_member = archive.testzip()
+        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+            raise RuntimeError(_format_invalid_package_message(package_path, exc, package_name=effective_name)) from exc
+        if bad_member is not None:
+            raise RuntimeError(
+                _format_invalid_package_message(package_path, f"CRC 校验失败: {bad_member}", package_name=effective_name)
+            )
+        return
+
+    if _is_tar_gz_package_name(effective_name):
+        try:
+            with tarfile.open(package_path, "r:gz") as archive:
+                for _member in archive:
+                    pass
+        except (OSError, tarfile.TarError) as exc:
+            raise RuntimeError(_format_invalid_package_message(package_path, exc, package_name=effective_name)) from exc
+        return
+
+    raise RuntimeError(f"不支持的更新包格式: {effective_name}")
+
+
+def _is_zip_package(package_path: Path) -> bool:
+    return _is_zip_package_name(package_path.name)
+
+
+def _is_tar_gz_package(package_path: Path) -> bool:
+    return _is_tar_gz_package_name(package_path.name)
+
+
+def _is_zip_package_name(package_name: str) -> bool:
+    return str(package_name or "").lower().endswith(".zip")
+
+
+def _is_tar_gz_package_name(package_name: str) -> bool:
+    return str(package_name or "").lower().endswith(".tar.gz")
+
+
+def _format_invalid_package_message(
+    package_path: Path,
+    detail: Any | None = None,
+    *,
+    package_name: str | None = None,
+) -> str:
+    display_name = str(package_name or package_path.name)
+    message = f"更新包已损坏，请重新下载: {display_name}"
+    detail_text = str(detail or "").strip()
+    if detail_text:
+        return f"{message} ({detail_text})"
+    return message
+
+
 def _normalize_archive_path(raw_path: str) -> str:
     parts: list[str] = []
     for part in str(raw_path or "").replace("\\", "/").split("/"):
@@ -423,6 +516,13 @@ def _normalize_archive_path(raw_path: str) -> str:
 def _is_protected_update_path(relative_path: str) -> bool:
     root_name = relative_path.split("/", 1)[0]
     return relative_path in PROTECTED_UPDATE_PATHS or root_name in PROTECTED_UPDATE_PATHS
+
+
+def _clear_pending_update(settings: dict[str, Any]) -> None:
+    settings["pending_update_version"] = ""
+    settings["pending_update_path"] = ""
+    settings["pending_update_notes"] = ""
+    settings["pending_update_platform"] = ""
 
 
 def _normalize_tag_name(tag_name: Any) -> str:
