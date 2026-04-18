@@ -217,25 +217,42 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
     assert next(item for item in items if item["alias"] == "team2")["avatar_name"] == "claude-blue.png"
 
 
-def test_list_system_scripts_only_exposes_codex_switch_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    allowed_script = tmp_path / "codex_switch_source.bat"
-    hidden_script = tmp_path / "network_traffic.ps1"
-    allowed_script.write_text(":: Codex 换源\n", encoding="utf-8")
-    hidden_script.write_text("# 网络流量\n", encoding="utf-8")
+def test_list_system_scripts_reads_active_bot_workdir_scripts(
+    monkeypatch: pytest.MonkeyPatch,
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    powershell_script = scripts_dir / "network_traffic.ps1"
+    batch_script = scripts_dir / "build_web_frontend.bat"
+    shell_script = scripts_dir / "deploy.sh"
+    markdown_file = scripts_dir / "README.md"
 
-    monkeypatch.setattr("bot.platform.scripts.SCRIPTS_DIR", tmp_path)
-    monkeypatch.setattr("bot.platform.scripts.allowed_script_extensions", lambda: {".bat", ".ps1"})
+    powershell_script.write_text("# 网络流量\n# 查看网络状态\n", encoding="utf-8")
+    batch_script.write_text(":: 构建前端\nREM 运行前端构建\n", encoding="utf-8")
+    shell_script.write_text("# Linux only\n", encoding="utf-8")
+    markdown_file.write_text("ignore me\n", encoding="utf-8")
 
-    payload = list_system_scripts()
+    web_manager.main_profile.working_dir = str(tmp_path)
+    monkeypatch.setattr("bot.platform.scripts.get_runtime_platform", lambda: "windows")
+
+    payload = list_system_scripts(web_manager, "main", 1001)
 
     assert payload == {
         "items": [
             {
-                "script_name": "codex_switch_source",
-                "display_name": "Codex 换源",
-                "description": "Codex 换源",
-                "path": str(allowed_script),
-            }
+                "script_name": "build_web_frontend.bat",
+                "display_name": "构建前端",
+                "description": "构建前端 | 运行前端构建",
+                "path": str(batch_script),
+            },
+            {
+                "script_name": "network_traffic.ps1",
+                "display_name": "网络流量",
+                "description": "网络流量 | 查看网络状态",
+                "path": str(powershell_script),
+            },
         ]
     }
 

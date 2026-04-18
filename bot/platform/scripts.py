@@ -15,15 +15,19 @@ from .output import strip_ansi_escape
 from .runtime import get_runtime_platform
 
 logger = logging.getLogger(__name__)
-SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 SCRIPT_EXEC_TIMEOUT = 60
-EXPOSED_SYSTEM_SCRIPT_NAMES = {"codex_switch_source"}
+SUPPORTED_WINDOWS_SCRIPT_EXTENSIONS = {".ps1", ".bat"}
+SUPPORTED_LINUX_SCRIPT_EXTENSIONS = {".sh", ".py"}
 
 
 def allowed_script_extensions() -> set[str]:
     if get_runtime_platform() == "windows":
-        return {".bat", ".cmd", ".ps1", ".py", ".exe"}
-    return {".sh", ".py"}
+        return SUPPORTED_WINDOWS_SCRIPT_EXTENSIONS
+    return SUPPORTED_LINUX_SCRIPT_EXTENSIONS
+
+
+def get_scripts_dir(working_dir: str | Path) -> Path:
+    return Path(working_dir).expanduser().resolve() / "scripts"
 
 
 def build_script_command(script_path: Path) -> tuple[list[str] | str, bool]:
@@ -137,21 +141,19 @@ def get_script_description(script_path: Path) -> str:
     return "无简介"
 
 
-def list_available_scripts() -> list[tuple[str, str, str, Path]]:
-    if not SCRIPTS_DIR.exists():
+def list_available_scripts(scripts_dir: Path) -> list[tuple[str, str, str, Path]]:
+    if not scripts_dir.exists() or not scripts_dir.is_dir():
         return []
 
     scripts = []
-    for item in SCRIPTS_DIR.iterdir():
+    for item in scripts_dir.iterdir():
         if not item.is_file():
             continue
         if item.suffix.lower() not in allowed_script_extensions():
             continue
-        if item.stem not in EXPOSED_SYSTEM_SCRIPT_NAMES:
-            continue
-        scripts.append((item.stem, get_script_display_name(item), get_script_description(item), item))
+        scripts.append((item.name, get_script_display_name(item), get_script_description(item), item.resolve()))
 
-    scripts.sort(key=lambda row: row[0])
+    scripts.sort(key=lambda row: row[0].lower())
     return scripts
 
 

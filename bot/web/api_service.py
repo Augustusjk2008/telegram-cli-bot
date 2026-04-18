@@ -70,7 +70,7 @@ from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
-from bot.platform.scripts import execute_script, list_available_scripts, stream_execute_script
+from bot.platform.scripts import execute_script, get_scripts_dir, list_available_scripts, stream_execute_script
 from bot.sessions import (
     align_session_paths,
     get_or_create_session,
@@ -2285,9 +2285,15 @@ def read_file_content(
     }
 
 
-def list_system_scripts() -> dict[str, Any]:
+def _get_system_scripts_dir(manager: MultiBotManager, alias: str) -> Path:
+    profile = get_profile_or_raise(manager, alias)
+    return get_scripts_dir(profile.working_dir)
+
+
+def list_system_scripts(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    del user_id
     items = []
-    for script_name, display_name, description, path in list_available_scripts():
+    for script_name, display_name, description, path in list_available_scripts(_get_system_scripts_dir(manager, alias)):
         items.append(
             {
                 "script_name": script_name,
