@@ -1150,7 +1150,7 @@ describe("RealWebBotClient", () => {
     });
   });
 
-  test("listSystemScripts returns available admin scripts", async () => {
+  test("listSystemScripts requests bot-scoped system functions", async () => {
     fetchMock
       .mockResolvedValueOnce({
         ok: true,
@@ -1168,10 +1168,10 @@ describe("RealWebBotClient", () => {
           data: {
             items: [
               {
-                script_name: "network_traffic",
+                script_name: "network_traffic.ps1",
                 display_name: "网络流量",
                 description: "查看网络状态",
-                path: "C:\\scripts\\network_traffic.ps1",
+                path: "C:\\workspace\\demo\\scripts\\network_traffic.ps1",
               },
             ],
           },
@@ -1180,14 +1180,22 @@ describe("RealWebBotClient", () => {
 
     const client = new RealWebBotClient();
     await client.login("secret-token");
-    const scripts = await client.listSystemScripts();
+    const scripts = await client.listSystemScripts("main");
 
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/scripts",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
     expect(scripts).toEqual([
       {
-        scriptName: "network_traffic",
+        scriptName: "network_traffic.ps1",
         displayName: "网络流量",
         description: "查看网络状态",
-        path: "C:\\scripts\\network_traffic.ps1",
+        path: "C:\\workspace\\demo\\scripts\\network_traffic.ps1",
       },
     ]);
   });
@@ -1198,7 +1206,7 @@ describe("RealWebBotClient", () => {
       start(controller) {
         controller.enqueue(encoder.encode("event: log\ndata: {\"text\":\"npm run build\"}\n\n"));
         controller.enqueue(encoder.encode("event: log\ndata: {\"text\":\"vite build finished\"}\n\n"));
-        controller.enqueue(encoder.encode("event: done\ndata: {\"script_name\":\"build_web_frontend\",\"success\":true,\"output\":\"Web 前端构建完成\"}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"script_name\":\"build_web_frontend.sh\",\"success\":true,\"output\":\"Web 前端构建完成\"}\n\n"));
         controller.close();
       },
     });
@@ -1226,24 +1234,24 @@ describe("RealWebBotClient", () => {
     await client.login("secret-token");
 
     const logs: string[] = [];
-    const result = await client.runSystemScriptStream("build_web_frontend", (line) => {
+    const result = await client.runSystemScriptStream("main", "build_web_frontend.sh", (line) => {
       logs.push(line);
     });
 
     expect(fetchMock).toHaveBeenLastCalledWith(
-      "/api/admin/scripts/run/stream",
+      "/api/bots/main/scripts/run/stream",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
           Authorization: "Bearer secret-token",
           "Content-Type": "application/json",
         }),
-        body: JSON.stringify({ script_name: "build_web_frontend" }),
+        body: JSON.stringify({ script_name: "build_web_frontend.sh" }),
       }),
     );
     expect(logs).toEqual(["npm run build", "vite build finished"]);
     expect(result).toEqual({
-      scriptName: "build_web_frontend",
+      scriptName: "build_web_frontend.sh",
       success: true,
       output: "Web 前端构建完成",
     });

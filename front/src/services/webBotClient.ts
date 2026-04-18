@@ -100,7 +100,7 @@ export interface WebBotClient {
   startTunnel(): Promise<TunnelSnapshot>;
   stopTunnel(): Promise<TunnelSnapshot>;
   restartTunnel(): Promise<TunnelSnapshot>;
-  listSystemScripts(): Promise<SystemScript[]>;
-  runSystemScript(scriptName: string): Promise<SystemScriptResult>;
-  runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult>;
+  listSystemScripts(botAlias: string): Promise<SystemScript[]>;
+  runSystemScript(botAlias: string, scriptName: string): Promise<SystemScriptResult>;
+  runSystemScriptStream(botAlias: string, scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult>;
 }

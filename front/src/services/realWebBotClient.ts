@@ -1669,19 +1669,22 @@ export class RealWebBotClient implements WebBotClient {
     return mapTunnelSnapshot(data);
   }
 
-  async listSystemScripts(): Promise<SystemScript[]> {
-    const data = await this.requestJson<{ items: RawSystemScript[] }>("/api/admin/scripts");
+  async listSystemScripts(botAlias: string): Promise<SystemScript[]> {
+    const data = await this.requestJson<{ items: RawSystemScript[] }>(`/api/bots/${encodeURIComponent(botAlias)}/scripts`);
     return data.items.map(mapSystemScript);
   }
 
-  async runSystemScript(scriptName: string): Promise<SystemScriptResult> {
-    const data = await this.requestJson<{ script_name: string; success: boolean; output: string }>("/api/admin/scripts/run", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  async runSystemScript(botAlias: string, scriptName: string): Promise<SystemScriptResult> {
+    const data = await this.requestJson<{ script_name: string; success: boolean; output: string }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/scripts/run`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ script_name: scriptName }),
       },
-      body: JSON.stringify({ script_name: scriptName }),
-    });
+    );
     return {
       scriptName: data.script_name,
       success: data.success,
@@ -1689,8 +1692,8 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
-    const response = await fetch("/api/admin/scripts/run/stream", {
+  async runSystemScriptStream(botAlias: string, scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
+    const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/scripts/run/stream`, {
       method: "POST",
       headers: this.headers({
         "Content-Type": "application/json",

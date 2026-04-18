@@ -35,7 +35,7 @@ import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
 import {
   DEMO_MAIN_WORKDIR,
-  DEMO_SYSTEM_SCRIPTS,
+  DEMO_SYSTEM_SCRIPTS_BY_BOT,
   DEMO_TEAM_WORKDIR,
 } from "../mocks/demoEnvironment";
 import { APP_VERSION } from "../theme";
@@ -122,7 +122,6 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   ]);
-  private readonly scripts: SystemScript[] = DEMO_SYSTEM_SCRIPTS;
   private gitProxySettings: GitProxySettings = { port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -1053,23 +1052,23 @@ export class MockWebBotClient implements WebBotClient {
     return this.getTunnelStatus();
   }
 
-  async listSystemScripts(): Promise<SystemScript[]> {
-    return this.scripts;
+  async listSystemScripts(botAlias: string): Promise<SystemScript[]> {
+    return [...(DEMO_SYSTEM_SCRIPTS_BY_BOT[botAlias] || [])];
   }
 
-  async runSystemScript(scriptName: string): Promise<SystemScriptResult> {
+  async runSystemScript(botAlias: string, scriptName: string): Promise<SystemScriptResult> {
     return {
       scriptName,
       success: true,
-      output: `${scriptName} 执行完成（Mock）`,
+      output: `${botAlias}:${scriptName} 执行完成（Mock）`,
     };
   }
 
-  async runSystemScriptStream(scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
+  async runSystemScriptStream(botAlias: string, scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
     const logs = [
-      "cd front",
-      "npm run build",
-      "Web 前端构建完成",
+      "cd scripts",
+      scriptName,
+      "系统功能执行完成",
     ];
     for (const line of logs) {
       onLog(line);
@@ -1078,7 +1077,7 @@ export class MockWebBotClient implements WebBotClient {
     return {
       scriptName,
       success: true,
-      output: "Web 前端构建完成",
+      output: `${botAlias}:${scriptName} 执行完成（Mock）`,
     };
   }
 }
