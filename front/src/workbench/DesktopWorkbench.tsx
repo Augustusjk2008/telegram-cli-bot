@@ -10,9 +10,11 @@ import { FileTreePane } from "./FileTreePane";
 import { PaneChrome } from "./PaneChrome";
 import { PaneResizer } from "./PaneResizer";
 import { TerminalPane } from "./TerminalPane";
+import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileBrowser } from "./useFileBrowser";
 import { WorkbenchHeader } from "./WorkbenchHeader";
+import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { useWorkbenchState } from "./useWorkbenchState";
 import { clampPaneState, COLLAPSED_SIDEBAR_SIZE_PX, MIN_TERMINAL_HEIGHT_PX, PANE_RESIZER_SIZE_PX } from "./workbenchTypes";
 
@@ -63,6 +65,7 @@ export function DesktopWorkbench({
   const centerRowTemplate = layoutState.editorCollapsed
     ? `auto ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr)`
     : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
+  const workspaceName = browser.currentPath.split(/[\\/]+/).filter(Boolean).pop() || browser.currentPath || "/";
 
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);
@@ -87,129 +90,153 @@ export function DesktopWorkbench({
   }, []);
 
   return (
-    <div data-testid="desktop-workbench-root" className="grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)] bg-[var(--bg)]">
+    <div
+      data-testid="desktop-workbench-root"
+      className="grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto] bg-[var(--bg)]"
+    >
       <WorkbenchHeader
         currentBot={botAlias}
+        workspaceName={workspaceName}
         viewMode={viewMode}
         onViewModeChange={(nextMode) => onViewModeChange?.(nextMode)}
         onOpenBotSwitcher={() => onOpenBotSwitcher?.()}
       />
-      <div
-        data-testid="desktop-workbench-columns"
-        ref={columnsRef}
-        className={clsx("grid min-h-0 p-3")}
-        style={{ gridTemplateColumns: columnTemplate }}
-      >
-        <PaneChrome
-          testId="desktop-pane-files"
-          title="文件"
-          collapsed={layoutState.filesCollapsed}
-          collapseLabel="折叠左侧文件区"
-          expandLabel="展开左侧文件区"
-          onToggleCollapsed={() => togglePane("files")}
-        >
-          <FileTreePane
-            browser={browser}
-            onOpenFile={(path) => {
-              void tabs.openFile(path);
-            }}
-            onCreatedFile={(path, content, lastModifiedNs) => {
-              tabs.openCreatedFile(path, content, lastModifiedNs);
-            }}
-            onRenamedFile={(oldPath, nextPath) => {
-              tabs.syncRenamedPath(oldPath, nextPath);
-            }}
-            onDeletedFile={(path) => {
-              tabs.closePath(path);
-            }}
-          />
-        </PaneChrome>
-        <PaneResizer
-          ariaLabel="调整文件区宽度"
-          axis="x"
-          onResizeDelta={(deltaPx) =>
-            resizePane("filesWidthPx", layoutState.filesWidthPx + deltaPx, {
-              containerWidthPx: layoutBounds.columnsWidthPx,
-              containerHeightPx: layoutBounds.centerHeightPx,
-            })}
-        />
-
+      <div data-testid="desktop-workbench-shell" className="min-h-0">
         <div
-          data-testid="desktop-workbench-center-rows"
-          ref={centerRowsRef}
-          className="grid min-h-0"
-          style={{ gridTemplateRows: centerRowTemplate }}
+          data-testid="desktop-workbench-columns"
+          ref={columnsRef}
+          className={clsx("grid min-h-0 p-3")}
+          style={{ gridTemplateColumns: columnTemplate }}
         >
-          <PaneChrome
-            testId="desktop-pane-editor"
-            title="编辑器"
-            collapsed={layoutState.editorCollapsed}
-            collapseLabel="折叠编辑区"
-            expandLabel="展开编辑区"
-            onToggleCollapsed={() => togglePane("editor")}
+          <section
+            data-testid="desktop-pane-files"
+            data-collapsed={layoutState.filesCollapsed ? "true" : "false"}
+            className="grid min-h-0 border border-[var(--border)] bg-[var(--surface)]"
           >
-            <EditorPane
-              tabs={tabs.tabs}
-              activeTab={tabs.activeTab}
-              activeTabPath={tabs.activeTabPath}
-              onActivateTab={tabs.activateTab}
-              onCloseTab={tabs.closeTab}
-              onChangeActiveContent={tabs.updateActiveContent}
-              onSaveActiveTab={() => void tabs.saveActiveTab()}
-            />
-          </PaneChrome>
+            <div
+              className={
+                layoutState.filesCollapsed ? "grid min-h-0 grid-cols-[1fr]" : "grid min-h-0 grid-cols-[48px_minmax(0,1fr)]"
+              }
+            >
+              <WorkbenchActivityRail
+                activePanel="explorer"
+                explorerCollapsed={layoutState.filesCollapsed}
+                onToggleExplorer={() => togglePane("files")}
+              />
+              {!layoutState.filesCollapsed ? (
+                <FileTreePane
+                  browser={browser}
+                  onOpenFile={(path) => {
+                    void tabs.openFile(path);
+                  }}
+                  onCreatedFile={(path, content, lastModifiedNs) => {
+                    tabs.openCreatedFile(path, content, lastModifiedNs);
+                  }}
+                  onRenamedFile={(oldPath, nextPath) => {
+                    tabs.syncRenamedPath(oldPath, nextPath);
+                  }}
+                  onDeletedFile={(path) => {
+                    tabs.closePath(path);
+                  }}
+                />
+              ) : null}
+            </div>
+          </section>
           <PaneResizer
-            ariaLabel="调整编辑器高度"
-            axis="y"
+            ariaLabel="调整文件区宽度"
+            axis="x"
             onResizeDelta={(deltaPx) =>
-              resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
+              resizePane("filesWidthPx", layoutState.filesWidthPx + deltaPx, {
                 containerWidthPx: layoutBounds.columnsWidthPx,
                 containerHeightPx: layoutBounds.centerHeightPx,
               })}
           />
-          <PaneChrome
-            testId="desktop-pane-terminal"
-            title="终端"
-            collapsed={layoutState.terminalCollapsed}
-            collapseLabel="折叠终端区"
-            expandLabel="展开终端区"
-            onToggleCollapsed={() => togglePane("terminal")}
+
+          <div
+            data-testid="desktop-workbench-center-rows"
+            ref={centerRowsRef}
+            className="grid min-h-0"
+            style={{ gridTemplateRows: centerRowTemplate }}
           >
-            <TerminalPane
-              authToken={authToken}
+            <PaneChrome
+              testId="desktop-pane-editor"
+              title="编辑器"
+              collapsed={layoutState.editorCollapsed}
+              collapseLabel="折叠编辑区"
+              expandLabel="展开编辑区"
+              onToggleCollapsed={() => togglePane("editor")}
+            >
+              <EditorPane
+                tabs={tabs.tabs}
+                activeTab={tabs.activeTab}
+                activeTabPath={tabs.activeTabPath}
+                onActivateTab={tabs.activateTab}
+                onCloseTab={tabs.closeTab}
+                onChangeActiveContent={tabs.updateActiveContent}
+                onSaveActiveTab={() => void tabs.saveActiveTab()}
+              />
+            </PaneChrome>
+            <PaneResizer
+              ariaLabel="调整编辑器高度"
+              axis="y"
+              onResizeDelta={(deltaPx) =>
+                resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
+                  containerWidthPx: layoutBounds.columnsWidthPx,
+                  containerHeightPx: layoutBounds.centerHeightPx,
+                })}
+            />
+            <PaneChrome
+              testId="desktop-pane-terminal"
+              title="终端"
+              collapsed={layoutState.terminalCollapsed}
+              collapseLabel="折叠终端区"
+              expandLabel="展开终端区"
+              onToggleCollapsed={() => togglePane("terminal")}
+            >
+              <TerminalPane
+                authToken={authToken}
+                botAlias={botAlias}
+                client={client}
+                preferredWorkingDir={browser.currentPath}
+                themeName={themeName}
+              />
+            </PaneChrome>
+          </div>
+          <PaneResizer
+            ariaLabel="调整聊天区宽度"
+            axis="x"
+            onResizeDelta={(deltaPx) =>
+              resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
+                containerWidthPx: layoutBounds.columnsWidthPx,
+                containerHeightPx: layoutBounds.centerHeightPx,
+              })}
+          />
+
+          <PaneChrome
+            testId="desktop-pane-chat"
+            title="AI 聊天"
+            collapsed={layoutState.chatCollapsed}
+            collapseLabel="折叠右侧聊天区"
+            expandLabel="展开右侧聊天区"
+            onToggleCollapsed={() => togglePane("chat")}
+          >
+            <ChatPane
               botAlias={botAlias}
+              botAvatarName={botAvatarName}
+              userAvatarName={userAvatarName}
               client={client}
-              preferredWorkingDir={browser.currentPath}
-              themeName={themeName}
             />
           </PaneChrome>
         </div>
-        <PaneResizer
-          ariaLabel="调整聊天区宽度"
-          axis="x"
-          onResizeDelta={(deltaPx) =>
-            resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
-              containerWidthPx: layoutBounds.columnsWidthPx,
-              containerHeightPx: layoutBounds.centerHeightPx,
-            })}
-        />
-
-        <PaneChrome
-          testId="desktop-pane-chat"
-          title="AI 聊天"
-          collapsed={layoutState.chatCollapsed}
-          collapseLabel="折叠右侧聊天区"
-          expandLabel="展开右侧聊天区"
-          onToggleCollapsed={() => togglePane("chat")}
-        >
-          <ChatPane
-            botAlias={botAlias}
-            botAvatarName={botAvatarName}
-            userAvatarName={userAvatarName}
-            client={client}
-          />
-        </PaneChrome>
       </div>
+      <WorkbenchStatusBar
+        currentPath={browser.currentPath}
+        activeFilePath={tabs.activeTab?.path || ""}
+        isDirty={Boolean(tabs.activeTab?.dirty)}
+        terminalLabel="终端"
+        chatLabel="AI 助手"
+        viewMode={viewMode}
+      />
     </div>
   );
 }

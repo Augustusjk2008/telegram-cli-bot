@@ -36,12 +36,40 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(screen.getByTestId("desktop-pane-terminal")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-pane-chat")).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "折叠左侧文件区" }));
+  await user.click(screen.getByRole("button", { name: "折叠资源管理器" }));
   expect(screen.getByTestId("desktop-pane-files")).toHaveAttribute("data-collapsed", "true");
   expect(localStorage.getItem("web-workbench-pane-state")).toContain("\"filesCollapsed\":true");
 
   await user.click(screen.getByRole("button", { name: "手机版" }));
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
+});
+
+test("desktop workbench renders IDE shell chrome and keeps the activity rail when explorer is collapsed", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="bot-default.png"
+      userAvatarName="user-default.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(screen.getByTestId("desktop-workbench-titlebar")).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-activity-rail")).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-statusbar")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "折叠左侧文件区" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "折叠资源管理器" }));
+
+  expect(screen.getByTestId("desktop-workbench-activity-rail")).toBeVisible();
+  expect(screen.queryByText("EXPLORER")).not.toBeInTheDocument();
 });
 
 test("desktop workbench restores persisted pane sizes from storage", () => {
@@ -204,12 +232,12 @@ test("desktop workbench clamps invalid stored pane sizes and restores them after
     gridTemplateRows: "220px 8px minmax(160px, 1fr)",
   });
 
-  await user.click(screen.getByRole("button", { name: "折叠左侧文件区" }));
+  await user.click(screen.getByRole("button", { name: "折叠资源管理器" }));
   expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
     gridTemplateColumns: "72px 8px minmax(0, 1fr) 8px 260px",
   });
 
-  await user.click(screen.getByRole("button", { name: "展开左侧文件区" }));
+  await user.click(screen.getByRole("button", { name: "展开资源管理器" }));
   expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
     gridTemplateColumns: "420px 8px minmax(0, 1fr) 8px 260px",
   });
