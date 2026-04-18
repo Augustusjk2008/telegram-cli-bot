@@ -713,6 +713,10 @@ def _stream_event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
 
 def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     event_type = str(item.get("type") or "").strip()
+    if event_type in {"response_item", "event_msg"}:
+        turn = _new_turn_state()
+        _consume_codex_line(item, turn, include_trace=True)
+        return [dict(event) for event in turn["trace"]]
     if not event_type.startswith("item."):
         return []
 

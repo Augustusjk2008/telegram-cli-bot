@@ -96,6 +96,32 @@ def test_consume_stream_trace_chunk_maps_claude_events_without_type_error():
     assert events[1]["summary"] == "git status --short"
 
 
+def test_consume_stream_trace_chunk_maps_codex_response_item_and_event_msg_events():
+    state = create_stream_trace_state("codex")
+
+    events = consume_stream_trace_chunk(
+        "codex",
+        "\n".join(
+            [
+                '{"type":"response_item","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我先检查目录结构。"}]}}',
+                '{"type":"response_item","item":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}',
+                '{"type":"response_item","item":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}',
+                '{"type":"event_msg","payload":{"type":"agent_message","message":"目录已读取完成。"}}',
+            ]
+        ) + "\n",
+        state,
+    )
+
+    assert [event["kind"] for event in events] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+        "commentary",
+    ]
+    assert events[1]["summary"] == "Get-ChildItem -Force"
+    assert events[2]["summary"] == "README.md\nbot\nfront"
+
+
 def test_consume_claude_line_remains_backward_compatible_without_include_trace_kwarg():
     turn = _new_turn_state()
 

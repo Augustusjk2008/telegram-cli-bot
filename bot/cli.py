@@ -127,6 +127,28 @@ def _extract_codex_error_text(event: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_codex_content_text(content: Any) -> Optional[str]:
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if not isinstance(content, list):
+        return None
+
+    text_parts: List[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = str(block.get("type", "")).strip()
+        if block_type not in ("text", "output_text"):
+            continue
+        text_value = block.get("text")
+        if isinstance(text_value, str) and text_value.strip():
+            text_parts.append(text_value.strip())
+
+    if not text_parts:
+        return None
+    return "\n".join(text_parts).strip()
+
+
 def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
     """解析 codex --json 的单行事件。"""
     result: Dict[str, Optional[str]] = {
@@ -148,6 +170,37 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
 
     if event_type == "error":
         result["error_text"] = _extract_codex_error_text(event)
+        return result
+
+    if event_type in {"response_item", "event_msg"}:
+        payload = event.get("item")
+        if not isinstance(payload, dict):
+            payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return result
+
+        payload_type = str(payload.get("type", "")).strip()
+        if payload_type == "message":
+            role = str(payload.get("role", "")).strip().lower()
+            if role != "assistant":
+                return result
+            text_value = _extract_codex_content_text(payload.get("content"))
+            if not text_value:
+                return result
+            phase = str(payload.get("phase", "")).strip().lower()
+            if phase in {"final", "final_answer"}:
+                result["completed_text"] = text_value
+            result["delta_text"] = text_value
+            return result
+
+        if payload_type == "agent_message":
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip():
+                text_value = message.strip()
+                result["completed_text"] = text_value
+                result["delta_text"] = text_value
+            return result
+
         return result
 
     if not event_type.startswith("item."):

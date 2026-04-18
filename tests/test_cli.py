@@ -212,6 +212,20 @@ class TestParseCodexJsonOutput:
         text, thread_id = parse_codex_json_output("plain text output")
         assert isinstance(text, str)
 
+    def test_response_item_and_event_msg_output(self):
+        text, thread_id = parse_codex_json_output(
+            "\n".join(
+                [
+                    '{"type":"thread.started","thread_id":"thread-1"}',
+                    '{"type":"response_item","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我先检查目录结构。"}]}}',
+                    '{"type":"event_msg","payload":{"type":"agent_message","message":"目录已读取完成。"}}',
+                ]
+            )
+        )
+
+        assert text == "目录已读取完成。"
+        assert thread_id == "thread-1"
+
 
 class TestParseClaudeStreamJsonLine:
     """测试 Claude stream-json 单行解析"""

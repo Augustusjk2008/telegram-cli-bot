@@ -3318,6 +3318,54 @@ async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_d
     assert assistant_items[0]["meta"]["tool_call_count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_stream_cli_chat_persists_trace_counts_from_codex_response_items(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"response_item","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我先检查目录结构。"}]}}\n',
+                '{"type":"response_item","item":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}\n',
+                '{"type":"response_item","item":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}\n',
+                '{"type":"event_msg","payload":{"type":"agent_message","message":"目录已读取完成。"}}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    fake_process = MagicMock()
+    fake_process.stdout = FakeStdout()
+    fake_process.poll.side_effect = [None, None, None, None, 0, 0]
+    fake_process.wait.return_value = 0
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "列出当前目录")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    history = get_history(web_manager, "main", 1001, limit=10)
+    assistant_items = [item for item in history["items"] if item["role"] == "assistant"]
+
+    assert len(assistant_items) == 1
+    assert assistant_items[0]["id"] == done_event["message"]["id"]
+    assert assistant_items[0]["content"] == "目录已读取完成。"
+    assert assistant_items[0]["meta"]["trace_count"] == 4
+    assert assistant_items[0]["meta"]["tool_call_count"] == 1
+
+
 def test_kill_user_process_preserves_local_streaming_row(
     web_manager: MultiBotManager,
     tmp_path: Path,
