@@ -1702,7 +1702,7 @@ export class RealWebBotClient implements WebBotClient {
     });
 
     if (!response.ok || !response.body) {
-      let message = "执行脚本失败";
+      let message = "执行系统功能失败";
       try {
         const payload = (await response.json()) as JsonEnvelope<unknown>;
         message = payload.error?.message || message;
@@ -1744,7 +1744,7 @@ export class RealWebBotClient implements WebBotClient {
             output: event.output || "",
           };
         } else if (event.type === "error") {
-          throw new Error(event.message || "脚本执行失败");
+          throw new Error(event.message || "执行系统功能失败");
         }
 
         separatorIndex = buffer.indexOf("\n\n");

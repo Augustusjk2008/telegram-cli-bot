@@ -1076,19 +1076,19 @@ test("keeps showing a visible streaming badge while preview text is updating", a
   expect(screen.getByText("正在输出")).toBeInTheDocument();
 });
 
-test("shows reset kill and system-script actions for main bot", async () => {
+test("shows reset kill and system-function actions for non-main bots", async () => {
   const client = createClient({
     listSystemScripts: async () => [{
-      scriptName: "network_traffic",
+      scriptName: "network_traffic.ps1",
       displayName: "网络流量",
       description: "查看网络状态",
-      path: "C:\\scripts\\network_traffic.ps1",
+      path: "C:\\workspace\\team2\\scripts\\network_traffic.ps1",
     }],
   });
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="team2" client={client} />);
 
-  expect(await screen.findByRole("button", { name: "系统脚本" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "系统功能" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "重置会话" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
 });
@@ -1166,23 +1166,37 @@ test("does not force-scroll to the bottom once the user scrolls away during stre
   }
 }, 10000);
 
-test("shows compact system script titles without verbose metadata", async () => {
+test("opens system functions with bot-scoped calls and compact titles", async () => {
   const user = userEvent.setup();
+  const listSystemScripts = vi.fn(async () => [{
+    scriptName: "network_traffic.ps1",
+    displayName: "网络流量。查看当前网络流量与连接状态。",
+    description: "查看网络状态并输出详细路径",
+    path: "C:\\workspace\\team2\\scripts\\network_traffic.ps1",
+  }]);
+  const runSystemScript = vi.fn(async () => ({
+    scriptName: "network_traffic.ps1",
+    success: true,
+    output: "执行成功",
+  }));
   const client = createClient({
-    listSystemScripts: async () => [{
-      scriptName: "network_traffic",
-      displayName: "网络流量。查看当前网络流量与连接状态。",
-      description: "查看网络状态并输出详细路径",
-      path: "C:\\scripts\\network_traffic.ps1",
-    }],
+    listSystemScripts,
+    runSystemScript,
   });
 
-  render(<ChatScreen botAlias="main" client={client} />);
-  await user.click(await screen.findByRole("button", { name: "系统脚本" }));
+  render(<ChatScreen botAlias="team2" client={client} />);
+  await user.click(await screen.findByRole("button", { name: "系统功能" }));
 
+  expect(listSystemScripts).toHaveBeenCalledWith("team2");
+  expect(screen.getByRole("heading", { name: "系统功能" })).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: "网络流量" })).toBeInTheDocument();
   expect(screen.queryByText("查看网络状态并输出详细路径")).not.toBeInTheDocument();
-  expect(screen.queryByText("C:\\scripts\\network_traffic.ps1")).not.toBeInTheDocument();
+  expect(screen.queryByText("C:\\workspace\\team2\\scripts\\network_traffic.ps1")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "网络流量" }));
+
+  expect(runSystemScript).toHaveBeenCalledWith("team2", "network_traffic.ps1");
+  expect(await screen.findByText(/系统功能：网络流量。查看当前网络流量与连接状态。/)).toBeInTheDocument();
 });
 
 test("opens a file preview dialog when clicking a local markdown file link", async () => {

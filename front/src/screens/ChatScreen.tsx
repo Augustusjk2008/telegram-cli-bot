@@ -1068,11 +1068,11 @@ export function ChatScreen({
     setActionLoading("scripts");
     setScriptError("");
     try {
-      const nextScripts = await client.listSystemScripts();
+      const nextScripts = await client.listSystemScripts(botAlias);
       setScripts(nextScripts);
       setShowScripts(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载系统脚本失败");
+      setError(err instanceof Error ? err.message : "加载系统功能失败");
     } finally {
       setActionLoading("");
     }
@@ -1082,17 +1082,17 @@ export function ChatScreen({
     setRunningScriptName(script.scriptName);
     setScriptError("");
     try {
-      const result = await client.runSystemScript(script.scriptName);
+      const result = await client.runSystemScript(botAlias, script.scriptName);
       appendSystemMessage(
         [
-          `脚本：${script.displayName}`,
+          `系统功能：${script.displayName}`,
           result.success ? "执行结果：成功" : "执行结果：失败",
           result.output || "无输出",
         ].join("\n"),
       );
       setShowScripts(false);
     } catch (err) {
-      setScriptError(err instanceof Error ? err.message : "执行脚本失败");
+      setScriptError(err instanceof Error ? err.message : "执行系统功能失败");
     } finally {
       setRunningScriptName("");
     }
@@ -1149,17 +1149,15 @@ export function ChatScreen({
       {showTopChrome ? (
         <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {botAlias === "main" ? (
-              <button
-                type="button"
-                onClick={() => void handleOpenScripts()}
-                disabled={actionLoading === "scripts"}
-                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                <Terminal className="h-4 w-4" />
-                {actionLoading === "scripts" ? "加载脚本..." : "系统脚本"}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              onClick={() => void handleOpenScripts()}
+              disabled={actionLoading === "scripts"}
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            >
+              <Terminal className="h-4 w-4" />
+              {actionLoading === "scripts" ? "加载系统功能..." : "系统功能"}
+            </button>
             <button
               type="button"
               onClick={() => void handleResetSession()}
@@ -1278,8 +1276,8 @@ export function ChatScreen({
           <div className="w-full rounded-t-3xl bg-[var(--surface)] p-4 shadow-[var(--shadow-card)]">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold">系统脚本</h2>
-                <p className="text-sm text-[var(--muted)]">选择一个预设脚本立即执行</p>
+                <h2 className="text-lg font-semibold">系统功能</h2>
+                <p className="text-sm text-[var(--muted)]">选择一个系统功能立即执行</p>
               </div>
               <button
                 type="button"

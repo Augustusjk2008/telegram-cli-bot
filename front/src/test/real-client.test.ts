@@ -1257,6 +1257,69 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("runSystemScriptStream uses system-function fallback copy for HTTP failures", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        body: null,
+        json: async () => {
+          throw new Error("invalid json");
+        },
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(
+      client.runSystemScriptStream("main", "build_web_frontend.sh", () => {}),
+    ).rejects.toThrow("执行系统功能失败");
+  });
+
+  test("runSystemScriptStream uses system-function fallback copy for SSE errors", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: error\ndata: {}\n\n"));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(
+      client.runSystemScriptStream("main", "build_web_frontend.sh", () => {}),
+    ).rejects.toThrow("执行系统功能失败");
+  });
+
   test("getCliParams maps backend cli param payload", async () => {
     fetchMock
       .mockResolvedValueOnce({
