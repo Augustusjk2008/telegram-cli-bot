@@ -118,6 +118,15 @@ def _json(data: dict[str, Any], status: int = 200) -> web.Response:
     return web.json_response(data, status=status, dumps=lambda obj: json.dumps(obj, ensure_ascii=False))
 
 
+def _serialize_file_version_fields(data: dict[str, Any]) -> dict[str, Any]:
+    if "last_modified_ns" not in data:
+        return data
+    return {
+        **data,
+        "last_modified_ns": str(data["last_modified_ns"]),
+    }
+
+
 def _error_response(exc: WebApiError) -> web.Response:
     return _json({"ok": False, "error": {"code": exc.code, "message": exc.message}}, status=exc.status)
 
@@ -865,14 +874,14 @@ class WebApiServer:
             body.get("content", ""),
             expected_mtime_ns=body.get("expected_mtime_ns"),
         )
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def create_text_file_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = create_text_file(self.manager, alias, auth.user_id, body.get("filename", ""), body.get("content", ""))
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def rename_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -905,7 +914,7 @@ class WebApiServer:
         mode = request.query.get("mode", "cat")
         lines = int(request.query.get("lines", "20"))
         data = read_file_content(self.manager, alias, auth.user_id, filename, mode=mode, lines=lines)
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)

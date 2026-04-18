@@ -261,7 +261,7 @@ test("desktop file clicks open tabs and sync rename and delete actions", async (
     mode: "cat",
     fileSizeBytes: 128,
     isFullContent: true,
-    lastModifiedNs: 1,
+    lastModifiedNs: "1",
   }));
   vi.spyOn(client, "renamePath").mockImplementation(async (_botAlias, path, newName) => {
     entries = entries.map((entry) => entry.name === path ? { ...entry, name: newName } : entry);

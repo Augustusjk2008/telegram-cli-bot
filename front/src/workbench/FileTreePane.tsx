@@ -7,7 +7,7 @@ import { type UseFileBrowserResult } from "./useFileBrowser";
 type Props = {
   browser: UseFileBrowserResult;
   onOpenFile: (path: string) => void;
-  onCreatedFile: (path: string, content: string, lastModifiedNs?: number) => void;
+  onCreatedFile: (path: string, content: string, lastModifiedNs?: string) => void;
   onRenamedFile: (oldPath: string, nextPath: string) => void;
   onDeletedFile: (path: string) => void;
 };

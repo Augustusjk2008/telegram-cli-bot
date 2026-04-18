@@ -7,7 +7,7 @@ type Props = {
   client: WebBotClient;
 };
 
-function createTab(path: string, content: string, lastModifiedNs?: number): EditorTab {
+function createTab(path: string, content: string, lastModifiedNs?: string): EditorTab {
   return {
     path,
     content,
@@ -33,7 +33,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
   const activeTab = tabs.find((tab) => tab.path === activeTabPath) || null;
   const hasDirtyTabs = tabs.some((tab) => tab.dirty);
 
-  function openCreatedFile(path: string, content: string, lastModifiedNs?: number) {
+  function openCreatedFile(path: string, content: string, lastModifiedNs?: string) {
     setTabs((current) => {
       const nextTab = createTab(path, content, lastModifiedNs);
       const existingIndex = current.findIndex((item) => item.path === path);

@@ -10,6 +10,7 @@ import { normalizePathInput } from "../utils/pathInput";
 type Props = {
   client?: WebBotClient;
   onSelect: (alias: string) => void;
+  onBotsChange?: (bots: BotSummary[]) => void;
 };
 
 type CreateDraft = CreateBotInput;
@@ -23,7 +24,7 @@ const EMPTY_CREATE_DRAFT: CreateDraft = {
   avatarName: "bot-default.png",
 };
 
-export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Props) {
+export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange }: Props) {
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [loading, setLoading] = useState(true);
@@ -44,6 +45,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect }: Pro
       ]);
       const resolvedAssets = assets.length > 0 ? assets : DEFAULT_AVATAR_ASSETS;
       setBots(data);
+      onBotsChange?.(data);
       setAvatarAssets(resolvedAssets);
       setCreateDraft((prev) => ({
         ...prev,

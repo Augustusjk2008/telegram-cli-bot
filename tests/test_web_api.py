@@ -1166,6 +1166,46 @@ async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_file_routes_serialize_last_modified_ns_as_string(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.md"
+    target.write_text("# hello\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            read_resp = await client.get("/api/bots/main/files/read?filename=notes.md&mode=cat&lines=0")
+            assert read_resp.status == 200
+            read_payload = await read_resp.json()
+            assert read_payload["data"]["last_modified_ns"] == str(target.stat().st_mtime_ns)
+
+            write_resp = await client.post(
+                "/api/bots/main/files/write",
+                json={
+                    "path": "notes.md",
+                    "content": "# updated\n",
+                    "expected_mtime_ns": read_payload["data"]["last_modified_ns"],
+                },
+            )
+            assert write_resp.status == 200
+            write_payload = await write_resp.json()
+
+    assert write_payload["data"]["last_modified_ns"] == str(target.stat().st_mtime_ns)
+    assert target.read_text(encoding="utf-8") == "# updated\n"
+
+
+@pytest.mark.asyncio
 async def test_write_file_route_updates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
@@ -1176,6 +1216,7 @@ async def test_write_file_route_updates_file(web_manager: MultiBotManager, monke
     target = workspace / "notes.md"
     target.write_text("# hello\n", encoding="utf-8")
     web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
 
     previous = read_file_content(web_manager, "main", 1001, "notes.md", mode="cat", lines=0)
 

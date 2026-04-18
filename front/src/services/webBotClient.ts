@@ -52,7 +52,7 @@ export interface WebBotClient {
   deletePath(botAlias: string, path: string): Promise<void>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
-  writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: number): Promise<FileWriteResult>;
+  writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

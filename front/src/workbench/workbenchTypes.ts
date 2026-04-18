@@ -78,5 +78,5 @@ export type EditorTab = {
   saving: boolean;
   statusText: string;
   error: string;
-  lastModifiedNs?: number;
+  lastModifiedNs?: string;
 };

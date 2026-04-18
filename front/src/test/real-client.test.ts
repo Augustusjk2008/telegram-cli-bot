@@ -1125,6 +1125,7 @@ describe("RealWebBotClient", () => {
             mode: "cat",
             file_size_bytes: 123,
             is_full_content: true,
+            last_modified_ns: "1776420510390927700",
           },
         }),
       });
@@ -1147,6 +1148,56 @@ describe("RealWebBotClient", () => {
       workingDir: "",
       fileSizeBytes: 123,
       isFullContent: true,
+      lastModifiedNs: "1776420510390927700",
+    });
+  });
+
+  test("writeFile preserves string file versions in the request body", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            path: "README.md",
+            file_size_bytes: 16,
+            last_modified_ns: "1776420510390927700",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const result = await client.writeFile("main", "README.md", "updated content", "1776420510390927700");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/files/write",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          path: "README.md",
+          content: "updated content",
+          expected_mtime_ns: "1776420510390927700",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      path: "README.md",
+      fileSizeBytes: 16,
+      lastModifiedNs: "1776420510390927700",
     });
   });
 

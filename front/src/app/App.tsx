@@ -455,7 +455,7 @@ export function App() {
   }
 
   if (showBotManager || !currentBot) {
-    return <BotListScreen client={client} onSelect={handleSelectBot} />;
+    return <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} />;
   }
 
   const hideOuterChrome = (currentTab === "chat" && isChatImmersive)

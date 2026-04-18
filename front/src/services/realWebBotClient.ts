@@ -138,19 +138,19 @@ type RawFileReadResult = {
   working_dir?: string;
   file_size_bytes?: number;
   is_full_content?: boolean;
-  last_modified_ns?: number;
+  last_modified_ns?: string | number;
 };
 
 type RawFileWriteResult = {
   path: string;
   file_size_bytes: number;
-  last_modified_ns: number;
+  last_modified_ns: string | number;
 };
 
 type RawFileCreateResult = {
   path: string;
   file_size_bytes: number;
-  last_modified_ns: number;
+  last_modified_ns: string | number;
 };
 
 type RawFileRenameResult = {
@@ -1059,7 +1059,7 @@ export class RealWebBotClient implements WebBotClient {
       workingDir: data.working_dir || "",
       fileSizeBytes: data.file_size_bytes,
       isFullContent: data.is_full_content,
-      lastModifiedNs: data.last_modified_ns,
+      lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
     };
   }
 
@@ -1076,11 +1076,11 @@ export class RealWebBotClient implements WebBotClient {
       workingDir: data.working_dir || "",
       fileSizeBytes: data.file_size_bytes,
       isFullContent: data.is_full_content ?? true,
-      lastModifiedNs: data.last_modified_ns,
+      lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
     };
   }
 
-  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: number): Promise<FileWriteResult> {
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {
     const data = await this.requestJson<RawFileWriteResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/write`, {
       method: "POST",
       headers: {
@@ -1095,7 +1095,7 @@ export class RealWebBotClient implements WebBotClient {
     return {
       path: data.path,
       fileSizeBytes: data.file_size_bytes,
-      lastModifiedNs: data.last_modified_ns,
+      lastModifiedNs: String(data.last_modified_ns),
     };
   }
 
@@ -1110,7 +1110,7 @@ export class RealWebBotClient implements WebBotClient {
     return {
       path: data.path,
       fileSizeBytes: data.file_size_bytes,
-      lastModifiedNs: data.last_modified_ns,
+      lastModifiedNs: String(data.last_modified_ns),
     };
   }
 

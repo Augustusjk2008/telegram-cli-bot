@@ -390,7 +390,7 @@ export class MockWebBotClient implements WebBotClient {
       mode: "head" as const,
       fileSizeBytes: new TextEncoder().encode(content).length,
       isFullContent: true,
-      lastModifiedNs: this.getFileVersion(botAlias, browserPath, filename),
+      lastModifiedNs: String(this.getFileVersion(botAlias, browserPath, filename)),
     };
   }
 
@@ -402,14 +402,14 @@ export class MockWebBotClient implements WebBotClient {
       mode: "cat" as const,
       fileSizeBytes: new TextEncoder().encode(content).length,
       isFullContent: true,
-      lastModifiedNs: this.getFileVersion(botAlias, browserPath, filename),
+      lastModifiedNs: String(this.getFileVersion(botAlias, browserPath, filename)),
     };
   }
 
-  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: number): Promise<FileWriteResult> {
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {
     const browserPath = this.getBrowserPath(botAlias);
     const currentVersion = this.getFileVersion(botAlias, browserPath, path);
-    if (expectedMtimeNs !== undefined && expectedMtimeNs !== currentVersion) {
+    if (expectedMtimeNs !== undefined && expectedMtimeNs !== String(currentVersion)) {
       throw new Error("文件已被修改，请重新打开后再试");
     }
 
@@ -429,7 +429,7 @@ export class MockWebBotClient implements WebBotClient {
     return {
       path,
       fileSizeBytes: new TextEncoder().encode(content).length,
-      lastModifiedNs: nextVersion,
+      lastModifiedNs: String(nextVersion),
     };
   }
 
@@ -464,7 +464,7 @@ export class MockWebBotClient implements WebBotClient {
     return {
       path: fileName,
       fileSizeBytes: new TextEncoder().encode(content).length,
-      lastModifiedNs: nextVersion,
+      lastModifiedNs: String(nextVersion),
     };
   }
 

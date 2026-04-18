@@ -156,7 +156,7 @@ test("desktop bot switching requires confirmation when there are dirty editor ta
     mode: "cat",
     fileSizeBytes: 128,
     isFullContent: true,
-    lastModifiedNs: 1,
+    lastModifiedNs: "1",
   });
 
   render(<App />);
@@ -728,6 +728,32 @@ test("bot manager can add rename and delete managed bots", async () => {
   await user.click(screen.getByRole("button", { name: "删除 planner" }));
 
   expect(screen.queryByText("planner")).not.toBeInTheDocument();
+});
+
+test("newly created bot can be entered immediately from bot manager", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+
+  await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
+  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team3");
+  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+
+  expect(await screen.findByText("team3")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "进入 team3" }));
+
+  expect(await screen.findByRole("button", { name: "team3" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Bot 管理" })).not.toBeInTheDocument();
+  expect(document.title).toBe("team3 - Orbit Safe Claw");
 });
 
 test("create bot form no longer asks for telegram token", async () => {

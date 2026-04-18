@@ -114,19 +114,19 @@ export type FileReadResult = {
   workingDir?: string;
   fileSizeBytes?: number;
   isFullContent?: boolean;
-  lastModifiedNs?: number;
+  lastModifiedNs?: string;
 };
 
 export type FileWriteResult = {
   path: string;
   fileSizeBytes: number;
-  lastModifiedNs: number;
+  lastModifiedNs: string;
 };
 
 export type FileCreateResult = {
   path: string;
   fileSizeBytes: number;
-  lastModifiedNs: number;
+  lastModifiedNs: string;
 };
 
 export type FileRenameResult = {
