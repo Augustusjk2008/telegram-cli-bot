@@ -117,6 +117,12 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
     return MultiBotManager(main_profile=profile, storage_file=str(storage_file))
 
 
+def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_dir: Path):
+    import bot.session_store as session_store
+
+    assert session_store.STORE_FILE == temp_dir / ".session_store.json"
+
+
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):
     subdir = temp_dir / "workspace"
     subdir.mkdir()
