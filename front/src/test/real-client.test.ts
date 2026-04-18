@@ -144,6 +144,43 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("listFiles appends the explicit path query when provided", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            working_dir: "C:\\workspace\\demo\\src",
+            entries: [],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    await client.listFiles("main", "C:\\workspace\\demo\\src");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/ls?path=C%3A%5Cworkspace%5Cdemo%5Csrc",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
   test("createDirectory posts to the mkdir endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
@@ -21,6 +22,7 @@ import type {
 import type { WebBotClient } from "../services/webBotClient";
 import { dispatchAssistantCronRunEnqueued } from "../utils/assistantCronEvents";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
+import { normalizePathInput } from "../utils/pathInput";
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
   CHAT_BODY_FONT_SIZE_OPTIONS,
@@ -44,6 +46,9 @@ type Props = {
   botAvatarName?: string;
   client?: WebBotClient;
   onLogout: () => void;
+  embedded?: boolean;
+  prefilledWorkdir?: string;
+  onWorkdirUpdated?: (workingDir: string) => void;
   themeName?: UiThemeName;
   onThemeChange?: (themeName: UiThemeName) => void;
   chatBodyFontFamily?: ChatBodyFontFamilyName;
@@ -156,6 +161,9 @@ export function SettingsScreen({
   botAvatarName,
   client = new MockWebBotClient(),
   onLogout,
+  embedded = false,
+  prefilledWorkdir,
+  onWorkdirUpdated,
   themeName = DEFAULT_UI_THEME,
   onThemeChange,
   chatBodyFontFamily = DEFAULT_CHAT_BODY_FONT_FAMILY,
@@ -336,7 +344,7 @@ export function SettingsScreen({
         setDraftValues(buildDraftValues(cliParamsData));
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
-        setWorkdirDraft(overviewData.workingDir);
+        setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setTunnel(tunnelData);
         setGitProxySettings(gitProxyData);
         setGitProxyPortDraft(gitProxyData?.port || "");
@@ -352,7 +360,15 @@ export function SettingsScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client, isMainBot]);
+  }, [botAlias, client, isMainBot, prefilledWorkdir]);
+
+  useEffect(() => {
+    if (!prefilledWorkdir) {
+      return;
+    }
+    setWorkdirDraft(normalizePathInput(prefilledWorkdir));
+    setPendingWorkdirConflict(null);
+  }, [prefilledWorkdir]);
 
   useEffect(() => {
     if (!showUpdateLog || !updateLogViewportRef.current) {
@@ -521,7 +537,7 @@ export function SettingsScreen({
   };
 
   const applyWorkdirChange = async (options: UpdateBotWorkdirOptions = {}) => {
-    const nextWorkdir = workdirDraft.trim();
+    const nextWorkdir = normalizePathInput(workdirDraft);
     setSavingWorkdir(true);
     try {
       const nextBot = await client.updateBotWorkdir(botAlias, nextWorkdir, options);
@@ -529,13 +545,14 @@ export function SettingsScreen({
       setWorkdirDraft(nextBot.workingDir);
       setPendingWorkdirConflict(null);
       setNotice("工作目录已更新");
+      onWorkdirUpdated?.(nextBot.workingDir);
     } finally {
       setSavingWorkdir(false);
     }
   };
 
   const saveWorkdir = async () => {
-    const nextWorkdir = workdirDraft.trim();
+    const nextWorkdir = normalizePathInput(workdirDraft);
     if (!nextWorkdir) {
       setError("工作目录不能为空");
       return;
@@ -848,22 +865,24 @@ export function SettingsScreen({
   };
 
   return (
-    <main className="flex flex-col h-full bg-[var(--bg)]">
-      <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
-        {botAvatarName || overview?.avatarName ? (
-          <BotIdentity
-            alias={overview?.alias || botAlias}
-            avatarName={botAvatarName || overview?.avatarName}
-            size={32}
-            nameClassName="truncate text-xl font-bold text-[var(--text)]"
-            subtitle={<p className="text-sm text-[var(--muted)]">设置</p>}
-          />
-        ) : (
-          <h1 className="text-xl font-bold">设置</h1>
-        )}
-      </header>
+    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--surface)]" : "bg-[var(--bg)]")}>
+      {embedded ? null : (
+        <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] p-4">
+          {botAvatarName || overview?.avatarName ? (
+            <BotIdentity
+              alias={overview?.alias || botAlias}
+              avatarName={botAvatarName || overview?.avatarName}
+              size={32}
+              nameClassName="truncate text-xl font-bold text-[var(--text)]"
+              subtitle={<p className="text-sm text-[var(--muted)]">设置</p>}
+            />
+          ) : (
+            <h1 className="text-xl font-bold">设置</h1>
+          )}
+        </header>
+      )}
 
-      <section className="flex-1 overflow-y-auto p-4 space-y-6">
+      <section className={clsx("flex-1 overflow-y-auto space-y-6", embedded ? "p-3" : "p-4")}>
         {loading ? (
           <div className="text-center text-[var(--muted)]">加载中...</div>
         ) : null}
@@ -1568,15 +1587,17 @@ export function SettingsScreen({
               重置当前会话
             </span>
           </button>
-          <button
-            onClick={onLogout}
-            className="w-full flex items-center justify-between p-4 hover:bg-[var(--surface-strong)] active:bg-[var(--border)]"
-          >
-            <span className="flex items-center gap-3">
-              <LogOut className="w-5 h-5" />
-              退出登录
-            </span>
-          </button>
+          {embedded ? null : (
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center justify-between p-4 hover:bg-[var(--surface-strong)] active:bg-[var(--border)]"
+            >
+              <span className="flex items-center gap-3">
+                <LogOut className="w-5 h-5" />
+                退出登录
+              </span>
+            </button>
+          )}
         </div>
       </section>
 

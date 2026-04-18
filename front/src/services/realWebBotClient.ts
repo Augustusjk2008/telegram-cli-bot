@@ -1035,8 +1035,15 @@ export class RealWebBotClient implements WebBotClient {
     return data.working_dir;
   }
 
-  async listFiles(botAlias: string): Promise<DirectoryListing> {
-    const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[]; is_virtual_root?: boolean }>(`/api/bots/${encodeURIComponent(botAlias)}/ls`);
+  async listFiles(botAlias: string, path?: string): Promise<DirectoryListing> {
+    const params = new URLSearchParams();
+    if (path && path.trim()) {
+      params.set("path", path.trim());
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[]; is_virtual_root?: boolean }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/ls${suffix}`,
+    );
     return {
       workingDir: data.working_dir,
       entries: data.entries.map(mapFileEntry),
@@ -1055,13 +1062,16 @@ export class RealWebBotClient implements WebBotClient {
     return data.working_dir;
   }
 
-  async createDirectory(botAlias: string, name: string): Promise<void> {
+  async createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void> {
     await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/files/mkdir`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({
+        name,
+        ...(parentPath ? { parent_path: parentPath } : {}),
+      }),
     });
   }
 
@@ -1128,13 +1138,17 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async createTextFile(botAlias: string, filename: string, content = ""): Promise<FileCreateResult> {
+  async createTextFile(botAlias: string, filename: string, content = "", parentPath?: string): Promise<FileCreateResult> {
     const data = await this.requestJson<RawFileCreateResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/create`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ filename, content }),
+      body: JSON.stringify({
+        filename,
+        content,
+        ...(parentPath ? { parent_path: parentPath } : {}),
+      }),
     });
     return {
       path: data.path,

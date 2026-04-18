@@ -140,6 +140,30 @@ def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: 
     assert any(item["name"] == "hello.txt" for item in listing["entries"])
 
 
+def test_get_directory_listing_accepts_explicit_path_without_mutating_browser_dir(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    root = tmp_path / "workspace"
+    src = root / "src"
+    docs = root / "docs"
+    root.mkdir()
+    src.mkdir()
+    docs.mkdir()
+    (src / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(root)
+    session.browse_dir = str(docs)
+
+    listing = get_directory_listing(web_manager, "main", 1001, path=str(src))
+
+    assert listing["working_dir"] == str(src)
+    assert any(item["name"] == "main.py" for item in listing["entries"])
+    assert session.browse_dir == str(docs)
+    assert session.working_dir == str(root)
+
+
 def test_overview_includes_local_store_running_snapshot(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -906,6 +930,25 @@ def test_create_text_file_creates_file_in_current_browser_dir(web_manager: Multi
     assert isinstance(result["last_modified_ns"], int)
 
 
+def test_create_text_file_accepts_parent_path_for_tree_actions(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    root = tmp_path / "workspace"
+    docs = root / "docs"
+    root.mkdir()
+    docs.mkdir()
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(root)
+    session.browse_dir = str(root)
+
+    result = create_text_file(web_manager, "main", 1001, "notes.md", "# title\n", parent_path="docs")
+
+    assert result["path"] == "docs/notes.md"
+    assert (docs / "notes.md").read_text(encoding="utf-8") == "# title\n"
+
+
 def test_create_text_file_rejects_existing_target(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -957,18 +1000,19 @@ def test_rename_path_renames_file_in_place(web_manager: MultiBotManager, temp_di
     assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
 
 
-def test_rename_path_rejects_path_outside_current_directory_shape(web_manager: MultiBotManager, temp_dir: Path):
+def test_rename_path_accepts_nested_relative_path(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     target = workspace / "docs"
     target.mkdir(parents=True)
     (target / "notes.md").write_text("# hello\n", encoding="utf-8")
     change_working_directory(web_manager, "main", 1001, str(workspace))
 
-    with pytest.raises(WebApiError) as exc_info:
-        rename_path(web_manager, "main", 1001, "docs/notes.md", "draft.md")
+    result = rename_path(web_manager, "main", 1001, "docs/notes.md", "draft.md")
 
-    assert exc_info.value.code == "invalid_rename_path"
-    assert (target / "notes.md").exists()
+    assert result["old_path"] == "docs/notes.md"
+    assert result["path"] == "docs/draft.md"
+    assert not (target / "notes.md").exists()
+    assert (target / "draft.md").exists()
 
 
 def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiBotManager, temp_dir: Path):

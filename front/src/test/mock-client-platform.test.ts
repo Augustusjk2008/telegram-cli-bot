@@ -111,4 +111,18 @@ describe("MockWebBotClient platform defaults", () => {
     expect(await client.getCurrentPath("main")).toBe("/srv/telegram-cli-bridge/new-root");
     expect(listing.workingDir).toBe("/srv/telegram-cli-bridge/new-root");
   });
+
+  test("createTextFile accepts an explicit parent path for tree actions", async () => {
+    const client = new MockWebBotClient();
+
+    await client.createTextFile("main", "draft.md", "# draft\n", "/srv/telegram-cli-bridge/demo/docs");
+
+    const listing = await client.listFiles("main", "/srv/telegram-cli-bridge/demo/docs");
+    expect(listing.entries).toContainEqual(
+      expect.objectContaining({
+        name: "draft.md",
+        isDir: false,
+      }),
+    );
+  });
 });

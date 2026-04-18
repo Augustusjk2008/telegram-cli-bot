@@ -1,21 +1,26 @@
-import { Bot, Files, GitBranch, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { clsx } from "clsx";
-
-type WorkbenchPanelId = "explorer" | "git" | "assistant";
+import { Files, GitBranch, PanelLeftClose, PanelLeftOpen, Settings2 } from "lucide-react";
+import type { DesktopSidebarView } from "./workbenchTypes";
 
 type Props = {
-  activePanel: WorkbenchPanelId;
-  explorerCollapsed: boolean;
-  onToggleExplorer: () => void;
+  activePanel: DesktopSidebarView;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  onSelectPanel: (panel: DesktopSidebarView) => void;
 };
 
-const ITEMS: Array<{ id: WorkbenchPanelId; label: string; icon: typeof Files }> = [
-  { id: "explorer", label: "资源管理器", icon: Files },
+const ITEMS: Array<{ id: DesktopSidebarView; label: string; icon: typeof Files }> = [
+  { id: "files", label: "文件", icon: Files },
   { id: "git", label: "Git", icon: GitBranch },
-  { id: "assistant", label: "AI 助手", icon: Bot },
+  { id: "settings", label: "设置", icon: Settings2 },
 ];
 
-export function WorkbenchActivityRail({ activePanel, explorerCollapsed, onToggleExplorer }: Props) {
+export function WorkbenchActivityRail({
+  activePanel,
+  sidebarCollapsed,
+  onToggleSidebar,
+  onSelectPanel,
+}: Props) {
   return (
     <aside
       data-testid="desktop-workbench-activity-rail"
@@ -23,11 +28,11 @@ export function WorkbenchActivityRail({ activePanel, explorerCollapsed, onToggle
     >
       <button
         type="button"
-        aria-label={explorerCollapsed ? "展开资源管理器" : "折叠资源管理器"}
-        onClick={onToggleExplorer}
+        aria-label={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+        onClick={onToggleSidebar}
         className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)]"
       >
-        {explorerCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </button>
       {ITEMS.map(({ id, label, icon: Icon }) => (
         <button
@@ -35,6 +40,7 @@ export function WorkbenchActivityRail({ activePanel, explorerCollapsed, onToggle
           type="button"
           aria-label={label}
           aria-pressed={id === activePanel}
+          onClick={() => onSelectPanel(id)}
           className={clsx(
             "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
             id === activePanel && "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]",

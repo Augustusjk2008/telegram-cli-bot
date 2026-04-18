@@ -856,6 +856,29 @@ def _validate_text_filename(name: str) -> str:
     return candidate
 
 
+def _resolve_action_parent_dir(session: UserSession, parent_path: str | None = None) -> str:
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
+    candidate = str(parent_path or "").strip()
+    if not candidate:
+        return browser_dir
+
+    resolved_base = os.path.abspath(browser_dir)
+    if os.path.isabs(candidate):
+        resolved_path = os.path.abspath(os.path.expanduser(candidate))
+    else:
+        resolved_path = os.path.abspath(os.path.join(resolved_base, os.path.expanduser(candidate)))
+
+    try:
+        if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
+            _raise(400, "unsafe_write_path", "文件路径不安全")
+    except ValueError:
+        _raise(400, "unsafe_write_path", "文件路径不安全")
+
+    if not os.path.isdir(resolved_path):
+        _raise(404, "dir_not_found", f"目录不存在: {resolved_path}")
+    return resolved_path
+
+
 def _ensure_file_browser_supported(manager: MultiBotManager, alias: str) -> BotProfile:
     profile = get_profile_or_raise(manager, alias)
     if not _supports_cli_runtime(profile):
@@ -876,25 +899,40 @@ def _list_directory_entries(working_dir: str) -> dict[str, Any]:
     return _build_directory_listing_response(working_dir, entries)
 
 
-def get_directory_listing(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+def get_directory_listing(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str | None = None,
+) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _get_browser_directory(session)
-    if _is_windows_drives_virtual_root(browser_dir):
+    target_dir = browser_dir
+    if path is not None and str(path).strip():
+        target_dir = _resolve_browser_target_path(browser_dir, str(path))
+    if _is_windows_drives_virtual_root(target_dir):
         return _list_windows_drive_entries()
     try:
-        return _list_directory_entries(browser_dir)
+        return _list_directory_entries(target_dir)
     except FileNotFoundError:
-        _raise(404, "working_dir_not_found", f"目录不存在: {browser_dir}")
+        _raise(404, "working_dir_not_found", f"目录不存在: {target_dir}")
     except Exception as exc:
         _raise(500, "list_dir_failed", str(exc))
 
 
-def create_directory(manager: MultiBotManager, alias: str, user_id: int, name: str) -> dict[str, Any]:
+def create_directory(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    name: str,
+    parent_path: str | None = None,
+) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    directory_name, target_path = _resolve_new_directory_path(browser_dir, name)
+    parent_dir = _resolve_action_parent_dir(session, parent_path)
+    directory_name, target_path = _resolve_new_directory_path(parent_dir, name)
 
     if os.path.exists(target_path):
         _raise(409, "path_exists", "目标已存在")
@@ -919,13 +957,15 @@ def create_text_file(
     user_id: int,
     filename: str,
     content: str = "",
+    parent_path: str | None = None,
 ) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
     _ensure_editor_content_size(content)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _require_real_browser_directory(_get_browser_directory(session))
+    parent_dir = _resolve_action_parent_dir(session, parent_path)
     file_name = _validate_text_filename(filename)
-    target_path = os.path.abspath(os.path.join(browser_dir, file_name))
+    target_path = os.path.abspath(os.path.join(parent_dir, file_name))
 
     if os.path.exists(target_path):
         _raise(409, "file_already_exists", "文件已存在")
@@ -939,7 +979,7 @@ def create_text_file(
         _raise(500, "create_file_failed", str(exc))
 
     return {
-        "path": file_name,
+        "path": os.path.relpath(target_path, browser_dir).replace("\\", "/"),
         "file_size_bytes": os.path.getsize(target_path),
         "last_modified_ns": _stat_file_version(target_path),
     }
@@ -949,14 +989,11 @@ def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, n
     _ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    source_name = str(path or "").strip()
-    path_separators = {os.path.sep}
-    if os.path.altsep:
-        path_separators.add(os.path.altsep)
-    if not source_name or any(separator and separator in source_name for separator in path_separators):
-        _raise(400, "invalid_rename_path", "仅支持重命名当前目录下的文件")
+    source_rel = str(path or "").strip().replace("\\", "/")
+    if not source_rel:
+        _raise(400, "invalid_rename_path", "缺少待重命名路径")
 
-    source_path = _resolve_safe_write_path(browser_dir, path)
+    source_path = _resolve_safe_write_path(browser_dir, source_rel)
     target_name = _validate_text_filename(new_name)
 
     if not os.path.isfile(source_path):
@@ -975,7 +1012,7 @@ def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, n
 
     target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
     return {
-        "old_path": path,
+        "old_path": source_rel,
         "path": target_relative_path,
     }
 

@@ -187,6 +187,11 @@ export class MockWebBotClient implements WebBotClient {
     return this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
   }
 
+  private resolveTargetDir(botAlias: string, parentPath?: string): string {
+    const candidate = parentPath?.trim();
+    return candidate && candidate.length > 0 ? candidate : this.getBrowserPath(botAlias);
+  }
+
   private cronRunKey(botAlias: string, jobId: string): string {
     return `${botAlias}:${jobId}`;
   }
@@ -302,8 +307,8 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias).workingDir;
   }
 
-  async listFiles(botAlias: string): Promise<DirectoryListing> {
-    const currentPath = this.getBrowserPath(botAlias);
+  async listFiles(botAlias: string, path?: string): Promise<DirectoryListing> {
+    const currentPath = path?.trim() || this.getBrowserPath(botAlias);
     const botFiles = mockFiles[botAlias] || {};
     return {
       workingDir: currentPath,
@@ -329,13 +334,13 @@ export class MockWebBotClient implements WebBotClient {
     return nextPath;
   }
 
-  async createDirectory(botAlias: string, name: string): Promise<void> {
+  async createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void> {
     const folderName = name.trim();
     if (!folderName) {
       throw new Error("文件夹名称不能为空");
     }
 
-    const currentPath = this.getBrowserPath(botAlias);
+    const currentPath = this.resolveTargetDir(botAlias, parentPath);
     const botFiles = (mockFiles[botAlias] ||= {});
     const currentEntries = [...(botFiles[currentPath] || [])];
     if (currentEntries.some((entry) => entry.name === folderName)) {
@@ -435,15 +440,15 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async createTextFile(botAlias: string, filename: string, content = ""): Promise<FileCreateResult> {
+  async createTextFile(botAlias: string, filename: string, content = "", parentPath?: string): Promise<FileCreateResult> {
     const fileName = filename.trim();
     if (!fileName) {
       throw new Error("文件名不能为空");
     }
 
-    const browserPath = this.getBrowserPath(botAlias);
+    const targetDir = this.resolveTargetDir(botAlias, parentPath);
     const botFiles = (mockFiles[botAlias] ||= {});
-    const currentEntries = [...(botFiles[browserPath] || [])];
+    const currentEntries = [...(botFiles[targetDir] || [])];
     if (currentEntries.some((entry) => entry.name === fileName)) {
       throw new Error("文件已存在");
     }
@@ -460,11 +465,19 @@ export class MockWebBotClient implements WebBotClient {
       }
       return left.name.localeCompare(right.name, "zh-CN");
     });
-    botFiles[browserPath] = currentEntries;
+    botFiles[targetDir] = currentEntries;
 
-    const nextVersion = this.setFileState(botAlias, browserPath, fileName, content);
+    const nextVersion = this.setFileState(botAlias, targetDir, fileName, content);
+    const browserPath = this.getBrowserPath(botAlias);
+    const normalizedTargetDir = targetDir.replace(/\\/g, "/");
+    const normalizedBrowserPath = browserPath.replace(/\\/g, "/");
+    const relativeDir = normalizedTargetDir === normalizedBrowserPath
+      ? ""
+      : normalizedTargetDir.startsWith(`${normalizedBrowserPath}/`)
+        ? normalizedTargetDir.slice(normalizedBrowserPath.length + 1)
+        : "";
     return {
-      path: fileName,
+      path: relativeDir ? `${relativeDir}/${fileName}` : fileName,
       fileSizeBytes: new TextEncoder().encode(content).length,
       lastModifiedNs: String(nextVersion),
     };

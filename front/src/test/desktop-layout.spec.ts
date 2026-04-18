@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("desktop workbench renders the four-pane shell", async ({ page }) => {
+test("desktop workbench stays viewport-bound and keeps overflow inside panes", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("desktop-workbench-root")).toBeVisible();
@@ -17,4 +17,12 @@ test("desktop workbench renders the four-pane shell", async ({ page }) => {
   await expect(page.getByTestId("desktop-pane-editor")).toBeVisible();
   await expect(page.getByTestId("desktop-pane-terminal")).toBeVisible();
   await expect(page.getByTestId("desktop-pane-chat")).toBeVisible();
+  await expect(page.getByTestId("desktop-workbench-statusbar")).toHaveCount(0);
+
+  const metrics = await page.evaluate(() => ({
+    viewportHeight: window.innerHeight,
+    documentHeight: document.documentElement.scrollHeight,
+  }));
+
+  expect(metrics.documentHeight).toBeLessThanOrEqual(metrics.viewportHeight + 2);
 });

@@ -240,6 +240,14 @@ test("renders git repo summary and changed files", async () => {
   expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
 });
 
+test("embedded git omits the page header chrome", async () => {
+  render(<GitScreen botAlias="main" client={createClient()} embedded />);
+
+  expect(await screen.findByText("当前分支")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Git" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
+});
+
 test("shows init action when current directory is not a git repo", async () => {
   const user = userEvent.setup();
   const initSpy = async (): Promise<GitOverview> => buildRepoOverview();

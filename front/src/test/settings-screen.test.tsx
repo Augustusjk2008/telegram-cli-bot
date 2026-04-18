@@ -51,6 +51,23 @@ test("assistant bots lock the default workdir in settings", async () => {
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
 
+test("embedded settings can prefill the workdir without rendering logout controls", async () => {
+  const client = new MockWebBotClient();
+
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={client}
+      onLogout={() => undefined}
+      embedded
+      prefilledWorkdir="C:\\workspace\\picked"
+    />,
+  );
+
+  expect(await screen.findByLabelText("工作目录")).toHaveValue("C:\\workspace\\picked");
+  expect(screen.queryByRole("button", { name: "退出登录" })).not.toBeInTheDocument();
+});
+
 test("settings screen asks for confirmation before resetting the current workdir conversation", async () => {
   const user = userEvent.setup();
   const updateBotWorkdir = vi.fn()

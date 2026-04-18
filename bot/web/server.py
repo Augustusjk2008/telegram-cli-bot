@@ -728,7 +728,8 @@ class WebApiServer:
     async def get_ls(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_directory_listing(self.manager, alias, auth.user_id)})
+        target_path = request.query.get("path") or None
+        return _json({"ok": True, "data": get_directory_listing(self.manager, alias, auth.user_id, path=target_path)})
 
     async def post_cd(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -869,7 +870,13 @@ class WebApiServer:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = create_directory(self.manager, alias, auth.user_id, body.get("name", ""))
+        data = create_directory(
+            self.manager,
+            alias,
+            auth.user_id,
+            body.get("name", ""),
+            parent_path=body.get("parent_path"),
+        )
         return _json({"ok": True, "data": data})
 
     async def write_file_view(self, request: web.Request) -> web.Response:
@@ -890,7 +897,14 @@ class WebApiServer:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = create_text_file(self.manager, alias, auth.user_id, body.get("filename", ""), body.get("content", ""))
+        data = create_text_file(
+            self.manager,
+            alias,
+            auth.user_id,
+            body.get("filename", ""),
+            body.get("content", ""),
+            parent_path=body.get("parent_path"),
+        )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def rename_path_view(self, request: web.Request) -> web.Response:

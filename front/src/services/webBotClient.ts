@@ -47,14 +47,14 @@ export interface WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
   ): Promise<ChatMessage>;
   getCurrentPath(botAlias: string): Promise<string>;
-  listFiles(botAlias: string): Promise<DirectoryListing>;
+  listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
   changeDirectory(botAlias: string, path: string): Promise<string>;
-  createDirectory(botAlias: string, name: string): Promise<void>;
+  createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void>;
   deletePath(botAlias: string, path: string): Promise<void>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
-  createTextFile(botAlias: string, filename: string, content?: string): Promise<FileCreateResult>;
+  createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string): Promise<void>;

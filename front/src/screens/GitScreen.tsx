@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { useEffect, useMemo, useState } from "react";
 import { GitBranch, RefreshCw } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
@@ -9,6 +10,7 @@ type Props = {
   botAlias: string;
   botAvatarName?: string;
   client?: WebBotClient;
+  embedded?: boolean;
 };
 
 type DiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
@@ -78,7 +80,7 @@ function diffLineClasses(kind: DiffLineKind) {
   return "text-[var(--text)]";
 }
 
-export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClient() }: Props) {
+export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClient(), embedded = false }: Props) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -146,35 +148,37 @@ export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClie
   }
 
   return (
-    <main className="flex h-full flex-col bg-[var(--bg)]">
-      <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold">Git</h1>
-            {botAvatarName ? (
-              <BotIdentity
-                alias={botAlias}
-                avatarName={botAvatarName}
-                size={28}
-                className="mt-1 flex min-w-0 items-center gap-2"
-                nameClassName="truncate text-sm font-medium text-[var(--muted)]"
-              />
-            ) : (
-              <p className="text-sm text-[var(--muted)]">{botAlias}</p>
-            )}
+    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--surface)]" : "bg-[var(--bg)]")}>
+      {embedded ? null : (
+        <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h1 className="text-xl font-bold">Git</h1>
+              {botAvatarName ? (
+                <BotIdentity
+                  alias={botAlias}
+                  avatarName={botAvatarName}
+                  size={28}
+                  className="mt-1 flex min-w-0 items-center gap-2"
+                  nameClassName="truncate text-sm font-medium text-[var(--muted)]"
+                />
+              ) : (
+                <p className="text-sm text-[var(--muted)]">{botAlias}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadOverview()}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface)]"
+            >
+              <RefreshCw className="h-4 w-4" />
+              刷新
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadOverview()}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface)]"
-          >
-            <RefreshCw className="h-4 w-4" />
-            刷新
-          </button>
-        </div>
-      </header>
+        </header>
+      )}
 
-      <section className="flex-1 space-y-4 overflow-y-auto p-4">
+      <section className={clsx("flex-1 space-y-4 overflow-y-auto", embedded ? "p-3" : "p-4")}>
         {loading ? <div className="text-center text-[var(--muted)]">加载中...</div> : null}
         {error ? (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

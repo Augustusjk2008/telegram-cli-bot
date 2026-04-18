@@ -8,3 +8,11 @@ test("normalizePathInput trims Linux paths without rewriting separators", () => 
 test("normalizePathInput leaves plain command names unchanged", () => {
   expect(normalizePathInput("codex")).toBe("codex");
 });
+
+test("normalizePathInput collapses uniformly doubled Windows separators", () => {
+  expect(normalizePathInput("  C:\\\\workspace\\\\picked  ")).toBe("C:\\workspace\\picked");
+});
+
+test("normalizePathInput preserves a real UNC path", () => {
+  expect(normalizePathInput("\\\\server\\share\\workspace")).toBe("\\\\server\\share\\workspace");
+});
