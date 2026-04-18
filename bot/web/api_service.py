@@ -2305,30 +2305,43 @@ def list_system_scripts(manager: MultiBotManager, alias: str, user_id: int) -> d
     return {"items": items}
 
 
-def _resolve_system_script_path(script_name: str) -> Path:
+def _resolve_system_script_path(manager: MultiBotManager, alias: str, script_name: str) -> Path:
     if not script_name or not script_name.strip():
         _raise(400, "empty_script_name", "脚本名不能为空")
 
-    for name, _, _, path in list_available_scripts():
-        if name.lower() == script_name.strip().lower():
-            return path
+    requested_name = Path(script_name.strip()).name
+    scripts_dir = _get_system_scripts_dir(manager, alias).resolve()
+
+    for name, _, _, path in list_available_scripts(scripts_dir):
+        if name.lower() == requested_name.lower():
+            resolved = path.resolve()
+            if scripts_dir not in resolved.parents:
+                _raise(400, "invalid_script_path", "脚本路径无效")
+            return resolved
 
     _raise(404, "script_not_found", f"未找到脚本: {script_name}")
 
 
-async def run_system_script(script_name: str) -> dict[str, Any]:
-    target_path = _resolve_system_script_path(script_name)
+async def run_system_script(manager: MultiBotManager, alias: str, user_id: int, script_name: str) -> dict[str, Any]:
+    del user_id
+    target_path = _resolve_system_script_path(manager, alias, script_name)
     loop = asyncio.get_running_loop()
     success, output = await loop.run_in_executor(None, execute_script, target_path)
     return {
-        "script_name": target_path.stem,
+        "script_name": target_path.name,
         "success": success,
         "output": output,
     }
 
 
-async def _stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]]:
-    target_path = _resolve_system_script_path(script_name)
+async def _stream_system_script(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    script_name: str,
+) -> AsyncIterator[dict[str, Any]]:
+    del user_id
+    target_path = _resolve_system_script_path(manager, alias, script_name)
     event_queue: queue.Queue[Any] = queue.Queue()
     worker_done = threading.Event()
 
@@ -2355,9 +2368,14 @@ async def _stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any
         yield item
 
 
-async def stream_system_script(script_name: str) -> AsyncIterator[dict[str, Any]]:
+async def stream_system_script(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    script_name: str,
+) -> AsyncIterator[dict[str, Any]]:
     try:
-        async for event in _stream_system_script(script_name):
+        async for event in _stream_system_script(manager, alias, user_id, script_name):
             yield event
     except WebApiError as exc:
         yield {"type": "error", "code": exc.code, "message": exc.message}

@@ -911,18 +911,21 @@ class WebApiServer:
         auth = await self._with_auth(request)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
     
-    async def admin_scripts(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
-        return _json({"ok": True, "data": list_system_scripts()})
+    async def bot_scripts(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": list_system_scripts(self.manager, alias, auth.user_id)})
 
-    async def admin_run_script(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+    async def bot_run_script(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await run_system_script(body.get("script_name", ""))
+        data = await run_system_script(self.manager, alias, auth.user_id, body.get("script_name", ""))
         return _json({"ok": True, "data": data})
 
-    async def admin_run_script_stream(self, request: web.Request) -> web.StreamResponse:
-        await self._with_auth(request)
+    async def bot_run_script_stream(self, request: web.Request) -> web.StreamResponse:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
         body = await self._parse_json(request)
         script_name = str(body.get("script_name", ""))
 
@@ -937,20 +940,20 @@ class WebApiServer:
         await response.prepare(request)
 
         client_disconnected = False
-        async for event in stream_system_script(script_name):
+        async for event in stream_system_script(self.manager, alias, auth.user_id, script_name):
             if client_disconnected:
                 continue
             try:
                 await response.write(_format_sse(event["type"], event))
             except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                 client_disconnected = True
-                logger.info("系统脚本 SSE 客户端已断开，继续在后台执行: script=%s", script_name)
+                logger.info("系统功能 SSE 客户端已断开，继续在后台执行: alias=%s script=%s", alias, script_name)
 
         if not client_disconnected:
             try:
                 await response.write_eof()
             except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                logger.info("系统脚本 SSE 客户端在结束前断开: script=%s", script_name)
+                logger.info("系统功能 SSE 客户端在结束前断开: alias=%s script=%s", alias, script_name)
         return response
 
     async def admin_processing(self, request: web.Request) -> web.Response:
@@ -1263,11 +1266,11 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/files/delete", self.delete_path_view)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
+        app.router.add_get("/api/bots/{alias}/scripts", self.bot_scripts)
+        app.router.add_post("/api/bots/{alias}/scripts/run/stream", self.bot_run_script_stream)
+        app.router.add_post("/api/bots/{alias}/scripts/run", self.bot_run_script)
         app.router.add_get("/api/admin/bots", self.admin_bots)
         app.router.add_get("/api/admin/assets/avatars", self.admin_list_avatar_assets)
-        app.router.add_get("/api/admin/scripts", self.admin_scripts)
-        app.router.add_post("/api/admin/scripts/run/stream", self.admin_run_script_stream)
-        app.router.add_post("/api/admin/scripts/run", self.admin_run_script)
         app.router.add_get("/api/admin/bots/{alias}/processing", self.admin_processing)
         app.router.add_post("/api/admin/bots", self.admin_add_bot)
         app.router.add_get("/api/admin/bots/{alias}", self.admin_single_bot)

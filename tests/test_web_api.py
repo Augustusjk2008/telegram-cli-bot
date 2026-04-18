@@ -51,6 +51,7 @@ from bot.web.api_service import (
     rename_path,
     run_chat,
     run_cli_chat,
+    run_system_script,
     save_uploaded_file,
     write_file_content,
 )
@@ -1378,21 +1379,60 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
 
 
 @pytest.mark.asyncio
-async def test_admin_run_script_stream_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+async def test_run_system_script_executes_full_filename_from_bot_scripts_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script_path = scripts_dir / "network_traffic.ps1"
+    script_path.write_text("# 网络流量\n", encoding="utf-8")
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    monkeypatch.setattr("bot.platform.scripts.get_runtime_platform", lambda: "windows")
+
+    execute_calls: list[Path] = []
+
+    def fake_execute_script(path: Path) -> tuple[bool, str]:
+        execute_calls.append(path)
+        return True, "ok"
+
+    monkeypatch.setattr("bot.web.api_service.execute_script", fake_execute_script)
+
+    payload = await run_system_script(web_manager, "main", 1001, "network_traffic.ps1")
+
+    assert execute_calls == [script_path.resolve()]
+    assert payload == {
+        "script_name": "network_traffic.ps1",
+        "success": True,
+        "output": "ok",
+    }
+
+
+@pytest.mark.asyncio
+async def test_bot_run_script_stream_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
 
-    async def fake_stream_system_script(script_name: str):
+    async def fake_stream_system_script(
+        manager: MultiBotManager,
+        alias: str,
+        user_id: int,
+        script_name: str,
+    ):
+        assert alias == "main"
+        assert user_id == 1001
+        assert script_name == "build_web_frontend.sh"
         yield {"type": "log", "text": "npm run build"}
-        yield {"type": "log", "text": "vite build finished"}
         yield {"type": "done", "script_name": script_name, "success": True, "output": "Web 前端构建完成"}
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             with patch("bot.web.server.stream_system_script", fake_stream_system_script):
-                resp = await client.post("/api/admin/scripts/run/stream", json={"script_name": "build_web_frontend"})
+                resp = await client.post("/api/bots/main/scripts/run/stream", json={"script_name": "build_web_frontend.sh"})
                 assert resp.status == 200
                 body = await resp.text()
                 assert "event: log" in body
