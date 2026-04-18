@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"帮我分析这个 bug"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我先调用 brainstorming skill。"},{"type":"tool_use","id":"toolu_skill_1","name":"Skill","input":{"skill":"superpowers:brainstorming","args":""}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_skill_1","content":"Launching skill: superpowers:brainstorming"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: C:\\skills\\brainstorming\n\n# Brainstorming Ideas Into Designs\n\n## Checklist\n- Explore project context\n- Ask clarifying questions\n\n## Process Flow\n..."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我已经定位到问题根因。"}]}}

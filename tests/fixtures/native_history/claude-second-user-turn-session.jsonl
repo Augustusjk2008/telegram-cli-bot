@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"先看第一轮"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"这是第一轮回复。"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"再看第二轮"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"这是第二轮回复。"}]}}
