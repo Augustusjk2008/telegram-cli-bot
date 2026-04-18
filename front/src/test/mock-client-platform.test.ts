@@ -82,12 +82,29 @@ describe("MockWebBotClient platform defaults", () => {
     expect(listing.workingDir).toBe("/srv/telegram-cli-bridge/demo");
   });
 
+  test("updateBotWorkdir requires confirmation when visible history exists", async () => {
+    const client = new MockWebBotClient();
+
+    await expect(client.updateBotWorkdir("main", "/srv/telegram-cli-bridge/new-root")).rejects.toMatchObject({
+      name: "WebApiClientError",
+      code: "workdir_change_requires_reset",
+      status: 409,
+      data: {
+        currentWorkingDir: "/srv/telegram-cli-bridge/demo",
+        requestedWorkingDir: "/srv/telegram-cli-bridge/new-root",
+        historyCount: 1,
+        messageCount: 1,
+        botMode: "cli",
+      },
+    });
+  });
+
   test("updateBotWorkdir resets the current browser path to the new working directory", async () => {
     const client = new MockWebBotClient();
 
     await client.changeDirectory("main", "docs");
 
-    const updated = await client.updateBotWorkdir("main", "/srv/telegram-cli-bridge/new-root");
+    const updated = await client.updateBotWorkdir("main", "/srv/telegram-cli-bridge/new-root", { forceReset: true });
     const listing = await client.listFiles("main");
 
     expect(updated.workingDir).toBe("/srv/telegram-cli-bridge/new-root");

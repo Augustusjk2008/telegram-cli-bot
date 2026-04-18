@@ -81,8 +81,9 @@ from bot.sessions import (
 )
 from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command
+from bot.web.chat_history_service import ChatHistoryService
+from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
-from bot.web.native_history_builder import build_web_chat_history, finalize_web_chat_turn, get_web_chat_trace
 
 logger = logging.getLogger(__name__)
 EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
@@ -93,16 +94,19 @@ _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
 _WINDOWS_DRIVES_DISPLAY_ROOT = "盘符列表"
 _WINDOWS_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[\\/]*$")
 _WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+WORKDIR_CHANGE_REQUIRES_RESET = "workdir_change_requires_reset"
+WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 
 
 class WebApiError(Exception):
     """Web API 业务异常。"""
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, data: dict[str, Any] | None = None):
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.data = data or {}
 
 
 @dataclass
@@ -122,8 +126,8 @@ class CliAttemptState:
     codex_session_id: Optional[str] = None
 
 
-def _raise(status: int, code: str, message: str):
-    raise WebApiError(status=status, code=code, message=message)
+def _raise(status: int, code: str, message: str, data: dict[str, Any] | None = None):
+    raise WebApiError(status=status, code=code, message=message, data=data)
 
 
 def _avatar_asset_dirs() -> list[Path]:
@@ -494,20 +498,12 @@ def _build_running_reply_snapshot(session: UserSession) -> Optional[dict[str, An
     }
 
 
+def _get_chat_history_service(session: UserSession) -> ChatHistoryService:
+    return ChatHistoryService(ChatStore(Path(session.working_dir)))
+
+
 def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[str, Any]:
-    with session._lock:
-        return {
-            "bot_alias": profile.alias,
-            "bot_mode": profile.bot_mode,
-            "cli_type": profile.cli_type,
-            "cli_path": profile.cli_path,
-            "working_dir": session.working_dir,
-            "message_count": session.message_count,
-            "history_count": len(session.history),
-            "is_processing": session.is_processing,
-            "running_reply": _build_running_reply_snapshot(session),
-            "session_ids": _build_session_ids(session),
-        }
+    return _get_chat_history_service(session).build_session_snapshot(profile, session)
 
 
 def _build_capabilities(profile: BotProfile, is_main: bool) -> list[str]:
@@ -1035,26 +1031,42 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
 def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int = 50) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    return {"items": build_web_chat_history(profile, session, limit=max(1, limit), include_trace=False)}
+    service = _get_chat_history_service(session)
+    return {"items": service.list_history(profile, session, limit=max(1, limit))}
 
 
 def get_history_trace(manager: MultiBotManager, alias: str, user_id: int, message_id: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    data = get_web_chat_trace(profile, session, message_id)
+    service = _get_chat_history_service(session)
+    data = service.get_message_trace(profile, session, message_id)
     if data is None:
         _raise(404, "trace_not_found", "未找到对应消息的过程详情")
     return data
 
 
 def reset_user_session(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    removed = reset_session(resolve_session_bot_id(manager, alias), user_id)
     profile = get_profile_or_raise(manager, alias)
+    bot_id = resolve_session_bot_id(manager, alias)
+    state_path = None
     if profile.bot_mode == "assistant":
         state_path = Path(profile.working_dir) / ".assistant" / "state" / "users" / f"{user_id}.json"
-        if state_path.exists():
-            home = bootstrap_assistant_home(profile.working_dir)
-            removed = clear_assistant_runtime_state(home, user_id) or removed
+
+    with sessions_lock:
+        session = sessions.get((bot_id, user_id))
+
+    if session is None:
+        if profile.bot_mode == "assistant" and (state_path is None or not state_path.exists()):
+            return {"reset": reset_session(bot_id, user_id)}
+        session = get_session_for_alias(manager, alias, user_id)
+    else:
+        session = align_session_paths(session, profile.working_dir, profile.bot_mode)
+
+    _get_chat_history_service(session).reset_active_conversation(profile, session)
+    removed = reset_session(bot_id, user_id)
+    if profile.bot_mode == "assistant" and state_path is not None and state_path.exists():
+        home = bootstrap_assistant_home(profile.working_dir)
+        removed = clear_assistant_runtime_state(home, user_id) or removed
     return {"reset": removed}
 
 
@@ -1290,6 +1302,19 @@ def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: 
         if preview_text:
             event["preview_text"] = preview_text[-800:]
     return event
+
+
+def _extract_final_codex_completed_message(raw_output: str) -> Optional[str]:
+    last_completed: Optional[str] = None
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_codex_json_line(stripped)
+        completed_text = str(parsed.get("completed_text") or "").strip()
+        if completed_text:
+            last_completed = completed_text
+    return last_completed
 
 
 def _trace_event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
@@ -1563,7 +1588,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
-    session.start_running_reply(text)
 
     try:
         session.touch()
@@ -1572,6 +1596,16 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         session_id_changed = False
         meta_sent = False
         max_attempts = 2 if cli_type == "claude" else 1
+        service = _get_chat_history_service(session)
+        turn_handle = service.start_turn(
+            profile=profile,
+            session=session,
+            user_text=text,
+            native_provider=cli_type,
+            assistant_home=str(assistant_home.root) if assistant_home is not None else None,
+            managed_prompt_hash=session.managed_prompt_hash_seen,
+            prompt_surface_version="v1" if assistant_home is not None else None,
+        )
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
@@ -1639,6 +1673,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             done_force_killed = False
             trace_state = create_stream_trace_state(cli_type)
             live_trace_events: list[dict[str, Any]] = []
+            latest_preview_text = ""
 
             def read_stdout() -> None:
                 try:
@@ -1683,6 +1718,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         raw_output_parts.append(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             live_trace_events.append(trace_event)
+                            service.append_trace_event(turn_handle, trace_event)
                             yield {"type": "trace", "event": trace_event}
 
                         if cli_type == "codex":
@@ -1747,7 +1783,10 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                     if status_signature != last_status_signature and (
                         status_signature[0] > 0 or status_signature[1]
                     ):
-                        session.update_running_reply(status_event.get("preview_text"))
+                        preview_text = str(status_event.get("preview_text") or "")
+                        if preview_text:
+                            latest_preview_text = preview_text
+                            service.replace_assistant_preview(turn_handle, preview_text)
                         yield status_event
                         last_status_signature = status_signature
 
@@ -1768,6 +1807,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             if cli_type == "codex":
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id
+                response = _extract_final_codex_completed_message(raw_output) or response
             elif cli_type == "claude":
                 if claude_collector is not None:
                     response = claude_collector.final_text or ""
@@ -1829,21 +1869,22 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             )
             with session._lock:
                 stop_requested = bool(session.stop_requested)
-                preview_text = session.running_preview_text or ""
             final_trace = _build_terminal_trace(
                 live_trace=live_trace_events,
                 stop_requested=stop_requested,
                 timed_out=timed_out,
                 returncode=returncode,
             )
-            fallback_output = response if completion_state == "completed" else (preview_text or response)
-            done_message = finalize_web_chat_turn(
-                profile,
-                session,
-                user_text=text,
-                fallback_output=fallback_output,
-                fallback_trace=final_trace,
+            for trace_event in final_trace[len(live_trace_events):]:
+                service.append_trace_event(turn_handle, trace_event)
+            fallback_output = response if completion_state == "completed" else (latest_preview_text or response)
+            done_message = service.complete_turn(
+                turn_handle,
                 completion_state=completion_state,
+                content=fallback_output,
+                native_session_id=session.codex_session_id if cli_type == "codex" else session.claude_session_id,
+                error_code=None if completion_state == "completed" else completion_state,
+                error_message=None if completion_state == "completed" else response,
             )
             if assistant_home is not None:
                 try:
@@ -1858,7 +1899,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                     logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
-            session.clear_running_reply()
             yield {
                 "type": "done",
                 "output": str(done_message.get("content") or response),
@@ -1873,7 +1913,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         with session._lock:
             session.process = None
             session.is_processing = False
-        session.clear_running_reply()
 
 
 async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
@@ -1915,7 +1954,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
-    session.start_running_reply(text)
 
     try:
         session.touch()
@@ -1923,6 +1961,16 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         started_at = loop.time()
         session_id_changed = False
         max_attempts = 2 if cli_type == "claude" else 1
+        service = _get_chat_history_service(session)
+        turn_handle = service.start_turn(
+            profile=profile,
+            session=session,
+            user_text=text,
+            native_provider=cli_type,
+            assistant_home=str(assistant_home.root) if assistant_home is not None else None,
+            managed_prompt_hash=session.managed_prompt_hash_seen,
+            prompt_surface_version="v1" if assistant_home is not None else None,
+        )
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
@@ -2030,14 +2078,22 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 response_text=response,
             )
             with session._lock:
-                preview_text = session.running_preview_text or ""
-            done_message = finalize_web_chat_turn(
-                profile,
-                session,
-                user_text=text,
-                fallback_output=response if completion_state == "completed" else (preview_text or response),
-                fallback_trace=[],
+                stop_requested = bool(session.stop_requested)
+            terminal_trace = _build_terminal_trace(
+                live_trace=[],
+                stop_requested=stop_requested,
+                timed_out=timed_out,
+                returncode=returncode,
+            )
+            for trace_event in terminal_trace:
+                service.append_trace_event(turn_handle, trace_event)
+            done_message = service.complete_turn(
+                turn_handle,
+                content=response if completion_state == "completed" else (response or msg("chat", "no_output")),
                 completion_state=completion_state,
+                native_session_id=session.codex_session_id if cli_type == "codex" else session.claude_session_id,
+                error_code=None if completion_state == "completed" else completion_state,
+                error_message=None if completion_state == "completed" else response,
             )
             if assistant_home is not None:
                 try:
@@ -2052,7 +2108,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                     logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
-            session.clear_running_reply()
             return {
                 "output": str(done_message.get("content") or response),
                 "message": done_message,
@@ -2065,7 +2120,6 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         with session._lock:
             session.process = None
             session.is_processing = False
-        session.clear_running_reply()
 
 
 async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
@@ -2491,14 +2545,74 @@ async def rename_managed_bot(manager: MultiBotManager, alias: str, new_alias: st
     return {"bot": build_bot_summary(manager, profile.alias)}
 
 
+def _reset_session_for_workdir_change(session: UserSession, working_dir: str) -> None:
+    next_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0)) + 1
+    with session._lock:
+        session.codex_session_id = None
+        session.claude_session_id = None
+        session.claude_session_initialized = False
+        session.history = []
+        session.web_turn_overlays = []
+        session.running_user_text = None
+        session.running_preview_text = ""
+        session.running_started_at = None
+        session.running_updated_at = None
+        session.stop_requested = False
+        session.message_count = 0
+        session.session_epoch = next_epoch
+        session.working_dir = working_dir
+        session.browse_dir = working_dir
+    session.persist()
+
+
 async def update_bot_workdir(
     manager: MultiBotManager,
     alias: str,
     working_dir: str,
     user_id: Optional[int] = None,
+    force_reset: bool = False,
 ) -> dict[str, Any]:
-    await manager.set_bot_workdir(alias, working_dir)
-    return {"bot": build_bot_summary(manager, alias, user_id)}
+    profile = get_profile_or_raise(manager, alias)
+    resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir or "").strip()))
+    if not os.path.isdir(resolved_working_dir):
+        _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")
+    if profile.bot_mode == "assistant":
+        _raise(409, "unsupported_bot_mode", "assistant 型 Bot 不允许修改默认工作目录")
+    session = get_session_for_alias(manager, alias, user_id) if user_id is not None else None
+
+    if session is not None:
+        service = _get_chat_history_service(session)
+        current_working_dir = session.working_dir
+        target_changed = resolved_working_dir != current_working_dir
+        if target_changed:
+            with session._lock:
+                is_processing = session.is_processing
+            if is_processing:
+                _raise(
+                    409,
+                    WORKDIR_CHANGE_BLOCKED_PROCESSING,
+                    "当前仍有任务运行，请先停止任务再切换工作目录",
+                    data=service.summarize_active_conversation(profile, session),
+                )
+
+            if service.has_active_conversation(profile, session) and not force_reset:
+                summary = service.summarize_active_conversation(profile, session)
+                summary["requested_working_dir"] = resolved_working_dir
+                _raise(
+                    409,
+                    WORKDIR_CHANGE_REQUIRES_RESET,
+                    "切换工作目录会丢失当前会话，确认后重试",
+                    data=summary,
+                )
+
+        if force_reset and service.has_active_conversation(profile, session):
+            service.reset_active_conversation(profile, session)
+
+        if target_changed or force_reset:
+            _reset_session_for_workdir_change(session, resolved_working_dir)
+
+    await manager.set_bot_workdir(alias, resolved_working_dir, update_sessions=False)
+    return {"bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session)}
 
 
 async def update_bot_avatar(

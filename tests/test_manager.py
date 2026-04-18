@@ -185,7 +185,7 @@ class TestManagerLoadSave:
         session = get_or_create_session(123, "sub1", 456, default_working_dir=str(old_dir))
         session.browse_dir = str(nested)
 
-        await m.set_bot_workdir("sub1", str(new_dir))
+        await m.set_bot_workdir("sub1", str(new_dir), update_sessions=True)
 
         assert m.managed_profiles["sub1"].working_dir == str(new_dir)
         assert session.working_dir == str(new_dir)
@@ -194,6 +194,33 @@ class TestManagerLoadSave:
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert data["bots"][0]["alias"] == "sub1"
         assert data["bots"][0]["working_dir"] == str(new_dir)
+
+    @pytest.mark.asyncio
+    async def test_set_bot_workdir_does_not_update_live_sessions_by_default(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        profile = BotProfile(alias="main", token="main_tok")
+        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
+
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        m.managed_profiles["sub1"] = BotProfile(
+            alias="sub1",
+            token="tok1",
+            cli_type="claude",
+            cli_path="claude",
+            working_dir=str(old_dir),
+        )
+        session = get_or_create_session(123, "sub1", 456, default_working_dir=str(old_dir))
+        session.browse_dir = str(old_dir)
+
+        await m.set_bot_workdir("sub1", str(new_dir))
+
+        assert m.managed_profiles["sub1"].working_dir == str(new_dir)
+        assert session.working_dir == str(old_dir)
+        assert session.browse_dir == str(old_dir)
 
     @pytest.mark.asyncio
     async def test_set_bot_workdir_rejects_assistant_mode(self, temp_dir: Path):

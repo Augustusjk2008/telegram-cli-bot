@@ -1254,62 +1254,81 @@ test("opens a file preview dialog when clicking a local absolute file link outsi
   expect(await screen.findByRole("dialog", { name: "C:/logs/app.log" })).toBeInTheDocument();
 });
 
-test("restores in-progress reply after reopening and refreshes to final history", async () => {
+test("chat screen trusts the history streaming row instead of merging overview.runningReply", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "列出当前目录",
+        createdAt: "2026-04-18T10:00:00",
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "我先检查目录结构。",
+        createdAt: "2026-04-18T10:00:01",
+        state: "streaming",
+      },
+    ],
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "busy",
+      workingDir: "C:\\workspace",
+      isProcessing: true,
+      runningReply: {
+        userText: "列出当前目录",
+        previewText: "这段预览不应再单独插入",
+        startedAt: "2026-04-18T10:00:01",
+        updatedAt: "2026-04-18T10:00:02",
+      },
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("我先检查目录结构。")).toBeInTheDocument();
+  expect(screen.queryByText("这段预览不应再单独插入")).not.toBeInTheDocument();
+  expect(screen.getAllByText("列出当前目录")).toHaveLength(1);
+});
+
+test("chat screen does not render restored synthetic reply bubbles after refresh", async () => {
   vi.useFakeTimers();
 
   let overviewCalls = 0;
-  let historyCalls = 0;
   const client = createClient({
-    listMessages: async (): Promise<ChatMessage[]> => {
-      historyCalls += 1;
-      if (historyCalls === 1) {
-        return [{
-          id: "user-1",
-          role: "user",
-          text: "继续执行",
-          createdAt: new Date().toISOString(),
-          state: "done",
-        }];
-      }
-      return [
-        {
-          id: "user-1",
-          role: "user",
-          text: "继续执行",
-          createdAt: new Date().toISOString(),
-          state: "done",
-        },
-        {
-          id: "assistant-final",
-          role: "assistant",
-          text: "最终结果",
-          createdAt: new Date().toISOString(),
-          state: "done",
-        },
-      ];
-    },
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "继续执行",
+        createdAt: "2026-04-18T10:00:00",
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "恢复到上次可见输出",
+        createdAt: "2026-04-18T10:00:01",
+        state: "error",
+      },
+    ],
     getBotOverview: async () => {
       overviewCalls += 1;
-      if (overviewCalls === 1) {
-        return {
-          alias: "main",
-          cliType: "codex",
-          status: "busy",
-          workingDir: "C:\\workspace",
-          isProcessing: true,
-          runningReply: {
-            previewText: "处理中预览",
-            startedAt: "2026-04-09T10:40:00",
-            updatedAt: "2026-04-09T10:40:05",
-          },
-        };
-      }
       return {
         alias: "main",
         cliType: "codex",
-        status: "running",
+        status: overviewCalls === 1 ? "busy" : "running",
         workingDir: "C:\\workspace",
         isProcessing: false,
+        runningReply: {
+          userText: "继续执行",
+          previewText: "恢复到上次可见输出",
+          startedAt: "2026-04-18T10:00:01",
+          updatedAt: "2026-04-18T10:00:05",
+        },
       };
     },
   });
@@ -1320,46 +1339,15 @@ test("restores in-progress reply after reopening and refreshes to final history"
     await Promise.resolve();
   });
 
-  expect(screen.getByText("处理中预览")).toBeInTheDocument();
-  expect(screen.getByText(/正在生成|处理中预览/)).toBeInTheDocument();
+  expect(screen.getByText("恢复到上次可见输出")).toBeInTheDocument();
+  expect(screen.queryByText("检测到上次未完成任务，已恢复最近预览。")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
 
   await act(async () => {
-    vi.advanceTimersByTime(1100);
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1100);
   });
 
-  expect(screen.getByText("最终结果")).toBeInTheDocument();
-}, 8000);
-
-test("shows the last unfinished preview after a restored session is no longer running", async () => {
-  const client = createClient({
-    listMessages: async (): Promise<ChatMessage[]> => [{
-      id: "user-1",
-      role: "user",
-      text: "继续执行",
-      createdAt: new Date().toISOString(),
-      state: "done",
-    }],
-    getBotOverview: async () => ({
-      alias: "main",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace",
-      isProcessing: false,
-      runningReply: {
-        userText: "继续执行",
-        previewText: "恢复到上次预览",
-        startedAt: "2026-04-09T10:40:00",
-        updatedAt: "2026-04-09T10:40:05",
-      },
-    }),
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  expect(await screen.findByText("恢复到上次预览")).toBeInTheDocument();
-  expect(screen.getByText("检测到上次未完成任务，已恢复最近预览。")).toBeInTheDocument();
+  expect(screen.getAllByText("恢复到上次可见输出")).toHaveLength(1);
 });
 
 test("shows persisted elapsed badge from loaded history", async () => {
@@ -1514,58 +1502,6 @@ test("uses inline mobile avatars and only shows the first avatar in consecutive 
   expect(desktopUserAvatars).toHaveLength(2);
 });
 
-test("shows a continue action for restored replies and sends the assistant resume prompt", async () => {
-  const user = userEvent.setup();
-  const sendSpy = vi.fn(
-    async (_botAlias: string, _text: string, _onChunk: (chunk: string) => void) => ({
-      id: "assistant-resumed",
-      role: "assistant" as const,
-      text: "继续完成",
-      createdAt: new Date().toISOString(),
-      state: "done" as const,
-    }),
-  );
-
-  const client = createClient({
-    getBotOverview: async () => ({
-      alias: "main",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace",
-      botMode: "assistant",
-      isProcessing: false,
-      runningReply: {
-        userText: "继续执行",
-        previewText: `${"前文".repeat(30)}最后结论还没发完`,
-        startedAt: "2026-04-13T09:08:00",
-        updatedAt: "2026-04-13T09:09:00",
-      },
-    }),
-    listMessages: async (): Promise<ChatMessage[]> => [{
-      id: "user-1",
-      role: "user",
-      text: "继续执行",
-      createdAt: "2026-04-13T09:08:00",
-      state: "done",
-    }],
-    sendMessage: sendSpy,
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  await user.click(await screen.findByRole("button", { name: "继续" }));
-
-  await waitFor(() => {
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-  });
-
-  const prompt = sendSpy.mock.calls[0]?.[1] as string;
-  expect(prompt).toContain("上次异常中断了");
-  expect(prompt).toContain("最后结论还没发完");
-  expect(prompt).toContain("assistant 历史记录");
-  expect(prompt).toContain("assistant 相关保存记录");
-});
-
 test("assistant chat polls while idle and picks up scheduled cron runs", async () => {
   vi.useFakeTimers();
 
@@ -1604,13 +1540,22 @@ test("assistant chat polls while idle and picks up scheduled cron runs", async (
       if (historyCalls < 2) {
         return [];
       }
-      return [{
-        id: "user-cron-1",
-        role: "user",
-        text: "定时检查邮箱",
-        createdAt: "2026-04-16T18:00:00",
-        state: "done",
-      }];
+      return [
+        {
+          id: "user-cron-1",
+          role: "user",
+          text: "定时检查邮箱",
+          createdAt: "2026-04-16T18:00:00",
+          state: "done",
+        },
+        {
+          id: "assistant-cron-1",
+          role: "assistant",
+          text: "正在读取最新邮件",
+          createdAt: "2026-04-16T18:00:01",
+          state: "streaming",
+        },
+      ];
     },
   });
 
@@ -1679,9 +1624,9 @@ test("assistant chat immediately shows manual cron prompts after the settings ha
         {
           id: "assistant-cron-1",
           role: "assistant",
-          text: "最近邮件已经整理完成",
-          createdAt: "2026-04-16T18:05:05",
-          state: "done",
+          text: "正在读取最近邮件",
+          createdAt: "2026-04-16T18:05:01",
+          state: "streaming",
         },
       ];
     },

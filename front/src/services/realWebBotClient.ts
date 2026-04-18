@@ -1,3 +1,4 @@
+import { WebApiClientError } from "./types";
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
@@ -36,6 +37,8 @@ import type {
   SystemScriptResult,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
+  UpdateBotWorkdirOptions,
+  WorkdirChangeConflict,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
@@ -45,6 +48,7 @@ type JsonEnvelope<T> = {
   error?: {
     code?: string;
     message?: string;
+    data?: unknown;
   };
 };
 
@@ -380,6 +384,27 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   return summary;
 }
 
+function mapWorkdirChangeConflict(raw: unknown): WorkdirChangeConflict | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const data = raw as Record<string, unknown>;
+  return {
+    currentWorkingDir: String(data.current_working_dir || ""),
+    requestedWorkingDir: String(data.requested_working_dir || ""),
+    historyCount: Number(data.history_count || 0),
+    messageCount: Number(data.message_count || 0),
+    botMode: String(data.bot_mode || ""),
+  };
+}
+
+function mapApiErrorData(code: string | undefined, raw: unknown): unknown {
+  if (code === "workdir_change_requires_reset" || code === "workdir_change_blocked_processing") {
+    return mapWorkdirChangeConflict(raw);
+  }
+  return raw;
+}
+
 function mapFileEntry(raw: RawFileEntry): FileEntry {
   return {
     name: raw.name,
@@ -555,7 +580,7 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
     role: raw.role,
     text: raw.content,
     createdAt: raw.created_at || raw.timestamp || new Date().toISOString(),
-    state: fallbackState,
+    state: raw.state || fallbackState,
     ...(typeof raw.elapsed_seconds === "number" ? { elapsedSeconds: raw.elapsed_seconds } : {}),
     ...(mapMessageMeta(raw.meta) ? { meta: mapMessageMeta(raw.meta) } : {}),
   };
@@ -811,7 +836,11 @@ export class RealWebBotClient implements WebBotClient {
       );
     }
     if (!response.ok || !payload.ok) {
-      throw new Error(payload.error?.message || "请求失败");
+      throw new WebApiClientError(payload.error?.message || "请求失败", {
+        status: response.status,
+        code: payload.error?.code,
+        data: mapApiErrorData(payload.error?.code, payload.error?.data),
+      });
     }
     return payload.data;
   }
@@ -1420,13 +1449,20 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
-  async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
+  async updateBotWorkdir(
+    botAlias: string,
+    workingDir: string,
+    options: UpdateBotWorkdirOptions = {},
+  ): Promise<BotSummary> {
     const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/workdir`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ working_dir: workingDir }),
+      body: JSON.stringify({
+        working_dir: workingDir,
+        force_reset: Boolean(options.forceReset),
+      }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }

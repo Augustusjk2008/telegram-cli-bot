@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Dict, Tuple
 
 from bot.models import UserSession
-from bot.session_store import load_session, remove_session, remove_all_sessions_for_bot, save_session
+from bot.session_store import (
+    LOCAL_HISTORY_BACKEND,
+    load_session,
+    migrate_local_history_snapshot,
+    remove_all_sessions_for_bot,
+    remove_session,
+    save_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +39,7 @@ def get_or_create_session(
     load_persisted_state: bool = True,
 ) -> UserSession:
     key = (bot_id, user_id)
+    should_persist_migration = False
 
     with sessions_lock:
         if key in sessions and sessions[key].is_expired():
@@ -65,42 +73,45 @@ def get_or_create_session(
             running_preview_text = ""
             running_started_at = None
             running_updated_at = None
+            local_history_backend = LOCAL_HISTORY_BACKEND
+            session_epoch = 0
+            managed_prompt_hash_seen = None
             
             if stored_data:
+                original_stored_data = dict(stored_data)
+                stored_data = migrate_local_history_snapshot(
+                    stored_data,
+                    default_working_dir=default_working_dir,
+                )
+                should_persist_migration = (
+                    original_stored_data.get("local_history_backend") != LOCAL_HISTORY_BACKEND
+                )
                 codex_session_id = stored_data.get("codex_session_id")
                 claude_session_id = stored_data.get("claude_session_id")
                 working_dir = stored_data.get("working_dir") or default_working_dir
                 browse_dir = stored_data.get("browse_dir") or None
-                overlays = stored_data.get("web_turn_overlays")
-                if isinstance(overlays, list):
-                    web_turn_overlays = [
-                        dict(item)
-                        for item in overlays
-                        if isinstance(item, dict)
-                    ][-20:]
                 try:
                     message_count = max(0, int(stored_data.get("message_count", 0) or 0))
                 except (TypeError, ValueError):
                     message_count = 0
                 last_activity = _parse_stored_datetime(stored_data.get("last_activity"))
-                running_user_text = stored_data.get("running_user_text") or None
-                running_preview_text = stored_data.get("running_preview_text") or ""
-                running_started_at = stored_data.get("running_started_at") or None
-                running_updated_at = stored_data.get("running_updated_at") or None
+                local_history_backend = stored_data.get("local_history_backend") or LOCAL_HISTORY_BACKEND
+                try:
+                    session_epoch = max(0, int(stored_data.get("session_epoch", 0) or 0))
+                except (TypeError, ValueError):
+                    session_epoch = 0
+                managed_prompt_hash_seen = stored_data.get("managed_prompt_hash_seen") or None
                 # 恢复时标记为已初始化（因为我们有 session_id）
                 claude_session_initialized = bool(claude_session_id)
                 if (
                     codex_session_id
                     or claude_session_id
-                    or web_turn_overlays
-                    or running_started_at
                     or working_dir != default_working_dir
                 ):
                     logger.info(f"已恢复会话: bot={bot_id}, user={user_id}, "
                               f"codex={codex_session_id is not None}, "
                               f"claude={claude_session_id is not None}, "
-                              f"overlays={len(web_turn_overlays)}, "
-                              f"running={running_started_at is not None}")
+                              f"epoch={session_epoch}")
             
             sessions[key] = UserSession(
                 bot_id=bot_id,
@@ -119,8 +130,17 @@ def get_or_create_session(
                 running_updated_at=running_updated_at,
                 last_activity=last_activity,
                 message_count=message_count,
+                local_history_backend=local_history_backend,
+                session_epoch=session_epoch,
+                managed_prompt_hash_seen=managed_prompt_hash_seen,
             )
-        return sessions[key]
+            session = sessions[key]
+        else:
+            session = sessions[key]
+
+    if should_persist_migration:
+        _save_session_to_store(session)
+    return session
 
 
 # 保持向后兼容的别名
@@ -137,13 +157,11 @@ def _save_session_to_store(session: UserSession):
             claude_session_id=session.claude_session_id,
             working_dir=session.working_dir,
             browse_dir=session.browse_dir,
-            web_turn_overlays=[dict(item) for item in session.web_turn_overlays[-20:]],
             message_count=session.message_count,
             last_activity=session.last_activity.isoformat(),
-            running_user_text=session.running_user_text,
-            running_preview_text=session.running_preview_text,
-            running_started_at=session.running_started_at,
-            running_updated_at=session.running_updated_at,
+            local_history_backend=session.local_history_backend,
+            session_epoch=session.session_epoch,
+            managed_prompt_hash_seen=session.managed_prompt_hash_seen,
         )
 
 

@@ -445,7 +445,7 @@ class MultiBotManager:
             await self._ensure_assistant_services()
             return profile
 
-    async def set_bot_workdir(self, alias: str, working_dir: str) -> None:
+    async def set_bot_workdir(self, alias: str, working_dir: str, *, update_sessions: bool = False) -> None:
         normalized_alias = str(alias or "").strip().lower()
         resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir or "").strip()))
         if not os.path.isdir(resolved_working_dir):
@@ -457,7 +457,8 @@ class MultiBotManager:
                 raise ValueError("assistant 型 Bot 不允许修改默认工作目录")
             profile.working_dir = resolved_working_dir
             self._save_profiles()
-            update_bot_working_dir(normalized_alias, resolved_working_dir)
+            if update_sessions:
+                update_bot_working_dir(normalized_alias, resolved_working_dir)
 
     async def get_bot_cli_params(self, alias: str, cli_type: Optional[str] = None) -> dict:
         normalized_alias = str(alias or "").strip().lower()

@@ -131,9 +131,9 @@ class TestSessionPersistence:
         assert not store_file.exists()
 
     def test_session_restored_from_store(self, temp_dir: Path):
-        """测试从持久化存储恢复会话（不检查工作目录）"""
+        """测试恢复旧快照时切换到 local_v1 并清理原生 session_id"""
         from unittest.mock import patch
-        from bot.session_store import save_session
+        from bot.session_store import LOCAL_HISTORY_BACKEND, load_session, save_session
         
         # 先保存会话到持久化存储
         with patch("bot.session_store.STORE_FILE", temp_dir / ".session_store.json"):
@@ -148,14 +148,23 @@ class TestSessionPersistence:
             with sessions_lock:
                 sessions.clear()
             
-            # 重新获取会话，应该恢复 session_id（不管工作目录是什么）
+            # 重新获取会话，应该执行 cutover 而不是恢复旧的原生 session_id
             other_dir = temp_dir / "other"
             other_dir.mkdir()
             s = get_session(1, "main", 100, str(other_dir))
-            
-            assert s.codex_session_id == "thread_restored_123"
-            assert s.claude_session_id == "claude_restored_789"
-            assert s.claude_session_initialized is True
+
+            assert s.codex_session_id is None
+            assert s.claude_session_id is None
+            assert s.claude_session_initialized is False
+            assert s.local_history_backend == LOCAL_HISTORY_BACKEND
+            assert s.session_epoch == 1
+            persisted = load_session(1, 100)
+            assert persisted["local_history_backend"] == LOCAL_HISTORY_BACKEND
+            assert persisted["session_epoch"] == 1
+            assert persisted["working_dir"] == str(other_dir)
+            assert persisted["browse_dir"] == str(other_dir)
+            assert "codex_session_id" not in persisted
+            assert "claude_session_id" not in persisted
             assert not hasattr(s, "ki" "mi_session_id")
 
     def test_reset_session_clears_persistent_store(self, temp_dir: Path):
@@ -204,9 +213,9 @@ class TestSessionPersistence:
             assert data2["claude_session_id"] == "claude_s2"
 
     def test_session_restored_after_restart(self, temp_dir: Path):
-        """测试重启后恢复会话"""
+        """测试重启后恢复旧快照时触发 local_v1 cutover"""
         from unittest.mock import patch
-        from bot.session_store import save_session, load_session
+        from bot.session_store import LOCAL_HISTORY_BACKEND, load_session, save_session
         
         with patch("bot.session_store.STORE_FILE", temp_dir / ".session_store.json"):
             # 模拟之前保存的会话
@@ -223,15 +232,24 @@ class TestSessionPersistence:
             with sessions_lock:
                 sessions.clear()
             
-            # 重新获取会话（模拟重启后）
+            # 重新获取会话（模拟重启后）时应该清掉旧的原生 session_id
             s = get_session(1, "main", 100, str(temp_dir))
-            
-            # 应该恢复之前的 session_id
-            assert s.codex_session_id == "codex_prev_session"
+
+            assert s.codex_session_id is None
+            assert s.claude_session_id is None
+            assert s.claude_session_initialized is False
+            assert s.local_history_backend == LOCAL_HISTORY_BACKEND
+            assert s.session_epoch == 1
+            persisted = load_session(1, 100)
+            assert persisted["local_history_backend"] == LOCAL_HISTORY_BACKEND
+            assert persisted["session_epoch"] == 1
+            assert persisted["working_dir"] == str(temp_dir)
+            assert persisted["browse_dir"] == str(temp_dir)
+            assert "codex_session_id" not in persisted
             assert not hasattr(s, "ki" "mi_session_id")
 
-    def test_persist_saves_overlay_workdir_and_running_reply_without_history(self, temp_dir: Path):
-        """测试会话快照会自动持久化 overlay，但不保存聊天历史"""
+    def test_persist_saves_local_history_backend_without_legacy_overlay_fields(self, temp_dir: Path):
+        """测试会话快照只持久化 local_v1 元数据，不再保存 overlay/running 字段"""
         from unittest.mock import patch
         from bot.session_store import load_session
 
@@ -251,6 +269,8 @@ class TestSessionPersistence:
         with patch("bot.session_store.STORE_FILE", store_file):
             session = get_session(1, "main", 100, str(temp_dir))
             session.working_dir = str(temp_dir / "workspace")
+            session.local_history_backend = "local_v1"
+            session.session_epoch = 2
             session.touch()
             session.add_to_history("user", "hello")
             session.web_turn_overlays = [overlay]
@@ -262,32 +282,22 @@ class TestSessionPersistence:
             assert data is not None
             assert data["working_dir"] == str(temp_dir / "workspace")
             assert data["message_count"] == 1
+            assert data["local_history_backend"] == "local_v1"
+            assert data["session_epoch"] == 2
             assert "history" not in data
-            assert data.get("web_turn_overlays") == [overlay]
-            assert data["running_user_text"] == "continue"
-            assert data["running_preview_text"] == "partial"
+            assert "web_turn_overlays" not in data
+            assert "running_user_text" not in data
+            assert "running_preview_text" not in data
             assert "last_activity" in data
 
-    def test_session_restored_with_overlay_workdir_and_running_reply_but_not_history(self, temp_dir: Path):
-        """测试从持久化存储恢复 overlay 快照，但不恢复 history"""
+    def test_get_or_create_session_clears_legacy_native_session_ids_on_cutover(self, temp_dir: Path):
+        """测试首轮 cutover 会清掉 legacy native session 和可见 overlay 状态"""
         from unittest.mock import patch
         from bot.session_store import _make_key
 
         store_file = temp_dir / ".session_store.json"
         restored_dir = temp_dir / "restored"
         restored_dir.mkdir()
-        history = [
-            {
-                "timestamp": "2026-04-09T10:00:00",
-                "role": "user",
-                "content": "continue",
-            },
-            {
-                "timestamp": "2026-04-09T10:00:02",
-                "role": "assistant",
-                "content": "partial result",
-            },
-        ]
         overlay = {"provider": "codex", "summary_text": "部分预览"}
 
         with patch("bot.session_store.STORE_FILE", store_file):
@@ -295,16 +305,13 @@ class TestSessionPersistence:
                 json.dumps(
                     {
                         _make_key(1, 100): {
-                            "codex_session_id": "thread_restored_123",
+                            "codex_session_id": "thread-old",
+                            "claude_session_id": "claude-old",
                             "working_dir": str(restored_dir),
-                            "history": history,
                             "web_turn_overlays": [overlay],
-                            "message_count": 7,
-                            "last_activity": "2026-04-09T10:00:03",
+                            "running_started_at": "2026-04-18T10:00:00+00:00",
                             "running_user_text": "continue",
                             "running_preview_text": "still running",
-                            "running_started_at": "2026-04-09T10:00:01",
-                            "running_updated_at": "2026-04-09T10:00:04",
                         }
                     },
                     ensure_ascii=False,
@@ -318,13 +325,15 @@ class TestSessionPersistence:
 
             session = get_session(1, "main", 100, str(temp_dir))
 
-            assert session.codex_session_id == "thread_restored_123"
+            assert session.local_history_backend == "local_v1"
+            assert session.session_epoch == 1
+            assert session.codex_session_id is None
+            assert session.claude_session_id is None
             assert session.working_dir == str(restored_dir)
             assert session.history == []
-            assert getattr(session, "web_turn_overlays", []) == [overlay]
-            assert session.message_count == 7
-            assert session.running_user_text == "continue"
-            assert session.running_preview_text == "still running"
-            assert session.running_started_at == "2026-04-09T10:00:01"
-            assert session.running_updated_at == "2026-04-09T10:00:04"
+            assert getattr(session, "web_turn_overlays", []) == []
+            assert session.running_user_text is None
+            assert session.running_preview_text == ""
+            assert session.running_started_at is None
+            assert session.running_updated_at is None
             assert session.is_processing is False

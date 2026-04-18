@@ -86,42 +86,36 @@ class TestSaveAndLoadSession:
             assert data["codex_session_id"] == "thread_abc123"
             assert "claude_session_id" not in data
 
-    def test_save_session_omits_legacy_history_snapshot_fields(self, temp_dir: Path):
-        """测试保存会话快照时不再持久化聊天历史"""
+    def test_save_session_omits_legacy_overlay_fields_and_marks_local_history_backend(self, temp_dir: Path):
+        """测试 local_v1 快照只持久化仍有意义的元数据"""
         store_file = temp_dir / ".session_store.json"
-        history = [
-            {
-                "timestamp": "2026-04-09T12:00:00",
-                "role": "user",
-                "content": "hello",
-            }
-        ]
 
         with patch("bot.session_store.STORE_FILE", store_file):
             save_session(
                 bot_id=1,
-                user_id=100,
-                codex_session_id="thread_abc123",
-                working_dir="C:\\workspace\\saved",
-                history=history,
+                user_id=1001,
+                codex_session_id="thread-1",
+                claude_session_id="claude-1",
+                working_dir=str(temp_dir),
+                browse_dir=str(temp_dir),
                 message_count=3,
-                last_activity="2026-04-09T12:00:01",
-                running_user_text="continue",
-                running_preview_text="partial",
-                running_started_at="2026-04-09T12:00:02",
-                running_updated_at="2026-04-09T12:00:03",
+                last_activity="2026-04-18T10:00:00+00:00",
+                local_history_backend="local_v1",
+                session_epoch=2,
+                running_user_text="legacy",
+                running_preview_text="legacy-preview",
+                web_turn_overlays=[{"summary_text": "legacy"}],
             )
 
-            data = load_session(1, 100)
+            data = load_session(1, 1001)
             assert data is not None
-            assert data["working_dir"] == "C:\\workspace\\saved"
-            assert "history" not in data
+            assert data["local_history_backend"] == "local_v1"
+            assert data["session_epoch"] == 2
+            assert data["codex_session_id"] == "thread-1"
             assert data["message_count"] == 3
-            assert data["last_activity"] == "2026-04-09T12:00:01"
-            assert data["running_user_text"] == "continue"
-            assert data["running_preview_text"] == "partial"
-            assert data["running_started_at"] == "2026-04-09T12:00:02"
-            assert data["running_updated_at"] == "2026-04-09T12:00:03"
+            assert "running_user_text" not in data
+            assert "running_preview_text" not in data
+            assert "web_turn_overlays" not in data
 
 
 class TestRemoveSession:

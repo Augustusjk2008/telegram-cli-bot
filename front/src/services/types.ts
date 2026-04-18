@@ -14,6 +14,33 @@ export type BotSummary = {
   isMain?: boolean;
 };
 
+export type WorkdirChangeConflict = {
+  currentWorkingDir: string;
+  requestedWorkingDir: string;
+  historyCount: number;
+  messageCount: number;
+  botMode: string;
+};
+
+export type UpdateBotWorkdirOptions = {
+  forceReset?: boolean;
+};
+
+export class WebApiClientError extends Error {
+  status?: number;
+  code?: string;
+  data?: unknown;
+
+  constructor(message: string, init: { status?: number; code?: string; data?: unknown } = {}) {
+    super(message);
+    this.name = "WebApiClientError";
+    this.status = init.status;
+    this.code = init.code;
+    this.data = init.data;
+    Object.setPrototypeOf(this, WebApiClientError.prototype);
+  }
+}
+
 export type RunningReply = {
   userText?: string;
   previewText?: string;

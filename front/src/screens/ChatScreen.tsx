@@ -9,7 +9,6 @@ import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ChatTracePanel } from "../components/ChatTracePanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
-import { RestoredReplyNotice } from "../components/RestoredReplyNotice";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   BotOverview,
@@ -17,7 +16,6 @@ import type {
   ChatMessageMetaInfo,
   ChatTraceEvent,
   FileReadResult,
-  RunningReply,
   SystemScript,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -26,7 +24,6 @@ import {
   isAssistantCronRunEnqueuedEvent,
   type AssistantCronRunEnqueuedDetail,
 } from "../utils/assistantCronEvents";
-import { buildResumePrompt } from "../utils/chatResume";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import {
   getFilePreviewStatusText,
@@ -55,101 +52,12 @@ function getCompactScriptTitle(script: SystemScript) {
   return firstSentence || script.scriptName;
 }
 
-function runningUserId(botAlias: string) {
-  return `running-user-${botAlias}`;
-}
-
-function runningAssistantId(botAlias: string) {
-  return `running-assistant-${botAlias}`;
-}
-
-function restoredSystemId(botAlias: string) {
-  return `restored-system-${botAlias}`;
-}
-
-function restoredAssistantId(botAlias: string) {
-  return `restored-assistant-${botAlias}`;
-}
-
 function pendingCronUserId(runId: string) {
   return `assistant-cron-user-${runId}`;
 }
 
 function pendingCronAssistantId(runId: string) {
   return `assistant-cron-assistant-${runId}`;
-}
-
-function mergeRunningReply(items: ChatMessage[], botAlias: string, runningReply?: RunningReply | null) {
-  const nextItems = items.filter(
-    (item) => item.id !== runningUserId(botAlias) && item.id !== runningAssistantId(botAlias),
-  );
-
-  if (runningReply?.userText) {
-    const hasUserMessage = nextItems.some((item) => item.role === "user" && item.text === runningReply.userText);
-    if (!hasUserMessage) {
-      nextItems.push({
-        id: runningUserId(botAlias),
-        role: "user",
-        text: runningReply.userText,
-        createdAt: runningReply.startedAt,
-        state: "done",
-      });
-    }
-  }
-
-  nextItems.push({
-    id: runningAssistantId(botAlias),
-    role: "assistant",
-    text: runningReply?.previewText || "",
-    createdAt: runningReply?.startedAt || new Date().toISOString(),
-    state: "streaming",
-  });
-
-  return nextItems;
-}
-
-function mergeRestoredReply(items: ChatMessage[], botAlias: string, runningReply?: RunningReply | null) {
-  if (!runningReply) {
-    return items;
-  }
-
-  const nextItems = items.filter(
-    (item) =>
-      item.id !== runningUserId(botAlias)
-      && item.id !== runningAssistantId(botAlias)
-      && item.id !== restoredSystemId(botAlias)
-      && item.id !== restoredAssistantId(botAlias),
-  );
-
-  if (runningReply.userText) {
-    const hasUserMessage = nextItems.some((item) => item.role === "user" && item.text === runningReply.userText);
-    if (!hasUserMessage) {
-      nextItems.push({
-        id: runningUserId(botAlias),
-        role: "user",
-        text: runningReply.userText,
-        createdAt: runningReply.startedAt,
-        state: "done",
-      });
-    }
-  }
-
-  nextItems.push({
-    id: restoredSystemId(botAlias),
-    role: "system",
-    text: "检测到上次未完成任务，已恢复最近预览。",
-    createdAt: runningReply.updatedAt || runningReply.startedAt,
-    state: "done",
-  });
-  nextItems.push({
-    id: restoredAssistantId(botAlias),
-    role: "assistant",
-    text: runningReply.previewText || "上次任务在完成前中断，未留下预览文本。",
-    createdAt: runningReply.updatedAt || runningReply.startedAt,
-    state: "error",
-  });
-
-  return nextItems;
 }
 
 function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRunEnqueuedDetail[]) {
@@ -190,26 +98,22 @@ function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRu
 function resolvePendingCronRuns(
   pendingRuns: AssistantCronRunEnqueuedDetail[],
   items: ChatMessage[],
-  runningReply?: RunningReply | null,
 ) {
   if (pendingRuns.length === 0) {
     return pendingRuns;
   }
 
   return pendingRuns.filter((pendingRun) => {
-    if (runningReply?.userText === pendingRun.prompt) {
-      return false;
-    }
-
     const hasPromptUserMessage = items.some((item) => item.role === "user" && item.text === pendingRun.prompt);
-    const hasAssistantResult = items.some((item) => item.role === "assistant" && item.state !== "streaming");
-    return !(hasPromptUserMessage && hasAssistantResult);
+    const hasAssistantMessage = items.some((item) => item.role === "assistant");
+    return !(hasPromptUserMessage && hasAssistantMessage);
   });
 }
 
-function resolveStreamStartMs(runningReply?: RunningReply | null, elapsedSeconds?: number) {
-  if (runningReply?.startedAt) {
-    const parsed = Date.parse(runningReply.startedAt);
+function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
+  const streamingItem = [...items].reverse().find((item) => item.role === "assistant" && item.state === "streaming");
+  if (streamingItem?.createdAt) {
+    const parsed = Date.parse(streamingItem.createdAt);
     if (!Number.isNaN(parsed)) {
       return parsed;
     }
@@ -375,9 +279,6 @@ type ChatMessageRowProps = {
   assistantName: string;
   assistantAvatarName?: string;
   userAvatarName?: string;
-  botAlias: string;
-  restoredReplyActive: boolean;
-  isStreaming: boolean;
   isCopied: boolean;
   tracePanelExpanded: boolean;
   traceLoadState?: { loading: boolean; error?: string };
@@ -385,7 +286,6 @@ type ChatMessageRowProps = {
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: () => void;
   onCopyMessage: (item: ChatMessage) => void;
-  onResumeContinue: () => void;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -394,9 +294,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   assistantName,
   assistantAvatarName,
   userAvatarName,
-  botAlias,
-  restoredReplyActive,
-  isStreaming,
   isCopied,
   tracePanelExpanded,
   traceLoadState,
@@ -404,7 +301,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onLoadTrace,
   onToggleTracePanel,
   onCopyMessage,
-  onResumeContinue,
 }: ChatMessageRowProps) {
   if (item.role === "system") {
     return (
@@ -498,9 +394,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
               onCopy={() => void onCopyMessage(item)}
             />
           ) : null}
-          {item.id === restoredAssistantId(botAlias) && restoredReplyActive ? (
-            <RestoredReplyNotice disabled={isStreaming} onContinue={() => void onResumeContinue()} />
-          ) : null}
         </div>
       </div>
     </div>
@@ -537,7 +430,6 @@ export function ChatScreen({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
-  const [restoredReply, setRestoredReply] = useState<RunningReply | null>(null);
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [expandedTracePanels, setExpandedTracePanels] = useState<Record<string, boolean>>({});
@@ -554,7 +446,6 @@ export function ChatScreen({
   const traceLoadStateRef = useRef<Record<string, { loading: boolean; error?: string }>>({});
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
-  const restoredReplyRef = useRef<RunningReply | null>(null);
   const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
   const assistantPollTimerRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
@@ -592,12 +483,29 @@ export function ChatScreen({
   }, [botOverview]);
 
   useEffect(() => {
-    restoredReplyRef.current = restoredReply;
-  }, [restoredReply]);
-
-  useEffect(() => {
     pendingCronRunsRef.current = pendingCronRuns;
   }, [pendingCronRuns]);
+
+  const applyHistoryView = useCallback((
+    messages: ChatMessage[],
+    overview: BotOverview,
+    pendingRuns: AssistantCronRunEnqueuedDetail[],
+  ) => {
+    const nextItems = mergePendingCronRuns(messages, pendingRuns);
+    const hasStreamingRow = nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
+    const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow || pendingRuns.length > 0);
+
+    setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
+    setIsStreaming(shouldPoll);
+    setStreamMode(shouldPoll ? "poll" : "");
+    if (shouldPoll) {
+      setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(nextItems));
+    } else {
+      setStreamStartedAtMs(null);
+    }
+
+    return { nextItems, shouldPoll };
+  }, []);
 
   const stopAssistantPoll = useCallback(() => {
     if (assistantPollTimerRef.current !== null) {
@@ -621,60 +529,19 @@ export function ChatScreen({
 
       setBotOverview(overview);
       setWorkingDir(overview.workingDir || "");
+      const previousCount = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-")).length;
 
       const nextPendingRuns = resolvePendingCronRuns(
         pendingCronRunsRef.current,
         messages,
-        overview.runningReply,
       );
       if (nextPendingRuns.length !== pendingCronRunsRef.current.length) {
         setPendingCronRuns(nextPendingRuns);
       }
 
-      if (overview.isProcessing) {
-        setIsStreaming(true);
-        setRestoredReply(null);
-        setStreamMode("poll");
-        setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(overview.runningReply));
-        setItems((prev) => mergeMessagesPreservingClientState(prev, mergeRunningReply(messages, botAlias, overview.runningReply)));
-      } else if (overview.runningReply) {
-        const nextItems = mergePendingCronRuns(
-          mergeRestoredReply(messages, botAlias, overview.runningReply),
-          nextPendingRuns,
-        );
-        setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
-        setRestoredReply(overview.runningReply);
-        if (nextPendingRuns.length > 0) {
-          setIsStreaming(true);
-          setStreamMode("poll");
-          setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs({
-            startedAt: nextPendingRuns[0]?.queuedAt || overview.runningReply.startedAt,
-            updatedAt: nextPendingRuns[0]?.queuedAt || overview.runningReply.updatedAt,
-          }));
-        } else {
-          setIsStreaming(false);
-          setStreamMode("");
-          setStreamStartedAtMs(null);
-        }
-      } else if (nextPendingRuns.length > 0) {
-        setItems((prev) => mergeMessagesPreservingClientState(prev, mergePendingCronRuns(messages, nextPendingRuns)));
-        setRestoredReply(null);
-        setIsStreaming(true);
-        setStreamMode("poll");
-        setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs({
-          startedAt: nextPendingRuns[0].queuedAt,
-          updatedAt: nextPendingRuns[0].queuedAt,
-        }));
-      } else {
-        const previousCount = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-")).length;
-        setItems((prev) => mergeMessagesPreservingClientState(prev, messages));
-        setRestoredReply(null);
-        setIsStreaming(false);
-        setStreamMode("");
-        setStreamStartedAtMs(null);
-        if (!isVisibleRef.current && messages.length > previousCount) {
-          onUnreadResult?.(botAlias);
-        }
+      const { nextItems, shouldPoll } = applyHistoryView(messages, overview, nextPendingRuns);
+      if (!isVisibleRef.current && !shouldPoll && nextItems.length > previousCount) {
+        onUnreadResult?.(botAlias);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "恢复任务状态失败");
@@ -720,7 +587,6 @@ export function ChatScreen({
     setPreviewContent("");
     setPreviewResult(null);
     setBotOverview(null);
-    setRestoredReply(null);
     setPendingCronRuns([]);
     setCopiedMessageId("");
     setExpandedTracePanels({});
@@ -733,19 +599,7 @@ export function ChatScreen({
         if (cancelled) return;
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
-        if (overview.isProcessing) {
-          setRestoredReply(null);
-          setItems(mergeRunningReply(messages, botAlias, overview.runningReply));
-          setIsStreaming(true);
-          setStreamMode("poll");
-          setStreamStartedAtMs(resolveStreamStartMs(overview.runningReply));
-        } else if (overview.runningReply) {
-          setRestoredReply(overview.runningReply);
-          setItems(mergeRestoredReply(messages, botAlias, overview.runningReply));
-        } else {
-          setRestoredReply(null);
-          setItems(messages);
-        }
+        applyHistoryView(messages, overview, []);
         setLoading(false);
         if (overview.isProcessing || overview.botMode === "assistant") {
           scheduleAssistantPoll();
@@ -763,7 +617,7 @@ export function ChatScreen({
       cancelled = true;
       stopAssistantPoll();
     };
-  }, [botAlias, client, scheduleAssistantPoll, stopAssistantPoll]);
+  }, [applyHistoryView, botAlias, client, scheduleAssistantPoll, stopAssistantPoll]);
 
   useEffect(() => {
     const handleAssistantCronRunEnqueued = (event: Event) => {
@@ -777,7 +631,6 @@ export function ChatScreen({
       }
 
       setError("");
-      setRestoredReply(null);
       forceAutoScrollRef.current = true;
       shouldStickToBottomRef.current = true;
       setPendingCronRuns((prev) => {
@@ -786,13 +639,11 @@ export function ChatScreen({
         }
         return [...prev, detail];
       });
-      setItems((prev) => mergePendingCronRuns(prev, [detail]));
+      const nextItems = mergePendingCronRuns(itemsRef.current, [detail]);
+      setItems(nextItems);
       setIsStreaming(true);
       setStreamMode("poll");
-      setStreamStartedAtMs(resolveStreamStartMs({
-        startedAt: detail.queuedAt,
-        updatedAt: detail.queuedAt,
-      }));
+      setStreamStartedAtMs(resolveStreamStartMs(nextItems));
       scheduleAssistantPoll();
     };
 
@@ -964,7 +815,6 @@ export function ChatScreen({
     };
 
     setError("");
-    setRestoredReply(null);
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
@@ -989,7 +839,7 @@ export function ChatScreen({
         },
         (status) => {
           if (typeof status.elapsedSeconds === "number") {
-            setStreamStartedAtMs(resolveStreamStartMs(undefined, status.elapsedSeconds));
+            setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
           }
           if (status.previewText) {
             usingPreviewReplace = true;
@@ -1113,14 +963,6 @@ export function ChatScreen({
     }
   }, []);
 
-  const handleResumeContinue = useCallback(async () => {
-    const activeRestoredReply = restoredReplyRef.current;
-    if (!activeRestoredReply || isStreaming) {
-      return;
-    }
-    await handleSend(buildResumePrompt(botOverviewRef.current?.botMode, activeRestoredReply.previewText));
-  }, [handleSend, isStreaming]);
-
   const killTaskActive = isStreaming || actionLoading === "kill";
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
@@ -1208,9 +1050,6 @@ export function ChatScreen({
             assistantName={assistantName}
             assistantAvatarName={assistantAvatarName}
             userAvatarName={userAvatarName}
-            botAlias={botAlias}
-            restoredReplyActive={Boolean(restoredReply)}
-            isStreaming={isStreaming}
             isCopied={copiedMessageId === item.id}
             tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
             traceLoadState={traceLoadState[getMessageClientStateKey(item)]}
@@ -1237,7 +1076,6 @@ export function ChatScreen({
               });
             }}
             onCopyMessage={handleCopyMessage}
-            onResumeContinue={handleResumeContinue}
           />
         ))}
         <div ref={bottomAnchorRef} aria-hidden="true" />

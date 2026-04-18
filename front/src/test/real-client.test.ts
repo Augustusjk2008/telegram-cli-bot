@@ -561,7 +561,7 @@ describe("RealWebBotClient", () => {
           Authorization: "Bearer secret-token",
           "Content-Type": "application/json",
         }),
-        body: JSON.stringify({ working_dir: "C:\\workspace\\next" }),
+        body: JSON.stringify({ working_dir: "C:\\workspace\\next", force_reset: false }),
       }),
     );
     expect(bot).toEqual({
@@ -571,6 +571,53 @@ describe("RealWebBotClient", () => {
       workingDir: "C:\\workspace\\next",
       lastActiveText: "运行中",
       avatarName: "bot-default.png",
+    });
+  });
+
+  test("requestJson throws WebApiClientError with structured workdir conflict data", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          ok: false,
+          error: {
+            code: "workdir_change_requires_reset",
+            message: "切换工作目录会丢失当前会话，确认后重试",
+            data: {
+              current_working_dir: "C:\\workspace\\old",
+              requested_working_dir: "C:\\workspace\\new",
+              history_count: 2,
+              message_count: 5,
+              bot_mode: "cli",
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(client.updateBotWorkdir("main", "C:\\workspace\\new")).rejects.toMatchObject({
+      name: "WebApiClientError",
+      code: "workdir_change_requires_reset",
+      status: 409,
+      data: {
+        currentWorkingDir: "C:\\workspace\\old",
+        requestedWorkingDir: "C:\\workspace\\new",
+        historyCount: 2,
+        messageCount: 5,
+        botMode: "cli",
+      },
     });
   });
 

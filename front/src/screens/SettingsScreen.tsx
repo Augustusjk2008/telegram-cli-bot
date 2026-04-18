@@ -3,6 +3,7 @@ import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square }
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { WebApiClientError } from "../services/types";
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
@@ -14,6 +15,8 @@ import type {
   CliParamsPayload,
   GitProxySettings,
   TunnelSnapshot,
+  UpdateBotWorkdirOptions,
+  WorkdirChangeConflict,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { dispatchAssistantCronRunEnqueued } from "../utils/assistantCronEvents";
@@ -103,6 +106,20 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function asWebApiClientError(error: unknown): WebApiClientError | null {
+  if (error instanceof WebApiClientError) {
+    return error;
+  }
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const candidate = error as Partial<WebApiClientError> & { name?: unknown };
+  if (candidate.name === "WebApiClientError" || typeof candidate.code === "string") {
+    return candidate as WebApiClientError;
+  }
+  return null;
+}
+
 function cronScheduleText(job: AssistantCronJob) {
   if (job.schedule.type === "daily") {
     return `每天 ${job.schedule.time || "00:00"} (${job.schedule.timezone})`;
@@ -166,6 +183,7 @@ export function SettingsScreen({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [workdirDraft, setWorkdirDraft] = useState("");
+  const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [assistantCronJobs, setAssistantCronJobs] = useState<AssistantCronJob[]>([]);
   const [assistantCronRuns, setAssistantCronRuns] = useState<Record<string, AssistantCronRun[]>>({});
   const [assistantCronLoading, setAssistantCronLoading] = useState(false);
@@ -502,6 +520,20 @@ export function SettingsScreen({
     }
   };
 
+  const applyWorkdirChange = async (options: UpdateBotWorkdirOptions = {}) => {
+    const nextWorkdir = workdirDraft.trim();
+    setSavingWorkdir(true);
+    try {
+      const nextBot = await client.updateBotWorkdir(botAlias, nextWorkdir, options);
+      setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
+      setWorkdirDraft(nextBot.workingDir);
+      setPendingWorkdirConflict(null);
+      setNotice("工作目录已更新");
+    } finally {
+      setSavingWorkdir(false);
+    }
+  };
+
   const saveWorkdir = async () => {
     const nextWorkdir = workdirDraft.trim();
     if (!nextWorkdir) {
@@ -509,18 +541,42 @@ export function SettingsScreen({
       return;
     }
 
-    setSavingWorkdir(true);
     setError("");
     setNotice("");
     try {
-      const nextBot = await client.updateBotWorkdir(botAlias, nextWorkdir);
-      setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
-      setWorkdirDraft(nextBot.workingDir);
-      setNotice("工作目录已更新");
+      await applyWorkdirChange();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新工作目录失败");
-    } finally {
-      setSavingWorkdir(false);
+      const clientError = asWebApiClientError(err);
+      if (clientError?.code === "workdir_change_requires_reset" && clientError.data) {
+        setPendingWorkdirConflict(clientError.data as WorkdirChangeConflict);
+        return;
+      }
+      if (clientError?.code === "workdir_change_blocked_processing") {
+        setPendingWorkdirConflict(null);
+        setError("当前仍有任务运行，请先停止任务再切换工作目录");
+        return;
+      }
+      setError(getErrorMessage(err, "更新工作目录失败"));
+    }
+  };
+
+  const confirmWorkdirChange = async () => {
+    setError("");
+    setNotice("");
+    try {
+      await applyWorkdirChange({ forceReset: true });
+    } catch (err) {
+      const clientError = asWebApiClientError(err);
+      if (clientError?.code === "workdir_change_requires_reset" && clientError.data) {
+        setPendingWorkdirConflict(clientError.data as WorkdirChangeConflict);
+        return;
+      }
+      if (clientError?.code === "workdir_change_blocked_processing") {
+        setPendingWorkdirConflict(null);
+        setError("当前仍有任务运行，请先停止任务再切换工作目录");
+        return;
+      }
+      setError(getErrorMessage(err, "更新工作目录失败"));
     }
   };
 
@@ -1024,7 +1080,12 @@ export function SettingsScreen({
                   aria-label="工作目录"
                   type="text"
                   value={workdirDraft}
-                  onChange={(event) => setWorkdirDraft(event.target.value)}
+                  onChange={(event) => {
+                    setWorkdirDraft(event.target.value);
+                    if (pendingWorkdirConflict) {
+                      setPendingWorkdirConflict(null);
+                    }
+                  }}
                   readOnly={workdirLocked}
                   className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                 />
@@ -1518,6 +1579,49 @@ export function SettingsScreen({
           </button>
         </div>
       </section>
+
+      {pendingWorkdirConflict ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workdir-reset-title"
+        >
+          <div className="w-full max-w-md rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl">
+            <h2 id="workdir-reset-title" className="text-base font-semibold text-[var(--text)]">
+              确认切换工作目录
+            </h2>
+            <p className="mt-3 text-sm text-[var(--muted)]">切换工作目录会丢失当前会话。</p>
+            <p className="mt-2 break-all text-sm text-[var(--text)]">
+              当前目录：{pendingWorkdirConflict.currentWorkingDir}
+            </p>
+            <p className="break-all text-sm text-[var(--text)]">
+              目标目录：{pendingWorkdirConflict.requestedWorkingDir}
+            </p>
+            <p className="text-sm text-[var(--muted)]">
+              将清空 {pendingWorkdirConflict.historyCount} 条聊天消息。
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingWorkdirConflict(null)}
+                disabled={savingWorkdir}
+                className="rounded-full border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmWorkdirChange()}
+                disabled={savingWorkdir}
+                className="rounded-full bg-[var(--danger)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              >
+                {savingWorkdir ? "切换中..." : "确认并切换"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showResetConfirm ? (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">

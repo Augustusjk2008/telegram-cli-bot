@@ -101,6 +101,8 @@ class UserSession:
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     managed_prompt_hash_seen: Optional[str] = None
+    local_history_backend: str = "local_v1"
+    session_epoch: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)

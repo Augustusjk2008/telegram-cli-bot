@@ -12,11 +12,12 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from bot.config import MANAGED_BOTS_FILE
 
 logger = logging.getLogger(__name__)
+LOCAL_HISTORY_BACKEND = "local_v1"
 
 # 存储文件路径（与托管bots文件同级目录）
 STORE_FILE = Path(MANAGED_BOTS_FILE).parent / ".session_store.json"
@@ -96,6 +97,30 @@ def load_session(bot_id: int, user_id: int) -> Optional[dict]:
     return data.get(key)
 
 
+def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_working_dir: str) -> dict[str, Any]:
+    next_data = dict(data or {})
+    if next_data.get("local_history_backend") == LOCAL_HISTORY_BACKEND:
+        next_data["session_epoch"] = max(0, int(next_data.get("session_epoch", 0) or 0))
+        if default_working_dir:
+            next_data["working_dir"] = next_data.get("working_dir") or default_working_dir
+            next_data["browse_dir"] = next_data.get("browse_dir") or next_data["working_dir"]
+        return next_data
+
+    next_data["local_history_backend"] = LOCAL_HISTORY_BACKEND
+    next_data["session_epoch"] = max(1, int(next_data.get("session_epoch", 0) or 0) + 1)
+    next_data["working_dir"] = next_data.get("working_dir") or default_working_dir
+    next_data["browse_dir"] = next_data.get("browse_dir") or next_data["working_dir"]
+    next_data["codex_session_id"] = None
+    next_data["claude_session_id"] = None
+    next_data["claude_session_initialized"] = False
+    next_data.pop("running_user_text", None)
+    next_data.pop("running_preview_text", None)
+    next_data.pop("running_started_at", None)
+    next_data.pop("running_updated_at", None)
+    next_data.pop("web_turn_overlays", None)
+    return next_data
+
+
 def save_session(
     bot_id: int,
     user_id: int,
@@ -107,6 +132,9 @@ def save_session(
     web_turn_overlays: Optional[list[dict]] = None,
     message_count: Optional[int] = None,
     last_activity: Optional[str] = None,
+    local_history_backend: Optional[str] = None,
+    session_epoch: Optional[int] = None,
+    managed_prompt_hash_seen: Optional[str] = None,
     running_user_text: Optional[str] = None,
     running_preview_text: Optional[str] = None,
     running_started_at: Optional[str] = None,
@@ -124,25 +152,18 @@ def save_session(
         session_data["working_dir"] = working_dir
     if isinstance(browse_dir, str) and browse_dir:
         session_data["browse_dir"] = browse_dir
-    if web_turn_overlays:
-        session_data["web_turn_overlays"] = [
-            dict(item)
-            for item in web_turn_overlays
-            if isinstance(item, dict)
-        ][-20:]
     if isinstance(message_count, int):
         session_data["message_count"] = max(0, message_count)
     if last_activity:
         session_data["last_activity"] = last_activity
-    if running_user_text:
-        session_data["running_user_text"] = running_user_text
-    if running_preview_text:
-        session_data["running_preview_text"] = running_preview_text
-    if running_started_at:
-        session_data["running_started_at"] = running_started_at
-    if running_updated_at:
-        session_data["running_updated_at"] = running_updated_at
+    if local_history_backend:
+        session_data["local_history_backend"] = local_history_backend
+    if isinstance(session_epoch, int):
+        session_data["session_epoch"] = max(0, session_epoch)
+    if managed_prompt_hash_seen:
+        session_data["managed_prompt_hash_seen"] = managed_prompt_hash_seen
     # legacy history is intentionally no longer persisted
+    # legacy running_* and web_turn_overlays are intentionally dropped on local_v1
 
     with _store_lock:
         try:

@@ -1,3 +1,4 @@
+import { WebApiClientError } from "./types";
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
@@ -28,6 +29,7 @@ import type {
   SystemScriptResult,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
+  UpdateBotWorkdirOptions,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
@@ -740,12 +742,30 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
-  async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
+  async updateBotWorkdir(
+    botAlias: string,
+    workingDir: string,
+    options: UpdateBotWorkdirOptions = {},
+  ): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
     if (current.botMode === "assistant") {
       throw new Error("assistant 型 Bot 不允许修改默认工作目录");
     }
     const nextDir = workingDir.trim();
+    const historyCount = mockChatMessages[botAlias]?.length || 0;
+    if (!options.forceReset && historyCount > 0) {
+      throw new WebApiClientError("切换工作目录会丢失当前会话，确认后重试", {
+        status: 409,
+        code: "workdir_change_requires_reset",
+        data: {
+          currentWorkingDir: current.workingDir,
+          requestedWorkingDir: nextDir,
+          historyCount,
+          messageCount: historyCount,
+          botMode: current.botMode || "cli",
+        },
+      });
+    }
     this.workdirOverrides.set(botAlias, nextDir);
     this.currentPaths.set(botAlias, nextDir);
     this.bots.set(botAlias, {

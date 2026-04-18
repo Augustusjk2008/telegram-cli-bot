@@ -9,6 +9,7 @@ managed_bots.json
 docs/superpowers/
 .worktrees/
 .release-local/
+.tcb/
 .env.copy
 .env copy
 .venv/

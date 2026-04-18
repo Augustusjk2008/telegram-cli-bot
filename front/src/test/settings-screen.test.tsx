@@ -51,6 +51,53 @@ test("assistant bots lock the default workdir in settings", async () => {
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
 
+test("settings screen asks for confirmation before resetting the current workdir conversation", async () => {
+  const user = userEvent.setup();
+  const updateBotWorkdir = vi.fn()
+    .mockRejectedValueOnce(
+      Object.assign(new Error("切换工作目录会丢失当前会话，确认后重试"), {
+        name: "WebApiClientError",
+        code: "workdir_change_requires_reset",
+        status: 409,
+        data: {
+          currentWorkingDir: "C:\\workspace\\old",
+          requestedWorkingDir: "C:\\workspace\\new",
+          historyCount: 2,
+          messageCount: 5,
+          botMode: "cli",
+        },
+      }),
+    )
+    .mockResolvedValueOnce({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\new",
+      lastActiveText: "运行中",
+      avatarName: "bot-default.png",
+    });
+
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "updateBotWorkdir").mockImplementation(updateBotWorkdir);
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  const input = await screen.findByLabelText("工作目录");
+  await user.clear(input);
+  await user.type(input, "C:\\workspace\\new");
+  await user.click(screen.getByRole("button", { name: "保存工作目录" }));
+
+  expect(await screen.findByRole("dialog", { name: "确认切换工作目录" })).toBeInTheDocument();
+  expect(screen.getByText("切换工作目录会丢失当前会话。")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "确认并切换" }));
+
+  await waitFor(() => {
+    expect(updateBotWorkdir).toHaveBeenNthCalledWith(2, "main", "C:\\workspace\\new", { forceReset: true });
+  });
+  expect(await screen.findByText("工作目录已更新")).toBeInTheDocument();
+});
+
 test("CLI type selector only shows codex and claude", async () => {
   const client = new MockWebBotClient();
 

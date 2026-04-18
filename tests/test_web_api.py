@@ -53,10 +53,13 @@ from bot.web.api_service import (
     run_cli_chat,
     run_system_script,
     save_uploaded_file,
+    update_bot_workdir,
     write_file_content,
 )
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.web import api_service
+from bot.web.chat_history_service import ChatHistoryService
+from bot.web.chat_store import ChatStore
 from bot.web.git_service import (
     commit_git_changes,
     get_git_diff,
@@ -137,22 +140,27 @@ def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: 
     assert any(item["name"] == "hello.txt" for item in listing["entries"])
 
 
-def test_overview_includes_running_reply_snapshot(web_manager: MultiBotManager):
+def test_overview_includes_local_store_running_snapshot(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    service = ChatHistoryService(ChatStore(tmp_path))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    service.replace_assistant_preview(handle, "处理中预览")
     with session._lock:
         session.is_processing = True
-        session.running_preview_text = "处理中预览"
-        session.running_started_at = "2026-04-09T10:40:00"
-        session.running_updated_at = "2026-04-09T10:40:05"
 
     overview = get_overview(web_manager, "main", 1001)
 
-    assert overview["session"]["running_reply"] == {
-        "user_text": "",
-        "preview_text": "处理中预览",
-        "started_at": "2026-04-09T10:40:00",
-        "updated_at": "2026-04-09T10:40:05",
-    }
+    assert overview["session"]["history_count"] == 2
+    assert overview["session"]["running_reply"]["user_text"] == "列出当前目录"
+    assert overview["session"]["running_reply"]["preview_text"] == "处理中预览"
 
 
 def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBotManager):
@@ -285,6 +293,91 @@ def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBot
     assert session.codex_session_id == "thread-old"
     assert session.claude_session_id == "claude-old"
     assert session.claude_session_initialized is True
+
+
+@pytest.mark.asyncio
+async def test_update_bot_workdir_requires_confirmation_when_local_history_exists(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    old_root.mkdir()
+    new_root.mkdir()
+    web_manager.main_profile.working_dir = str(old_root)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(old_root)
+    service = ChatHistoryService(ChatStore(old_root))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="hello",
+        native_provider="codex",
+    )
+    service.complete_turn(handle, content="world", completion_state="completed")
+
+    with pytest.raises(WebApiError) as exc_info:
+        await update_bot_workdir(web_manager, "main", str(new_root), 1001)
+
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "workdir_change_requires_reset"
+    assert exc_info.value.data == {
+        "current_working_dir": str(old_root),
+        "requested_working_dir": str(new_root),
+        "history_count": 2,
+        "message_count": session.message_count,
+        "bot_mode": "cli",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_bot_workdir_blocks_while_processing(web_manager: MultiBotManager, tmp_path: Path):
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    old_root.mkdir()
+    new_root.mkdir()
+    web_manager.main_profile.working_dir = str(old_root)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(old_root)
+    with session._lock:
+        session.is_processing = True
+
+    with pytest.raises(WebApiError) as exc_info:
+        await update_bot_workdir(web_manager, "main", str(new_root), 1001)
+
+    assert exc_info.value.code == "workdir_change_blocked_processing"
+    assert session.is_processing is True
+
+
+@pytest.mark.asyncio
+async def test_update_bot_workdir_force_reset_clears_history_and_native_session_ids(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    old_root.mkdir()
+    new_root.mkdir()
+    web_manager.main_profile.working_dir = str(old_root)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(old_root)
+    session.codex_session_id = "thread-1"
+    service = ChatHistoryService(ChatStore(old_root))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="hello",
+        native_provider="codex",
+    )
+    service.complete_turn(handle, content="world", completion_state="completed")
+
+    data = await update_bot_workdir(web_manager, "main", str(new_root), 1001, force_reset=True)
+
+    assert data["bot"]["working_dir"] == str(new_root)
+    assert session.working_dir == str(new_root)
+    assert session.browse_dir == str(new_root)
+    assert session.codex_session_id is None
+    assert get_history(web_manager, "main", 1001, limit=10)["items"] == []
 
 
 def test_change_working_directory_from_windows_drive_root_opens_drive_picker(
@@ -513,7 +606,7 @@ def test_assistant_change_directory_persists_browser_dir_in_assistant_state(
     assert json.loads(state_file.read_text(encoding="utf-8"))["browse_dir"] == str(browse_dir)
 
 
-def test_get_session_for_alias_restores_assistant_overlay_but_not_private_history(
+def test_get_session_for_alias_restores_assistant_private_metadata_without_visible_history_state(
     web_manager: MultiBotManager, temp_dir: Path
 ):
     workdir = temp_dir / "assistant-root"
@@ -540,6 +633,7 @@ def test_get_session_for_alias_restores_assistant_overlay_but_not_private_histor
             "codex_session_id": "assistant-thread",
             "web_turn_overlays": [{"provider": "codex", "summary_text": "synthetic"}],
             "message_count": 3,
+            "managed_prompt_hash_seen": "hash-private",
         },
     )
     save_session(
@@ -552,11 +646,12 @@ def test_get_session_for_alias_restores_assistant_overlay_but_not_private_histor
 
     session = get_session_for_alias(web_manager, "assistant1", 1001)
 
-    assert session.codex_session_id == "assistant-thread"
+    assert session.codex_session_id is None
     assert session.browse_dir == str(browse_dir)
     assert session.history == []
-    assert getattr(session, "web_turn_overlays", []) == [{"provider": "codex", "summary_text": "synthetic"}]
+    assert getattr(session, "web_turn_overlays", []) == []
     assert session.message_count == 3
+    assert session.managed_prompt_hash_seen == "hash-private"
 
 
 def test_reset_user_session_clears_assistant_private_state(
@@ -635,6 +730,27 @@ def test_reset_user_session_assistant_noop_does_not_bootstrap_home(
     assert result["reset"] is False
     bootstrap_mock.assert_not_called()
     clear_mock.assert_not_called()
+
+
+def test_reset_user_session_clears_local_history_rows(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    service = ChatHistoryService(ChatStore(tmp_path))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="hello",
+        native_provider="codex",
+    )
+    service.complete_turn(handle, content="world", completion_state="completed")
+
+    result = api_service.reset_user_session(web_manager, "main", 1001)
+    history = get_history(web_manager, "main", 1001, limit=10)
+
+    assert result["reset"] is True
+    assert history["items"] == []
 
 
 def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
@@ -2854,60 +2970,54 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     assert done_event["elapsed_seconds"] >= 0
 
 
-def test_get_history_uses_overlay_backed_native_shape_instead_of_legacy_history(
+def test_get_history_reads_from_local_store_not_overlay_or_legacy_history(
     web_manager: MultiBotManager,
+    tmp_path: Path,
 ):
     web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
     session.history = [{"role": "assistant", "content": "legacy"}]
-    session.web_turn_overlays = [
-        {
-            "provider": "codex",
-            "native_session_id": "",
-            "user_text": "列出当前目录",
-            "started_at": "2026-04-14T10:00:00",
-            "updated_at": "2026-04-14T10:00:05",
-            "summary_text": "目录已读取完成。",
-            "summary_kind": "final",
-            "completion_state": "completed",
-            "trace": [{"kind": "tool_call", "summary": "Get-ChildItem -Force"}],
-            "locator_hint": {"cwd": str(session.working_dir)},
-        }
-    ]
+    session.web_turn_overlays = [{"summary_text": "overlay"}]
+    service = ChatHistoryService(ChatStore(tmp_path))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    service.complete_turn(handle, content="目录已读取完成。", completion_state="completed")
 
     data = get_history(web_manager, "main", 1001, limit=10)
 
-    assert [item["role"] for item in data["items"]] == ["user", "assistant"]
-    assert data["items"][0]["content"] == "列出当前目录"
-    assert data["items"][1]["content"] == "目录已读取完成。"
+    assert [item["content"] for item in data["items"]] == ["列出当前目录", "目录已读取完成。"]
     assert all(item["content"] != "legacy" for item in data["items"])
-    assert data["items"][1]["meta"]["trace_count"] == 1
-    assert "trace" not in data["items"][1]["meta"]
+    assert all(item["content"] != "overlay" for item in data["items"])
 
 
 def test_get_history_trace_returns_full_trace_for_assistant_message(
     web_manager: MultiBotManager,
+    tmp_path: Path,
 ):
     web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
-    session.web_turn_overlays = [
-        {
-            "provider": "codex",
-            "native_session_id": "",
-            "user_text": "列出当前目录",
-            "started_at": "2026-04-14T10:00:00",
-            "updated_at": "2026-04-14T10:00:05",
-            "summary_text": "目录已读取完成。",
-            "summary_kind": "final",
-            "completion_state": "completed",
-            "trace": [
-                {"kind": "commentary", "summary": "我先检查目录结构。"},
-                {"kind": "tool_call", "summary": "Get-ChildItem -Force"},
-                {"kind": "tool_result", "summary": "bot\nfront"},
-            ],
-            "locator_hint": {"cwd": str(session.working_dir)},
-        }
-    ]
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    store = ChatStore(tmp_path)
+    service = ChatHistoryService(store)
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="我先检查目录结构。")
+    store.append_trace_event(handle.turn_id, kind="tool_call", summary="Get-ChildItem -Force")
+    store.append_trace_event(handle.turn_id, kind="tool_result", summary="bot\nfront")
+    service.complete_turn(handle, content="目录已读取完成。", completion_state="completed")
 
     history = get_history(web_manager, "main", 1001, limit=10)
     assistant_message_id = history["items"][1]["id"]
@@ -3116,6 +3226,117 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
     assert trace_events[1]["event"]["kind"] == "tool_result"
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "目录已读取完成。"
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_done(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"我先检查目录结构。"}}\n',
+                '{"type":"item.completed","item":{"type":"function_call","name":"shell_command","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}","call_id":"call_1"}}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"目录已读取完成。"}}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    fake_process = MagicMock()
+    fake_process.stdout = FakeStdout()
+    fake_process.poll.side_effect = [None, None, None, 0, 0]
+    fake_process.wait.return_value = 0
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "列出当前目录")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    history = get_history(web_manager, "main", 1001, limit=10)
+    assistant_items = [item for item in history["items"] if item["role"] == "assistant"]
+
+    assert len(assistant_items) == 1
+    assert assistant_items[0]["id"] == done_event["message"]["id"]
+    assert assistant_items[0]["content"] == "目录已读取完成。"
+    assert assistant_items[0]["meta"]["tool_call_count"] == 1
+
+
+def test_kill_user_process_preserves_local_streaming_row(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    service = ChatHistoryService(ChatStore(tmp_path))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="继续",
+        native_provider="codex",
+    )
+    service.replace_assistant_preview(handle, "处理中预览")
+
+    process = MagicMock()
+    process.poll.return_value = None
+    process.terminate = MagicMock()
+    with session._lock:
+        session.process = process
+        session.is_processing = True
+        session.stop_requested = False
+
+    result = kill_user_process(web_manager, "main", 1001)
+    history = get_history(web_manager, "main", 1001, limit=10)
+
+    assert result["killed"] is True
+    assert history["items"][-1]["content"] == "处理中预览"
+    assert history["items"][-1]["state"] == "streaming"
+
+
+@pytest.mark.asyncio
+async def test_assistant_turn_persists_only_visible_user_text(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(tmp_path),
+        enabled=True,
+        bot_mode="assistant",
+    )
+
+    fake_process = MagicMock()
+
+    fake_home = MagicMock()
+    fake_home.root = tmp_path / ".assistant"
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service._prepare_assistant_prompt", return_value=(fake_home, {}, "HIDDEN PREAMBLE\n\n查看最近变更")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("查看完成", "thread-1", 0, False)):
+        await run_cli_chat(web_manager, "assistant1", 1001, "查看最近变更")
+
+    history = get_history(web_manager, "assistant1", 1001, limit=10)
+    assert history["items"][0]["content"] == "查看最近变更"
+    assert all("HIDDEN PREAMBLE" not in item["content"] for item in history["items"])
 
 
 @pytest.mark.asyncio

@@ -128,7 +128,17 @@ def _serialize_file_version_fields(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _error_response(exc: WebApiError) -> web.Response:
-    return _json({"ok": False, "error": {"code": exc.code, "message": exc.message}}, status=exc.status)
+    return _json(
+        {
+            "ok": False,
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "data": exc.data,
+            },
+        },
+        status=exc.status,
+    )
 
 
 def _normalize_origin(origin: str) -> str:
@@ -1026,7 +1036,13 @@ class WebApiServer:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await update_bot_workdir(self.manager, alias, body.get("working_dir", ""), auth.user_id)
+        data = await update_bot_workdir(
+            self.manager,
+            alias,
+            body.get("working_dir", ""),
+            auth.user_id,
+            force_reset=bool(body.get("force_reset")),
+        )
         return _json({"ok": True, "data": data})
 
     async def admin_update_avatar(self, request: web.Request) -> web.Response:

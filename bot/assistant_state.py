@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.assistant_home import AssistantHome
+from bot.session_store import LOCAL_HISTORY_BACKEND, migrate_local_history_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,9 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
                 "claude_session_initialized": current.claude_session_initialized,
                 "message_count": current.message_count,
                 "managed_prompt_hash_seen": current.managed_prompt_hash_seen,
+                "local_history_backend": current.local_history_backend,
+                "session_epoch": current.session_epoch,
                 "last_activity": current.last_activity.isoformat(),
-                "running_user_text": current.running_user_text,
-                "running_preview_text": current.running_preview_text,
-                "running_started_at": current.running_started_at,
-                "running_updated_at": current.running_updated_at,
-                "web_turn_overlays": [dict(item) for item in current.web_turn_overlays[-20:]],
             },
         )
 
@@ -90,24 +88,49 @@ def _normalize_optional_str(value: Any) -> str | None:
 
 
 def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) -> None:
-    state = load_assistant_runtime_state(home, user_id)
+    original_state = load_assistant_runtime_state(home, user_id)
+    if not original_state:
+        return
+    state = migrate_local_history_snapshot(original_state, default_working_dir=session.working_dir)
     if not state:
         return
 
-    with session._lock:
-        overlays = state.get("web_turn_overlays")
-        if isinstance(overlays, list):
-            session.web_turn_overlays = [
-                dict(item)
-                for item in overlays
-                if isinstance(item, dict)
-            ][-20:]
-        else:
-            session.web_turn_overlays = []
+    if state != original_state:
+        save_assistant_runtime_state(
+            home,
+            user_id,
+            {
+                "working_dir": state.get("working_dir") or session.working_dir,
+                "browse_dir": state.get("browse_dir") or "",
+                "codex_session_id": state.get("codex_session_id"),
+                "claude_session_id": state.get("claude_session_id"),
+                "claude_session_initialized": bool(state.get("claude_session_initialized")),
+                "message_count": max(0, int(state.get("message_count", 0) or 0)),
+                "managed_prompt_hash_seen": state.get("managed_prompt_hash_seen"),
+                "local_history_backend": state.get("local_history_backend") or LOCAL_HISTORY_BACKEND,
+                "session_epoch": max(0, int(state.get("session_epoch", 0) or 0)),
+                "last_activity": state.get("last_activity"),
+            },
+        )
 
+    with session._lock:
+        session.web_turn_overlays = []
+        session.running_user_text = None
+        session.running_preview_text = ""
+        session.running_started_at = None
+        session.running_updated_at = None
+        session.local_history_backend = state.get("local_history_backend") or LOCAL_HISTORY_BACKEND
+        try:
+            session.session_epoch = max(0, int(state.get("session_epoch", session.session_epoch) or 0))
+        except (TypeError, ValueError):
+            session.session_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0))
         browse_dir = state.get("browse_dir")
         if isinstance(browse_dir, str) and browse_dir.strip():
             session.browse_dir = browse_dir
+
+        working_dir = state.get("working_dir")
+        if isinstance(working_dir, str) and working_dir.strip():
+            session.working_dir = working_dir
 
         session.codex_session_id = _normalize_optional_str(state.get("codex_session_id"))
         session.claude_session_id = _normalize_optional_str(state.get("claude_session_id"))
@@ -125,10 +148,6 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
         if last_activity is not None:
             session.last_activity = last_activity
 
-        session.running_user_text = _normalize_optional_str(state.get("running_user_text"))
-        session.running_preview_text = state.get("running_preview_text") or ""
-        session.running_started_at = _normalize_optional_str(state.get("running_started_at"))
-        session.running_updated_at = _normalize_optional_str(state.get("running_updated_at"))
         session.managed_prompt_hash_seen = _normalize_optional_str(state.get("managed_prompt_hash_seen"))
 
 

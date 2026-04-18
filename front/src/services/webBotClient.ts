@@ -29,6 +29,7 @@ import type {
   SystemScript,
   SystemScriptResult,
   TunnelSnapshot,
+  UpdateBotWorkdirOptions,
 } from "./types";
 
 export interface WebBotClient {
@@ -79,7 +80,7 @@ export interface WebBotClient {
   stashGitChanges(botAlias: string): Promise<GitActionResult>;
   popGitStash(botAlias: string): Promise<GitActionResult>;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
-  updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary>;
+  updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;

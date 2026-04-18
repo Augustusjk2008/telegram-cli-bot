@@ -33,6 +33,7 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
@@ -63,6 +64,7 @@ async def test_run_all_bots_prints_web_access_url_for_specific_host(monkeypatch)
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
@@ -99,6 +101,7 @@ async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(mon
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
@@ -137,6 +140,7 @@ async def test_run_all_bots_prints_ipv6_loopback_when_web_host_is_ipv6_any(monke
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
@@ -176,6 +180,7 @@ async def test_run_all_bots_prints_ipv6_loopback_host(monkeypatch):
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
@@ -212,6 +217,7 @@ async def test_run_all_bots_supports_web_only_mode(monkeypatch):
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
@@ -242,6 +248,7 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
     fake_manager = MagicMock()
     fake_manager.start_all = AsyncMock()
     fake_manager.start_watchdog = AsyncMock()
+    fake_manager.start_background_services = AsyncMock()
     fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()

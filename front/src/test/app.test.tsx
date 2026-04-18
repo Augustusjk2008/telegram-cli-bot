@@ -573,7 +573,10 @@ test("settings tab can update bot working directory", async () => {
   await user.type(input, "C:\\workspace\\updated");
   await user.click(screen.getByRole("button", { name: "保存工作目录" }));
 
-  expect(workdirSpy).toHaveBeenCalledWith("main", "C:\\workspace\\updated");
+  expect(workdirSpy).toHaveBeenNthCalledWith(1, "main", "C:\\workspace\\updated", {});
+  expect(await screen.findByRole("dialog", { name: "确认切换工作目录" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "确认并切换" }));
+  expect(workdirSpy).toHaveBeenNthCalledWith(2, "main", "C:\\workspace\\updated", { forceReset: true });
   expect(await screen.findByText("工作目录已更新")).toBeInTheDocument();
 });
 
