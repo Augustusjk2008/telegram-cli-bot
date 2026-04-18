@@ -1442,6 +1442,38 @@ async def test_bot_run_script_stream_returns_sse_events(web_manager: MultiBotMan
 
 
 @pytest.mark.asyncio
+async def test_stream_system_script_normalizes_done_event_script_name_to_full_filename(
+    monkeypatch: pytest.MonkeyPatch,
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script_path = scripts_dir / "network_traffic.ps1"
+    script_path.write_text("# 网络流量\n", encoding="utf-8")
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    monkeypatch.setattr("bot.platform.scripts.get_runtime_platform", lambda: "windows")
+
+    def fake_stream_execute_script(path: Path):
+        assert path == script_path.resolve()
+        yield {"type": "log", "text": "checking"}
+        yield {"type": "done", "script_name": "network_traffic", "success": True, "output": "ok"}
+
+    monkeypatch.setattr("bot.web.api_service.stream_execute_script", fake_stream_execute_script)
+
+    events = [
+        event
+        async for event in api_service.stream_system_script(web_manager, "main", 1001, "network_traffic.ps1")
+    ]
+
+    assert events == [
+        {"type": "log", "text": "checking"},
+        {"type": "done", "script_name": "network_traffic.ps1", "success": True, "output": "ok"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_admin_restart_returns_response_before_triggering_restart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)

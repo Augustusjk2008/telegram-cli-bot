@@ -2365,6 +2365,11 @@ async def _stream_system_script(
 
         if isinstance(item, Exception):
             raise item
+        if item.get("type") == "done":
+            item = {
+                **item,
+                "script_name": target_path.name,
+            }
         yield item
 
 
