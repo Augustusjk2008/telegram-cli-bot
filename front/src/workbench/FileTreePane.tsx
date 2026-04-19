@@ -1,5 +1,5 @@
-import { Download, FilePlus, FolderPlus, Pencil, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Bot, Download, Eye, FilePlus, FolderPlus, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
+import { useRef, useState } from "react";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
@@ -9,7 +9,11 @@ type Props = {
   onCreatedFile: (path: string, content: string, lastModifiedNs?: string) => void;
   onRenamedFile: (oldPath: string, nextPath: string) => void;
   onDeletedFile: (path: string) => void;
+  onRequestPreview: (path: string) => void;
+  onRequestUpload: (files: File[]) => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
+  focused: boolean;
+  onToggleFocus: () => void;
 };
 
 function branchLabel(path: string) {
@@ -23,7 +27,11 @@ export function FileTreePane({
   onCreatedFile,
   onRenamedFile,
   onDeletedFile,
+  onRequestPreview,
+  onRequestUpload,
   onRequestSetWorkdir,
+  focused,
+  onToggleFocus,
 }: Props) {
   const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
   const [pendingFileName, setPendingFileName] = useState("");
@@ -34,6 +42,8 @@ export function FileTreePane({
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
+  const [dragDepth, setDragDepth] = useState(0);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   async function handleCreateFile() {
     setCreateFileBusy(true);
@@ -92,6 +102,14 @@ export function FileTreePane({
     }
   }
 
+  async function handleUpload(files: File[]) {
+    if (files.length === 0) {
+      return;
+    }
+    await onRequestUpload(files);
+    await tree.refreshRoot({ preserveExpandedPaths: true });
+  }
+
   function renderBranch(entries: FileTreeNode[], depth: number) {
     return (
       <ul className="space-y-0.5">
@@ -99,10 +117,13 @@ export function FileTreePane({
           const expanded = tree.isExpanded(entry.path);
           const branch = tree.branches[entry.path];
           const dirLabel = branchLabel(entry.path);
+          const absolutePath = `${tree.rootPath.replace(/[\\/]+$/, "")}/${entry.path}`;
+
           return (
             <li key={entry.path}>
               <div
                 className="group flex min-w-0 items-center gap-1 rounded-md text-[12px]"
+                data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
                 style={{ paddingLeft: `${depth * 12}px` }}
               >
                 {entry.isDir ? (
@@ -141,16 +162,28 @@ export function FileTreePane({
                 )}
 
                 {entry.isDir ? (
-                  <button
-                    type="button"
-                    aria-label={`设 ${entry.path} 为工作目录`}
-                    onClick={() => onRequestSetWorkdir(`${tree.rootPath.replace(/[\\/]+$/, "")}/${entry.path}`)}
-                    className="shrink-0 rounded px-2 py-1 text-[11px] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-                  >
-                    设为工作目录
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      aria-label={`设 ${entry.path} 为 Bot 工作目录`}
+                      title={`设 ${entry.path} 为 Bot 工作目录`}
+                      onClick={() => onRequestSetWorkdir(absolutePath)}
+                      className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+                    >
+                      <Bot className="h-3.5 w-3.5" />
+                    </button>
+                  </>
                 ) : (
                   <>
+                    <button
+                      type="button"
+                      aria-label={`预览 ${entry.path}`}
+                      title={`预览 ${entry.path}`}
+                      onClick={() => onRequestPreview(entry.path)}
+                      className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
                     <button
                       type="button"
                       aria-label={`重命名 ${entry.path}`}
@@ -211,15 +244,69 @@ export function FileTreePane({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      data-testid="desktop-file-tree-dropzone"
+      onDragEnter={(event) => {
+        event.preventDefault();
+        setDragDepth((current) => current + 1);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        setDragDepth((current) => Math.max(0, current - 1));
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragDepth(0);
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (files.length > 0) {
+          void handleUpload(files);
+        }
+      }}
+      className="relative flex h-full min-h-0 flex-col"
+    >
       <div className="border-b border-[var(--border)] px-3 py-2.5">
-        <div className="truncate text-[11px] text-[var(--muted)]">{tree.rootPath}</div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="truncate text-[11px] text-[var(--muted)]">{tree.rootPath}</div>
+          <button
+            type="button"
+            aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
+            onClick={onToggleFocus}
+            className="rounded border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+          >
+            {focused ? "恢复" : "聚焦"}
+          </button>
+        </div>
         <div className="mt-2 flex items-center gap-2">
+          <input
+            ref={uploadInputRef}
+            aria-label="上传文件"
+            type="file"
+            className="hidden"
+            onChange={(event) => {
+              const files = Array.from(event.target.files || []);
+              if (files.length > 0) {
+                void handleUpload(files);
+              }
+              event.currentTarget.value = "";
+            }}
+          />
+          <button
+            type="button"
+            aria-label="上传文件"
+            title="上传文件"
+            onClick={() => uploadInputRef.current?.click()}
+            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+          >
+            <Upload className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             aria-label="刷新文件树"
             title="刷新文件树"
-            onClick={() => void tree.refreshRoot()}
+            onClick={() => void tree.refreshRoot({ preserveExpandedPaths: true })}
             className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
           >
             <RefreshCw className="h-3.5 w-3.5" />
@@ -258,6 +345,15 @@ export function FileTreePane({
         ) : null}
         {!tree.loading && !tree.error ? renderBranch(tree.rootEntries, 0) : null}
       </div>
+
+      {dragDepth > 0 ? (
+        <div
+          data-testid="desktop-file-drop-overlay"
+          className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-2xl border border-dashed border-[var(--accent)] bg-[var(--accent-soft)] text-sm font-medium text-[var(--text)]"
+        >
+          释放文件以上传到当前工作区根目录
+        </div>
+      ) : null}
 
       {showCreateFileDialog ? (
         <FileNameDialog

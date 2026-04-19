@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileCreateResult, FileRenameResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
 
 export type FileTreeNode = {
   path: string;
@@ -24,9 +25,13 @@ export type UseFileTreeResult = {
   rootEntries: FileTreeNode[];
   branches: Record<string, FileTreeBranchState>;
   expandedPaths: string[];
+  highlightedPath: string;
   isExpanded: (path: string) => boolean;
   toggleDirectory: (path: string) => Promise<void>;
-  refreshRoot: () => Promise<void>;
+  refreshRoot: (options?: { preserveExpandedPaths?: boolean }) => Promise<void>;
+  restoreExpandedPaths: (paths: string[]) => Promise<void>;
+  revealPath: (path: string) => Promise<void>;
+  highlightPath: (path: string) => void;
   createDirectory: (name: string, parentPath?: string) => Promise<void>;
   createFile: (filename: string, content?: string, parentPath?: string) => Promise<FileCreateResult>;
   renameFile: (path: string, newName: string) => Promise<FileRenameResult>;
@@ -64,12 +69,45 @@ function mapBranchEntries(parentPath: string, entries: Array<{ name: string; isD
   }));
 }
 
+function uniqueExpandedPaths(paths: string[]) {
+  const seen = new Set<string>();
+  return paths
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .filter((item) => {
+      if (seen.has(item)) {
+        return false;
+      }
+      seen.add(item);
+      return true;
+    })
+    .sort((left, right) => left.split("/").length - right.split("/").length)
+    .slice(0, WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT);
+}
+
+function ancestorPathsForPath(path: string) {
+  const ancestors: string[] = [];
+  let current = parentTreePath(path);
+  while (current) {
+    ancestors.unshift(current);
+    current = parentTreePath(current);
+  }
+  return ancestors;
+}
+
 export function useFileTree(botAlias: string, client: WebBotClient): UseFileTreeResult {
   const [rootPath, setRootPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [expandedPaths, setExpandedPaths] = useState<string[]>([]);
   const [branches, setBranches] = useState<Record<string, FileTreeBranchState>>({});
+  const [highlightedPath, setHighlightedPath] = useState("");
+  const expandedPathsRef = useRef<string[]>([]);
+  const highlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    expandedPathsRef.current = expandedPaths;
+  }, [expandedPaths]);
 
   const loadBranch = useCallback(async (currentRootPath: string, branchPath: string) => {
     setBranches((current) => ({
@@ -107,15 +145,29 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
     }
   }, [botAlias, client]);
 
-  const refreshRoot = useCallback(async () => {
+  const loadExpandedPathsForRoot = useCallback(async (currentRootPath: string, paths: string[]) => {
+    for (const path of uniqueExpandedPaths(paths)) {
+      try {
+        await loadBranch(currentRootPath, path);
+      } catch {
+        // Branch state already captures the error.
+      }
+    }
+  }, [loadBranch]);
+
+  const refreshRoot = useCallback(async (options?: { preserveExpandedPaths?: boolean }) => {
+    const preserveExpandedPaths = options?.preserveExpandedPaths === true;
     setLoading(true);
     setError("");
     try {
       const nextRootPath = await client.getCurrentPath(botAlias);
       await client.changeDirectory(botAlias, nextRootPath);
       const listing = await client.listFiles(botAlias, nextRootPath);
+      const nextExpandedPaths = preserveExpandedPaths ? expandedPathsRef.current : [];
+      const normalizedExpandedPaths = uniqueExpandedPaths(nextExpandedPaths);
+
       setRootPath(nextRootPath);
-      setExpandedPaths([]);
+      setExpandedPaths(normalizedExpandedPaths);
       setBranches({
         "": {
           entries: mapBranchEntries("", listing.entries),
@@ -124,37 +176,79 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
           error: "",
         },
       });
+
+      if (normalizedExpandedPaths.length > 0) {
+        await loadExpandedPathsForRoot(nextRootPath, normalizedExpandedPaths);
+      }
     } catch (nextError) {
       setError(getErrorMessage(nextError, "加载文件树失败"));
       setBranches({});
     } finally {
       setLoading(false);
     }
-  }, [botAlias, client]);
+  }, [botAlias, client, loadExpandedPathsForRoot]);
 
   useEffect(() => {
     void refreshRoot();
   }, [refreshRoot]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  function highlightPath(path: string) {
+    setHighlightedPath(path);
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedPath((current) => current === path ? "" : current);
+      highlightTimerRef.current = null;
+    }, WORKBENCH_HIGHLIGHT_DURATION_MS);
+  }
 
   async function refreshBranch(branchPath: string) {
     if (!rootPath) {
       return;
     }
     if (!branchPath) {
-      await refreshRoot();
+      await refreshRoot({ preserveExpandedPaths: true });
       return;
     }
     await loadBranch(rootPath, branchPath);
   }
 
+  async function restoreExpandedPaths(paths: string[]) {
+    if (!rootPath) {
+      return;
+    }
+    const normalizedPaths = uniqueExpandedPaths(paths);
+    setExpandedPaths(normalizedPaths);
+    await loadExpandedPathsForRoot(rootPath, normalizedPaths);
+  }
+
+  async function revealPath(path: string) {
+    if (!rootPath) {
+      return;
+    }
+    const nextExpandedPaths = uniqueExpandedPaths([...expandedPathsRef.current, ...ancestorPathsForPath(path)]);
+    setExpandedPaths(nextExpandedPaths);
+    await loadExpandedPathsForRoot(rootPath, nextExpandedPaths);
+    highlightPath(path);
+  }
+
   async function toggleDirectory(path: string) {
-    const isExpanded = expandedPaths.includes(path);
+    const isExpanded = expandedPathsRef.current.includes(path);
     if (isExpanded) {
       setExpandedPaths((current) => current.filter((item) => item !== path));
       return;
     }
 
-    setExpandedPaths((current) => [...current, path]);
+    setExpandedPaths((current) => uniqueExpandedPaths([...current, path]));
     if (!branches[path]?.loaded) {
       try {
         await loadBranch(rootPath, path);
@@ -171,6 +265,7 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
       parentPath ? joinAbsoluteTreePath(rootPath, parentPath) : undefined,
     );
     await refreshBranch(parentPath);
+    highlightPath(parentPath ? `${parentPath}/${name}` : name);
   }
 
   async function createFile(filename: string, content = "", parentPath = "") {
@@ -181,12 +276,14 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
       parentPath ? joinAbsoluteTreePath(rootPath, parentPath) : undefined,
     );
     await refreshBranch(parentPath);
+    highlightPath(result.path);
     return result;
   }
 
   async function renameFile(path: string, newName: string) {
     const result = await client.renamePath(botAlias, path, newName);
     await refreshBranch(parentTreePath(path));
+    highlightPath(result.path);
     return result;
   }
 
@@ -210,9 +307,13 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
     rootEntries: branches[""]?.entries || [],
     branches,
     expandedPaths,
+    highlightedPath,
     isExpanded: (path: string) => expandedPaths.includes(path),
     toggleDirectory,
     refreshRoot,
+    restoreExpandedPaths,
+    revealPath,
+    highlightPath,
     createDirectory,
     createFile,
     renameFile,

@@ -11,6 +11,7 @@ type Props = {
   botAvatarName?: string;
   client?: WebBotClient;
   embedded?: boolean;
+  onOverviewChange?: (overview: GitOverview | null) => void;
 };
 
 type DiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
@@ -80,7 +81,13 @@ function diffLineClasses(kind: DiffLineKind) {
   return "text-[var(--text)]";
 }
 
-export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClient(), embedded = false }: Props) {
+export function GitScreen({
+  botAlias,
+  botAvatarName,
+  client = new MockWebBotClient(),
+  embedded = false,
+  onOverviewChange,
+}: Props) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -102,8 +109,11 @@ export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClie
     try {
       const next = await client.getGitOverview(botAlias);
       setOverview(next);
+      onOverviewChange?.(next);
     } catch (err) {
+      setOverview(null);
       setError(err instanceof Error ? err.message : "加载 Git 状态失败");
+      onOverviewChange?.(null);
     } finally {
       setLoading(false);
     }
@@ -123,6 +133,7 @@ export function GitScreen({ botAlias, botAvatarName, client = new MockWebBotClie
     try {
       const result = await fn();
       setOverview(result.overview);
+      onOverviewChange?.(result.overview);
       setNotice(result.message || "Git 操作完成");
       if (key === "commit") {
         setCommitMessage("");

@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "../app/App";
-import type { ChatMessage } from "../services/types";
+import type { BotSummary, ChatMessage } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 
 const terminalSessionMock = vi.hoisted(() => ({
@@ -284,7 +284,7 @@ test("keeps the waiting state after switching bots away and back", async () => {
 
 test("chat screen cache evicts older bots after switching across many bots", async () => {
   const user = userEvent.setup();
-  const bots = [
+  const bots: BotSummary[] = [
     {
       alias: "main",
       cliType: "codex",
@@ -1035,7 +1035,7 @@ test("bot manager highlights offline bots and blocks entering them", async () =>
       workingDir: "C:\\workspace\\plans",
       lastActiveText: "离线",
     },
-  ]);
+  ] satisfies BotSummary[]);
 
   render(<App />);
 
@@ -1067,7 +1067,7 @@ test("bot switcher disables offline bots", async () => {
       workingDir: "C:\\workspace\\plans",
       lastActiveText: "离线",
     },
-  ]);
+  ] satisfies BotSummary[]);
 
   render(<App />);
 

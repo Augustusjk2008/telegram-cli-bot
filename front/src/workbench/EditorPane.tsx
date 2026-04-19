@@ -1,3 +1,5 @@
+import { clsx } from "clsx";
+import { useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import type { EditorTab } from "./workbenchTypes";
 
@@ -5,10 +7,16 @@ type Props = {
   tabs: EditorTab[];
   activeTab: EditorTab | null;
   activeTabPath: string;
-  onActivateTab: (path: string) => void;
-  onCloseTab: (path: string) => void;
+  onActivateTab: (path: string) => void | Promise<void>;
+  onCloseTab: (path: string) => boolean;
   onChangeActiveContent: (content: string) => void;
   onSaveActiveTab: () => void;
+  onCloseOthers: (path: string) => void;
+  onCloseTabsToRight: (path: string) => void;
+  onReopenLastClosed: () => void | Promise<void>;
+  onRevealInTree: (path: string) => void | Promise<void>;
+  focused: boolean;
+  onToggleFocus: () => void;
 };
 
 export function EditorPane({
@@ -19,7 +27,15 @@ export function EditorPane({
   onCloseTab,
   onChangeActiveContent,
   onSaveActiveTab,
+  onCloseOthers,
+  onCloseTabsToRight,
+  onReopenLastClosed,
+  onRevealInTree,
+  focused,
+  onToggleFocus,
 }: Props) {
+  const [menuPath, setMenuPath] = useState("");
+
   if (tabs.length === 0 || !activeTab) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center p-6 text-sm text-[var(--muted)]">
@@ -29,48 +45,130 @@ export function EditorPane({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
-        {tabs.map((tab) => (
-          <div
-            key={tab.path}
-            className="flex shrink-0 items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] pl-3 pr-2"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTabPath === tab.path}
-              onClick={() => onActivateTab(tab.path)}
-              className="py-2 text-sm text-[var(--text)]"
-            >
-              {tab.path}
-              {tab.dirty ? " *" : ""}
-            </button>
-            <button
-              type="button"
-              aria-label={`关闭 ${tab.path}`}
-              onClick={() => onCloseTab(tab.path)}
-              className="rounded-lg px-1 py-1 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-[var(--text)]">{activeTab.path}</p>
-          <p className="text-xs text-[var(--muted)]">{activeTab.dirty ? "有未保存修改" : "已与磁盘同步"}</p>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+          {tabs.map((tab) => {
+            const isActive = activeTabPath === tab.path;
+            return (
+              <div
+                key={tab.path}
+                className={clsx(
+                  "relative flex shrink-0 items-center gap-1 rounded-lg border px-3 py-1.5",
+                  isActive
+                    ? "border-[var(--accent-outline)] bg-[var(--accent-soft)]"
+                    : "border-[var(--border)] bg-[var(--surface)]",
+                )}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => void onActivateTab(tab.path)}
+                  className="text-sm text-[var(--text)]"
+                >
+                  {tab.basename}
+                </button>
+                {tab.dirty ? (
+                  <span
+                    data-testid={`editor-tab-dirty-dot-${tab.path}`}
+                    className="h-2 w-2 rounded-full bg-[var(--accent)]"
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  aria-label={`标签页操作 ${tab.basename}`}
+                  onClick={() => setMenuPath((current) => current === tab.path ? "" : tab.path)}
+                  className="rounded px-1 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                >
+                  ⋯
+                </button>
+                <button
+                  type="button"
+                  aria-label={`关闭 ${tab.path}`}
+                  onClick={() => {
+                    if (onCloseTab(tab.path)) {
+                      setMenuPath((current) => current === tab.path ? "" : current);
+                    }
+                  }}
+                  className="rounded px-1 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                >
+                  ×
+                </button>
+                {menuPath === tab.path ? (
+                  <div className="absolute right-0 top-full z-20 mt-2 w-44 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCloseTab(tab.path);
+                        setMenuPath("");
+                      }}
+                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      关闭
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCloseOthers(tab.path);
+                        setMenuPath("");
+                      }}
+                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      关闭其他标签页
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCloseTabsToRight(tab.path);
+                        setMenuPath("");
+                      }}
+                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      关闭右侧标签页
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onReopenLastClosed();
+                        setMenuPath("");
+                      }}
+                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      重新打开刚关闭的标签页
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onRevealInTree(tab.path);
+                        setMenuPath("");
+                      }}
+                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      在文件树中定位
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
         <button
           type="button"
-          onClick={onSaveActiveTab}
-          disabled={!activeTab.dirty || activeTab.loading || activeTab.saving}
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-60"
+          aria-label={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
+          onClick={onToggleFocus}
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs hover:bg-[var(--surface)]"
         >
-          {activeTab.saving ? "保存中..." : "保存"}
+          {focused ? "恢复" : "聚焦"}
         </button>
+      </div>
+
+      <div
+        data-testid="workbench-context-row"
+        className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]"
+      >
+        <span className="truncate font-mono">{activeTab.path}</span>
+        <span>{activeTab.dirty ? "未保存" : activeTab.missing ? "文件不存在" : "已保存"}</span>
       </div>
 
       {activeTab.statusText ? (
@@ -84,20 +182,22 @@ export function EditorPane({
         </div>
       ) : null}
 
-      <div className="flex-1 min-h-0">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <FileEditorSurface
           path={activeTab.path}
           value={activeTab.content}
           loading={activeTab.loading}
           saving={activeTab.saving}
           dirty={activeTab.dirty}
-          canSave={activeTab.dirty}
+          canSave={activeTab.dirty && !activeTab.missing}
           statusText=""
           error=""
           hideHeader
           onChange={onChangeActiveContent}
           onSave={onSaveActiveTab}
-          onClose={() => onCloseTab(activeTab.path)}
+          onClose={() => {
+            onCloseTab(activeTab.path);
+          }}
         />
       </div>
     </div>

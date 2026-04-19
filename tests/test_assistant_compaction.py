@@ -86,7 +86,7 @@ def test_build_compaction_memory_block_includes_quiet_maintenance_and_proposals_
     assert ".assistant/proposals" in block
 
 
-def test_finalize_compaction_writes_audit_when_working_files_change(tmp_path):
+def test_finalize_compaction_writes_changed_audit_when_working_files_change(tmp_path):
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
     home = bootstrap_assistant_home(workdir)
@@ -100,27 +100,31 @@ def test_finalize_compaction_writes_audit_when_working_files_change(tmp_path):
     )
     after = snapshot_managed_surface(home)
 
-    changed = finalize_compaction(
+    result = finalize_compaction(
         home,
         before=before,
         after=after,
         consumed_capture_ids=[capture["id"]],
+        review_prompt_active=False,
     )
 
     audit_path = home.root / "audit" / "compactions.jsonl"
     lines = audit_path.read_text(encoding="utf-8").splitlines()
-
-    assert changed is True
-    assert len(lines) == 1
     payload = json.loads(lines[0])
+    state = load_compaction_state(home)
+
+    assert result == "changed"
+    assert len(lines) == 1
+    assert payload["result"] == "changed"
+    assert payload["surface_changed"] is True
+    assert payload["review_prompt_active"] is False
     assert payload["consumed_capture_ids"] == [capture["id"]]
     assert payload["before"] != payload["after"]
-
-    state = load_compaction_state(home)
     assert state["pending"] is False
     assert state["pending_capture_count"] == 0
     assert state["cursor_capture_id"] == capture["id"]
     assert state["last_compacted_at"]
+    assert state["last_compaction_result"] == "changed"
 
 
 def test_list_pending_capture_ids_returns_full_cursor_range(tmp_path):
@@ -167,27 +171,32 @@ def test_finalize_compaction_writes_real_consumed_capture_range_to_audit(tmp_pat
     after = snapshot_managed_surface(home)
 
     consumed_capture_ids = list_pending_capture_ids(home)
-    changed = finalize_compaction(
+    result = finalize_compaction(
         home,
         before=before,
         after=after,
         consumed_capture_ids=consumed_capture_ids,
+        review_prompt_active=False,
     )
 
     audit_path = home.root / "audit" / "compactions.jsonl"
     payload = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])
     state = load_compaction_state(home)
 
-    assert changed is True
+    assert result == "changed"
     assert consumed_capture_ids == [capture_a["id"], capture_b["id"]]
+    assert payload["result"] == "changed"
+    assert payload["surface_changed"] is True
+    assert payload["review_prompt_active"] is False
     assert payload["from_cursor_capture_id"] == old_capture["id"]
     assert payload["to_cursor_capture_id"] == capture_b["id"]
     assert payload["consumed_capture_count"] == 2
     assert payload["consumed_capture_ids"] == [capture_a["id"], capture_b["id"]]
     assert state["cursor_capture_id"] == capture_b["id"]
+    assert state["last_compaction_result"] == "changed"
 
 
-def test_finalize_compaction_keeps_pending_when_surface_is_unchanged(tmp_path):
+def test_finalize_compaction_returns_noop_when_prompt_was_visible_and_surface_is_unchanged(tmp_path):
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
     home = bootstrap_assistant_home(workdir)
@@ -196,15 +205,51 @@ def test_finalize_compaction_keeps_pending_when_surface_is_unchanged(tmp_path):
     refresh_compaction_state(home, latest_capture=capture)
     before = snapshot_managed_surface(home)
 
-    changed = finalize_compaction(
+    result = finalize_compaction(
         home,
         before=before,
         after=before,
         consumed_capture_ids=[capture["id"]],
+        review_prompt_active=True,
+    )
+
+    audit_path = home.root / "audit" / "compactions.jsonl"
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    payload = json.loads(lines[0])
+    state = load_compaction_state(home)
+
+    assert result == "noop"
+    assert len(lines) == 1
+    assert payload["result"] == "noop"
+    assert payload["surface_changed"] is False
+    assert payload["review_prompt_active"] is True
+    assert payload["consumed_capture_ids"] == [capture["id"]]
+    assert state["pending"] is False
+    assert state["pending_reason"] is None
+    assert state["pending_capture_count"] == 0
+    assert state["cursor_capture_id"] == capture["id"]
+    assert state["last_compaction_result"] == "noop"
+
+
+def test_finalize_compaction_returns_none_when_prompt_was_not_visible_and_surface_is_unchanged(tmp_path):
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+
+    capture = record_assistant_capture(home, 1001, "assistant 是全局的", "记住了")
+    refresh_compaction_state(home, latest_capture=capture)
+    before = snapshot_managed_surface(home)
+
+    result = finalize_compaction(
+        home,
+        before=before,
+        after=before,
+        consumed_capture_ids=[capture["id"]],
+        review_prompt_active=False,
     )
 
     state = load_compaction_state(home)
-    assert changed is False
+    assert result == "none"
     assert state["pending"] is True
     assert state["pending_reason"] == "strong_signal"
     assert state["pending_capture_count"] == 1

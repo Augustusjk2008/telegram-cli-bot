@@ -1,5 +1,51 @@
 export type DesktopSidebarView = "files" | "git" | "settings";
 
+export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_snapshot";
+
+export type PersistedWorkbenchTab = {
+  path: string;
+  dirty: boolean;
+  lastModifiedNs?: string;
+  savedContent?: string;
+  draftContent?: string;
+  contentPersistence: PersistedTabContentPersistence;
+};
+
+export type FocusedWorkbenchPane = "sidebar" | "editor" | "terminal" | "chat" | null;
+
+export type WorkbenchRestoreState = "clean" | "restored" | "draft-only";
+
+export type TerminalOverrideState = {
+  cwd: string;
+  source: "tree" | "manual";
+};
+
+export type TerminalWorkbenchStatus = {
+  connected: boolean;
+  connectionText: string;
+  currentCwd: string;
+  overrideCwd?: string;
+};
+
+export type ChatWorkbenchStatus = {
+  state: "idle" | "running" | "waiting" | "error";
+  processing: boolean;
+  elapsedSeconds?: number;
+  lastError?: string;
+};
+
+export type PersistedWorkbenchSession = {
+  version: 1;
+  botAlias: string;
+  workspaceRoot: string;
+  sidebarView: DesktopSidebarView;
+  expandedPaths: string[];
+  activeTabPath: string;
+  terminalOverrideCwd?: string;
+  focusedPane?: FocusedWorkbenchPane;
+  tabs: PersistedWorkbenchTab[];
+};
+
 export type DesktopPaneState = {
   sidebarCollapsed: boolean;
   sidebarView: DesktopSidebarView;
@@ -25,6 +71,14 @@ export const DEFAULT_DESKTOP_PANE_STATE: DesktopPaneState = {
   chatWidthPx: 384,
   editorHeightPx: 420,
 };
+
+export const WORKBENCH_SESSION_VERSION = 1;
+export const WORKBENCH_SESSION_WRITE_DELAY_MS = 400;
+export const WORKBENCH_CLEAN_TAB_SNAPSHOT_LIMIT_BYTES = 256 * 1024;
+export const WORKBENCH_SNAPSHOT_TOTAL_LIMIT_BYTES = 3 * 1024 * 1024;
+export const WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT = 20;
+export const WORKBENCH_HIGHLIGHT_DURATION_MS = 1200;
+export const CLOSED_TAB_HISTORY_LIMIT = 10;
 
 type ClampPaneStateOptions = {
   containerWidthPx?: number;
@@ -72,6 +126,7 @@ export function clampPaneState(
 
 export type EditorTab = {
   path: string;
+  basename: string;
   content: string;
   savedContent: string;
   dirty: boolean;
@@ -80,4 +135,7 @@ export type EditorTab = {
   statusText: string;
   error: string;
   lastModifiedNs?: string;
+  cold: boolean;
+  missing: boolean;
+  contentPersistence: PersistedTabContentPersistence;
 };

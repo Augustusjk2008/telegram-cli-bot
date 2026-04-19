@@ -44,7 +44,7 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
 });
 
-test("desktop workbench removes the status bar and uses the left rail to switch sidebar content", async () => {
+test("desktop workbench shows the status bar and uses the left rail to switch sidebar content", async () => {
   const user = userEvent.setup();
 
   render(
@@ -63,7 +63,8 @@ test("desktop workbench removes the status bar and uses the left rail to switch 
 
   expect(screen.getByTestId("desktop-workbench-titlebar")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-workbench-activity-rail")).toBeInTheDocument();
-  expect(screen.queryByTestId("desktop-workbench-statusbar")).not.toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-statusbar")).toBeInTheDocument();
+  expect(screen.getByText("AI 等待中")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "折叠编辑区" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "折叠右侧聊天区" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "AI 助手" })).not.toBeInTheDocument();
@@ -96,6 +97,63 @@ test("desktop workbench keeps chat session actions visible in the embedded chat 
   expect(await screen.findByRole("button", { name: "系统功能" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "重置会话" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
+});
+
+test("focused panes maximize into the available workbench area", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }],
+  });
+  vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "README",
+    mode: "cat",
+    fileSizeBytes: 128,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="bot-default.png"
+      userAvatarName="user-default.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const columns = screen.getByTestId("desktop-workbench-columns");
+  const centerRows = screen.getByTestId("desktop-workbench-center-rows");
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "聚焦编辑器" }));
+
+  expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-focused-pane", "editor");
+  expect(columns).toHaveStyle({
+    gridTemplateColumns: "0px 0px minmax(0, 1fr) 0px 0px",
+  });
+  expect(centerRows).toHaveStyle({
+    gridTemplateRows: "minmax(0, 1fr) 0px 0px",
+  });
+
+  await user.click(screen.getByRole("button", { name: "退出聚焦编辑器" }));
+
+  expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-focused-pane", "none");
+  expect(columns).toHaveStyle({
+    gridTemplateColumns: "320px 8px minmax(0, 1fr) 8px 384px",
+  });
+  expect(centerRows).toHaveStyle({
+    gridTemplateRows: "420px 8px minmax(160px, 1fr)",
+  });
 });
 
 test("desktop workbench restores persisted pane sizes from storage", () => {
@@ -267,6 +325,135 @@ test("desktop workbench clamps invalid stored pane sizes and restores them after
   expect(screen.getByTestId("desktop-pane-files")).not.toHaveClass("rounded-2xl");
 });
 
+test("desktop preview dialog follows the editor pane and can be dragged", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: 1600,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    writable: true,
+    value: 1200,
+  });
+
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function () {
+    const testId = (this as HTMLElement).getAttribute("data-testid");
+    if (testId === "desktop-workbench-columns") {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 1400,
+        bottom: 820,
+        width: 1400,
+        height: 820,
+        toJSON() {
+          return {};
+        },
+      };
+    }
+    if (testId === "desktop-workbench-center-rows") {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 900,
+        bottom: 620,
+        width: 900,
+        height: 620,
+        toJSON() {
+          return {};
+        },
+      };
+    }
+    if (testId === "desktop-pane-editor") {
+      return {
+        x: 240,
+        y: 170,
+        top: 170,
+        left: 240,
+        right: 1060,
+        bottom: 710,
+        width: 820,
+        height: 540,
+        toJSON() {
+          return {};
+        },
+      };
+    }
+
+    return {
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1000,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      toJSON() {
+        return {};
+      },
+    };
+  });
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" },
+    ],
+  });
+  vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "preview content",
+    mode: "head",
+    fileSizeBytes: 128,
+    isFullContent: false,
+    lastModifiedNs: "1",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="bot-default.png"
+      userAvatarName="user-default.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "预览 README.md" }));
+
+  const previewWindow = await screen.findByTestId("desktop-workbench-preview-window");
+  expect(previewWindow).toHaveStyle({
+    left: "252px",
+    top: "182px",
+    width: "796px",
+    height: "516px",
+  });
+
+  const dragHandle = screen.getByTestId("desktop-preview-drag-handle");
+  fireEvent.pointerDown(dragHandle, { pointerId: 1, button: 0, clientX: 320, clientY: 220 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 380, clientY: 280 });
+  fireEvent.pointerUp(window, { pointerId: 1, clientX: 380, clientY: 280 });
+
+  expect(previewWindow).toHaveStyle({
+    left: "312px",
+    top: "242px",
+  });
+});
+
 test("desktop file clicks open tabs and sync rename and delete actions", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -326,4 +513,46 @@ test("desktop file clicks open tabs and sync rename and delete actions", async (
   await waitFor(() => {
     expect(screen.queryByRole("tab", { name: /README-renamed\.md/ })).not.toBeInTheDocument();
   });
+});
+
+test("desktop file tree loads file content on the first click", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => ({
+    workingDir: "/workspace",
+    entries: !path || path === "/workspace"
+      ? [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }]
+      : [],
+  }));
+  vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "FIRST_CLICK_CONTENT",
+    mode: "cat",
+    fileSizeBytes: 128,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="bot-default.png"
+      userAvatarName="user-default.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+
+  await waitFor(() => {
+    expect(screen.getByText("FIRST_CLICK_CONTENT")).toBeInTheDocument();
+  });
+  expect(client.readFileFull).toHaveBeenCalledTimes(1);
 });

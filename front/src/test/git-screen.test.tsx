@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { GitScreen } from "../screens/GitScreen";
+import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   BotOverview,
   BotSummary,
@@ -60,7 +61,8 @@ function buildRepoOverview(overrides: Partial<GitOverview> = {}): GitOverview {
 }
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
-  const baseClient: WebBotClient = {
+  const client = new MockWebBotClient();
+  return Object.assign(client, {
     login: async (): Promise<SessionState> => ({
       currentBotAlias: "main",
       currentPath: "C:\\workspace\\repo",
@@ -90,26 +92,26 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       state: "done",
     }),
     getCurrentPath: async () => "C:\\workspace\\repo",
-      listFiles: async (): Promise<DirectoryListing> => ({
-        workingDir: "C:\\workspace\\repo",
-        entries: [],
-      }),
-      changeDirectory: async () => "C:\\workspace\\repo",
-      createDirectory: async () => undefined,
-      deletePath: async () => undefined,
-      readFile: async () => ({
-        content: "",
-        mode: "head",
-        fileSizeBytes: 0,
-        isFullContent: true,
-      }),
-      readFileFull: async () => ({
-        content: "",
-        mode: "cat",
-        fileSizeBytes: 0,
-        isFullContent: true,
-      }),
-      uploadFile: async () => undefined,
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace\\repo",
+      entries: [],
+    }),
+    changeDirectory: async () => "C:\\workspace\\repo",
+    createDirectory: async () => undefined,
+    deletePath: async () => undefined,
+    readFile: async () => ({
+      content: "",
+      mode: "head" as const,
+      fileSizeBytes: 0,
+      isFullContent: true,
+    }),
+    readFileFull: async () => ({
+      content: "",
+      mode: "cat" as const,
+      fileSizeBytes: 0,
+      isFullContent: true,
+    }),
+    uploadFile: async () => undefined,
     downloadFile: async () => undefined,
     resetSession: async () => undefined,
     killTask: async () => "已发送终止任务请求",
@@ -227,8 +229,8 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       success: true,
       output: "ok",
     }),
-  };
-  return { ...baseClient, ...overrides };
+    ...overrides,
+  });
 }
 
 test("renders git repo summary and changed files", async () => {

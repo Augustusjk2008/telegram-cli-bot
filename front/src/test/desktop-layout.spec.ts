@@ -17,7 +17,7 @@ test("desktop workbench stays viewport-bound and keeps overflow inside panes", a
   await expect(page.getByTestId("desktop-pane-editor")).toBeVisible();
   await expect(page.getByTestId("desktop-pane-terminal")).toBeVisible();
   await expect(page.getByTestId("desktop-pane-chat")).toBeVisible();
-  await expect(page.getByTestId("desktop-workbench-statusbar")).toHaveCount(0);
+  await expect(page.getByTestId("desktop-workbench-statusbar")).toBeVisible();
 
   const metrics = await page.evaluate(() => ({
     viewportHeight: window.innerHeight,
@@ -25,4 +25,18 @@ test("desktop workbench stays viewport-bound and keeps overflow inside panes", a
   }));
 
   expect(metrics.documentHeight).toBeLessThanOrEqual(metrics.viewportHeight + 2);
+});
+
+test("desktop workbench uses boxy corners for toolbar buttons", async ({ page }) => {
+  await page.goto("/");
+
+  const scriptsButton = page.getByRole("button", { name: "系统功能" });
+  await expect(scriptsButton).toBeVisible();
+
+  const borderRadius = await scriptsButton.evaluate((element) => {
+    const radius = window.getComputedStyle(element).borderRadius;
+    return Number.parseFloat(radius);
+  });
+
+  expect(borderRadius).toBeLessThanOrEqual(8);
 });

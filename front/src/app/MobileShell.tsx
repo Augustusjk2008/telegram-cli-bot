@@ -1,5 +1,13 @@
 import type { ReactNode } from "react";
-import { Folder, GitBranch, Menu, MessageSquare, Settings, SquareTerminal } from "lucide-react";
+import {
+  Folder,
+  GitBranch,
+  Menu,
+  MessageSquare,
+  Settings,
+  SquareTerminal,
+  type LucideIcon,
+} from "lucide-react";
 import { clsx } from "clsx";
 import type { ViewMode } from "./layoutMode";
 
@@ -28,6 +36,14 @@ export function MobileShell({
   onViewModeChange,
   onTabChange,
 }: Props) {
+  const navItems: Array<{ tab: AppTab; label: string; Icon: LucideIcon }> = [
+    { tab: "chat", label: "聊天", Icon: MessageSquare },
+    { tab: "files", label: "文件", Icon: Folder },
+    { tab: "terminal", label: "终端", Icon: SquareTerminal },
+    { tab: "git", label: "Git", Icon: GitBranch },
+    { tab: "settings", label: "设置", Icon: Settings },
+  ];
+
   return (
     <div className="flex min-w-0 flex-col h-[100dvh] w-full bg-[var(--bg)] shadow-xl overflow-hidden relative">
       {!hideOuterChrome ? (
@@ -79,16 +95,10 @@ export function MobileShell({
 
       {!hideOuterChrome ? (
         <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
-          {[
-            ["chat", "聊天", MessageSquare],
-            ["files", "文件", Folder],
-            ["terminal", "终端", SquareTerminal],
-            ["git", "Git", GitBranch],
-            ["settings", "设置", Settings],
-          ].map(([tab, label, Icon]) => (
+          {navItems.map(({ tab, label, Icon }) => (
             <button
               key={tab}
-              onClick={() => onTabChange(tab as AppTab)}
+              onClick={() => onTabChange(tab)}
               className={clsx(
                 "flex flex-col items-center p-2 rounded-xl min-w-[64px]",
                 currentTab === tab ? "text-[var(--accent)]" : "text-[var(--muted)]",

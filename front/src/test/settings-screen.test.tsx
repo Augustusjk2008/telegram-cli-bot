@@ -285,7 +285,7 @@ test("main settings show update log modal and restart guidance after download", 
   expect(dialog).toHaveTextContent("已下载 50%");
   expect(screen.queryByText("下载进行中，请不要刷新或离开当前页面。")).not.toBeInTheDocument();
 
-  const beforeUnloadEvent = new Event("beforeunload", { cancelable: true }) as Event & { returnValue?: string };
+  const beforeUnloadEvent = new Event("beforeunload", { cancelable: true }) as Event & { returnValue?: unknown };
   Object.defineProperty(beforeUnloadEvent, "returnValue", {
     configurable: true,
     enumerable: true,

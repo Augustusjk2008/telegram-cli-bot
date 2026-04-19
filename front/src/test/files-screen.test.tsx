@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
+import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -10,9 +11,27 @@ vi.mock("../utils/fileEditorLanguage", () => ({
 }));
 
 vi.mock("@uiw/react-codemirror", () => ({
-  default: () => (
-    <div className="cm-editor" data-testid="codemirror-editor">
-      <div className="cm-scroller" data-testid="codemirror-scroller">mock editor</div>
+  default: ({
+    className,
+    height,
+    width,
+    autoFocus,
+  }: {
+    className?: string;
+    height?: string;
+    width?: string;
+    autoFocus?: boolean;
+  }) => (
+    <div
+      className={className}
+      data-testid="codemirror-wrapper"
+      data-height={height}
+      data-width={width}
+      data-autofocus={autoFocus ? "true" : "false"}
+    >
+      <div className="cm-editor" data-testid="codemirror-editor">
+        <div className="cm-scroller" data-testid="codemirror-scroller">mock editor</div>
+      </div>
     </div>
   ),
 }));
@@ -34,7 +53,8 @@ afterEach(() => {
 });
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
-  const baseClient: WebBotClient = {
+  const client = new MockWebBotClient();
+  return Object.assign(client, {
     login: async (): Promise<SessionState> => ({
       currentBotAlias: "main",
       currentPath: "C:\\workspace",
@@ -107,7 +127,7 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     },
     readFileFull: async (_botAlias: string, filename: string) => ({
       content: `FULL:${filename}`,
-      mode: "cat",
+      mode: "cat" as const,
       fileSizeBytes: 128,
       isFullContent: true,
     }),
@@ -253,8 +273,8 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       success: true,
       output: "ok",
     }),
-  };
-  return { ...baseClient, ...overrides };
+    ...overrides,
+  });
 }
 
 test("renders markdown files as formatted content", async () => {
@@ -294,7 +314,7 @@ test("can load full file content from preview modal", async () => {
   const user = userEvent.setup();
   const readFullSpy = vi.fn(async () => ({
     content: "完整内容\n第二行",
-    mode: "cat",
+    mode: "cat" as const,
     fileSizeBytes: 128,
     isFullContent: true,
   }));
@@ -312,6 +332,23 @@ test("can load full file content from preview modal", async () => {
   expect(screen.getByText("已加载全文")).toBeInTheDocument();
 });
 
+test("editor mounts a full-size codemirror wrapper and autofocuses on open", async () => {
+  const user = userEvent.setup();
+
+  render(<FilesScreen botAlias="main" client={createClient()} />);
+
+  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
+
+  const wrapper = await screen.findByTestId("codemirror-wrapper");
+  expect(wrapper).toHaveClass("h-full");
+  expect(wrapper).toHaveClass("min-h-0");
+  expect(wrapper).toHaveClass("w-full");
+  expect(wrapper).toHaveClass("min-w-0");
+  expect(wrapper).toHaveAttribute("data-height", "100%");
+  expect(wrapper).toHaveAttribute("data-width", "100%");
+  expect(wrapper).toHaveAttribute("data-autofocus", "true");
+});
+
 test("editor configures the CodeMirror scroll container for pointer and touch scrolling", async () => {
   const user = userEvent.setup();
 
@@ -324,12 +361,14 @@ test("editor configures the CodeMirror scroll container for pointer and touch sc
   await waitFor(() => {
     expect(editor).toHaveStyle({
       height: "100%",
-      minHeight: "100%",
+      minHeight: "0px",
       overflow: "hidden",
     });
     expect(scroller).toHaveStyle({
-      height: "100%",
-      maxHeight: "100%",
+      flex: "1 1 auto",
+      height: "auto",
+      maxHeight: "none",
+      minHeight: "0px",
       overflow: "auto",
       touchAction: "pan-x pan-y",
       overscrollBehavior: "contain",

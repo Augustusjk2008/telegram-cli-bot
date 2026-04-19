@@ -92,6 +92,7 @@ type RawHistoryItem = {
   created_at?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  state?: ChatMessage["state"];
   elapsed_seconds?: number;
   meta?: RawChatMessageMeta;
 };

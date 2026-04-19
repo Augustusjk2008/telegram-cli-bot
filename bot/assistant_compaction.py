@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from bot.assistant_home import AssistantHome
 
@@ -12,6 +12,7 @@ STATE_PATH = Path("state/compaction.json")
 CAPTURE_THRESHOLD = 6
 TIME_THRESHOLD_SECONDS = 30 * 60
 STRONG_SIGNAL_TOKENS = ("不要", "必须", "只能", "固定", "全局")
+CompactionFinalizeResult = Literal["none", "changed", "noop"]
 
 
 def _default_compaction_state() -> dict[str, Any]:
@@ -23,6 +24,7 @@ def _default_compaction_state() -> dict[str, Any]:
         "pending_capture_count": 0,
         "cursor_capture_id": None,
         "last_compacted_at": None,
+        "last_compaction_result": None,
     }
 
 
@@ -168,6 +170,10 @@ def build_compaction_memory_block(home: AssistantHome) -> str:
     )
 
 
+def is_compaction_prompt_active(home: AssistantHome) -> bool:
+    return bool(load_compaction_state(home).get("pending"))
+
+
 def snapshot_managed_surface(home: AssistantHome) -> dict[str, str]:
     surface: dict[str, str] = {}
     for path in sorted((home.root / "memory" / "working").glob("*.md")):
@@ -183,18 +189,24 @@ def finalize_compaction(
     before: dict[str, str],
     after: dict[str, str],
     consumed_capture_ids: list[str],
-) -> bool:
-    if before == after:
-        return False
+    review_prompt_active: bool,
+) -> CompactionFinalizeResult:
+    surface_changed = before != after
+    if not surface_changed and not review_prompt_active:
+        return "none"
 
     state = load_compaction_state(home)
     timestamp = datetime.now(UTC).isoformat()
+    result: CompactionFinalizeResult = "changed" if surface_changed else "noop"
     audit_path = home.root / "audit" / "compactions.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
     from_cursor_capture_id = state.get("cursor_capture_id")
     to_cursor_capture_id = consumed_capture_ids[-1] if consumed_capture_ids else from_cursor_capture_id
     event = {
         "created_at": timestamp,
+        "result": result,
+        "surface_changed": surface_changed,
+        "review_prompt_active": review_prompt_active,
         "from_cursor_capture_id": from_cursor_capture_id,
         "to_cursor_capture_id": to_cursor_capture_id,
         "consumed_capture_count": len(consumed_capture_ids),
@@ -214,6 +226,7 @@ def finalize_compaction(
             "pending_capture_count": 0,
             "cursor_capture_id": consumed_capture_ids[-1] if consumed_capture_ids else state.get("cursor_capture_id"),
             "last_compacted_at": timestamp,
+            "last_compaction_result": result,
         },
     )
-    return True
+    return result

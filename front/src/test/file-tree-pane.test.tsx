@@ -80,7 +80,9 @@ test("tree can hand a directory off to embedded settings as the next workdir tar
   );
 
   await screen.findByText("README.md");
-  await user.click(screen.getByRole("button", { name: "设 docs 为工作目录" }));
+  expect(screen.queryByRole("button", { name: "在终端中打开 docs" })).not.toBeInTheDocument();
+  expect(screen.queryByText("设为 Bot 工作目录")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "设 docs 为 Bot 工作目录" }));
 
   expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
 });

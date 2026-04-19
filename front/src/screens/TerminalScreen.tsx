@@ -5,6 +5,7 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
+import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
 
 type Props = {
   authToken: string;
@@ -12,10 +13,16 @@ type Props = {
   client?: WebBotClient;
   isVisible: boolean;
   preferredWorkingDir: string;
+  pendingWorkingDir?: string;
   themeName?: UiThemeName;
   isImmersive?: boolean;
   embedded?: boolean;
+  focused?: boolean;
+  onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
+  onAcceptPendingWorkingDir?: () => void;
+  onCancelPendingWorkingDir?: () => void;
+  onWorkbenchStatusChange?: (status: TerminalWorkbenchStatus) => void;
 };
 
 type Disposable = {
@@ -62,10 +69,16 @@ export function TerminalScreen({
   client = defaultTerminalClient,
   isVisible,
   preferredWorkingDir,
+  pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
   isImmersive = false,
   embedded = false,
+  focused = false,
+  onToggleFocus,
   onToggleImmersive,
+  onAcceptPendingWorkingDir,
+  onCancelPendingWorkingDir,
+  onWorkbenchStatusChange,
 }: Props) {
   const layoutHandleRef = useRef<number | null>(null);
   const layoutRequestRef = useRef({
@@ -253,11 +266,17 @@ export function TerminalScreen({
     if (!nextWorkingDir) {
       return;
     }
+    const previousWorkingDir = latestWorkingDirRef.current;
     latestWorkingDirRef.current = nextWorkingDir;
     if (!sessionRef.current) {
       setActiveWorkingDir(nextWorkingDir);
+      return;
     }
-  }, [preferredWorkingDir]);
+    if (nextWorkingDir !== previousWorkingDir && nextWorkingDir !== activeWorkingDir) {
+      setActiveWorkingDir(nextWorkingDir);
+      rebuildTerminal();
+    }
+  }, [activeWorkingDir, preferredWorkingDir]);
 
   useEffect(() => {
     let cancelled = false;
@@ -404,6 +423,15 @@ export function TerminalScreen({
   const connectionText = error ? "连接失败" : isConnected ? "已连接" : instanceId > 0 ? "连接中..." : "准备启动";
   const canCloseTerminal = !isTerminalClosed && sessionRef.current !== null;
 
+  useEffect(() => {
+    onWorkbenchStatusChange?.({
+      connected: isConnected,
+      connectionText,
+      currentCwd: activeWorkingDir,
+      overrideCwd: pendingWorkingDir,
+    });
+  }, [activeWorkingDir, connectionText, isConnected, onWorkbenchStatusChange, pendingWorkingDir]);
+
   return (
     <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--bg)]">
       <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3">
@@ -411,6 +439,11 @@ export function TerminalScreen({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-semibold text-[var(--text)]">{connectionText}</h1>
+              {pendingWorkingDir ? (
+                <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                  临时目录
+                </span>
+              ) : null}
               {ptyMode !== null ? (
                 <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
                   {ptyMode ? "PTY" : "PIPE"}
@@ -425,6 +458,16 @@ export function TerminalScreen({
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {embedded && onToggleFocus ? (
+              <button
+                type="button"
+                aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
+                onClick={onToggleFocus}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs hover:bg-[var(--surface)]"
+              >
+                {focused ? "恢复" : "聚焦"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={closeTerminal}
@@ -444,6 +487,26 @@ export function TerminalScreen({
             </button>
           </div>
         </div>
+        {pendingWorkingDir ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs">
+            <span className="font-medium text-[var(--text)]">临时目录</span>
+            <span className="truncate text-[var(--muted)]">{pendingWorkingDir}</span>
+            <button
+              type="button"
+              onClick={onAcceptPendingWorkingDir}
+              className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
+            >
+              立即切换
+            </button>
+            <button
+              type="button"
+              onClick={onCancelPendingWorkingDir}
+              className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
+            >
+              取消
+            </button>
+          </div>
+        ) : null}
         <div data-testid="terminal-instance-id" className="sr-only">
           {instanceId}
         </div>

@@ -25,6 +25,7 @@ import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
+import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
 import {
   APP_NAME,
@@ -186,6 +187,7 @@ export function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [publicHostInfo, setPublicHostInfo] = useState<PublicHostInfo | null>(null);
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
+  const [desktopChatStatusByBot, setDesktopChatStatusByBot] = useState<Record<string, ChatWorkbenchStatus>>({});
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
@@ -363,10 +365,11 @@ export function App() {
         setClient(nextClient);
         setIsLoggedIn(true);
         setCurrentBot(restoredAlias || null);
-        setShowBotManager(false);
-        setMountedChatBots(restoredAlias ? [restoredAlias] : []);
-        setLoginError("");
-        setIsTerminalImmersive(false);
+      setShowBotManager(false);
+      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setDesktopChatStatusByBot({});
+      setLoginError("");
+      setIsTerminalImmersive(false);
       })
       .catch(() => {
         clearStoredToken();
@@ -390,6 +393,7 @@ export function App() {
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "登录失败");
@@ -409,6 +413,7 @@ export function App() {
     setBots([]);
     setUnreadBots([]);
     setMountedChatBots([]);
+    setDesktopChatStatusByBot({});
     setLoginError("");
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
@@ -589,6 +594,7 @@ export function App() {
           onUserAvatarChange={handleUserAvatarChange}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
+          chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
           chatPaneContent={(
             <div className="h-full">
               {mountedChatBots.map((alias) => (
@@ -601,6 +607,23 @@ export function App() {
                     isVisible={alias === currentBot}
                     embedded
                     onUnreadResult={markBotUnread}
+                    onWorkbenchStatusChange={(status) => {
+                      setDesktopChatStatusByBot((prev) => {
+                        const currentStatus = prev[alias];
+                        if (
+                          currentStatus?.state === status.state
+                          && currentStatus.processing === status.processing
+                          && currentStatus.elapsedSeconds === status.elapsedSeconds
+                          && currentStatus.lastError === status.lastError
+                        ) {
+                          return prev;
+                        }
+                        return {
+                          ...prev,
+                          [alias]: status,
+                        };
+                      });
+                    }}
                   />
                 </div>
               ))}

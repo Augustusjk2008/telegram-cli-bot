@@ -5,12 +5,13 @@ import { isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 
 type Props = {
   content: string;
+  variant?: "preview" | "desktop-preview";
   onFileLinkClick?: (href: string) => void;
 };
 
 type MarkdownContentProps = {
   content: string;
-  variant?: "preview" | "chat";
+  variant?: "preview" | "desktop-preview" | "chat";
   onFileLinkClick?: (href: string) => void;
 };
 
@@ -43,9 +44,12 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
 
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
   const isChat = variant === "chat";
+  const isDesktopPreview = variant === "desktop-preview";
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
-    : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
+    : isDesktopPreview
+      ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]"
+      : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
 
   return (
     <div className={containerClassName}>
@@ -122,6 +126,6 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
   );
 }
 
-export function MarkdownPreview({ content, onFileLinkClick }: Props) {
-  return <MarkdownContent content={content} variant="preview" onFileLinkClick={onFileLinkClick} />;
+export function MarkdownPreview({ content, variant = "preview", onFileLinkClick }: Props) {
+  return <MarkdownContent content={content} variant={variant} onFileLinkClick={onFileLinkClick} />;
 }

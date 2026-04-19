@@ -1,0 +1,87 @@
+.desktop-workbench-root {
+  position: relative;
+  --desktop-workbench-control-radius: 6px;
+  --desktop-workbench-chip-radius: 6px;
+  background:
+    radial-gradient(circle at top, var(--bg-glow), transparent 38%),
+    radial-gradient(circle at top right, var(--bg-glow-strong), transparent 26%),
+    var(--workbench-shell-bg);
+}
+
+.desktop-workbench-root :where(
+  button,
+  [role="button"],
+  [role="tab"],
+  input,
+  textarea,
+  select,
+  label,
+  a
+)[class*="rounded-"] {
+  border-radius: var(--desktop-workbench-control-radius) !important;
+}
+
+.desktop-workbench-root :where(div, span, p)[class*="rounded-full"][class*="px-"] {
+  border-radius: var(--desktop-workbench-chip-radius) !important;
+}
+
+.desktop-workbench-pane {
+  position: relative;
+  border: 1px solid var(--workbench-hairline);
+  background: var(--workbench-panel-bg);
+  box-shadow: none;
+}
+
+.desktop-workbench-root[data-has-focus="true"] .desktop-workbench-pane:not([data-focused="true"]) {
+  opacity: 0.28;
+  pointer-events: none;
+}
+
+.desktop-workbench-pane[data-focused="true"] {
+  z-index: 30;
+  box-shadow: 0 0 0 1px var(--workbench-focus-ring), 0 28px 80px rgba(0, 0, 0, 0.32);
+}
+
+.desktop-workbench-root[data-has-focus="true"] [data-testid="desktop-workbench-columns"] {
+  gap: 0;
+}
+
+.desktop-workbench-root[data-has-focus="true"] [data-testid="desktop-workbench-center-rows"] {
+  gap: 0;
+}
+
+.desktop-workbench-root [data-testid="workbench-focus-backdrop"] {
+  backdrop-filter: blur(2px);
+}
+
+.desktop-workbench-root [data-testid="desktop-file-drop-overlay"] {
+  animation: workbenchOverlayFadeIn 120ms ease-out;
+}
+
+.desktop-workbench-root [data-testid="workbench-context-row"] {
+  background: var(--workbench-panel-elevated-bg);
+}
+
+.desktop-workbench-root [data-highlighted="true"] {
+  animation: workbenchRowHighlight 1.2s ease-out;
+}
+
+@keyframes workbenchOverlayFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes workbenchRowHighlight {
+  0% {
+    background: var(--workbench-active-bg);
+  }
+
+  100% {
+    background: transparent;
+  }
+}

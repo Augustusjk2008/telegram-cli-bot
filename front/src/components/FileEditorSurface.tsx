@@ -18,8 +18,11 @@ type Props = {
 
 type CodeMirrorComponent = ComponentType<{
   value: string;
+  className?: string;
   height?: string;
+  width?: string;
   extensions?: unknown[];
+  autoFocus?: boolean;
   editable?: boolean;
   basicSetup?: unknown;
   onChange?: (value: string) => void;
@@ -99,19 +102,45 @@ export function FileEditorSurface({
       return;
     }
 
+    const wrapper = host.firstElementChild instanceof HTMLElement ? host.firstElementChild : null;
     const editor = host.querySelector<HTMLElement>(".cm-editor");
     const scroller = host.querySelector<HTMLElement>(".cm-scroller");
+    const gutters = host.querySelector<HTMLElement>(".cm-gutters");
+    const content = host.querySelector<HTMLElement>(".cm-content");
+    if (wrapper) {
+      wrapper.style.height = "100%";
+      wrapper.style.width = "100%";
+      wrapper.style.minHeight = "0";
+      wrapper.style.minWidth = "0";
+      wrapper.style.display = "flex";
+      wrapper.style.overflow = "hidden";
+    }
     if (editor) {
       editor.style.height = "100%";
-      editor.style.minHeight = "100%";
+      editor.style.minHeight = "0";
+      editor.style.width = "100%";
+      editor.style.minWidth = "0";
+      editor.style.display = "flex";
+      editor.style.flex = "1 1 auto";
+      editor.style.flexDirection = "column";
       editor.style.overflow = "hidden";
+    }
+    if (gutters) {
+      gutters.style.flexShrink = "0";
+    }
+    if (content) {
+      content.style.minWidth = "100%";
     }
     if (!scroller) {
       return;
     }
 
-    scroller.style.height = "100%";
-    scroller.style.maxHeight = "100%";
+    scroller.style.flex = "1 1 auto";
+    scroller.style.minHeight = "0";
+    scroller.style.minWidth = "0";
+    scroller.style.width = "100%";
+    scroller.style.height = "auto";
+    scroller.style.maxHeight = "none";
     scroller.style.overflow = "auto";
     scroller.style.touchAction = "pan-x pan-y";
     scroller.style.overscrollBehavior = "contain";
@@ -120,7 +149,7 @@ export function FileEditorSurface({
   }, [CodeMirrorEditor, path]);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-[var(--surface)]">
+    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]">
       {!hideHeader ? (
         <div className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -150,17 +179,20 @@ export function FileEditorSurface({
           {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {CodeMirrorEditor ? (
           <div
             ref={editorHostRef}
             data-testid="file-editor-host"
-            className="h-full min-h-[22rem] overflow-hidden bg-[var(--bg)]"
+            className="flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--bg)]"
           >
             <CodeMirrorEditor
               value={value}
+              className="h-full min-h-0 w-full min-w-0"
               height="100%"
+              width="100%"
               extensions={editorExtensions}
+              autoFocus
               editable={!loading && !saving}
               basicSetup={{
                 lineNumbers: true,
@@ -182,7 +214,7 @@ export function FileEditorSurface({
               scrollbarGutter: "stable both-edges",
               WebkitOverflowScrolling: "touch",
             }}
-            className="h-full min-h-[22rem] w-full resize-none overflow-auto border-0 bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           />
         )}
       </div>

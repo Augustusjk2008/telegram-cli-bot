@@ -30,6 +30,7 @@ import {
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
 } from "../utils/filePreview";
+import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 
 type Props = {
   botAlias: string;
@@ -39,9 +40,15 @@ type Props = {
   isVisible?: boolean;
   isImmersive?: boolean;
   embedded?: boolean;
+  focused?: boolean;
+  onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onUnreadResult?: (botAlias: string) => void;
+  onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
 };
+
+const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
+const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
 
 function getCompactScriptTitle(script: SystemScript) {
   const source = (script.displayName || script.description || script.scriptName).trim();
@@ -93,6 +100,10 @@ function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRu
   }
 
   return nextItems;
+}
+
+function countPersistedHistoryItems(items: ChatMessage[]) {
+  return items.filter((item) => !item.id.startsWith("assistant-cron-")).length;
 }
 
 function resolvePendingCronRuns(
@@ -408,8 +419,11 @@ export function ChatScreen({
   isVisible = true,
   isImmersive = false,
   embedded = false,
+  focused = false,
+  onToggleFocus,
   onToggleImmersive,
   onUnreadResult,
+  onWorkbenchStatusChange,
 }: Props) {
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -514,7 +528,7 @@ export function ChatScreen({
     }
   }, []);
 
-  const scheduleAssistantPoll = useCallback((delayMs = 1000) => {
+  const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_ASSISTANT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
     assistantPollTimerRef.current = window.setTimeout(() => {
       assistantPollTimerRef.current = null;
@@ -525,21 +539,36 @@ export function ChatScreen({
   pollAssistantStateRef.current = async () => {
     try {
       const overview = await client.getBotOverview(botAlias);
-      const messages = await client.listMessages(botAlias);
 
       setBotOverview(overview);
       setWorkingDir(overview.workingDir || "");
-      const previousCount = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-")).length;
+      const previousCount = countPersistedHistoryItems(itemsRef.current);
 
       const nextPendingRuns = resolvePendingCronRuns(
         pendingCronRunsRef.current,
-        messages,
+        itemsRef.current,
       );
       if (nextPendingRuns.length !== pendingCronRunsRef.current.length) {
         setPendingCronRuns(nextPendingRuns);
       }
 
-      const { nextItems, shouldPoll } = applyHistoryView(messages, overview, nextPendingRuns);
+      const shouldRefreshMessages = Boolean(
+        overview.isProcessing
+        || overview.runningReply
+        || nextPendingRuns.length > 0
+        || (typeof overview.historyCount === "number" && overview.historyCount !== previousCount),
+      );
+
+      const messages = shouldRefreshMessages
+        ? await client.listMessages(botAlias)
+        : itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
+
+      const refreshedPendingRuns = resolvePendingCronRuns(nextPendingRuns, messages);
+      if (refreshedPendingRuns.length !== nextPendingRuns.length) {
+        setPendingCronRuns(refreshedPendingRuns);
+      }
+
+      const { nextItems, shouldPoll } = applyHistoryView(messages, overview, refreshedPendingRuns);
       if (!isVisibleRef.current && !shouldPoll && nextItems.length > previousCount) {
         onUnreadResult?.(botAlias);
       }
@@ -554,7 +583,10 @@ export function ChatScreen({
         || (Boolean(botOverviewRef.current?.botMode) && botOverviewRef.current?.botMode === "assistant" && !loadingRef.current && !isStreamingRef.current)
       );
       if (shouldContinue) {
-        scheduleAssistantPoll();
+        const nextDelay = streamModeRef.current === "poll" || botOverviewRef.current?.isProcessing
+          ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS
+          : IDLE_ASSISTANT_POLL_INTERVAL_MS;
+        scheduleAssistantPoll(nextDelay);
       } else {
         stopAssistantPoll();
       }
@@ -601,8 +633,10 @@ export function ChatScreen({
         setWorkingDir(overview.workingDir || "");
         applyHistoryView(messages, overview, []);
         setLoading(false);
-        if (overview.isProcessing || overview.botMode === "assistant") {
-          scheduleAssistantPoll();
+        if (isVisible && (overview.isProcessing || overview.botMode === "assistant")) {
+          scheduleAssistantPoll(
+            overview.isProcessing ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS : IDLE_ASSISTANT_POLL_INTERVAL_MS,
+          );
         } else {
           stopAssistantPoll();
         }
@@ -617,7 +651,7 @@ export function ChatScreen({
       cancelled = true;
       stopAssistantPoll();
     };
-  }, [applyHistoryView, botAlias, client, scheduleAssistantPoll, stopAssistantPoll]);
+  }, [applyHistoryView, botAlias, client, isVisible, scheduleAssistantPoll, stopAssistantPoll]);
 
   useEffect(() => {
     const handleAssistantCronRunEnqueued = (event: Event) => {
@@ -674,13 +708,22 @@ export function ChatScreen({
 
   const isAssistantBot = botOverview?.botMode === "assistant";
 
+  useEffect(() => {
+    onWorkbenchStatusChange?.({
+      state: error ? "error" : isStreaming ? "running" : loading ? "waiting" : "idle",
+      processing: isStreaming,
+      elapsedSeconds: isStreaming ? elapsedSeconds : undefined,
+      lastError: error || undefined,
+    });
+  }, [elapsedSeconds, error, isStreaming, loading, onWorkbenchStatusChange]);
+
   useLayoutEffect(() => {
     const shouldPoll = streamMode === "poll" || (Boolean(isAssistantBot) && isVisible && !loading && !isStreaming);
     if (!shouldPoll) {
       stopAssistantPoll();
       return;
     }
-    scheduleAssistantPoll();
+    scheduleAssistantPoll(streamMode === "poll" ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS : IDLE_ASSISTANT_POLL_INTERVAL_MS);
   }, [isAssistantBot, isStreaming, isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
 
   const lastItem = items[items.length - 1];
@@ -992,6 +1035,16 @@ export function ChatScreen({
       {showActionBar ? (
         <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div className="flex gap-2 overflow-x-auto pb-1">
+            {embedded && onToggleFocus ? (
+              <button
+                type="button"
+                aria-label={focused ? "退出聚焦聊天" : "聚焦聊天"}
+                onClick={onToggleFocus}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)]"
+              >
+                {focused ? "恢复布局" : "聚焦聊天"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void handleOpenScripts()}

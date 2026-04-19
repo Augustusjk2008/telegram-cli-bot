@@ -2,11 +2,13 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
+import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ChatMessage, ChatTraceDetails, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
-  const baseClient: WebBotClient = {
+  const client = new MockWebBotClient();
+  return Object.assign(client, {
     login: async () => ({
       currentBotAlias: "main",
       currentPath: "/",
@@ -40,29 +42,29 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       };
     },
     getCurrentPath: async () => "C:\\workspace",
-      listFiles: async () => ({
-        workingDir: "C:\\workspace",
-        entries: [],
-      }),
-      changeDirectory: async () => "C:\\workspace",
-      createDirectory: async () => undefined,
-      deletePath: async () => undefined,
-      readFile: async () => ({
-        content: "",
-        mode: "head",
-        fileSizeBytes: 0,
-        isFullContent: true,
-      }),
-      readFileFull: async () => ({
-        content: "",
-        mode: "cat",
-        fileSizeBytes: 0,
-        isFullContent: true,
-      }),
-      uploadFile: async () => undefined,
+    listFiles: async () => ({
+      workingDir: "C:\\workspace",
+      entries: [],
+    }),
+    changeDirectory: async () => "C:\\workspace",
+    createDirectory: async () => undefined,
+    deletePath: async () => undefined,
+    readFile: async () => ({
+      content: "",
+      mode: "head" as const,
+      fileSizeBytes: 0,
+      isFullContent: true,
+    }),
+    readFileFull: async () => ({
+      content: "",
+      mode: "cat" as const,
+      fileSizeBytes: 0,
+      isFullContent: true,
+    }),
+    uploadFile: async () => undefined,
     downloadFile: async () => undefined,
     resetSession: async () => undefined,
-    killTask: async () => undefined,
+    killTask: async () => "已发送终止任务请求",
     restartService: async () => undefined,
     getGitProxySettings: async () => ({ port: "" }),
     updateGitProxySettings: async () => ({ port: "" }),
@@ -201,8 +203,8 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       success: true,
       output: "ok",
     }),
-  };
-  return { ...baseClient, ...overrides };
+    ...overrides,
+  });
 }
 
 afterEach(() => {
@@ -645,12 +647,54 @@ test("assistant idle polling keeps loaded trace details for the same message id"
   expect(getMessageTrace).toHaveBeenCalledTimes(1);
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(5100);
   });
 
   expect(screen.getByRole("button", { name: "收起过程详情" })).toBeInTheDocument();
   expect(screen.getByText("assistant trace detail")).toBeInTheDocument();
   expect(getMessageTrace).toHaveBeenCalledTimes(1);
+});
+
+test("assistant idle polling skips reloading history when count is unchanged", async () => {
+  vi.useFakeTimers();
+
+  const listMessages = vi.fn(async (): Promise<ChatMessage[]> => [{
+    id: "assistant-1",
+    role: "assistant",
+    text: "assistant reply",
+    createdAt: "2026-04-16T18:00:00",
+    state: "done",
+  }]);
+  const getBotOverview = vi.fn(async () => ({
+    alias: "assistant1",
+    cliType: "codex" as const,
+    status: "running" as const,
+    workingDir: "C:\\workspace",
+    botMode: "assistant",
+    isProcessing: false,
+    historyCount: 1,
+  }));
+  const client = createClient({
+    getBotOverview,
+    listMessages: listMessages as never,
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("assistant reply")).toBeInTheDocument();
+  expect(listMessages).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5100);
+  });
+
+  expect(getBotOverview).toHaveBeenCalledTimes(2);
+  expect(listMessages).toHaveBeenCalledTimes(1);
 });
 
 test("assistant idle polling keeps process details expanded when the message id changes", async () => {
@@ -722,7 +766,7 @@ test("assistant idle polling keeps process details expanded when the message id 
   expect(getMessageTrace).toHaveBeenCalledTimes(1);
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(5100);
   });
 
   expect(screen.getByRole("button", { name: "收起过程详情" })).toBeInTheDocument();
@@ -941,10 +985,19 @@ test("scrolls to the latest message on first load and when shown again", async (
 
     scrollSpy.mockClear();
 
-    rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
-    rerender(<ChatScreen botAlias="main" client={client} isVisible />);
+    await act(async () => {
+      rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
+      await Promise.resolve();
+    });
 
-    expect(scrollSpy).toHaveBeenCalled();
+    await act(async () => {
+      rerender(<ChatScreen botAlias="main" client={client} isVisible />);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(scrollSpy).toHaveBeenCalled();
+    });
   } finally {
     if (original) {
       Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -1568,11 +1621,47 @@ test("assistant chat polls while idle and picks up scheduled cron runs", async (
   expect(screen.queryByText("定时检查邮箱")).not.toBeInTheDocument();
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2100);
+    await vi.advanceTimersByTimeAsync(10100);
   });
 
   expect(screen.getByText("定时检查邮箱")).toBeInTheDocument();
   expect(screen.getByText("正在读取最新邮件")).toBeInTheDocument();
+});
+
+test("hidden assistant chat does not start idle polling on mount", async () => {
+  vi.useFakeTimers();
+
+  const getBotOverview = vi.fn(async () => ({
+    alias: "assistant1",
+    cliType: "codex" as const,
+    status: "running" as const,
+    workingDir: "C:\\workspace",
+    botMode: "assistant",
+    isProcessing: false,
+    historyCount: 0,
+  }));
+  const listMessages = vi.fn(async (): Promise<ChatMessage[]> => []);
+  const client = createClient({
+    getBotOverview,
+    listMessages: listMessages as never,
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} isVisible={false} />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(getBotOverview).toHaveBeenCalledTimes(1);
+  expect(listMessages).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1100);
+  });
+
+  expect(getBotOverview).toHaveBeenCalledTimes(1);
+  expect(listMessages).toHaveBeenCalledTimes(1);
 });
 
 test("assistant chat immediately shows manual cron prompts after the settings handoff event", async () => {

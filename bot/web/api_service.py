@@ -35,6 +35,7 @@ from bot.assistant_cron_store import (
 from bot.assistant_cron_types import AssistantCronJob
 from bot.assistant_compaction import (
     finalize_compaction,
+    is_compaction_prompt_active,
     list_pending_capture_ids,
     refresh_compaction_state,
     snapshot_managed_surface,
@@ -1152,9 +1153,10 @@ def _prepare_assistant_prompt(
     user_id: int,
     user_text: str,
     cli_type: str,
-) -> tuple[Any, dict[str, str], str]:
+) -> tuple[Any, dict[str, str], str, bool]:
     assistant_home = bootstrap_assistant_home(profile.working_dir)
     assistant_pre_surface = snapshot_managed_surface(assistant_home)
+    compaction_prompt_active = is_compaction_prompt_active(assistant_home)
     sync_result = sync_managed_prompt_files(assistant_home)
     compiled_prompt = compile_assistant_prompt(
         assistant_home,
@@ -1167,7 +1169,7 @@ def _prepare_assistant_prompt(
     if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
         session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
         session.persist()
-    return assistant_home, assistant_pre_surface, compiled_prompt.prompt_text
+    return assistant_home, assistant_pre_surface, compiled_prompt.prompt_text, compaction_prompt_active
 
 
 def _finalize_assistant_chat_turn(
@@ -1177,19 +1179,21 @@ def _finalize_assistant_chat_turn(
     user_text: str,
     response: str,
     assistant_pre_surface: dict[str, str],
+    compaction_prompt_active: bool,
 ) -> None:
     capture = record_assistant_capture(assistant_home, user_id, user_text, response)
     refresh_compaction_state(assistant_home, latest_capture=capture)
     consumed_capture_ids = list_pending_capture_ids(assistant_home) or [capture["id"]]
     sync_managed_prompt_files(assistant_home)
     assistant_post_surface = snapshot_managed_surface(assistant_home)
-    changed = finalize_compaction(
+    compaction_result = finalize_compaction(
         assistant_home,
         before=assistant_pre_surface,
         after=assistant_post_surface,
         consumed_capture_ids=consumed_capture_ids,
+        review_prompt_active=compaction_prompt_active,
     )
-    if changed:
+    if compaction_result in {"changed", "noop"}:
         sync_managed_prompt_files(assistant_home)
 
 
@@ -1601,6 +1605,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
     prompt_text = text
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
+    compaction_prompt_active = False
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -1609,7 +1614,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
-        assistant_home, assistant_pre_surface, prompt_text = _prepare_assistant_prompt(
+        assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active = _prepare_assistant_prompt(
             profile,
             session,
             user_id=user_id,
@@ -1933,6 +1938,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         user_text=text,
                         response=str(done_message.get("content") or response),
                         assistant_pre_surface=assistant_pre_surface,
+                        compaction_prompt_active=compaction_prompt_active,
                     )
                 except Exception as exc:
                     logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
@@ -1968,6 +1974,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
     prompt_text = text
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
+    compaction_prompt_active = False
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -1976,7 +1983,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
-        assistant_home, assistant_pre_surface, prompt_text = _prepare_assistant_prompt(
+        assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active = _prepare_assistant_prompt(
             profile,
             session,
             user_id=user_id,
@@ -2143,6 +2150,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                         user_text=text,
                         response=str(done_message.get("content") or response),
                         assistant_pre_surface=assistant_pre_surface,
+                        compaction_prompt_active=compaction_prompt_active,
                     )
                 except Exception as exc:
                     logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)

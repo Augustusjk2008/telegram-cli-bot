@@ -34,10 +34,15 @@ def _normalize_repo_relative_path(path: str) -> str:
     return value
 
 
+def _build_git_command(args: list[str]) -> list[str]:
+    # H:/ 等非系统盘上的 fsmonitor 可能让 status/diff 长时间卡住，Web Git 统一禁用。
+    return ["git", "-c", "core.fsmonitor=false", *get_git_proxy_config_args(), *args]
+
+
 def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
-            ["git", *get_git_proxy_config_args(), *args],
+            _build_git_command(args),
             cwd=repo_root,
             capture_output=True,
             text=True,
@@ -57,7 +62,7 @@ def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subproce
 def _resolve_repo_root(working_dir: str) -> Optional[str]:
     try:
         result = subprocess.run(
-            ["git", *get_git_proxy_config_args(), "rev-parse", "--show-toplevel"],
+            _build_git_command(["rev-parse", "--show-toplevel"]),
             cwd=working_dir,
             capture_output=True,
             text=True,
