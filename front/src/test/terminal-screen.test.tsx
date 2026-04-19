@@ -8,6 +8,9 @@ const terminalEventHandlers = vi.hoisted(() => ({
   onWriteParsed: undefined as undefined | (() => void),
   onScroll: undefined as undefined | (() => void),
 }));
+const resizeObserverMock = vi.hoisted(() => ({
+  callback: undefined as undefined | ResizeObserverCallback,
+}));
 
 const terminalSessionMock = vi.hoisted(() => ({
   sendControl: vi.fn(),
@@ -45,6 +48,7 @@ beforeEach(() => {
   createTerminalSessionMock.mockClear();
   terminalEventHandlers.onWriteParsed = undefined;
   terminalEventHandlers.onScroll = undefined;
+  resizeObserverMock.callback = undefined;
   terminalSessionMock.sendControl.mockReset();
   terminalSessionMock.sendText.mockReset();
   terminalSessionMock.fit.mockReset();
@@ -63,6 +67,20 @@ beforeEach(() => {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })),
+  );
+  vi.stubGlobal(
+    "ResizeObserver",
+    class ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeObserverMock.callback = callback;
+      }
+
+      observe() {}
+
+      unobserve() {}
+
+      disconnect() {}
+    },
   );
 });
 
@@ -198,4 +216,32 @@ test("coalesces follow-scroll work for bursty terminal output into one animation
   });
 
   expect(terminalSessionMock.scrollToBottom).toHaveBeenCalledTimes(1);
+});
+
+test("refits the terminal when the viewport size changes without rebuilding the session", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
+
+  render(
+    <TerminalScreen
+      authToken="123"
+      botAlias="main"
+      isVisible
+      preferredWorkingDir="C:\\workspace\\demo"
+    />,
+  );
+
+  const viewport = await screen.findByTestId("terminal-viewport");
+  terminalSessionMock.fit.mockClear();
+
+  Object.defineProperty(viewport, "clientWidth", { value: 960, configurable: true });
+  Object.defineProperty(viewport, "clientHeight", { value: 480, configurable: true });
+
+  act(() => {
+    resizeObserverMock.callback?.([], {} as ResizeObserver);
+  });
+
+  expect(terminalSessionMock.fit).toHaveBeenCalledTimes(1);
 });

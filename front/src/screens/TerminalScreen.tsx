@@ -401,6 +401,37 @@ export function TerminalScreen({
   }, [instanceId]);
 
   useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!sessionRef.current || !viewport || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    let previousWidth = viewport.clientWidth;
+    let previousHeight = viewport.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = viewport.clientWidth;
+      const nextHeight = viewport.clientHeight;
+      if (nextWidth === previousWidth && nextHeight === previousHeight) {
+        return;
+      }
+      previousWidth = nextWidth;
+      previousHeight = nextHeight;
+      queueLayoutWork({
+        refit: true,
+        syncViewport: true,
+        syncFollowing: true,
+        follow: isFollowingRef.current,
+      });
+    });
+
+    observer.observe(viewport);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [instanceId]);
+
+  useEffect(() => {
     if (lastThemeRef.current === themeName) {
       return;
     }

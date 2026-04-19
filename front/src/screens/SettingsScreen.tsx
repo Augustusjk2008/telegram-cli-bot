@@ -101,6 +101,10 @@ function toRequestValue(field: CliParamField, value: string | boolean) {
   return value;
 }
 
+function hasDraftValueChanged(previousValue: string | boolean, nextValue: string | boolean) {
+  return previousValue !== nextValue;
+}
+
 function tunnelStatusText(status: TunnelSnapshot["status"]) {
   if (status === "running") return "运行中";
   if (status === "starting") return "启动中";
@@ -211,7 +215,7 @@ export function SettingsScreen({
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
-  const [savingParamKey, setSavingParamKey] = useState("");
+  const [savingCliParams, setSavingCliParams] = useState(false);
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
@@ -228,6 +232,12 @@ export function SettingsScreen({
   const isAssistantBot = overview?.botMode === "assistant";
   const isUpdateDownloading = updateAction === "download";
   const isAssistantCronEditing = assistantCronEditingJobId !== "";
+  const cliParamDrafts = cliParams ? buildDraftValues(cliParams) : null;
+  const hasCliParamChanges = cliParams
+    ? Object.keys(cliParams.schema).some((key) =>
+      hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""),
+    )
+    : false;
 
   const resetAssistantAutomationDraft = () => {
     setAssistantCronEditingJobId("");
@@ -475,26 +485,40 @@ export function SettingsScreen({
     }
   };
 
-  const saveCliParam = async (key: string) => {
+  const saveCliParams = async () => {
     if (!cliParams) return;
-    const field = cliParams.schema[key];
-    if (!field) return;
+    const dirtyKeys = Object.keys(cliParams.schema).filter((key) =>
+      hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""),
+    );
 
-    setSavingParamKey(key);
+    if (!dirtyKeys.length) {
+      setNotice("参数未改动");
+      setError("");
+      return;
+    }
+
+    setSavingCliParams(true);
     setError("");
     setNotice("");
     try {
-      const next = await client.updateCliParam(
-        botAlias,
-        key,
-        toRequestValue(field, draftValues[key] ?? ""),
-      );
+      let next = cliParams;
+      for (const key of dirtyKeys) {
+        const field = next.schema[key];
+        if (!field) {
+          continue;
+        }
+        next = await client.updateCliParam(
+          botAlias,
+          key,
+          toRequestValue(field, draftValues[key] ?? ""),
+        );
+      }
       syncCliParams(next);
       setNotice("参数已保存");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存参数失败");
     } finally {
-      setSavingParamKey("");
+      setSavingCliParams(false);
     }
   };
 
@@ -1095,7 +1119,7 @@ export function SettingsScreen({
                 <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
                 {workdirLocked ? <p className="mt-1 text-xs text-[var(--muted)]">assistant 型 Bot 的默认工作目录已锁定</p> : null}
               </div>
-              <div className="flex items-center gap-2">
+              <div>
                 <input
                   id="bot-workdir"
                   aria-label="工作目录"
@@ -1108,9 +1132,11 @@ export function SettingsScreen({
                     }
                   }}
                   readOnly={workdirLocked}
-                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                 />
-                {workdirLocked ? null : (
+              </div>
+              {workdirLocked ? null : (
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     aria-label="浏览工作目录"
@@ -1120,8 +1146,6 @@ export function SettingsScreen({
                   >
                     浏览目录
                   </button>
-                )}
-                {workdirLocked ? null : (
                   <button
                     type="button"
                     onClick={() => void saveWorkdir()}
@@ -1131,8 +1155,8 @@ export function SettingsScreen({
                     <Save className="h-4 w-4" />
                     {savingWorkdir ? "保存中..." : "保存工作目录"}
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
             {isAssistantBot ? (
@@ -1437,15 +1461,26 @@ export function SettingsScreen({
                 <h2 className="text-base font-semibold text-[var(--text)]">CLI 参数</h2>
                 <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams.cliType}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => void resetCurrentCliParams()}
-                disabled={resettingCliParams}
-                className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                <RefreshCw className="h-4 w-4" />
-                {resettingCliParams ? "重置中..." : "恢复默认参数"}
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveCliParams()}
+                  disabled={savingCliParams || !hasCliParamChanges}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {savingCliParams ? "保存中..." : "保存参数"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void resetCurrentCliParams()}
+                  disabled={resettingCliParams}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  {resettingCliParams ? "重置中..." : "恢复默认参数"}
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -1454,38 +1489,31 @@ export function SettingsScreen({
                 const value = draftValues[key] ?? "";
                 const inputId = `cli-param-${key}`;
 
-                return (
-                  <div key={key} className="rounded-xl border border-[var(--border)] p-3 space-y-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <label htmlFor={inputId} className="font-medium text-[var(--text)]">{label}</label>
-                        <p className="text-xs text-[var(--muted)]">{key}</p>
-                      </div>
-                      <button
-                        type="button"
-                        aria-label={`保存 ${label}`}
-                        onClick={() => void saveCliParam(key)}
-                        disabled={savingParamKey === key}
-                        className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
-                      >
-                        <Save className="h-4 w-4" />
-                        {savingParamKey === key ? "保存中..." : "保存"}
-                      </button>
-                    </div>
+                if (field.type === "boolean") {
+                  return (
+                    <label
+                      key={key}
+                      htmlFor={inputId}
+                      className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-medium text-[var(--text)]"
+                    >
+                      <span>{label}</span>
+                      <input
+                        id={inputId}
+                        aria-label={label}
+                        type="checkbox"
+                        checked={Boolean(value)}
+                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
+                        className="h-4 w-4 shrink-0"
+                      />
+                    </label>
+                  );
+                }
 
-                    {field.type === "boolean" ? (
-                      <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)]">
-                        <span>{label}</span>
-                        <input
-                          id={inputId}
-                          aria-label={label}
-                          type="checkbox"
-                          checked={Boolean(value)}
-                          onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
-                          className="h-4 w-4"
-                        />
-                      </label>
-                    ) : field.enum ? (
+                return (
+                  <div key={key} className="space-y-2">
+                    <label htmlFor={inputId} className="block text-sm font-medium text-[var(--text)]">{label}</label>
+
+                    {field.enum ? (
                       <select
                         id={inputId}
                         aria-label={label}

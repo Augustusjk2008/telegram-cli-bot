@@ -564,8 +564,13 @@ test("settings tab can save cli params and restart tunnel", async () => {
   await user.click(screen.getByRole("button", { name: "设置" }));
   await screen.findByLabelText("推理努力程度");
 
+  expect(screen.getByRole("button", { name: "保存参数" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "保存 推理努力程度" })).not.toBeInTheDocument();
+  expect(screen.getAllByText("绕过审批和沙箱")).toHaveLength(1);
+  expect(screen.queryByText("yolo")).not.toBeInTheDocument();
+
   await user.selectOptions(screen.getByLabelText("推理努力程度"), "high");
-  await user.click(screen.getByRole("button", { name: "保存 推理努力程度" }));
+  await user.click(screen.getByRole("button", { name: "保存参数" }));
   expect(updateSpy).toHaveBeenCalledWith("main", "reasoning_effort", "high");
   expect(await screen.findByText("参数已保存")).toBeInTheDocument();
 
