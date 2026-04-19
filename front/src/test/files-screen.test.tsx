@@ -11,7 +11,7 @@ vi.mock("../utils/fileEditorLanguage", () => ({
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: () => (
-    <div className="cm-editor">
+    <div className="cm-editor" data-testid="codemirror-editor">
       <div className="cm-scroller" data-testid="codemirror-scroller">mock editor</div>
     </div>
   ),
@@ -319,15 +319,35 @@ test("editor configures the CodeMirror scroll container for pointer and touch sc
 
   await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
 
+  const editor = await screen.findByTestId("codemirror-editor");
   const scroller = await screen.findByTestId("codemirror-scroller");
   await waitFor(() => {
+    expect(editor).toHaveStyle({
+      height: "100%",
+      minHeight: "100%",
+      overflow: "hidden",
+    });
     expect(scroller).toHaveStyle({
+      height: "100%",
+      maxHeight: "100%",
       overflow: "auto",
       touchAction: "pan-x pan-y",
       overscrollBehavior: "contain",
       scrollbarGutter: "stable both-edges",
     });
   });
+});
+
+test("editor uses a single flat surface instead of a nested rounded frame", async () => {
+  const user = userEvent.setup();
+
+  render(<FilesScreen botAlias="main" client={createClient()} />);
+
+  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
+
+  const host = await screen.findByTestId("file-editor-host");
+  expect(host).not.toHaveClass("rounded-2xl");
+  expect(host).not.toHaveClass("border");
 });
 
 test("hides the full-read button when preview already contains the whole small file", async () => {

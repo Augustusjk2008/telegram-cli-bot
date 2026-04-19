@@ -5,6 +5,118 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 
+function getNodeModulePackageName(id: string) {
+  const normalized = id.replace(/\\/g, '/');
+  const nodeModulesMarker = '/node_modules/';
+  const startIndex = normalized.lastIndexOf(nodeModulesMarker);
+  if (startIndex < 0) {
+    return null;
+  }
+
+  const packagePath = normalized.slice(startIndex + nodeModulesMarker.length);
+  const segments = packagePath.split('/');
+  if (segments[0]?.startsWith('@')) {
+    return segments.length >= 2 ? `${segments[0]}/${segments[1]}` : segments[0];
+  }
+  return segments[0] || null;
+}
+
+function isMarkdownVendor(packageName: string) {
+  return (
+    packageName === 'react-markdown'
+    || packageName === 'unified'
+    || packageName === 'vfile'
+    || packageName === 'bail'
+    || packageName === 'devlop'
+    || packageName === 'trough'
+    || packageName === 'zwitch'
+    || packageName === 'is-plain-obj'
+    || packageName === 'property-information'
+    || packageName === 'space-separated-tokens'
+    || packageName === 'comma-separated-tokens'
+    || packageName === 'html-url-attributes'
+    || packageName === 'decode-named-character-reference'
+    || packageName === 'longest-streak'
+    || packageName === 'ccount'
+    || packageName === 'markdown-table'
+    || packageName === 'trim-lines'
+    || packageName === 'extend'
+    || packageName === 'style-to-object'
+    || packageName === 'style-to-js'
+    || packageName === 'inline-style-parser'
+    || packageName === 'vfile-message'
+    || packageName === 'escape-string-regexp'
+    || packageName === 'estree-util-is-identifier-name'
+    || packageName.startsWith('remark-')
+    || packageName.startsWith('rehype-')
+    || packageName.startsWith('micromark')
+    || packageName.startsWith('mdast-')
+    || packageName.startsWith('hast-')
+    || packageName.startsWith('unist-')
+    || packageName.startsWith('character-entities')
+  );
+}
+
+function isEditorVendor(packageName: string) {
+  return (
+    packageName === '@babel/runtime'
+    || packageName === 'codemirror'
+    || packageName === 'crelt'
+    || packageName === 'style-mod'
+    || packageName === 'w3c-keyname'
+    || packageName === 'marijn-find-cluster-break'
+    || packageName === 'orderedmap'
+    || packageName.startsWith('@uiw/')
+    || packageName.startsWith('@codemirror/')
+    || packageName.startsWith('@lezer/')
+  );
+}
+
+function isEditorLanguageVendor(packageName: string) {
+  return (
+    packageName.startsWith('@codemirror/lang-')
+    || packageName === '@lezer/css'
+    || packageName === '@lezer/html'
+    || packageName === '@lezer/javascript'
+    || packageName === '@lezer/json'
+    || packageName === '@lezer/markdown'
+    || packageName === '@lezer/python'
+  );
+}
+
+function resolveVendorChunk(id: string) {
+  const packageName = getNodeModulePackageName(id);
+  if (!packageName) {
+    return undefined;
+  }
+
+  if (packageName === 'react' || packageName === 'react-dom' || packageName === 'scheduler') {
+    return 'react-vendor';
+  }
+
+  if (packageName === 'lucide-react') {
+    return 'icons-vendor';
+  }
+
+  if (packageName.startsWith('@xterm/')) {
+    return 'terminal-vendor';
+  }
+
+  if (isMarkdownVendor(packageName)) {
+    return 'markdown-vendor';
+  }
+
+  if (isEditorLanguageVendor(packageName)) {
+    return 'editor-language-vendor';
+  }
+
+  if (isEditorVendor(packageName)) {
+    return 'editor-vendor';
+  }
+
+  return 'vendor';
+}
+
 export default defineConfig(({mode}) => {
   const repoRoot = path.resolve(__dirname, '..');
   const frontRoot = path.resolve(__dirname, '.');
@@ -32,6 +144,15 @@ export default defineConfig(({mode}) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      },
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            return resolveVendorChunk(id);
+          },
+        },
       },
     },
     server: {

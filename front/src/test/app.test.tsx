@@ -410,6 +410,45 @@ test("main settings can switch and persist appearance preferences", async () => 
   expect(await screen.findByText("聊天段间距已更新")).toBeInTheDocument();
 });
 
+test("desktop settings can switch and persist appearance preferences", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  expect(await screen.findByText("界面与阅读")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "经典暖色" }));
+  expect(document.documentElement.dataset.theme).toBe("classic");
+  expect(localStorage.getItem("web-ui-theme")).toBe("classic");
+
+  await user.selectOptions(screen.getByLabelText("聊天正文字体"), "kai");
+  expect(localStorage.getItem("web-chat-body-font-family")).toBe("kai");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toBe('"KaiTi", "Kaiti SC", "STKaiti", serif');
+
+  await user.selectOptions(screen.getByLabelText("聊天正文字号"), "large");
+  expect(localStorage.getItem("web-chat-body-font-size")).toBe("large");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("17px");
+
+  await user.selectOptions(screen.getByLabelText("聊天行间距"), "relaxed");
+  expect(localStorage.getItem("web-chat-body-line-height")).toBe("relaxed");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("2.1");
+
+  await user.selectOptions(screen.getByLabelText("聊天段间距"), "relaxed");
+  expect(localStorage.getItem("web-chat-body-paragraph-spacing")).toBe("relaxed");
+  expect(document.documentElement.style.getPropertyValue("--chat-body-paragraph-spacing")).toBe("1.1em");
+
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/user-default.png");
+  await user.click(screen.getByRole("button", { name: "我的头像" }));
+  await user.click(screen.getByRole("button", { name: "选择头像 claude-blue.png" }));
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
+  expect(localStorage.getItem("web-user-avatar-name")).toBe("claude-blue.png");
+});
+
 test("team2 settings hide the main appearance module", async () => {
   const user = userEvent.setup();
   render(<App />);

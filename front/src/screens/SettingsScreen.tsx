@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotIdentity } from "../components/BotIdentity";
+import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
@@ -192,6 +193,7 @@ export function SettingsScreen({
   const [notice, setNotice] = useState("");
   const [workdirDraft, setWorkdirDraft] = useState("");
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
+  const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [assistantCronJobs, setAssistantCronJobs] = useState<AssistantCronJob[]>([]);
   const [assistantCronRuns, setAssistantCronRuns] = useState<Record<string, AssistantCronRun[]>>({});
   const [assistantCronLoading, setAssistantCronLoading] = useState(false);
@@ -1111,6 +1113,17 @@ export function SettingsScreen({
                 {workdirLocked ? null : (
                   <button
                     type="button"
+                    aria-label="浏览工作目录"
+                    onClick={() => setShowWorkdirPicker(true)}
+                    disabled={savingWorkdir}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  >
+                    浏览目录
+                  </button>
+                )}
+                {workdirLocked ? null : (
+                  <button
+                    type="button"
                     onClick={() => void saveWorkdir()}
                     disabled={savingWorkdir}
                     className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
@@ -1370,6 +1383,20 @@ export function SettingsScreen({
               </div>
             ) : null}
           </section>
+        ) : null}
+
+        {showWorkdirPicker && !workdirLocked ? (
+          <DirectoryPickerDialog
+            title="选择工作目录"
+            botAlias={botAlias}
+            client={client}
+            initialPath={workdirDraft}
+            onPick={(workingDir) => {
+              setWorkdirDraft(workingDir);
+              setPendingWorkdirConflict(null);
+            }}
+            onClose={() => setShowWorkdirPicker(false)}
+          />
         ) : null}
 
         {isMainBot ? (

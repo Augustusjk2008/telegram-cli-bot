@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AppUpdateStatus, CreateAssistantCronJobInput } from "../services/types";
+import type { AppUpdateStatus, CreateAssistantCronJobInput, DirectoryListing } from "../services/types";
 
 class StreamingUpdateClient extends MockWebBotClient {
   releaseDownload: (() => void) | null = null;
@@ -33,6 +33,50 @@ class StreamingUpdateClient extends MockWebBotClient {
   }
 }
 
+class SettingsDirectoryPickerClient extends MockWebBotClient {
+  browserPath = "C:\\workspace";
+  private readonly directoryMap: Record<string, DirectoryListing["entries"]> = {
+    "C:\\workspace": [
+      { name: "repos", isDir: true },
+    ],
+    "C:\\workspace\\repos": [
+      { name: "team-a", isDir: true },
+    ],
+    "C:\\workspace\\repos\\team-a": [],
+  };
+
+  async getCurrentPath(): Promise<string> {
+    return "C:\\workspace";
+  }
+
+  async getBotOverview(botAlias: string) {
+    const overview = await super.getBotOverview(botAlias);
+    return {
+      ...overview,
+      workingDir: "C:\\workspace",
+    };
+  }
+
+  async listFiles(): Promise<DirectoryListing> {
+    return {
+      workingDir: this.browserPath,
+      entries: this.directoryMap[this.browserPath] || [],
+    };
+  }
+
+  async changeDirectory(_botAlias: string, path: string): Promise<string> {
+    if (path === "..") {
+      const next = this.browserPath.replace(/\\[^\\]+$/, "");
+      this.browserPath = next.length > 2 ? next : "C:\\workspace";
+      return this.browserPath;
+    }
+    this.browserPath = /^[A-Za-z]:\\/.test(path)
+      ? path
+      : `${this.browserPath}\\${path}`;
+    return this.browserPath;
+  }
+}
+
 test("assistant bots lock the default workdir in settings", async () => {
   const client = new MockWebBotClient();
   await client.addBot({
@@ -47,8 +91,36 @@ test("assistant bots lock the default workdir in settings", async () => {
   render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
 
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "浏览工作目录" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "保存工作目录" })).not.toBeInTheDocument();
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
+});
+
+test("settings can browse and pick a workdir before saving", async () => {
+  const user = userEvent.setup();
+  const client = new SettingsDirectoryPickerClient();
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByLabelText("工作目录")).toHaveValue("C:\\workspace");
+
+  await user.click(screen.getByRole("button", { name: "浏览工作目录" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
+  expect(within(dialog).getByText("C:\\workspace")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "进入目录 repos" }));
+  await user.click(await within(dialog).findByRole("button", { name: "进入目录 team-a" }));
+
+  expect(within(dialog).getByText("C:\\workspace\\repos\\team-a")).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "使用当前目录" }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "选择工作目录" })).not.toBeInTheDocument();
+  });
+
+  expect(screen.getByLabelText("工作目录")).toHaveValue("C:\\workspace\\repos\\team-a");
+  expect(client.browserPath).toBe("C:\\workspace");
 });
 
 test("embedded settings can prefill the workdir without rendering logout controls", async () => {

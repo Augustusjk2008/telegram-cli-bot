@@ -94,6 +94,17 @@ class TunnelService:
         except OSError:
             return False
 
+    @staticmethod
+    def _can_resolve_public_url(public_url: str) -> bool:
+        parsed = urlsplit(public_url)
+        host = parsed.hostname
+        if not host:
+            return False
+        try:
+            return bool(socket.getaddrinfo(host, None))
+        except OSError:
+            return False
+
     def _build_initial_snapshot(self) -> dict[str, Any]:
         if self._manual_public_url:
             return {
@@ -298,7 +309,12 @@ class TunnelService:
 
         pid = self._coerce_pid(data.get("pid"))
         public_url = str(data.get("public_url") or "").strip()
-        if pid <= 0 or not public_url or not self._is_cloudflared_process(pid):
+        if (
+            pid <= 0
+            or not public_url
+            or not self._is_cloudflared_process(pid)
+            or not self._can_resolve_public_url(public_url)
+        ):
             self._clear_state_file()
             return False
 

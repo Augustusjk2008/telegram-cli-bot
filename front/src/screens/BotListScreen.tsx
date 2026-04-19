@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AvatarPicker } from "../components/AvatarPicker";
+import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { AvatarAsset, BotSummary, CliType, CreateBotInput } from "../services/types";
@@ -34,6 +35,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
   const [savingAction, setSavingAction] = useState("");
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
+  const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
 
   async function loadBots() {
     setLoading(true);
@@ -61,6 +63,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
   useEffect(() => {
     void loadBots();
   }, [client]);
+
+  const directoryBrowserAlias = bots.find((bot) => bot.isMain || bot.alias === "main")?.alias || bots[0]?.alias || "main";
 
   async function createBot() {
     if (!createDraft.alias.trim()) {
@@ -259,14 +263,25 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder="codex"
           />
-          <input
-            aria-label="新 Bot 工作目录"
-            type="text"
-            value={createDraft.workingDir}
-            onChange={(event) => setCreateDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder="/srv/telegram-cli-bridge/team3"
-          />
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              aria-label="新 Bot 工作目录"
+              type="text"
+              value={createDraft.workingDir}
+              onChange={(event) => setCreateDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
+              className="w-full flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+              placeholder="/srv/telegram-cli-bridge/team3"
+            />
+            <button
+              type="button"
+              aria-label="浏览新 Bot 工作目录"
+              onClick={() => setShowWorkdirPicker(true)}
+              disabled={savingAction !== ""}
+              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            >
+              浏览目录
+            </button>
+          </div>
         </div>
         <button
           type="button"
@@ -402,6 +417,16 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           })}
         </div>
       )}
+      {showWorkdirPicker ? (
+        <DirectoryPickerDialog
+          title="选择工作目录"
+          botAlias={directoryBrowserAlias}
+          client={client}
+          initialPath={createDraft.workingDir}
+          onPick={(workingDir) => setCreateDraft((prev) => ({ ...prev, workingDir }))}
+          onClose={() => setShowWorkdirPicker(false)}
+        />
+      ) : null}
     </main>
   );
 }

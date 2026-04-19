@@ -99,11 +99,19 @@ export function FileEditorSurface({
       return;
     }
 
+    const editor = host.querySelector<HTMLElement>(".cm-editor");
     const scroller = host.querySelector<HTMLElement>(".cm-scroller");
+    if (editor) {
+      editor.style.height = "100%";
+      editor.style.minHeight = "100%";
+      editor.style.overflow = "hidden";
+    }
     if (!scroller) {
       return;
     }
 
+    scroller.style.height = "100%";
+    scroller.style.maxHeight = "100%";
     scroller.style.overflow = "auto";
     scroller.style.touchAction = "pan-x pan-y";
     scroller.style.overscrollBehavior = "contain";
@@ -142,11 +150,12 @@ export function FileEditorSurface({
           {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 p-4">
+      <div className="min-h-0 flex-1">
         {CodeMirrorEditor ? (
           <div
             ref={editorHostRef}
-            className="h-full min-h-[22rem] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg)]"
+            data-testid="file-editor-host"
+            className="h-full min-h-[22rem] overflow-hidden bg-[var(--bg)]"
           >
             <CodeMirrorEditor
               value={value}
@@ -173,7 +182,7 @@ export function FileEditorSurface({
               scrollbarGutter: "stable both-edges",
               WebkitOverflowScrolling: "touch",
             }}
-            className="h-full min-h-[22rem] w-full resize-none overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+            className="h-full min-h-[22rem] w-full resize-none overflow-auto border-0 bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           />
         )}
       </div>

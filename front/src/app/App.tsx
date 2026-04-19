@@ -577,6 +577,16 @@ export function App() {
           userAvatarName={userAvatarName}
           client={client}
           themeName={themeName}
+          onThemeChange={handleThemeChange}
+          chatBodyFontFamily={chatBodyFontFamily}
+          onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
+          chatBodyFontSize={chatBodyFontSize}
+          onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
+          chatBodyLineHeight={chatBodyLineHeight}
+          onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
+          chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+          onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
+          onUserAvatarChange={handleUserAvatarChange}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           chatPaneContent={(

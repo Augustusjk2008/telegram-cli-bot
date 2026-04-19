@@ -12,6 +12,9 @@ import time
 ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
 ES_CONTINUOUS = 0x80000000
+SEM_FAILCRITICALERRORS = 0x0001
+SEM_NOGPFAULTERRORBOX = 0x0002
+SEM_NOOPENFILEERRORBOX = 0x8000
 
 # 确保 refactoring/ 在 sys.path 中，以便 `python bot/main.py` 也能正确导入 bot 包
 _this_dir = os.path.dirname(os.path.abspath(__file__))          # refactoring/bot/
@@ -140,6 +143,25 @@ def disable_console_quick_edit():
             logger.warning(f"禁用快速编辑模式失败: {e}")
 
 
+def suppress_windows_error_dialogs():
+    """禁用 Windows 子进程崩溃/打开文件错误的桌面弹窗。"""
+    if sys.platform != "win32" or not hasattr(ctypes, "windll"):
+        return
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+        get_error_mode = getattr(kernel32, "GetErrorMode", None)
+        set_error_mode = getattr(kernel32, "SetErrorMode", None)
+        if not callable(set_error_mode):
+            return
+        current_mode = int(get_error_mode()) if callable(get_error_mode) else 0
+        desired_mode = current_mode | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+        set_error_mode(desired_mode)
+        logger.info("已禁用 Windows 崩溃弹窗和打开文件错误弹窗")
+    except Exception as e:
+        logger.warning(f"禁用 Windows 错误弹窗失败: {e}")
+
+
 def prevent_system_sleep():
     """阻止系统进入睡眠状态"""
     if sys.platform == "win32":
@@ -225,6 +247,9 @@ def main():
 
     # 禁用控制台快速编辑模式，避免点击控制台导致程序暂停
     disable_console_quick_edit()
+
+    # 禁用 Windows 错误弹窗，避免 CLI 子进程异常时卡住桌面会话
+    suppress_windows_error_dialogs()
 
     # 阻止系统进入睡眠状态
     prevent_system_sleep()

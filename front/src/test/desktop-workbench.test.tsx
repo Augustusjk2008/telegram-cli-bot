@@ -78,6 +78,26 @@ test("desktop workbench removes the status bar and uses the left rail to switch 
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
 });
 
+test("desktop workbench keeps chat session actions visible in the embedded chat pane", async () => {
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="bot-default.png"
+      userAvatarName="user-default.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "系统功能" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重置会话" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
+});
+
 test("desktop workbench restores persisted pane sizes from storage", () => {
   localStorage.setItem(
     "web-workbench-pane-state",

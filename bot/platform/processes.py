@@ -11,6 +11,16 @@ def build_subprocess_group_kwargs() -> dict:
     return {"start_new_session": True}
 
 
+def build_hidden_process_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if not creationflags:
+        return {}
+    return {"creationflags": creationflags}
+
+
 def terminate_process_tree_sync(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return

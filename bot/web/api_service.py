@@ -70,6 +70,7 @@ from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
+from bot.platform.processes import build_hidden_process_kwargs
 from bot.platform.scripts import execute_script, get_scripts_dir, list_available_scripts, stream_execute_script
 from bot.sessions import (
     align_session_paths,
@@ -1672,6 +1673,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                     env=env,
                     encoding="utf-8",
                     errors="replace",
+                    **build_hidden_process_kwargs(),
                 )
             except FileNotFoundError:
                 _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
@@ -2037,6 +2039,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                     env=env,
                     encoding="utf-8",
                     errors="replace",
+                    **build_hidden_process_kwargs(),
                 )
             except FileNotFoundError:
                 _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))

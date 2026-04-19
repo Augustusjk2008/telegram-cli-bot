@@ -968,6 +968,7 @@ export function ChatScreen({
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const showTopChrome = !embedded && !isImmersive;
+  const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
 
   return (
@@ -988,7 +989,7 @@ export function ChatScreen({
           ) : null}
         </header>
       ) : null}
-      {showTopChrome ? (
+      {showActionBar ? (
         <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div className="flex gap-2 overflow-x-auto pb-1">
             <button

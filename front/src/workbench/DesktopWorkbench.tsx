@@ -5,7 +5,13 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { WebBotClient } from "../services/webBotClient";
 import { GitScreen } from "../screens/GitScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
-import type { UiThemeName } from "../theme";
+import type {
+  ChatBodyFontFamilyName,
+  ChatBodyFontSizeName,
+  ChatBodyLineHeightName,
+  ChatBodyParagraphSpacingName,
+  UiThemeName,
+} from "../theme";
 import { ChatPane } from "./ChatPane";
 import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
@@ -25,6 +31,16 @@ type Props = {
   userAvatarName?: string;
   client?: WebBotClient;
   themeName?: UiThemeName;
+  onThemeChange?: (themeName: UiThemeName) => void;
+  chatBodyFontFamily?: ChatBodyFontFamilyName;
+  onChatBodyFontFamilyChange?: (fontFamily: ChatBodyFontFamilyName) => void;
+  chatBodyFontSize?: ChatBodyFontSizeName;
+  onChatBodyFontSizeChange?: (fontSize: ChatBodyFontSizeName) => void;
+  chatBodyLineHeight?: ChatBodyLineHeightName;
+  onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
+  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
+  onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
+  onUserAvatarChange?: (avatarName: string) => void;
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
   chatPaneContent?: ReactNode;
@@ -41,6 +57,16 @@ export function DesktopWorkbench({
   botAlias,
   userAvatarName,
   themeName,
+  onThemeChange,
+  chatBodyFontFamily,
+  onChatBodyFontFamilyChange,
+  chatBodyFontSize,
+  onChatBodyFontSizeChange,
+  chatBodyLineHeight,
+  onChatBodyLineHeightChange,
+  chatBodyParagraphSpacing,
+  onChatBodyParagraphSpacingChange,
+  onUserAvatarChange,
   viewMode = "desktop",
   hasUnreadOtherBots = false,
   chatPaneContent,
@@ -110,7 +136,17 @@ export function DesktopWorkbench({
             void fileTree.refreshRoot();
           }}
           themeName={themeName}
+          onThemeChange={onThemeChange}
+          chatBodyFontFamily={chatBodyFontFamily}
+          onChatBodyFontFamilyChange={onChatBodyFontFamilyChange}
+          chatBodyFontSize={chatBodyFontSize}
+          onChatBodyFontSizeChange={onChatBodyFontSizeChange}
+          chatBodyLineHeight={chatBodyLineHeight}
+          onChatBodyLineHeightChange={onChatBodyLineHeightChange}
+          chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+          onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
           userAvatarName={userAvatarName}
+          onUserAvatarChange={onUserAvatarChange}
         />
       );
     }

@@ -2602,6 +2602,25 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
 
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.build_hidden_process_kwargs", return_value={"creationflags": 123}) as hidden_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process) as popen_mock, \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("完成回复", "thread-1", 0, False),
+         ):
+        await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    hidden_mock.assert_called_once_with()
+    assert popen_mock.call_args.kwargs["creationflags"] == 123
+
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
     web_manager: MultiBotManager, temp_dir: Path
 ):
@@ -3012,6 +3031,27 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     assert done_event["output"] == "（无输出）" or isinstance(done_event["output"], str)
     assert isinstance(done_event["elapsed_seconds"], int)
     assert done_event["elapsed_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
+    fake_stdout = MagicMock()
+    fake_stdout.readline.return_value = ""
+    fake_stdout.read.return_value = ""
+
+    fake_process = MagicMock()
+    fake_process.stdout = fake_stdout
+    fake_process.poll.return_value = 0
+    fake_process.wait.return_value = 0
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.build_hidden_process_kwargs", return_value={"creationflags": 456}) as hidden_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process) as popen_mock:
+        [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    hidden_mock.assert_called_once_with()
+    assert popen_mock.call_args.kwargs["creationflags"] == 456
 
 
 def test_get_history_reads_from_local_store_not_overlay_or_legacy_history(

@@ -44,6 +44,7 @@ async def test_tunnel_service_reuses_persisted_quick_tunnel_without_starting_new
     )
 
     with patch.object(service, "_is_cloudflared_process", return_value=True), \
+         patch.object(service, "_can_resolve_public_url", return_value=True, create=True), \
          patch("bot.web.tunnel_service.subprocess.Popen", side_effect=AssertionError("should not spawn cloudflared")):
         snapshot = await service.start()
 
@@ -79,6 +80,7 @@ async def test_tunnel_service_reuses_persisted_ipv4_tunnel_for_ipv6_any_host(tmp
 
     with patch.object(service, "_is_cloudflared_process", return_value=True), \
          patch.object(service, "_can_connect_local_url", return_value=True, create=True), \
+         patch.object(service, "_can_resolve_public_url", return_value=True, create=True), \
          patch("bot.web.tunnel_service.subprocess.Popen", side_effect=AssertionError("should not spawn cloudflared")):
         snapshot = await service.start()
 
@@ -113,6 +115,37 @@ def test_tunnel_service_does_not_restore_unreachable_ipv4_tunnel_for_ipv6_any_ho
 
     with patch.object(service, "_is_cloudflared_process", return_value=True), \
          patch.object(service, "_can_connect_local_url", return_value=False, create=True), \
+         patch.object(service, "_clear_state_file") as clear_state_file:
+        restored = service._try_restore_persisted_tunnel()
+
+    assert restored is False
+    clear_state_file.assert_called_once()
+
+
+def test_tunnel_service_does_not_restore_persisted_tunnel_with_unresolvable_public_url(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "mode": "cloudflare_quick",
+                "source": "quick_tunnel",
+                "public_url": "https://stable.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "pid": 4321,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+    )
+
+    with patch.object(service, "_is_cloudflared_process", return_value=True), \
+         patch.object(service, "_can_resolve_public_url", return_value=False, create=True), \
          patch.object(service, "_clear_state_file") as clear_state_file:
         restored = service._try_restore_persisted_tunnel()
 
