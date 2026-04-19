@@ -46,11 +46,11 @@ class TestGetSession:
         s2 = get_session(2, "sub", 100, str(temp_dir))
         assert s1 is not s2
 
-    def test_expired_session_recreated(self, temp_dir: Path):
+    def test_inactive_session_is_reused_instead_of_recreated(self, temp_dir: Path):
         s1 = get_session(1, "main", 100, str(temp_dir))
         s1.last_activity = datetime(2000, 1, 1)  # 强制过期
         s2 = get_session(1, "main", 100, str(temp_dir))
-        assert s1 is not s2
+        assert s1 is s2
 
 
 class TestResetSession:

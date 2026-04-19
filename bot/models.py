@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from bot.config import CLI_TYPE, CLI_PATH, SESSION_TIMEOUT, WORKING_DIR
+from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
 from bot.cli_params import CliParamsConfig
 
 if TYPE_CHECKING:
@@ -113,10 +113,6 @@ class UserSession:
             self.last_activity = datetime.now()
             self.message_count += 1
         self.persist_debounced()
-
-    def is_expired(self) -> bool:
-        elapsed = (datetime.now() - self.last_activity).total_seconds()
-        return elapsed > SESSION_TIMEOUT
 
     def add_to_history(self, role: str, content: str, *, elapsed_seconds: Optional[int] = None):
         with self._lock:

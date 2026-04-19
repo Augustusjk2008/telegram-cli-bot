@@ -21,7 +21,6 @@ class TestImports:
             DANGEROUS_COMMANDS,
             POLLING_TIMEOUT,
             RESERVED_ALIASES,
-            SESSION_TIMEOUT,
             SUPPORTED_CLI_TYPES,
             WEB_ENABLED,
             WORKING_DIR,

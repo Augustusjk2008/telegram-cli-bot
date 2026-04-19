@@ -18,7 +18,6 @@ from bot.config import (
     RESTART_EVENT,
     RESTART_REQUESTED,
     RESTART_SUPERVISOR_ENV,
-    SESSION_TIMEOUT,
     SUPPORTED_CLI_TYPES,
     WORKING_DIR,
     build_reexec_args,
@@ -71,8 +70,10 @@ class TestConfigConstants:
         assert POLLING_WATCHDOG_INTERVAL == 5
         assert MAIN_LOOP_RETRY_DELAY == 5
 
-    def test_session_timeout_is_int(self):
-        assert isinstance(SESSION_TIMEOUT, int)
+    def test_session_timeout_constant_removed(self):
+        import bot.config as config
+
+        assert not hasattr(config, "SESSION_TIMEOUT")
 
     def test_working_dir_is_absolute(self):
         import os

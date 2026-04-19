@@ -27,7 +27,6 @@ from bot.config import (
     MAIN_LOOP_RETRY_DELAY,
     MANAGED_BOTS_FILE,
     RESTART_EXIT_CODE,
-    SESSION_TIMEOUT,
     WORKING_DIR,
     is_supervised_restart,
     reexec_current_process,
@@ -220,7 +219,6 @@ def main():
     safe_print(msgs.get("startup", "loading_config"))
     safe_print(f"   CLI类型: {CLI_TYPE}")
     safe_print(f"   工作目录: {WORKING_DIR}")
-    safe_print(f"   会话超时: {SESSION_TIMEOUT}秒")
     safe_print(f"   托管配置: {MANAGED_BOTS_FILE}")
     safe_print(f"   Web API: {'开启' if config.WEB_ENABLED else '关闭'}")
     safe_print(msgs.get("startup", "loaded"))

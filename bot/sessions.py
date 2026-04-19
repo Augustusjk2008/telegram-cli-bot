@@ -42,20 +42,6 @@ def get_or_create_session(
     should_persist_migration = False
 
     with sessions_lock:
-        if key in sessions and sessions[key].is_expired():
-            expired_session = sessions[key]
-            del sessions[key]
-        else:
-            expired_session = None
-
-    # 在锁外终止进程，避免持锁期间阻塞其他会话操作
-    if expired_session is not None:
-        try:
-            expired_session.terminate_process()
-        except Exception:
-            pass
-
-    with sessions_lock:
         if key not in sessions:
             # 尝试从持久化存储恢复会话
             stored_data = load_session(bot_id, user_id) if load_persisted_state else None
@@ -206,21 +192,6 @@ def is_bot_processing(bot_id: int) -> bool:
         return False
     finally:
         sessions_lock.release()
-
-
-def cleanup_expired_sessions():
-    """清理过期的会话"""
-    with sessions_lock:
-        expired_keys = [
-            key for key, session in sessions.items()
-            if session.is_expired()
-        ]
-        expired_sessions = [(key, sessions.pop(key)) for key in expired_keys]
-
-    # 在锁外终止进程和持久化，避免持锁期间阻塞
-    for key, session in expired_sessions:
-        session.terminate_process()
-        logger.info(f"已清理过期会话: bot={key[0]}, user={key[1]}")
 
 
 def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:

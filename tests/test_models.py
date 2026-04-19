@@ -74,13 +74,9 @@ class TestUserSession:
         assert s.last_activity > old_time
         assert s.message_count == old_count + 1
 
-    def test_is_expired(self):
+    def test_user_session_no_longer_exposes_is_expired(self):
         s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")
-        assert s.is_expired() is False
-        # 强制过期
-        from bot.config import SESSION_TIMEOUT
-        s.last_activity = datetime(2000, 1, 1)
-        assert s.is_expired() is True
+        assert not hasattr(s, "is_expired")
 
     def test_add_to_history(self):
         s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")
