@@ -5,11 +5,19 @@ type Props = {
   currentBot: string;
   workspaceName: string;
   viewMode: ViewMode;
+  hasUnreadOtherBots?: boolean;
   onViewModeChange: (viewMode: ViewMode) => void;
   onOpenBotSwitcher: () => void;
 };
 
-export function WorkbenchHeader({ currentBot, workspaceName, viewMode, onViewModeChange, onOpenBotSwitcher }: Props) {
+export function WorkbenchHeader({
+  currentBot,
+  workspaceName,
+  viewMode,
+  hasUnreadOtherBots = false,
+  onViewModeChange,
+  onOpenBotSwitcher,
+}: Props) {
   return (
     <header
       data-testid="desktop-workbench-titlebar"
@@ -19,8 +27,18 @@ export function WorkbenchHeader({ currentBot, workspaceName, viewMode, onViewMod
         <button
           type="button"
           onClick={onOpenBotSwitcher}
-          className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--surface)]"
+          className={clsx(
+            "relative rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--surface)]",
+            hasUnreadOtherBots ? "pr-5" : "",
+          )}
         >
+          {hasUnreadOtherBots ? (
+            <span
+              data-testid="bot-switcher-unread-indicator"
+              aria-hidden="true"
+              className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--surface-strong)]"
+            />
+          ) : null}
           {currentBot}
         </button>
         <span className="truncate text-xs text-[var(--muted)]">{workspaceName}</span>

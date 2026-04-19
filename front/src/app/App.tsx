@@ -191,6 +191,13 @@ export function App() {
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
   const displayBots = useMemo(() => applyUnreadStatus(bots, unreadBots), [bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
+  const hasUnreadOtherBots = useMemo(() => {
+    if (unreadBots.length === 0) {
+      return false;
+    }
+    const knownAliases = new Set(bots.map((bot) => bot.alias));
+    return unreadBots.some((alias) => alias !== currentBot && knownAliases.has(alias));
+  }, [bots, currentBot, unreadBots]);
   const effectiveLayoutMode = resolveEffectiveLayoutMode(viewMode, viewportWidth);
   const currentBotSummary = useMemo(() => {
     if (!currentBot) {
@@ -571,6 +578,24 @@ export function App() {
           client={client}
           themeName={themeName}
           viewMode={viewMode}
+          hasUnreadOtherBots={hasUnreadOtherBots}
+          chatPaneContent={(
+            <div className="h-full">
+              {mountedChatBots.map((alias) => (
+                <div key={`desktop-chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
+                  <ChatScreen
+                    botAlias={alias}
+                    client={client}
+                    botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
+                    userAvatarName={userAvatarName}
+                    isVisible={alias === currentBot}
+                    embedded
+                    onUnreadResult={markBotUnread}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
           onViewModeChange={setViewMode}
           onOpenBotSwitcher={() => {
             void openBotSwitcher();
@@ -590,6 +615,7 @@ export function App() {
         hideOuterChrome={hideOuterChrome}
         activeScreen={activeScreen}
         viewMode={viewMode}
+        hasUnreadOtherBots={hasUnreadOtherBots}
         onOpenBotSwitcher={() => {
           void openBotSwitcher();
         }}

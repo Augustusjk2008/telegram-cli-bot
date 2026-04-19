@@ -11,6 +11,7 @@ type Props = {
   hideOuterChrome: boolean;
   activeScreen: ReactNode;
   viewMode: ViewMode;
+  hasUnreadOtherBots?: boolean;
   onOpenBotSwitcher: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onTabChange: (tab: AppTab) => void;
@@ -22,6 +23,7 @@ export function MobileShell({
   hideOuterChrome,
   activeScreen,
   viewMode,
+  hasUnreadOtherBots = false,
   onOpenBotSwitcher,
   onViewModeChange,
   onTabChange,
@@ -32,8 +34,18 @@ export function MobileShell({
         <header className="flex items-center justify-between p-3 bg-[var(--surface-strong)] border-b border-[var(--border)] shrink-0">
           <button
             onClick={onOpenBotSwitcher}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-[var(--border)] transition-colors"
+            className={clsx(
+              "relative flex items-center gap-2 rounded-lg px-3 py-1.5 transition-colors hover:bg-[var(--border)]",
+              hasUnreadOtherBots ? "pr-5" : "",
+            )}
           >
+            {hasUnreadOtherBots ? (
+              <span
+                data-testid="bot-switcher-unread-indicator"
+                aria-hidden="true"
+                className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--surface-strong)]"
+              />
+            ) : null}
             <Menu className="w-5 h-5" />
             <span className="font-semibold">{currentBot}</span>
           </button>

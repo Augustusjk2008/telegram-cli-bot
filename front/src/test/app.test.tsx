@@ -124,7 +124,7 @@ test("forced desktop mode mounts the desktop shell instead of the mobile bottom 
   await user.click(screen.getByRole("button", { name: "登录" }));
 
   expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "文件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
 });
 
 test("mobile shell exposes a layout toggle that can switch into desktop mode", async () => {
@@ -682,14 +682,60 @@ test("marks a bot unread after a hidden reply completes and clears it on return"
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
   });
 
+  expect(within(screen.getByRole("button", { name: "team2" })).getByTestId("bot-switcher-unread-indicator")).toBeInTheDocument();
+
   await user.click(screen.getByRole("button", { name: "team2" }));
   expect(await screen.findByText("未读")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /main/i }));
   expect(await screen.findByText("后台完成")).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: "main" })).queryByTestId("bot-switcher-unread-indicator")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "main" }));
   expect(screen.queryByText("未读")).not.toBeInTheDocument();
+});
+
+test("desktop header shows an unread indicator when another bot has unread messages", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "sendMessage").mockImplementation(
+    async (_botAlias: string, _text: string, _onChunk: (chunk: string) => void): Promise<ChatMessage> =>
+      new Promise((resolve) => {
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-hidden-desktop",
+            role: "assistant",
+            text: "后台完成",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 800);
+      }),
+  );
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续处理");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  });
+
+  expect(within(screen.getByRole("button", { name: "team2" })).getByTestId("bot-switcher-unread-indicator")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "team2" }));
+  await user.click(await screen.findByRole("button", { name: /main/i }));
+  await screen.findByText("后台完成");
+
+  expect(within(screen.getByRole("button", { name: "main" })).queryByTestId("bot-switcher-unread-indicator")).not.toBeInTheDocument();
 });
 
 test("bot manager can add rename and delete managed bots", async () => {

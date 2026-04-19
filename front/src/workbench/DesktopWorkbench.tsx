@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { WebBotClient } from "../services/webBotClient";
@@ -26,6 +26,9 @@ type Props = {
   client?: WebBotClient;
   themeName?: UiThemeName;
   viewMode?: ViewMode;
+  hasUnreadOtherBots?: boolean;
+  chatPaneContent?: ReactNode;
+  onUnreadResult?: (botAlias: string) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: () => void;
   onDirtyTabsChange?: (hasDirtyTabs: boolean) => void;
@@ -39,6 +42,9 @@ export function DesktopWorkbench({
   userAvatarName,
   themeName,
   viewMode = "desktop",
+  hasUnreadOtherBots = false,
+  chatPaneContent,
+  onUnreadResult,
   onViewModeChange,
   onOpenBotSwitcher,
   onDirtyTabsChange,
@@ -141,6 +147,7 @@ export function DesktopWorkbench({
         currentBot={botAlias}
         workspaceName={workspaceName}
         viewMode={viewMode}
+        hasUnreadOtherBots={hasUnreadOtherBots}
         onViewModeChange={(nextMode) => onViewModeChange?.(nextMode)}
         onOpenBotSwitcher={() => onOpenBotSwitcher?.()}
       />
@@ -251,12 +258,15 @@ export function DesktopWorkbench({
             data-testid="desktop-pane-chat"
             className="min-h-0 overflow-hidden border border-[var(--border)] bg-[var(--surface)]"
           >
-            <ChatPane
-              botAlias={botAlias}
-              botAvatarName={botAvatarName}
-              userAvatarName={userAvatarName}
-              client={client}
-            />
+            {chatPaneContent || (
+              <ChatPane
+                botAlias={botAlias}
+                botAvatarName={botAvatarName}
+                userAvatarName={userAvatarName}
+                client={client}
+                onUnreadResult={onUnreadResult}
+              />
+            )}
           </section>
         </div>
       </div>

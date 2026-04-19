@@ -6,9 +6,10 @@ type Props = {
   botAvatarName?: string;
   userAvatarName?: string;
   client: WebBotClient;
+  onUnreadResult?: (botAlias: string) => void;
 };
 
-export function ChatPane({ botAlias, botAvatarName, userAvatarName, client }: Props) {
+export function ChatPane({ botAlias, botAvatarName, userAvatarName, client, onUnreadResult }: Props) {
   return (
     <ChatScreen
       botAlias={botAlias}
@@ -17,6 +18,7 @@ export function ChatPane({ botAlias, botAvatarName, userAvatarName, client }: Pr
       client={client}
       isVisible
       embedded
+      onUnreadResult={onUnreadResult}
     />
   );
 }
