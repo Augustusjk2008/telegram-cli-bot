@@ -25,6 +25,7 @@ import type {
   GitProxySettings,
   GitOverview,
   ChatAttachmentUploadResult,
+  ChatAttachmentDeleteResult,
   PublicHostInfo,
   SessionState,
   SystemScript,
@@ -58,6 +59,7 @@ export interface WebBotClient {
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
+  deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string): Promise<void>;
   resetSession(botAlias: string): Promise<void>;

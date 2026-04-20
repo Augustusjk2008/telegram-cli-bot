@@ -8,6 +8,7 @@ import type {
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
+  ChatAttachmentDeleteResult,
   ChatAttachmentUploadResult,
   ChatMessage,
   ChatStatusUpdate,
@@ -527,6 +528,16 @@ export class MockWebBotClient implements WebBotClient {
       filename,
       savedPath: `C:\\Users\\demo\\.tcb\\chat-attachments\\${botAlias}\\1001\\${filename}`,
       size: file.size,
+    };
+  }
+
+  async deleteChatAttachment(_botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult> {
+    const segments = savedPath.split(/[\\/]+/).filter(Boolean);
+    return {
+      filename: segments[segments.length - 1] || savedPath,
+      savedPath,
+      existed: true,
+      deleted: true,
     };
   }
 

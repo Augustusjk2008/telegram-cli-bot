@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LoaderCircle, Maximize2, Minimize2, RotateCcw, Square, Terminal } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
@@ -52,8 +52,15 @@ type PendingChatAttachment = ChatAttachmentUploadResult & {
   id: string;
 };
 
+type ParsedUserAttachment = {
+  filename: string;
+  savedPath: string;
+};
+
 const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
 const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
+const SSE_STALL_RECOVERY_DELAY_MS = 2500;
+const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 
 function getCompactScriptTitle(script: SystemScript) {
   const source = (script.displayName || script.description || script.scriptName).trim();
@@ -193,6 +200,42 @@ function buildComposedMessageText(text: string, attachments: PendingChatAttachme
     return `${trimmedText}\n\n${attachmentBlock}`;
   }
   return trimmedText || attachmentBlock;
+}
+
+function isAbsoluteAttachmentPath(path: string) {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/") || path.startsWith("\\\\");
+}
+
+function getAttachmentFilename(savedPath: string) {
+  const parts = savedPath.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] || savedPath;
+}
+
+function parseUserMessageDisplay(text: string) {
+  const attachments: ParsedUserAttachment[] = [];
+  const visibleLines: string[] = [];
+
+  for (const line of text.split(/\r?\n/)) {
+    const matched = line.match(CHAT_ATTACHMENT_LINE_RE);
+    const savedPath = matched?.[1]?.trim() || "";
+    if (savedPath && isAbsoluteAttachmentPath(savedPath)) {
+      attachments.push({
+        filename: getAttachmentFilename(savedPath),
+        savedPath,
+      });
+      continue;
+    }
+    visibleLines.push(line);
+  }
+
+  return {
+    visibleText: visibleLines.join("\n").trim(),
+    attachments,
+  };
+}
+
+function getRenderedAttachmentStateKey(messageId: string, savedPath: string) {
+  return `${messageId}|${savedPath}`;
 }
 
 function getMessageClientStateKey(item: ChatMessage) {
@@ -343,8 +386,11 @@ type ChatMessageRowProps = {
   assistantAvatarName?: string;
   userAvatarName?: string;
   isCopied: boolean;
+  deletedAttachmentKeys: Record<string, boolean>;
+  deletingAttachmentKeys: Record<string, boolean>;
   tracePanelExpanded: boolean;
   traceLoadState?: { loading: boolean; error?: string };
+  onDeleteAttachment: (messageId: string, savedPath: string) => void;
   onFileLinkClick: (href: string) => void;
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: () => void;
@@ -357,8 +403,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   assistantAvatarName,
   userAvatarName,
   isCopied,
+  deletedAttachmentKeys,
+  deletingAttachmentKeys,
   tracePanelExpanded,
   traceLoadState,
+  onDeleteAttachment,
   onFileLinkClick,
   onLoadTrace,
   onToggleTracePanel,
@@ -376,6 +425,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
   const isUser = item.role === "user";
   const messageName = isUser ? "你" : assistantName;
+  const parsedUserMessage = isUser ? parseUserMessageDisplay(item.text) : null;
+  const visibleUserText = parsedUserMessage?.visibleText || "";
+  const userAttachments = parsedUserMessage?.attachments || [];
   const trace = item.meta?.trace;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const hasTracePanel = item.role === "assistant" && traceCount > 0;
@@ -409,6 +461,51 @@ const ChatMessageRow = memo(function ChatMessageRow({
         >
           {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
             <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+          ) : isUser ? (
+            <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
+              {visibleUserText ? (
+                <ChatPlainTextMessage content={visibleUserText} className="text-white" />
+              ) : null}
+              {userAttachments.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {userAttachments.map((attachment) => {
+                    const attachmentStateKey = getRenderedAttachmentStateKey(item.id, attachment.savedPath);
+                    const isDeleted = Boolean(deletedAttachmentKeys[attachmentStateKey]);
+                    const isDeleting = Boolean(deletingAttachmentKeys[attachmentStateKey]);
+
+                    return (
+                      <span
+                        key={attachment.savedPath}
+                        title={attachment.savedPath}
+                        className={isDeleted
+                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70"
+                          : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs text-white"}
+                      >
+                        <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{attachment.filename}</span>
+                        {isDeleted ? (
+                          <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] text-white/80">已删除</span>
+                        ) : (
+                          <button
+                            type="button"
+                            aria-label={`删除附件文件 ${attachment.filename}`}
+                            disabled={isDeleting}
+                            onClick={() => onDeleteAttachment(item.id, attachment.savedPath)}
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-white/80 hover:bg-white/15 disabled:opacity-60"
+                          >
+                            {isDeleting ? (
+                              <LoaderCircle className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
           ) : (
             <ChatPlainTextMessage
               content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
@@ -486,6 +583,8 @@ export function ChatScreen({
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [copiedMessageId, setCopiedMessageId] = useState("");
+  const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
+  const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
   const [expandedTracePanels, setExpandedTracePanels] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -502,6 +601,8 @@ export function ChatScreen({
   const botOverviewRef = useRef<BotOverview | null>(null);
   const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
   const assistantPollTimerRef = useRef<number | null>(null);
+  const sseRecoveryTimerRef = useRef<number | null>(null);
+  const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
   const assistantSendVersionRef = useRef(0);
 
@@ -569,6 +670,13 @@ export function ChatScreen({
     }
   }, []);
 
+  const stopSseRecoveryWatch = useCallback(() => {
+    if (sseRecoveryTimerRef.current !== null) {
+      window.clearTimeout(sseRecoveryTimerRef.current);
+      sseRecoveryTimerRef.current = null;
+    }
+  }, []);
+
   const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_ASSISTANT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
     assistantPollTimerRef.current = window.setTimeout(() => {
@@ -576,6 +684,67 @@ export function ChatScreen({
       void pollAssistantStateRef.current?.();
     }, delayMs);
   }, [stopAssistantPoll]);
+
+  const scheduleSseRecoveryWatch = useCallback(() => {
+    stopSseRecoveryWatch();
+    if (streamModeRef.current !== "sse" || !isVisibleRef.current) {
+      return;
+    }
+
+    const lastActivityAt = sseLastActivityAtRef.current ?? Date.now();
+    const delayMs = Math.max(200, SSE_STALL_RECOVERY_DELAY_MS - (Date.now() - lastActivityAt));
+    sseRecoveryTimerRef.current = window.setTimeout(() => {
+      sseRecoveryTimerRef.current = null;
+      const sendVersion = assistantSendVersionRef.current;
+
+      void (async () => {
+        if (streamModeRef.current !== "sse" || !isVisibleRef.current) {
+          return;
+        }
+
+        try {
+          const overview = await client.getBotOverview(botAlias);
+          if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current !== "sse") {
+            return;
+          }
+
+          setBotOverview(overview);
+          setWorkingDir(overview.workingDir || "");
+
+          if (overview.isProcessing || overview.runningReply) {
+            sseLastActivityAtRef.current = Date.now();
+            scheduleSseRecoveryWatch();
+            return;
+          }
+
+          const messages = await client.listMessages(botAlias);
+          if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current !== "sse") {
+            return;
+          }
+
+          const refreshedPendingRuns = resolvePendingCronRuns(
+            pendingCronRunsRef.current,
+            messages,
+          );
+          if (refreshedPendingRuns.length !== pendingCronRunsRef.current.length) {
+            setPendingCronRuns(refreshedPendingRuns);
+          }
+          assistantSendVersionRef.current += 1;
+          applyHistoryView(messages, overview, refreshedPendingRuns);
+        } catch {
+          sseLastActivityAtRef.current = Date.now();
+          scheduleSseRecoveryWatch();
+        }
+      })();
+    }, delayMs);
+  }, [applyHistoryView, botAlias, client, stopSseRecoveryWatch]);
+
+  const markSseActivity = useCallback(() => {
+    sseLastActivityAtRef.current = Date.now();
+    if (streamModeRef.current === "sse") {
+      scheduleSseRecoveryWatch();
+    }
+  }, [scheduleSseRecoveryWatch]);
 
   pollAssistantStateRef.current = async () => {
     const sendVersion = assistantSendVersionRef.current;
@@ -675,8 +844,12 @@ export function ChatScreen({
     setPendingAttachments([]);
     setUploadingAttachments(false);
     setCopiedMessageId("");
+    setDeletedAttachmentKeys({});
+    setDeletingAttachmentKeys({});
     setExpandedTracePanels({});
     setTraceLoadState({});
+    sseLastActivityAtRef.current = null;
+    stopSseRecoveryWatch();
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
 
@@ -704,8 +877,9 @@ export function ChatScreen({
     return () => {
       cancelled = true;
       stopAssistantPoll();
+      stopSseRecoveryWatch();
     };
-  }, [applyHistoryView, botAlias, client, isVisible, scheduleAssistantPoll, stopAssistantPoll]);
+  }, [applyHistoryView, botAlias, client, isVisible, scheduleAssistantPoll, stopAssistantPoll, stopSseRecoveryWatch]);
 
   useEffect(() => {
     const handleAssistantCronRunEnqueued = (event: Event) => {
@@ -770,6 +944,17 @@ export function ChatScreen({
       lastError: error || undefined,
     });
   }, [elapsedSeconds, error, isStreaming, loading, onWorkbenchStatusChange]);
+
+  useEffect(() => {
+    if (streamMode !== "sse" || !isVisible) {
+      stopSseRecoveryWatch();
+      return;
+    }
+    scheduleSseRecoveryWatch();
+    return () => {
+      stopSseRecoveryWatch();
+    };
+  }, [isVisible, scheduleSseRecoveryWatch, stopSseRecoveryWatch, streamMode]);
 
   useLayoutEffect(() => {
     const shouldPoll = streamMode === "poll" || (Boolean(isAssistantBot) && isVisible && !loading && !isStreaming);
@@ -918,8 +1103,51 @@ export function ChatScreen({
   }, [botAlias, client]);
 
   const handleRemoveAttachment = useCallback((attachmentId: string) => {
+    const removedAttachment = pendingAttachments.find((attachment) => attachment.id === attachmentId);
+    if (!removedAttachment) {
+      return;
+    }
+
     setPendingAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
-  }, []);
+    setError("");
+    void client.deleteChatAttachment(botAlias, removedAttachment.savedPath).catch((err) => {
+      setError(err instanceof Error ? err.message : "删除附件失败");
+      setPendingAttachments((prev) => (
+        prev.some((attachment) => attachment.id === removedAttachment.id)
+          ? prev
+          : [...prev, removedAttachment]
+      ));
+    });
+  }, [botAlias, client, pendingAttachments]);
+
+  const handleDeleteAttachment = useCallback(async (messageId: string, savedPath: string) => {
+    const attachmentStateKey = getRenderedAttachmentStateKey(messageId, savedPath);
+
+    setDeletingAttachmentKeys((prev) => ({
+      ...prev,
+      [attachmentStateKey]: true,
+    }));
+    setError("");
+
+    try {
+      await client.deleteChatAttachment(botAlias, savedPath);
+      setDeletedAttachmentKeys((prev) => ({
+        ...prev,
+        [attachmentStateKey]: true,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除附件失败");
+    } finally {
+      setDeletingAttachmentKeys((prev) => {
+        if (!prev[attachmentStateKey]) {
+          return prev;
+        }
+        const nextState = { ...prev };
+        delete nextState[attachmentStateKey];
+        return nextState;
+      });
+    }
+  }, [botAlias, client]);
 
   const handleSend = useCallback(async (text: string) => {
     const composedText = buildComposedMessageText(text, pendingAttachments);
@@ -929,6 +1157,7 @@ export function ChatScreen({
 
     const localStartedAtMs = Date.now();
     assistantSendVersionRef.current += 1;
+    const sendVersion = assistantSendVersionRef.current;
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -948,12 +1177,14 @@ export function ChatScreen({
     setError("");
     setPendingAttachments([]);
     stopAssistantPoll();
+    stopSseRecoveryWatch();
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     setIsStreaming(true);
     setStreamMode("sse");
     setStreamStartedAtMs(localStartedAtMs);
+    sseLastActivityAtRef.current = localStartedAtMs;
 
     try {
       let usingPreviewReplace = false;
@@ -961,6 +1192,10 @@ export function ChatScreen({
         botAlias,
         composedText,
         (chunk) => {
+          if (sendVersion !== assistantSendVersionRef.current) {
+            return;
+          }
+          markSseActivity();
           if (usingPreviewReplace) {
             return;
           }
@@ -971,6 +1206,10 @@ export function ChatScreen({
           })));
         },
         (status) => {
+          if (sendVersion !== assistantSendVersionRef.current) {
+            return;
+          }
+          markSseActivity();
           if (typeof status.elapsedSeconds === "number") {
             setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
           }
@@ -984,6 +1223,10 @@ export function ChatScreen({
           }
         },
         (traceEvent) => {
+          if (sendVersion !== assistantSendVersionRef.current) {
+            return;
+          }
+          markSseActivity();
           setItems((prev) => updateLatestAssistantMessage(
             prev,
             assistantId,
@@ -992,6 +1235,10 @@ export function ChatScreen({
           ));
         },
       );
+
+      if (sendVersion !== assistantSendVersionRef.current) {
+        return;
+      }
 
       const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
         ? finalMessage.elapsedSeconds
@@ -1009,6 +1256,9 @@ export function ChatScreen({
         onUnreadResult?.(botAlias);
       }
     } catch (err) {
+      if (sendVersion !== assistantSendVersionRef.current) {
+        return;
+      }
       const message = err instanceof Error ? err.message : "发送失败";
       setError(message);
       setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
@@ -1017,11 +1267,16 @@ export function ChatScreen({
         state: "error",
       })));
     } finally {
+      if (sendVersion !== assistantSendVersionRef.current) {
+        return;
+      }
+      stopSseRecoveryWatch();
+      sseLastActivityAtRef.current = null;
       setIsStreaming(false);
       setStreamMode("");
       setStreamStartedAtMs(null);
     }
-  }, [botAlias, client, onUnreadResult, pendingAttachments, stopAssistantPoll]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pendingAttachments, stopAssistantPoll, stopSseRecoveryWatch]);
 
   async function handleResetSession() {
     setActionLoading("reset");
@@ -1199,8 +1454,11 @@ export function ChatScreen({
             assistantAvatarName={assistantAvatarName}
             userAvatarName={userAvatarName}
             isCopied={copiedMessageId === item.id}
+            deletedAttachmentKeys={deletedAttachmentKeys}
+            deletingAttachmentKeys={deletingAttachmentKeys}
             tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
             traceLoadState={traceLoadState[getMessageClientStateKey(item)]}
+            onDeleteAttachment={handleDeleteAttachment}
             onFileLinkClick={handleFileLinkClick}
             onLoadTrace={loadMessageTrace}
             onToggleTracePanel={() => {

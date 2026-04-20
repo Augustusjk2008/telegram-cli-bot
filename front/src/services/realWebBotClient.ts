@@ -14,6 +14,7 @@ import type {
   BotOverview,
   BotStatus,
   BotSummary,
+  ChatAttachmentDeleteResult,
   ChatAttachmentUploadResult,
   ChatMessage,
   ChatTraceDetails,
@@ -168,6 +169,13 @@ type RawChatAttachmentUploadResult = {
   filename: string;
   saved_path: string;
   size: number;
+};
+
+type RawChatAttachmentDeleteResult = {
+  filename: string;
+  saved_path: string;
+  existed: boolean;
+  deleted: boolean;
 };
 
 type RawSystemScript = {
@@ -436,6 +444,15 @@ function mapChatAttachmentUploadResult(raw: RawChatAttachmentUploadResult): Chat
     filename: raw.filename,
     savedPath: raw.saved_path,
     size: raw.size,
+  };
+}
+
+function mapChatAttachmentDeleteResult(raw: RawChatAttachmentDeleteResult): ChatAttachmentDeleteResult {
+  return {
+    filename: raw.filename,
+    savedPath: raw.saved_path,
+    existed: Boolean(raw.existed),
+    deleted: Boolean(raw.deleted),
   };
 }
 
@@ -1198,6 +1215,22 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapChatAttachmentUploadResult(data);
+  }
+
+  async deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult> {
+    const data = await this.requestJson<RawChatAttachmentDeleteResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/chat/attachments/delete`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          saved_path: savedPath,
+        }),
+      },
+    );
+    return mapChatAttachmentDeleteResult(data);
   }
 
   async uploadFile(botAlias: string, file: File): Promise<void> {

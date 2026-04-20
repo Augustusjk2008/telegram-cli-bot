@@ -167,6 +167,13 @@ export type ChatAttachmentUploadResult = {
   size: number;
 };
 
+export type ChatAttachmentDeleteResult = {
+  filename: string;
+  savedPath: string;
+  existed: boolean;
+  deleted: boolean;
+};
+
 export type PublicHostInfo = {
   username: string;
   operatingSystem: string;

@@ -283,11 +283,51 @@ test("uploads chat attachments and appends absolute paths to the sent message", 
     );
   });
 
-  expect(await screen.findByText((content) => (
+  expect(await screen.findByText("report.txt")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "删除附件文件 report.txt" })).toBeInTheDocument();
+  expect(screen.queryByText((content) => (
     content.includes("附件路径为：")
     && content.includes("report.txt")
-  ))).toBeInTheDocument();
+  ))).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "移除附件 report.txt" })).not.toBeInTheDocument();
+});
+
+test("deletes attachment files from user message pills without exposing injected prompt text", async () => {
+  const user = userEvent.setup();
+  const deleteSpy = vi.fn(async (_botAlias: string, savedPath: string) => ({
+    filename: "report.txt",
+    savedPath,
+    existed: true,
+    deleted: true,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-attachment-1",
+        role: "user",
+        text: "请参考附件\n\n附件路径为：C:\\Users\\demo\\.tcb\\chat-attachments\\main\\1001\\report.txt",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+    ],
+    deleteChatAttachment: deleteSpy as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("请参考附件")).toBeInTheDocument();
+  expect(await screen.findByText("report.txt")).toBeInTheDocument();
+  expect(screen.queryByText((content) => content.includes("附件路径为："))).not.toBeInTheDocument();
+
+  await user.click(await screen.findByRole("button", { name: "删除附件文件 report.txt" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledWith(
+      "main",
+      "C:\\Users\\demo\\.tcb\\chat-attachments\\main\\1001\\report.txt",
+    );
+  });
+  expect(await screen.findByText("已删除")).toBeInTheDocument();
 });
 
 test("renders avatar and sender name together in the message header row", async () => {
@@ -1180,6 +1220,75 @@ test("shows waiting time while a reply is still pending", async () => {
   await waitFor(() => {
     expect(screen.getByTestId("assistant-markdown-message")).toHaveTextContent("done");
   }, { timeout: 3000 });
+}, 8000);
+
+test("recovers from a stalled sse completion by syncing finished history", async () => {
+  vi.useFakeTimers();
+  const getBotOverview = vi.fn(async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+    }));
+  const listMessages = vi
+    .fn<() => Promise<ChatMessage[]>>()
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      {
+        id: "user-server-1",
+        role: "user",
+        text: "继续",
+        createdAt: "2026-04-20T12:00:00",
+        state: "done",
+      },
+      {
+        id: "assistant-server-1",
+        role: "assistant",
+        text: "最终结果",
+        createdAt: "2026-04-20T12:00:01",
+        state: "done",
+      },
+    ]);
+  const client = createClient({
+    getBotOverview: getBotOverview as never,
+    listMessages: listMessages as never,
+    sendMessage: (_botAlias: string, _text: string, onChunk: (chunk: string) => void) =>
+      new Promise<ChatMessage>(() => {
+        window.setTimeout(() => {
+          onChunk("最终结果");
+        }, 300);
+      }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(screen.getByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "继续" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1300);
+  });
+
+  expect(screen.getByText("最终结果")).toBeInTheDocument();
+  expect(screen.getByText(/已等待 \d+ 秒/)).toBeInTheDocument();
+  expect(screen.getByText("正在输出")).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+  });
+
+  expect(getBotOverview).toHaveBeenCalledTimes(2);
+  expect(listMessages).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("最终结果")).toBeInTheDocument();
+  expect(screen.queryByText(/已等待 \d+ 秒/)).not.toBeInTheDocument();
+  expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
 }, 8000);
 
 test("keeps showing a visible streaming badge while preview text is updating", async () => {

@@ -48,6 +48,7 @@ from bot.web.api_service import (
     list_bots,
     list_system_scripts,
     create_text_file,
+    delete_chat_attachment,
     read_file_content,
     rename_path,
     run_chat,
@@ -817,6 +818,67 @@ def test_save_chat_attachment_deduplicates_existing_names(
     assert second["filename"] == "notes-1.txt"
     assert first["saved_path"] != second["saved_path"]
     assert Path(second["saved_path"]).read_bytes() == b"second\n"
+
+
+def test_delete_chat_attachment_removes_file_from_home_scoped_dir(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_home = temp_dir / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: fake_home))
+
+    uploaded = save_chat_attachment(web_manager, "main", 1001, "notes.txt", b"hello\n")
+    saved_path = Path(uploaded["saved_path"])
+
+    result = delete_chat_attachment(web_manager, "main", 1001, uploaded["saved_path"])
+
+    assert result == {
+        "filename": "notes.txt",
+        "saved_path": str(saved_path),
+        "existed": True,
+        "deleted": True,
+    }
+    assert not saved_path.exists()
+
+
+def test_delete_chat_attachment_rejects_paths_outside_user_scope(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_home = temp_dir / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: fake_home))
+    outside_path = temp_dir / "outside.txt"
+    outside_path.write_text("nope", encoding="utf-8")
+
+    with pytest.raises(WebApiError) as exc_info:
+        delete_chat_attachment(web_manager, "main", 1001, str(outside_path))
+
+    assert exc_info.value.status == 403
+    assert exc_info.value.code == "attachment_delete_forbidden"
+
+
+def test_delete_chat_attachment_is_idempotent_when_file_is_already_missing(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_home = temp_dir / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: fake_home))
+    missing_path = fake_home / ".tcb" / "chat-attachments" / "main" / "1001" / "missing.txt"
+
+    result = delete_chat_attachment(web_manager, "main", 1001, str(missing_path))
+
+    assert result == {
+        "filename": "missing.txt",
+        "saved_path": str(missing_path),
+        "existed": False,
+        "deleted": False,
+    }
 
 
 def test_get_history_does_not_materialize_empty_home_store(

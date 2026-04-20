@@ -86,6 +86,7 @@ from .api_service import (
     stream_update_download,
     stream_chat,
     create_assistant_cron_job,
+    delete_chat_attachment,
     delete_assistant_cron_job,
     update_cli_params,
     update_assistant_cron_job,
@@ -879,6 +880,13 @@ class WebApiServer:
         result = save_chat_attachment(self.manager, alias, auth.user_id, filename, data)
         return _json({"ok": True, "data": result})
 
+    async def delete_chat_attachment_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        result = delete_chat_attachment(self.manager, alias, auth.user_id, body.get("saved_path", ""))
+        return _json({"ok": True, "data": result})
+
     async def create_directory_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
@@ -1312,6 +1320,7 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/git/stash/pop", self.post_git_stash_pop)
         app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
         app.router.add_post("/api/bots/{alias}/chat/attachments", self.upload_chat_attachment)
+        app.router.add_post("/api/bots/{alias}/chat/attachments/delete", self.delete_chat_attachment_view)
         app.router.add_post("/api/bots/{alias}/files/mkdir", self.create_directory_view)
         app.router.add_post("/api/bots/{alias}/files/write", self.write_file_view)
         app.router.add_post("/api/bots/{alias}/files/create", self.create_text_file_view)

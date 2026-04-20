@@ -914,6 +914,22 @@ def _resolve_unique_upload_path(base_dir: str, filename: str) -> tuple[str, str]
     return resolved_path, resolved_name
 
 
+def _resolve_chat_attachment_path(alias: str, user_id: int, saved_path: str) -> Path:
+    candidate = Path(str(saved_path or "").strip())
+    if not str(candidate):
+        _raise(400, "missing_saved_path", "附件路径不能为空")
+    if not candidate.is_absolute():
+        _raise(400, "invalid_saved_path", "附件路径必须是绝对路径")
+
+    attachment_dir = get_chat_attachments_dir(alias, user_id).resolve()
+    resolved_candidate = candidate.expanduser().resolve(strict=False)
+    try:
+        resolved_candidate.relative_to(attachment_dir)
+    except ValueError:
+        _raise(403, "attachment_delete_forbidden", "只能删除当前 Bot 当前用户上传的附件")
+    return resolved_candidate
+
+
 def _list_directory_entries(working_dir: str) -> dict[str, Any]:
     entries = []
     for entry in sorted(os.scandir(working_dir), key=lambda item: (not item.is_dir(), item.name.lower())):
@@ -2312,6 +2328,35 @@ def save_chat_attachment(manager: MultiBotManager, alias: str, user_id: int, fil
         "filename": stored_filename,
         "saved_path": file_path,
         "size": len(data),
+    }
+
+
+def delete_chat_attachment(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    saved_path: str,
+) -> dict[str, Any]:
+    _ensure_file_browser_supported(manager, alias)
+    target_path = _resolve_chat_attachment_path(alias, user_id, saved_path)
+
+    if target_path.exists() and not target_path.is_file():
+        _raise(400, "invalid_saved_path", "附件路径必须指向文件")
+
+    existed = target_path.exists()
+    if existed:
+        try:
+            target_path.unlink()
+        except FileNotFoundError:
+            existed = False
+        except Exception as exc:
+            _raise(500, "delete_attachment_failed", str(exc))
+
+    return {
+        "filename": target_path.name,
+        "saved_path": str(target_path),
+        "existed": existed,
+        "deleted": existed,
     }
 
 
