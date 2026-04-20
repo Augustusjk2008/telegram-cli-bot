@@ -8,7 +8,6 @@ from bot.assistant_home import AssistantHome
 from bot.assistant_compaction import build_compaction_memory_block
 
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)")
-_REREAD_NOTICE = "AGENTS.md 和 CLAUDE.md 已更新，请重新读取。"
 
 
 @dataclass(frozen=True)
@@ -174,28 +173,15 @@ def build_managed_memory_tail(home: AssistantHome) -> str:
 
 
 def compile_assistant_prompt(
-    home: AssistantHome,
-    user_id: int,
     user_text: str,
     *,
-    has_native_session: bool = False,
     managed_prompt_hash: str | None = None,
     seen_managed_prompt_hash: str | None = None,
 ) -> AssistantPromptPayload:
-    del home, user_id
-
     managed_prompt_hash = _normalize_optional_str(managed_prompt_hash)
     seen_managed_prompt_hash = _normalize_optional_str(seen_managed_prompt_hash)
 
-    prompt_text = user_text
-    if (
-        has_native_session
-        and managed_prompt_hash is not None
-        and managed_prompt_hash != seen_managed_prompt_hash
-    ):
-        prompt_text = f"{_REREAD_NOTICE}\n\n{user_text}"
-
     return AssistantPromptPayload(
-        prompt_text=prompt_text,
+        prompt_text=user_text,
         managed_prompt_hash_seen=managed_prompt_hash or seen_managed_prompt_hash,
     )

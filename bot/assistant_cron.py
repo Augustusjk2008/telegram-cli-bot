@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -46,6 +47,11 @@ class AssistantCronService:
         if len(value) <= limit:
             return value
         return value[:limit].rstrip() + "..."
+
+    def _build_synthetic_user_id(self, job_id: str) -> int:
+        digest = hashlib.sha256(f"{self.assistant_home.assistant_id}:{job_id}".encode("utf-8")).digest()
+        value = int.from_bytes(digest[:8], "big") & 0x7FFF_FFFF_FFFF_FFFF
+        return -max(1, value)
 
     async def start(self) -> None:
         if self._loop_task is not None and not self._loop_task.done():
@@ -132,6 +138,8 @@ class AssistantCronService:
             return {
                 "run_id": updated_state.pending_run_id or updated_state.current_run_id,
                 "status": "queued",
+                "task_mode": job.task.mode,
+                "deliver_mode": job.task.deliver_mode,
             }
         return result
 
@@ -165,13 +173,23 @@ class AssistantCronService:
             )
             return None
 
+        runtime_user_id = self.web_user_id
+        context_user_id = None
+        if job.task.mode == "dream":
+            runtime_user_id = self._build_synthetic_user_id(job.id)
+            context_user_id = self.web_user_id
+
         request = AssistantRunRequest(
             run_id=f"run_{uuid.uuid4().hex[:12]}",
             source="manual" if trigger_source == "manual" else "cron",
             bot_alias=self.bot_alias,
-            user_id=self.web_user_id,
+            user_id=runtime_user_id,
             text=job.task.prompt,
             interactive=False,
+            visible_text=job.task.prompt,
+            context_user_id=context_user_id,
+            task_mode=job.task.mode,
+            task_payload=job.task.to_dict(),
             job_id=job.id,
             scheduled_at=scheduled_at.isoformat(),
             enqueued_at=self.now_func().isoformat(),
@@ -216,7 +234,11 @@ class AssistantCronService:
         )
         self._watch_tasks.add(task)
         task.add_done_callback(self._watch_tasks.discard)
-        return result
+        return {
+            **result,
+            "task_mode": job.task.mode,
+            "deliver_mode": job.task.deliver_mode,
+        }
 
     async def _watch_run(self, job_id: str, run_id: str, trigger_source: str) -> None:
         try:

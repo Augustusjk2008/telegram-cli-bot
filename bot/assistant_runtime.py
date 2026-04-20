@@ -21,6 +21,10 @@ class AssistantRunRequest:
     user_id: int
     text: str
     interactive: bool
+    visible_text: str | None = None
+    context_user_id: int | None = None
+    task_mode: Literal["standard", "dream"] = "standard"
+    task_payload: dict[str, Any] | None = None
     job_id: str | None = None
     scheduled_at: str | None = None
     enqueued_at: str | None = None

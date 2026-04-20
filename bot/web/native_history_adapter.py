@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-_ASSISTANT_REREAD_NOTICE = "AGENTS.md 和 CLAUDE.md 已更新，请重新读取。"
-
 
 def _trace_event(kind: str, **extra: Any) -> dict[str, Any]:
     summary = str(extra.get("summary") or "").strip()
@@ -68,19 +66,8 @@ def _append_assistant_text(assistant_messages: list[str], text: Any) -> None:
         assistant_messages.append(value)
 
 
-def _normalize_user_text(value: Any) -> str:
-    text = _stringify_value(value)
-    if not text:
-        return ""
-    if text.startswith(_ASSISTANT_REREAD_NOTICE):
-        remainder = text[len(_ASSISTANT_REREAD_NOTICE):].lstrip()
-        if remainder:
-            return remainder
-    return text
-
-
 def _assign_user_text(turn: dict[str, Any], text: Any) -> None:
-    value = _normalize_user_text(text)
+    value = _stringify_value(text)
     if not value:
         return
     current = _stringify_value(turn.get("user_text"))

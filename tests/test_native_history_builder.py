@@ -560,14 +560,14 @@ def test_build_web_chat_history_ignores_active_partial_turns_after_compaction(mo
     assert messages[1]["content"] == "上一轮已经完成。"
 
 
-def test_build_web_chat_history_strips_assistant_reread_notice_and_merges_overlay(monkeypatch, tmp_path: Path):
-    transcript = tmp_path / "codex-assistant-reread.jsonl"
+def test_build_web_chat_history_merges_overlay_for_assistant_turn(monkeypatch, tmp_path: Path):
+    transcript = tmp_path / "codex-assistant-history.jsonl"
     transcript.write_text(
         "\n".join(
             [
                 '{"timestamp":"2026-04-14T06:34:58.784Z","type":"turn_context","payload":{"turn_id":"turn-1"}}',
-                '{"timestamp":"2026-04-14T06:34:58.786Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"AGENTS.md 和 CLAUDE.md 已更新，请重新读取。\\r\\n\\r\\ncodex现在能自动调用rg了吗\\r\\n"}]}}',
-                '{"timestamp":"2026-04-14T06:34:58.788Z","type":"event_msg","payload":{"type":"user_message","message":"AGENTS.md 和 CLAUDE.md 已更新，请重新读取。\\r\\n\\r\\ncodex现在能自动调用rg了吗\\r\\n"}}',
+                '{"timestamp":"2026-04-14T06:34:58.786Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex现在能自动调用rg了吗\\r\\n"}]}}',
+                '{"timestamp":"2026-04-14T06:34:58.788Z","type":"event_msg","payload":{"type":"user_message","message":"codex现在能自动调用rg了吗\\r\\n"}}',
                 '{"timestamp":"2026-04-14T06:36:18.249Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"能，现在会优先直接用 rg。"}],"phase":"final_answer"}}',
             ]
         ) + "\n",

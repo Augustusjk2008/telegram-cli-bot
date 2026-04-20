@@ -22,6 +22,7 @@ REQUIRED_DIRS = (
     "evals/runs",
     "audit",
     "audit/cron",
+    "audit/dream",
     "indexes",
     "prompts",
 )

@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 ScheduleType = Literal["daily", "interval"]
 MisfirePolicy = Literal["skip", "once"]
+TaskMode = Literal["standard", "dream"]
+DeliverMode = Literal["chat_handoff", "silent"]
 
 
 @dataclass(frozen=True)
@@ -43,13 +45,42 @@ class AssistantCronSchedule:
 @dataclass(frozen=True)
 class AssistantCronTask:
     prompt: str
+    mode: TaskMode = "standard"
+    lookback_hours: int = 24
+    history_limit: int = 40
+    capture_limit: int = 20
+    deliver_mode: DeliverMode = "chat_handoff"
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AssistantCronTask":
-        prompt = str((payload or {}).get("prompt") or "").strip()
+        data = dict(payload or {})
+        prompt = str(data.get("prompt") or "").strip()
         if not prompt:
             raise ValueError("task.prompt 不能为空")
-        return cls(prompt=prompt)
+        mode = str(data.get("mode") or "standard").strip().lower() or "standard"
+        if mode not in {"standard", "dream"}:
+            raise ValueError("task.mode 仅支持 standard 或 dream")
+        lookback_hours = int(data.get("lookback_hours") or 24)
+        history_limit = int(data.get("history_limit") or 40)
+        capture_limit = int(data.get("capture_limit") or 20)
+        if lookback_hours <= 0:
+            raise ValueError("task.lookback_hours 必须大于 0")
+        if history_limit <= 0:
+            raise ValueError("task.history_limit 必须大于 0")
+        if capture_limit <= 0:
+            raise ValueError("task.capture_limit 必须大于 0")
+        deliver_mode_default = "silent" if mode == "dream" else "chat_handoff"
+        deliver_mode = str(data.get("deliver_mode") or deliver_mode_default).strip().lower() or deliver_mode_default
+        if deliver_mode not in {"chat_handoff", "silent"}:
+            raise ValueError("task.deliver_mode 仅支持 chat_handoff 或 silent")
+        return cls(
+            prompt=prompt,
+            mode=mode,
+            lookback_hours=lookback_hours,
+            history_limit=history_limit,
+            capture_limit=capture_limit,
+            deliver_mode=deliver_mode,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

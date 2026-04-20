@@ -14,7 +14,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
@@ -23,13 +23,15 @@ from bot.assistant_context import AssistantPromptPayload
 from bot.assistant_cron import AssistantCronService
 from bot.assistant_cron_store import save_job_runtime_state
 from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
+from bot.assistant_dream import AssistantDreamPreparedPrompt, AssistantDreamApplyResult
 from bot.assistant_docs import ManagedPromptSyncResult
 from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_runtime import AssistantRunRequest
 from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
 from bot.models import BotProfile, UserSession
 from bot.session_store import save_session
-from bot.web.server import WebApiServer
+from bot.web.server import WebApiServer, _TERMINAL_OUTPUT_EOF
 from bot.web.api_service import (
     AuthContext,
     _stream_cli_chat,
@@ -49,6 +51,7 @@ from bot.web.api_service import (
     list_system_scripts,
     create_text_file,
     delete_chat_attachment,
+    execute_assistant_run_request,
     read_file_content,
     rename_path,
     run_chat,
@@ -510,6 +513,31 @@ def _build_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
     )
 
 
+def _build_dream_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
+    return AssistantCronJob.from_dict(
+        {
+            "id": job_id,
+            "enabled": True,
+            "title": "Dream 任务",
+            "schedule": {
+                "type": "interval",
+                "every_seconds": 600,
+                "timezone": "Asia/Shanghai",
+                "misfire_policy": "skip",
+            },
+            "task": {
+                "prompt": prompt,
+                "mode": "dream",
+                "lookback_hours": 24,
+                "history_limit": 40,
+                "capture_limit": 20,
+                "deliver_mode": "silent",
+            },
+            "execution": {"timeout_seconds": 600},
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_manual_assistant_cron_run_targets_visible_web_user_session(temp_dir: Path):
     home = bootstrap_assistant_home(temp_dir)
@@ -559,6 +587,32 @@ async def test_scheduled_assistant_cron_run_targets_visible_web_user_session(tem
     assert len(coordinator.requests) == 1
     assert coordinator.requests[0].user_id == 1001
     assert coordinator.requests[0].text == "汇总今天的重要动态"
+
+
+@pytest.mark.asyncio
+async def test_dream_assistant_cron_run_uses_synthetic_session_and_context_user(temp_dir: Path):
+    home = bootstrap_assistant_home(temp_dir)
+    coordinator = _FakeAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+        web_user_id=1001,
+    )
+    await service.save_job(_build_dream_assistant_cron_job("daily_dream", "根据近期工作做自我完善"))
+
+    result = await service.run_job_now("daily_dream")
+    await service.stop()
+
+    assert result["status"] == "queued"
+    assert result["task_mode"] == "dream"
+    assert result["deliver_mode"] == "silent"
+    assert len(coordinator.requests) == 1
+    request = coordinator.requests[0]
+    assert request.user_id < 0
+    assert request.context_user_id == 1001
+    assert request.task_mode == "dream"
+    assert request.task_payload["mode"] == "dream"
 
 
 def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: MultiBotManager):
@@ -1718,6 +1772,78 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
 
 
 @pytest.mark.asyncio
+async def test_terminal_websocket_ignores_disconnect_while_forwarding_output(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+    request = MagicMock()
+    request.query = {}
+    request.transport = None
+
+    state: dict[str, object] = {}
+
+    class FakeProcess:
+        is_pty = False
+        pid = 9876
+
+        def terminate(self) -> None:
+            state["terminated"] = True
+
+        def close(self) -> None:
+            state["closed"] = True
+
+    class FakeOutputPump:
+        def __init__(self, process):
+            self._reads = [b"hello", _TERMINAL_OUTPUT_EOF]
+
+        def start(self, loop) -> None:
+            state["pump_started"] = True
+
+        def stop(self) -> None:
+            state["pump_stopped"] = True
+
+        async def read(self):
+            return self._reads.pop(0)
+
+    class FakeWebSocket:
+        closed = True
+
+        def __init__(self):
+            self.binary_writes = 0
+
+        async def prepare(self, req):
+            return self
+
+        async def receive(self):
+            return MagicMock(type=WSMsgType.TEXT, data="{}")
+
+        async def send_json(self, payload):
+            state["pty_payload"] = payload
+
+        async def send_bytes(self, data):
+            self.binary_writes += 1
+            raise ClientConnectionResetError("Cannot write to closing transport")
+
+    fake_ws = FakeWebSocket()
+    fake_process = FakeProcess()
+
+    with patch.object(server, "_with_auth", AsyncMock(return_value=AuthContext(user_id=1001, token_used=False))), \
+         patch("bot.web.server.get_default_shell", return_value="powershell"), \
+         patch("bot.web.server.create_shell_process", return_value=fake_process), \
+         patch("bot.web.server._TerminalOutputPump", FakeOutputPump), \
+         patch("bot.web.server.web.WebSocketResponse", return_value=fake_ws), \
+         patch("bot.web.server.logger.exception") as exception_log:
+        response = await server.terminal_ws(request)
+
+    assert response is fake_ws
+    assert state["pty_payload"] == {"pty_mode": False}
+    assert state["pump_started"] is True
+    assert state["pump_stopped"] is True
+    assert state["terminated"] is True
+    assert state["closed"] is True
+    assert fake_ws.binary_writes == 1
+    exception_log.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_system_script_executes_full_filename_from_bot_scripts_dir(
     monkeypatch: pytest.MonkeyPatch,
     web_manager: MultiBotManager,
@@ -2794,10 +2920,7 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
 
     prompt_active_mock.assert_called_once_with(ANY)
     compiler.assert_called_once_with(
-        ANY,
-        1001,
         "hello",
-        has_native_session=False,
         managed_prompt_hash="hash-current",
         seen_managed_prompt_hash=None,
     )
@@ -2816,6 +2939,96 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     assert session.managed_prompt_hash_seen == "hash-updated"
     assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
+
+
+@pytest.mark.asyncio
+async def test_execute_assistant_run_request_applies_dream_result_and_skips_captures(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root-dream"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    fake_process = MagicMock()
+    request = AssistantRunRequest(
+        run_id="run_dream_1",
+        source="cron",
+        bot_alias="assistant1",
+        user_id=-77,
+        text="根据近期工作做自我完善",
+        interactive=False,
+        visible_text="根据近期工作做自我完善",
+        context_user_id=1001,
+        task_mode="dream",
+        task_payload={
+            "prompt": "根据近期工作做自我完善",
+            "mode": "dream",
+            "lookback_hours": 24,
+            "history_limit": 40,
+            "capture_limit": 20,
+            "deliver_mode": "silent",
+        },
+        job_id="daily_dream",
+        scheduled_at="2026-04-20T09:00:00+08:00",
+    )
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(False, False, "hash-current"),
+         ), \
+         patch(
+             "bot.web.api_service.prepare_dream_prompt",
+             return_value=AssistantDreamPreparedPrompt(
+                 prompt_text="dream prompt payload",
+                 context_stats={"history_count": 2, "capture_count": 1},
+             ),
+         ) as prepare_mock, \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value=AssistantPromptPayload(
+                 prompt_text="dream prompt payload",
+                 managed_prompt_hash_seen="hash-dream",
+             ),
+         ), \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}) as capture_mock, \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=(
+                 "摘要\n<DREAM_RESULT>{\"summary\":\"dream 完成\",\"working_memory\":{},\"knowledge_entries\":[],\"proposal\":null}</DREAM_RESULT>",
+                 "thread-1",
+                 0,
+                 False,
+             ),
+         ), \
+         patch(
+             "bot.web.api_service.apply_dream_result",
+             return_value=AssistantDreamApplyResult(
+                 summary="dream 完成",
+                 applied_paths=["C:/repo/.assistant/memory/working/recent_summary.md"],
+                 proposal_id="pr_123",
+                 audit_path="C:/repo/.assistant/audit/dream/run_dream_1.json",
+             ),
+         ) as apply_mock:
+        result = await execute_assistant_run_request(web_manager, request)
+
+    prepare_mock.assert_called_once()
+    capture_mock.assert_not_called()
+    assert build_mock.call_args.kwargs["user_text"] == "dream prompt payload"
+    apply_mock.assert_called_once()
+    assert result["output"] == "dream 完成"
+    assert result["proposal_id"] == "pr_123"
+    assert result["applied_paths"] == ["C:/repo/.assistant/memory/working/recent_summary.md"]
 
 
 @pytest.mark.asyncio
@@ -2912,10 +3125,7 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
     compiler.assert_called_once_with(
-        ANY,
-        1001,
         "hello",
-        has_native_session=True,
         managed_prompt_hash="hash-current",
         seen_managed_prompt_hash="hash-seen",
     )
@@ -2958,7 +3168,7 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
          patch(
              "bot.web.api_service.compile_assistant_prompt",
              return_value=AssistantPromptPayload(
-                 prompt_text="AGENTS.md 和 CLAUDE.md 已更新，请重新读取。\n\n继续。",
+                 prompt_text="继续。",
                  managed_prompt_hash_seen="hash-new",
              ),
          ) as compiler, \
@@ -2972,10 +3182,7 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
         events = [event async for event in _stream_cli_chat(web_manager, "assistant1", 1001, "继续。")]
 
     compiler.assert_called_once_with(
-        ANY,
-        1001,
         "继续。",
-        has_native_session=True,
         managed_prompt_hash="hash-new",
         seen_managed_prompt_hash="hash-old",
     )
@@ -2987,7 +3194,7 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
         consumed_capture_ids=["cap_1"],
         review_prompt_active=False,
     )
-    assert build_mock.call_args.kwargs["user_text"].startswith("AGENTS.md 和 CLAUDE.md 已更新")
+    assert build_mock.call_args.kwargs["user_text"] == "继续。"
     assert any(event["type"] == "done" for event in events)
     assert session.managed_prompt_hash_seen == "hash-new"
 

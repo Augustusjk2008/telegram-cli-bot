@@ -605,6 +605,7 @@ export function ChatScreen({
   const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
   const assistantSendVersionRef = useRef(0);
+  const isSseStreaming = () => streamModeRef.current === "sse";
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -687,7 +688,7 @@ export function ChatScreen({
 
   const scheduleSseRecoveryWatch = useCallback(() => {
     stopSseRecoveryWatch();
-    if (streamModeRef.current !== "sse" || !isVisibleRef.current) {
+    if (!isSseStreaming() || !isVisibleRef.current) {
       return;
     }
 
@@ -698,13 +699,13 @@ export function ChatScreen({
       const sendVersion = assistantSendVersionRef.current;
 
       void (async () => {
-        if (streamModeRef.current !== "sse" || !isVisibleRef.current) {
+        if (!isSseStreaming() || !isVisibleRef.current) {
           return;
         }
 
         try {
           const overview = await client.getBotOverview(botAlias);
-          if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current !== "sse") {
+          if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
 
@@ -718,7 +719,7 @@ export function ChatScreen({
           }
 
           const messages = await client.listMessages(botAlias);
-          if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current !== "sse") {
+          if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
 
@@ -741,20 +742,20 @@ export function ChatScreen({
 
   const markSseActivity = useCallback(() => {
     sseLastActivityAtRef.current = Date.now();
-    if (streamModeRef.current === "sse") {
+    if (isSseStreaming()) {
       scheduleSseRecoveryWatch();
     }
   }, [scheduleSseRecoveryWatch]);
 
   pollAssistantStateRef.current = async () => {
     const sendVersion = assistantSendVersionRef.current;
-    if (streamModeRef.current === "sse") {
+    if (isSseStreaming()) {
       return;
     }
 
     try {
       const overview = await client.getBotOverview(botAlias);
-      if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current === "sse") {
+      if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
         return;
       }
 
@@ -780,7 +781,7 @@ export function ChatScreen({
       const messages = shouldRefreshMessages
         ? await client.listMessages(botAlias)
         : itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
-      if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current === "sse") {
+      if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
         return;
       }
 

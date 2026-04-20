@@ -114,6 +114,11 @@ logger = logging.getLogger(__name__)
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
 _TERMINAL_OUTPUT_EOF = object()
+_CLIENT_DISCONNECT_ERRORS = (
+    ClientConnectionResetError,
+    ConnectionResetError,
+    BrokenPipeError,
+)
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -635,7 +640,11 @@ class WebApiServer:
 
             force_no_pty = bool(init_data.get("no_pty", False))
             process = create_shell_process(shell_type, cwd, use_pty=not force_no_pty)
-            await ws.send_json({"pty_mode": process.is_pty})
+            try:
+                await ws.send_json({"pty_mode": process.is_pty})
+            except _CLIENT_DISCONNECT_ERRORS:
+                logger.info("终端 WebSocket 客户端在初始化完成前断开: cwd=%s shell=%s", cwd, shell_type)
+                return ws
             loop = asyncio.get_running_loop()
             output_pump = _TerminalOutputPump(process)
             output_pump.start(loop)
@@ -645,7 +654,11 @@ class WebApiServer:
                     data = await output_pump.read()
                     if data is _TERMINAL_OUTPUT_EOF:
                         break
-                    await ws.send_bytes(data)
+                    try:
+                        await ws.send_bytes(data)
+                    except _CLIENT_DISCONNECT_ERRORS:
+                        logger.info("终端 WebSocket 客户端已断开，停止转发输出: cwd=%s shell=%s", cwd, shell_type)
+                        break
 
             async def forward_input() -> None:
                 while not ws.closed:

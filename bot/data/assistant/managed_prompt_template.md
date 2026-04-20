@@ -15,7 +15,6 @@
 - 如果下方 `HOST_MANAGED_MEMORY_PROMPT` 中出现 `assistant_skills`，它是宿主从 `.assistant/memory/skills` 聚合出的技能 descriptions 索引；需要时再去对应目录读取完整 `SKILL.md`。
 - 不要把对 `AGENTS.md` / `CLAUDE.md` 的直接编辑当成持久升级路径。
 - 不要让长期规则或代码升级自行生效。
-- 当宿主提示 `AGENTS.md` 和 `CLAUDE.md` 已更新时，先重新读取文件，再继续处理。
 
 ## 目录约定
 

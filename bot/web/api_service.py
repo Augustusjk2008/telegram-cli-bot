@@ -32,6 +32,7 @@ from bot.assistant_cron_store import (
     read_job_definition,
     read_job_run_audit,
 )
+from bot.assistant_dream import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
 from bot.assistant_cron_types import AssistantCronJob
 from bot.assistant_compaction import (
     finalize_compaction,
@@ -1179,15 +1180,6 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     return env
 
 
-def _has_native_session(session: UserSession, cli_type: str) -> bool:
-    with session._lock:
-        if cli_type == "codex":
-            return bool(session.codex_session_id)
-        if cli_type == "claude":
-            return bool(session.claude_session_initialized)
-    return False
-
-
 def _prepare_assistant_prompt(
     profile: BotProfile,
     session: UserSession,
@@ -1201,10 +1193,7 @@ def _prepare_assistant_prompt(
     compaction_prompt_active = is_compaction_prompt_active(assistant_home)
     sync_result = sync_managed_prompt_files(assistant_home)
     compiled_prompt = compile_assistant_prompt(
-        assistant_home,
-        user_id,
         user_text,
-        has_native_session=_has_native_session(session, cli_type),
         managed_prompt_hash=sync_result.managed_prompt_hash,
         seen_managed_prompt_hash=session.managed_prompt_hash_seen,
     )
@@ -1212,6 +1201,72 @@ def _prepare_assistant_prompt(
         session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
         session.persist()
     return assistant_home, assistant_pre_surface, compiled_prompt.prompt_text, compaction_prompt_active
+
+
+def _is_dream_request(request: AssistantRunRequest | None) -> bool:
+    return bool(request is not None and request.task_mode == "dream")
+
+
+def _prepare_dream_assistant_prompt(
+    manager: MultiBotManager,
+    profile: BotProfile,
+    session: UserSession,
+    request: AssistantRunRequest,
+    *,
+    user_text: str,
+) -> tuple[Any, str, dict[str, Any]]:
+    assistant_home = bootstrap_assistant_home(profile.working_dir)
+    sync_result = sync_managed_prompt_files(assistant_home)
+    context_user_id = request.context_user_id if request.context_user_id is not None else request.user_id
+    context_session = get_session_for_alias(manager, profile.alias, context_user_id)
+    config = AssistantDreamConfig.from_task_payload(request.task_payload)
+    prepared_prompt = prepare_dream_prompt(
+        assistant_home,
+        profile=profile,
+        session=context_session,
+        history_service=_get_chat_history_service(context_session),
+        config=config,
+        visible_text=user_text,
+    )
+    compiled_prompt = compile_assistant_prompt(
+        prepared_prompt.prompt_text,
+        managed_prompt_hash=sync_result.managed_prompt_hash,
+        seen_managed_prompt_hash=session.managed_prompt_hash_seen,
+    )
+    if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
+        session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
+        session.persist()
+    return assistant_home, compiled_prompt.prompt_text, prepared_prompt.context_stats
+
+
+def _finalize_dream_execution(
+    manager: MultiBotManager,
+    request: AssistantRunRequest,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, request.bot_alias)
+    assistant_home = bootstrap_assistant_home(profile.working_dir)
+    raw_output = str(result.get("output") or "")
+    applied = apply_dream_result(
+        assistant_home,
+        raw_output=raw_output,
+        visible_text=str(request.visible_text or request.text or "").strip(),
+        prompt_excerpt=str(result.get("dream_prompt_text") or "").strip()[:400],
+        context_stats=dict(result.get("dream_context_stats") or {}),
+        run_id=request.run_id,
+        job_id=request.job_id,
+        scheduled_at=request.scheduled_at,
+        context_user_id=request.context_user_id,
+        synthetic_user_id=request.user_id,
+    )
+    finalized = dict(result)
+    finalized["output"] = applied.summary
+    finalized["summary"] = applied.summary
+    finalized["applied_paths"] = list(applied.applied_paths)
+    finalized["audit_path"] = applied.audit_path
+    if applied.proposal_id:
+        finalized["proposal_id"] = applied.proposal_id
+    return finalized
 
 
 def _finalize_assistant_chat_turn(
@@ -2002,13 +2057,21 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             session.is_processing = False
 
 
-async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
+async def run_cli_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    request: AssistantRunRequest | None = None,
+) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
     session = get_session_for_alias(manager, alias, user_id)
-    text = (user_text or "").strip()
+    visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
+    text = (visible_input or "").strip()
     if not text:
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
@@ -2017,6 +2080,9 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False
+    finalize_assistant_turn = True
+    dream_context_stats: dict[str, Any] | None = None
+    dream_prompt_text = ""
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -2025,13 +2091,25 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
-        assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active = _prepare_assistant_prompt(
-            profile,
-            session,
-            user_id=user_id,
-            user_text=text,
-            cli_type=cli_type,
-        )
+        if _is_dream_request(request):
+            assert request is not None
+            assistant_home, prompt_text, dream_context_stats = _prepare_dream_assistant_prompt(
+                manager,
+                profile,
+                session,
+                request,
+                user_text=text,
+            )
+            dream_prompt_text = prompt_text
+            finalize_assistant_turn = False
+        else:
+            assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active = _prepare_assistant_prompt(
+                profile,
+                session,
+                user_id=user_id,
+                user_text=text,
+                cli_type=cli_type,
+            )
 
     done_session = None
     if cli_type == "claude":
@@ -2184,7 +2262,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
             )
-            if assistant_home is not None:
+            if assistant_home is not None and finalize_assistant_turn:
                 try:
                     _finalize_assistant_chat_turn(
                         assistant_home,
@@ -2198,7 +2276,7 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                     logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
             with session._lock:
                 session.is_processing = False
-            return {
+            response_payload = {
                 "output": str(done_message.get("content") or response),
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
@@ -2206,6 +2284,10 @@ async def run_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_
                 "timed_out": timed_out,
                 "session": build_session_snapshot(profile, session),
             }
+            if dream_context_stats is not None:
+                response_payload["dream_context_stats"] = dream_context_stats
+                response_payload["dream_prompt_text"] = dream_prompt_text
+            return response_payload
     finally:
         with session._lock:
             session.process = None
@@ -2297,11 +2379,21 @@ def build_assistant_run_request(alias: str, user_id: int, user_text: str) -> Ass
         user_id=user_id,
         text=user_text,
         interactive=True,
+        visible_text=user_text,
     )
 
 
 async def execute_assistant_run_request(manager: MultiBotManager, request: AssistantRunRequest) -> dict[str, Any]:
-    return await run_cli_chat(manager, request.bot_alias, request.user_id, request.text)
+    result = await run_cli_chat(
+        manager,
+        request.bot_alias,
+        request.user_id,
+        request.text,
+        request=request,
+    )
+    if _is_dream_request(request):
+        return _finalize_dream_execution(manager, request, result)
+    return result
 
 
 async def stream_assistant_run_request(

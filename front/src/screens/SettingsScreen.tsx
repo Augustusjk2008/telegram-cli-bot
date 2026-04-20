@@ -211,7 +211,12 @@ export function SettingsScreen({
   const [assistantCronDraftScheduleType, setAssistantCronDraftScheduleType] = useState<"daily" | "interval">("daily");
   const [assistantCronDraftTime, setAssistantCronDraftTime] = useState("09:00");
   const [assistantCronDraftEverySeconds, setAssistantCronDraftEverySeconds] = useState("3600");
+  const [assistantCronDraftMode, setAssistantCronDraftMode] = useState<"standard" | "dream">("standard");
   const [assistantCronDraftPrompt, setAssistantCronDraftPrompt] = useState("");
+  const [assistantCronDraftLookbackHours, setAssistantCronDraftLookbackHours] = useState("24");
+  const [assistantCronDraftHistoryLimit, setAssistantCronDraftHistoryLimit] = useState("40");
+  const [assistantCronDraftCaptureLimit, setAssistantCronDraftCaptureLimit] = useState("20");
+  const [assistantCronDraftDeliverMode, setAssistantCronDraftDeliverMode] = useState<"chat_handoff" | "silent">("chat_handoff");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
@@ -246,7 +251,12 @@ export function SettingsScreen({
     setAssistantCronDraftScheduleType("daily");
     setAssistantCronDraftTime("09:00");
     setAssistantCronDraftEverySeconds("3600");
+    setAssistantCronDraftMode("standard");
     setAssistantCronDraftPrompt("");
+    setAssistantCronDraftLookbackHours("24");
+    setAssistantCronDraftHistoryLimit("40");
+    setAssistantCronDraftCaptureLimit("20");
+    setAssistantCronDraftDeliverMode("chat_handoff");
   };
 
   const startEditingAssistantAutomation = (job: AssistantCronJob) => {
@@ -258,17 +268,44 @@ export function SettingsScreen({
     setAssistantCronDraftScheduleType(job.schedule.type);
     setAssistantCronDraftTime(job.schedule.time || "09:00");
     setAssistantCronDraftEverySeconds(String(job.schedule.everySeconds || 3600));
+    setAssistantCronDraftMode(job.task.mode || "standard");
     setAssistantCronDraftPrompt(job.task.prompt);
+    setAssistantCronDraftLookbackHours(String(job.task.lookbackHours || 24));
+    setAssistantCronDraftHistoryLimit(String(job.task.historyLimit || 40));
+    setAssistantCronDraftCaptureLimit(String(job.task.captureLimit || 20));
+    setAssistantCronDraftDeliverMode(
+      job.task.deliverMode || ((job.task.mode || "standard") === "dream" ? "silent" : "chat_handoff"),
+    );
   };
 
   const buildAssistantAutomationPayload = () => {
     const title = assistantCronDraftTitle.trim();
     const prompt = assistantCronDraftPrompt.trim();
+    const mode = assistantCronDraftMode;
     if (!title) {
       throw new Error("任务标题不能为空");
     }
     if (!prompt) {
       throw new Error("任务提示词不能为空");
+    }
+    const task = {
+      prompt,
+      mode,
+      lookbackHours: Number(assistantCronDraftLookbackHours),
+      historyLimit: Number(assistantCronDraftHistoryLimit),
+      captureLimit: Number(assistantCronDraftCaptureLimit),
+      deliverMode: assistantCronDraftDeliverMode,
+    } as const;
+    if (mode === "dream") {
+      if (!Number.isInteger(task.lookbackHours) || task.lookbackHours <= 0) {
+        throw new Error("回看小时数必须是正整数");
+      }
+      if (!Number.isInteger(task.historyLimit) || task.historyLimit <= 0) {
+        throw new Error("聊天历史条数必须是正整数");
+      }
+      if (!Number.isInteger(task.captureLimit) || task.captureLimit <= 0) {
+        throw new Error("capture 条数必须是正整数");
+      }
     }
     if (assistantCronDraftScheduleType === "daily") {
       const time = assistantCronDraftTime.trim();
@@ -283,9 +320,7 @@ export function SettingsScreen({
           timezone: "Asia/Shanghai",
           misfirePolicy: "once" as const,
         },
-        task: {
-          prompt,
-        },
+        task,
         execution: {
           timeoutSeconds: 1800,
         },
@@ -304,9 +339,7 @@ export function SettingsScreen({
         timezone: "Asia/Shanghai",
         misfirePolicy: "skip" as const,
       },
-      task: {
-        prompt,
-      },
+      task,
       execution: {
         timeoutSeconds: 1800,
       },
@@ -693,25 +726,33 @@ export function SettingsScreen({
     setNotice("");
     try {
       const result = await client.runAssistantCronJob(botAlias, job.id);
-      const queuedAt = new Date().toISOString();
       setAssistantCronJobs((prev) => prev.map((item) => (
         item.id === job.id
           ? { ...item, pending: true, pendingRunId: result.runId, lastStatus: result.status }
           : item
       )));
-      dispatchAssistantCronRunEnqueued({
-        botAlias,
-        runId: result.runId,
-        prompt: job.task.prompt,
-        queuedAt,
-      });
+      const taskMode = result.taskMode || job.task.mode || "standard";
+      const deliverMode = result.deliverMode
+        || job.task.deliverMode
+        || (taskMode === "dream" ? "silent" : "chat_handoff");
+      const shouldChatHandoff = taskMode !== "dream" && deliverMode === "chat_handoff";
+      if (shouldChatHandoff) {
+        dispatchAssistantCronRunEnqueued({
+          botAlias,
+          runId: result.runId,
+          prompt: job.task.prompt,
+          queuedAt: new Date().toISOString(),
+        });
+        setNotice(`任务已投递到聊天会话: ${result.runId}`);
+      } else {
+        setNotice(`Dream 任务已入队，将在后台静默执行: ${result.runId}`);
+      }
       try {
         const runs = await client.listAssistantCronRuns(botAlias, job.id, 3);
         setAssistantCronRuns((prev) => ({ ...prev, [job.id]: runs }));
       } catch {
         // ignore refresh failures for mock/local fallback
       }
-      setNotice(`任务已投递到聊天会话: ${result.runId}`);
     } catch (err) {
       setError(getErrorMessage(err, "手动触发 Automation 失败"));
     } finally {
@@ -1193,6 +1234,22 @@ export function SettingsScreen({
                       />
                     </label>
                     <label className="space-y-1">
+                      <span className="text-sm text-[var(--text)]">任务模式</span>
+                      <select
+                        aria-label="任务模式"
+                        value={assistantCronDraftMode}
+                        onChange={(event) => {
+                          const nextMode = event.target.value as "standard" | "dream";
+                          setAssistantCronDraftMode(nextMode);
+                          setAssistantCronDraftDeliverMode(nextMode === "dream" ? "silent" : "chat_handoff");
+                        }}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                      >
+                        <option value="standard">standard</option>
+                        <option value="dream">dream</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
                       <span className="text-sm text-[var(--text)]">调度类型</span>
                       <select
                         aria-label="调度类型"
@@ -1242,6 +1299,61 @@ export function SettingsScreen({
                       placeholder="请检查当前仓库状态并输出简短日报。"
                     />
                   </label>
+
+                  {assistantCronDraftMode === "dream" ? (
+                    <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                      <p className="text-xs text-[var(--muted)]">
+                        Dream 会在后台单轮完成，只会自动写 `.assistant` 受控目录；涉及代码或长期规则变化时只会生成 proposal。
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">回看小时数</span>
+                          <input
+                            aria-label="回看小时数"
+                            type="number"
+                            min={1}
+                            value={assistantCronDraftLookbackHours}
+                            onChange={(event) => setAssistantCronDraftLookbackHours(event.target.value)}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">聊天历史条数</span>
+                          <input
+                            aria-label="聊天历史条数"
+                            type="number"
+                            min={1}
+                            value={assistantCronDraftHistoryLimit}
+                            onChange={(event) => setAssistantCronDraftHistoryLimit(event.target.value)}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">Capture 条数</span>
+                          <input
+                            aria-label="Capture 条数"
+                            type="number"
+                            min={1}
+                            value={assistantCronDraftCaptureLimit}
+                            onChange={(event) => setAssistantCronDraftCaptureLimit(event.target.value)}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">投递方式</span>
+                          <select
+                            aria-label="投递方式"
+                            value={assistantCronDraftDeliverMode}
+                            onChange={(event) => setAssistantCronDraftDeliverMode(event.target.value as "chat_handoff" | "silent")}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                          >
+                            <option value="silent">silent</option>
+                            <option value="chat_handoff">chat_handoff</option>
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {isAssistantCronEditing ? (
                     <div className="flex flex-wrap gap-2">
@@ -1322,10 +1434,12 @@ export function SettingsScreen({
                         </div>
 
                         <div className="grid grid-cols-1 gap-2 text-xs text-[var(--muted)] sm:grid-cols-2">
+                          <p><span className="text-[var(--text)]">模式:</span> {job.task.mode || "standard"}</p>
                           <p><span className="text-[var(--text)]">调度:</span> {cronScheduleText(job)}</p>
                           <p><span className="text-[var(--text)]">下次运行:</span> {job.nextRunAt || "待计算"}</p>
                           <p><span className="text-[var(--text)]">状态:</span> {cronStatusText(job)}</p>
                           <p><span className="text-[var(--text)]">合并次数:</span> {job.coalescedCount}</p>
+                          <p><span className="text-[var(--text)]">投递:</span> {job.task.deliverMode || "chat_handoff"}</p>
                         </div>
 
                         <p className="text-xs text-[var(--muted)]">

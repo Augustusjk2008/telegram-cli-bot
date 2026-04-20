@@ -304,6 +304,8 @@ export type AppUpdateDownloadProgress = {
 
 export type AssistantCronScheduleType = "daily" | "interval";
 export type AssistantCronMisfirePolicy = "skip" | "once";
+export type AssistantCronTaskMode = "standard" | "dream";
+export type AssistantCronDeliverMode = "chat_handoff" | "silent";
 
 export type AssistantCronSchedule = {
   type: AssistantCronScheduleType;
@@ -315,6 +317,11 @@ export type AssistantCronSchedule = {
 
 export type AssistantCronTask = {
   prompt: string;
+  mode?: AssistantCronTaskMode;
+  lookbackHours?: number;
+  historyLimit?: number;
+  captureLimit?: number;
+  deliverMode?: AssistantCronDeliverMode;
 };
 
 export type AssistantCronExecution = {
@@ -374,4 +381,6 @@ export type AssistantCronRun = {
 export type AssistantCronRunRequestResult = {
   runId: string;
   status: string;
+  taskMode?: AssistantCronTaskMode;
+  deliverMode?: AssistantCronDeliverMode;
 };

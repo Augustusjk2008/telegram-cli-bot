@@ -271,6 +271,86 @@ test("manual assistant automation dispatches a chat handoff event", async () => 
   });
 });
 
+test("dream assistant automation stays silent and does not dispatch a chat handoff event", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+  await client.addBot({
+    alias: "assistant1",
+    botMode: "assistant",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\assistant1",
+    avatarName: "bot-default.png",
+  });
+  await client.createAssistantCronJob("assistant1", {
+    id: "daily_dream",
+    enabled: true,
+    title: "晨间 Dream",
+    schedule: {
+      type: "interval",
+      everySeconds: 300,
+      timezone: "Asia/Shanghai",
+      misfirePolicy: "skip",
+    },
+    task: {
+      prompt: "根据近期工作做自我完善",
+      mode: "dream",
+      lookbackHours: 24,
+      historyLimit: 40,
+      captureLimit: 20,
+      deliverMode: "silent",
+    },
+    execution: {
+      timeoutSeconds: 600,
+    },
+  } satisfies CreateAssistantCronJobInput);
+  vi.spyOn(client, "runAssistantCronJob").mockResolvedValue({
+    runId: "run_dream_1",
+    status: "queued",
+    taskMode: "dream",
+    deliverMode: "silent",
+  });
+
+  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
+  dispatchSpy.mockClear();
+
+  await user.click(await screen.findByRole("button", { name: "立即运行 晨间 Dream" }));
+
+  await waitFor(() => {
+    expect(screen.getByText(/Dream 任务已入队，将在后台静默执行/)).toBeInTheDocument();
+  });
+
+  const handoffEvent = dispatchSpy.mock.calls
+    .map(([event]) => event)
+    .find((event) => event instanceof CustomEvent && event.type === "assistant-cron-run-enqueued");
+  expect(handoffEvent).toBeUndefined();
+});
+
+test("settings screen shows dream fields when cron mode switches to dream", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  await client.addBot({
+    alias: "assistant1",
+    botMode: "assistant",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\assistant1",
+    avatarName: "bot-default.png",
+  });
+
+  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
+
+  await user.selectOptions(await screen.findByLabelText("任务模式"), "dream");
+
+  expect(screen.getByLabelText("回看小时数")).toBeInTheDocument();
+  expect(screen.getByLabelText("聊天历史条数")).toBeInTheDocument();
+  expect(screen.getByLabelText("Capture 条数")).toBeInTheDocument();
+  expect(screen.getByLabelText("投递方式")).toHaveValue("silent");
+});
+
 test("main settings show update log modal and restart guidance after download", async () => {
   const user = userEvent.setup();
   const client = new StreamingUpdateClient();

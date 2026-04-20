@@ -824,8 +824,17 @@ export class MockWebBotClient implements WebBotClient {
 
   async createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob> {
     const current = this.getAssistantCronJobs(botAlias);
+    const taskMode = input.task.mode || "standard";
     const job: AssistantCronJob = {
       ...input,
+      task: {
+        prompt: input.task.prompt,
+        mode: taskMode,
+        lookbackHours: input.task.lookbackHours ?? 24,
+        historyLimit: input.task.historyLimit ?? 40,
+        captureLimit: input.task.captureLimit ?? 20,
+        deliverMode: input.task.deliverMode ?? (taskMode === "dream" ? "silent" : "chat_handoff"),
+      },
       nextRunAt: input.schedule.type === "daily"
         ? "2026-04-17T09:00:00+08:00"
         : "2026-04-16T10:00:00+08:00",
@@ -861,6 +870,13 @@ export class MockWebBotClient implements WebBotClient {
       task: {
         ...existing.task,
         ...(input.task || {}),
+        mode: input.task?.mode || existing.task.mode || "standard",
+        lookbackHours: input.task?.lookbackHours ?? existing.task.lookbackHours ?? 24,
+        historyLimit: input.task?.historyLimit ?? existing.task.historyLimit ?? 40,
+        captureLimit: input.task?.captureLimit ?? existing.task.captureLimit ?? 20,
+        deliverMode: input.task?.deliverMode
+          ?? existing.task.deliverMode
+          ?? ((input.task?.mode || existing.task.mode) === "dream" ? "silent" : "chat_handoff"),
       },
       execution: {
         ...existing.execution,
@@ -883,6 +899,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult> {
+    const job = this.getAssistantCronJobs(botAlias).find((item) => item.id === jobId);
     const runId = `run_${Date.now()}`;
     const runs = this.assistantCronRuns.get(this.cronRunKey(botAlias, jobId)) || [];
     this.assistantCronRuns.set(this.cronRunKey(botAlias, jobId), [
@@ -915,6 +932,8 @@ export class MockWebBotClient implements WebBotClient {
     return {
       runId,
       status: "queued",
+      taskMode: job?.task.mode || "standard",
+      deliverMode: job?.task.deliverMode || "chat_handoff",
     };
   }
 

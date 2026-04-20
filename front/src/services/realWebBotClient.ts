@@ -295,6 +295,11 @@ type RawAssistantCronSchedule = {
 
 type RawAssistantCronTask = {
   prompt: string;
+  mode?: "standard" | "dream";
+  lookback_hours?: number;
+  history_limit?: number;
+  capture_limit?: number;
+  deliver_mode?: "chat_handoff" | "silent";
 };
 
 type RawAssistantCronExecution = {
@@ -754,6 +759,11 @@ function mapAssistantCronJob(raw: RawAssistantCronJob): AssistantCronJob {
     },
     task: {
       prompt: raw.task.prompt || "",
+      mode: raw.task.mode || "standard",
+      lookbackHours: Number(raw.task.lookback_hours || 24),
+      historyLimit: Number(raw.task.history_limit || 40),
+      captureLimit: Number(raw.task.capture_limit || 20),
+      deliverMode: raw.task.deliver_mode || (raw.task.mode === "dream" ? "silent" : "chat_handoff"),
     },
     execution: {
       timeoutSeconds: Number(raw.execution.timeout_seconds || 1800),
@@ -1582,6 +1592,11 @@ export class RealWebBotClient implements WebBotClient {
           },
           task: {
             prompt: input.task.prompt,
+            mode: input.task.mode || "standard",
+            lookback_hours: input.task.lookbackHours,
+            history_limit: input.task.historyLimit,
+            capture_limit: input.task.captureLimit,
+            deliver_mode: input.task.deliverMode,
           },
           execution: {
             timeout_seconds: input.execution.timeoutSeconds,
@@ -1621,6 +1636,17 @@ export class RealWebBotClient implements WebBotClient {
           ...(input.task ? {
             task: {
               ...(input.task.prompt ? { prompt: input.task.prompt } : {}),
+              ...(input.task.mode ? { mode: input.task.mode } : {}),
+              ...(typeof input.task.lookbackHours === "number"
+                ? { lookback_hours: input.task.lookbackHours }
+                : {}),
+              ...(typeof input.task.historyLimit === "number"
+                ? { history_limit: input.task.historyLimit }
+                : {}),
+              ...(typeof input.task.captureLimit === "number"
+                ? { capture_limit: input.task.captureLimit }
+                : {}),
+              ...(input.task.deliverMode ? { deliver_mode: input.task.deliverMode } : {}),
             },
           } : {}),
           ...(input.execution ? {
@@ -1646,7 +1672,12 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult> {
-    const data = await this.requestJson<{ run_id: string; status: string }>(
+    const data = await this.requestJson<{
+      run_id: string;
+      status: string;
+      task_mode?: "standard" | "dream";
+      deliver_mode?: "chat_handoff" | "silent";
+    }>(
       `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs/${encodeURIComponent(jobId)}/run`,
       {
         method: "POST",
@@ -1655,6 +1686,8 @@ export class RealWebBotClient implements WebBotClient {
     return {
       runId: data.run_id,
       status: data.status,
+      taskMode: data.task_mode,
+      deliverMode: data.deliver_mode,
     };
   }
 

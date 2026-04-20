@@ -23,6 +23,11 @@ export async function loadFileEditorExtensions(path: string): Promise<EditorExte
     return [python()];
   }
 
+  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalizedPath)) {
+    const { cpp } = await import("@codemirror/lang-cpp");
+    return [cpp()];
+  }
+
   if (/\.(html|htm)$/.test(normalizedPath)) {
     const { html } = await import("@codemirror/lang-html");
     return [html()];
