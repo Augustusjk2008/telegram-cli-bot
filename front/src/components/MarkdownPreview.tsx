@@ -1,6 +1,9 @@
-import type { ComponentPropsWithoutRef } from "react";
+import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useId, useState } from "react";
+import "katex/dist/katex.min.css";
+import rehypeKatex from "rehype-katex";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 
 type Props = {
@@ -19,7 +22,110 @@ function safeUrlTransform(url: string) {
   return isSafeMarkdownHref(url) ? url : "";
 }
 
-function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<"code">) {
+let mermaidInitialized = false;
+
+function stringifyCodeChildren(children: ReactNode) {
+  if (Array.isArray(children)) {
+    return children.map((item) => stringifyCodeChildren(item)).join("");
+  }
+  return typeof children === "string" ? children : String(children ?? "");
+}
+
+function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState("");
+  const diagramId = `mermaid-${useId().replace(/:/g, "")}`;
+
+  useEffect(() => {
+    let active = true;
+
+    void import("mermaid")
+      .then(({ default: mermaid }) => {
+        if (!mermaidInitialized) {
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: "neutral",
+            suppressErrorRendering: true,
+          });
+          mermaidInitialized = true;
+        }
+
+        return mermaid.render(diagramId, code);
+      })
+      .then((result) => {
+        if (!active) {
+          return;
+        }
+        setSvg(result.svg);
+        setError("");
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setSvg("");
+        setError("Mermaid 图表渲染失败，已回退为源码。");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [code, diagramId]);
+
+  if (error) {
+    return (
+      <div
+        data-mermaid-wrapper="true"
+        className={isChat
+          ? "rounded-xl border border-dashed border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          : "my-4 rounded-xl border border-dashed border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"}
+      >
+        <div className="mb-2 font-medium">{error}</div>
+        <pre className="min-w-0 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-[13px] leading-6">
+          {code}
+        </pre>
+      </div>
+    );
+  }
+
+  if (!svg) {
+    return (
+      <div
+        data-mermaid-wrapper="true"
+        className={isChat
+          ? "rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"
+          : "my-4 rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"}
+      >
+        正在渲染 Mermaid 图表...
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-mermaid-wrapper="true"
+      data-mermaid-diagram="true"
+      aria-label="Mermaid 图表"
+      className={isChat
+        ? "overflow-auto rounded-xl border border-[var(--border)] bg-white px-3 py-3 [&_svg]:h-auto [&_svg]:max-w-full"
+        : "my-4 overflow-auto rounded-xl border border-[var(--border)] bg-white px-3 py-3 [&_svg]:h-auto [&_svg]:max-w-full"}
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+
+type MarkdownCodeProps = ComponentPropsWithoutRef<"code"> & {
+  node?: unknown;
+  isChat: boolean;
+};
+
+function MarkdownCode({ className, children, node: _node, isChat, ...props }: MarkdownCodeProps) {
+  const codeText = stringifyCodeChildren(children).replace(/\n$/, "");
+  if (className?.includes("language-mermaid")) {
+    return <MermaidDiagram code={codeText} isChat={isChat} />;
+  }
+
   const hasLanguageClass = Boolean(className && className.includes("language-"));
   if (hasLanguageClass) {
     return (
@@ -42,6 +148,27 @@ function InlineCode({ className, children, ...props }: ComponentPropsWithoutRef<
   );
 }
 
+function MarkdownPre({
+  children,
+  isChat,
+}: {
+  children: ReactNode;
+  isChat: boolean;
+}) {
+  const childNodes = Children.toArray(children);
+  const firstChild = childNodes[0];
+
+  if (
+    childNodes.length === 1
+    && isValidElement(firstChild)
+    && Boolean(firstChild.props["data-mermaid-wrapper"])
+  ) {
+    return <>{firstChild}</>;
+  }
+
+  return <pre className={isChat ? "min-w-0 overflow-x-auto" : "my-4 min-w-0 overflow-x-auto"}>{children}</pre>;
+}
+
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
@@ -54,7 +181,8 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
   return (
     <div className={containerClassName}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={{
           h1: ({ children }) => <h1 className={isChat ? "break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h1>,
@@ -94,8 +222,12 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
               </a>
             );
           },
-          pre: ({ children }) => <pre className={isChat ? "min-w-0 overflow-x-auto" : "my-4 min-w-0 overflow-x-auto"}>{children}</pre>,
-          code: InlineCode,
+          pre: ({ children }) => <MarkdownPre isChat={isChat}>{children}</MarkdownPre>,
+          code: ({ node, className, children, ...props }) => (
+            <MarkdownCode node={node} className={className} isChat={isChat} {...props}>
+              {children}
+            </MarkdownCode>
+          ),
           table: ({ children }) => (
             <div className={isChat ? "overflow-x-auto" : "my-5 overflow-x-auto"}>
               <table className="min-w-full border-collapse overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">

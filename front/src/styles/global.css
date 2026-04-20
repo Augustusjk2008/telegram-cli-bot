@@ -43,14 +43,14 @@ html, body, #root {
 }
 
 .terminal-shell {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
   min-height: 100%;
 }
 
 .terminal-shell .xterm {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .terminal-shell .xterm .xterm-viewport {
@@ -62,6 +62,6 @@ html, body, #root {
 }
 
 .terminal-shell .xterm .xterm-screen {
-  width: max-content;
+  width: 100%;
   min-width: 100%;
 }

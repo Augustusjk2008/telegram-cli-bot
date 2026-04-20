@@ -46,15 +46,19 @@ export function EditorPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-strong)] px-2 py-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
           {tabs.map((tab) => {
             const isActive = activeTabPath === tab.path;
             return (
               <div
                 key={tab.path}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenuPath((current) => current === tab.path ? "" : tab.path);
+                }}
                 className={clsx(
-                  "relative flex shrink-0 items-center gap-1 rounded-lg border px-3 py-1.5",
+                  "relative flex shrink-0 items-center gap-1 border px-2.5 py-1.5",
                   isActive
                     ? "border-[var(--accent-outline)] bg-[var(--accent-soft)]"
                     : "border-[var(--border)] bg-[var(--surface)]",
@@ -64,8 +68,18 @@ export function EditorPane({
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  onClick={() => void onActivateTab(tab.path)}
-                  className="text-sm text-[var(--text)]"
+                  title={tab.path}
+                  onClick={() => {
+                    setMenuPath("");
+                    void onActivateTab(tab.path);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                      event.preventDefault();
+                      setMenuPath(tab.path);
+                    }
+                  }}
+                  className="max-w-52 truncate text-sm text-[var(--text)]"
                 >
                   {tab.basename}
                 </button>
@@ -75,14 +89,6 @@ export function EditorPane({
                     className="h-2 w-2 rounded-full bg-[var(--accent)]"
                   />
                 ) : null}
-                <button
-                  type="button"
-                  aria-label={`标签页操作 ${tab.basename}`}
-                  onClick={() => setMenuPath((current) => current === tab.path ? "" : tab.path)}
-                  className="rounded px-1 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-                >
-                  ⋯
-                </button>
                 <button
                   type="button"
                   aria-label={`关闭 ${tab.path}`}
@@ -161,14 +167,6 @@ export function EditorPane({
         >
           {focused ? "恢复" : "聚焦"}
         </button>
-      </div>
-
-      <div
-        data-testid="workbench-context-row"
-        className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]"
-      >
-        <span className="truncate font-mono">{activeTab.path}</span>
-        <span>{activeTab.dirty ? "未保存" : activeTab.missing ? "文件不存在" : "已保存"}</span>
       </div>
 
       {activeTab.statusText ? (

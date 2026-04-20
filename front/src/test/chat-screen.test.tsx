@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -232,6 +232,86 @@ test("shows a user message after sending text", async () => {
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
   expect(await screen.findByText("修一下这个 bug")).toBeInTheDocument();
   expect(await screen.findByText("用时 3 秒")).toBeInTheDocument();
+});
+
+test("uploads chat attachments and appends absolute paths to the sent message", async () => {
+  const user = userEvent.setup();
+  const sendSpy = vi.fn(
+    async (_botAlias: string, _text: string, onChunk: (chunk: string) => void) => {
+      onChunk("已收到");
+      return {
+        id: "assistant-attachment",
+        role: "assistant" as const,
+        text: "已收到",
+        createdAt: new Date().toISOString(),
+        state: "done" as const,
+      };
+    },
+  );
+  const uploadChatAttachment = vi.fn(async (_botAlias: string, file: File) => ({
+    filename: file.name,
+    savedPath: `C:\\Users\\demo\\.tcb\\chat-attachments\\main\\1001\\${file.name}`,
+    size: file.size,
+  }));
+  const client = createClient({
+    sendMessage: sendSpy as never,
+    uploadChatAttachment: uploadChatAttachment as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  const attachmentInput = screen.getByTestId("chat-attachment-input");
+  const file = new File(["hello"], "report.txt", { type: "text/plain" });
+  await user.upload(attachmentInput, file);
+
+  await waitFor(() => {
+    expect(uploadChatAttachment).toHaveBeenCalledTimes(1);
+  });
+  expect(await screen.findByRole("button", { name: "移除附件 report.txt" })).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "请分析这个附件");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => {
+    expect(sendSpy).toHaveBeenCalledWith(
+      "main",
+      "请分析这个附件\n\n附件路径为：C:\\Users\\demo\\.tcb\\chat-attachments\\main\\1001\\report.txt",
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  expect(await screen.findByText((content) => (
+    content.includes("附件路径为：")
+    && content.includes("report.txt")
+  ))).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "移除附件 report.txt" })).not.toBeInTheDocument();
+});
+
+test("renders avatar and sender name together in the message header row", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "assistant reply",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} embedded />);
+
+  expect(await screen.findByText("assistant reply")).toBeInTheDocument();
+  const assistantAvatar = screen.getByRole("img", { name: "main 头像" });
+  const metaRow = assistantAvatar.parentElement;
+  expect(metaRow).not.toBeNull();
+  expect(within(metaRow as HTMLElement).getByText("main")).toBeInTheDocument();
+  expect(metaRow?.nextElementSibling).not.toBeNull();
+  expect(metaRow?.nextElementSibling as HTMLElement).toContainElement(screen.getByText("assistant reply"));
 });
 
 test("submits the chat composer when pressing Shift+Enter", async () => {
@@ -1129,6 +1209,82 @@ test("keeps showing a visible streaming badge while preview text is updating", a
   expect(screen.getByText("正在输出")).toBeInTheDocument();
 });
 
+test("assistant send does not let an old idle poll replace the finishing reply with a stale streaming row", async () => {
+  vi.useFakeTimers();
+  let overviewCalls = 0;
+  const listMessages = vi
+    .fn<() => Promise<ChatMessage[]>>()
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      {
+        id: "user-server-1",
+        role: "user",
+        text: "继续",
+        createdAt: "2026-04-20T12:00:00",
+        state: "done",
+      },
+      {
+        id: "assistant-server-1",
+        role: "assistant",
+        text: "轮询中的旧预览",
+        createdAt: "2026-04-20T12:00:01",
+        state: "streaming",
+      },
+    ]);
+  const client = createClient({
+    getBotOverview: async () => {
+      overviewCalls += 1;
+      return {
+        alias: "assistant1",
+        cliType: "codex",
+        status: overviewCalls === 1 ? "running" : "busy",
+        workingDir: "C:\\workspace",
+        botMode: "assistant",
+        isProcessing: overviewCalls > 1,
+      };
+    },
+    listMessages: listMessages as never,
+    sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void) =>
+      new Promise<ChatMessage>((resolve) => {
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-done",
+            role: "assistant",
+            text: "真正完成的回复",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 6000);
+      }),
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(screen.getByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "继续" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5100);
+  });
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(screen.getByText("真正完成的回复")).toBeInTheDocument();
+  expect(screen.queryByText("轮询中的旧预览")).not.toBeInTheDocument();
+  expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
+  expect(screen.queryByText(/已等待 \d+ 秒/)).not.toBeInTheDocument();
+});
+
 test("shows reset kill and system-function actions for non-main bots", async () => {
   const client = createClient({
     listSystemScripts: async () => [{
@@ -1470,13 +1626,13 @@ test("renders sender names timestamps avatars and avoids duplicating elapsed tex
   expect(screen.getAllByText("main").length).toBeGreaterThan(0);
   expect(screen.getByText("09:08")).toBeInTheDocument();
   expect(screen.getByText("09:09")).toBeInTheDocument();
-  expect(screen.getAllByRole("img", { name: "你 头像" }).length).toBeGreaterThan(0);
-  const mainAvatars = screen.getAllByRole("img", { name: "main 头像" });
-  expect(mainAvatars.length).toBeGreaterThan(0);
-  const desktopMainAvatar = mainAvatars.find((avatar) =>
-    avatar.parentElement?.className.includes("hidden shrink-0 sm:flex items-start"),
+  const userAvatar = screen.getAllByRole("img", { name: "你 头像" })[0];
+  const mainAvatar = screen.getAllByRole("img", { name: "main 头像" }).find((avatar) =>
+    avatar.parentElement?.textContent?.includes("09:09"),
   );
-  expect(desktopMainAvatar?.parentElement).toHaveClass("items-start");
+  expect(userAvatar).toBeInTheDocument();
+  expect(mainAvatar).toBeDefined();
+  expect(within(mainAvatar?.parentElement as HTMLElement).getByText("main")).toBeInTheDocument();
 
   expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
   expect(screen.queryByText("用时 5 秒")).not.toBeInTheDocument();
@@ -1533,26 +1689,22 @@ test("uses inline mobile avatars and only shows the first avatar in consecutive 
   expect(await screen.findByText("第一条助手消息")).toBeInTheDocument();
 
   const assistantAvatars = screen.getAllByRole("img", { name: "main 头像" });
-  const inlineAssistantAvatars = assistantAvatars.filter((avatar) =>
-    avatar.parentElement?.className.includes("sm:hidden"),
-  );
-  const desktopAssistantAvatars = assistantAvatars.filter((avatar) =>
-    avatar.parentElement?.className.includes("hidden shrink-0 sm:flex"),
-  );
-
-  expect(inlineAssistantAvatars).toHaveLength(1);
-  expect(desktopAssistantAvatars).toHaveLength(2);
-
   const userAvatars = screen.getAllByRole("img", { name: "你 头像" });
-  const inlineUserAvatars = userAvatars.filter((avatar) =>
-    avatar.parentElement?.className.includes("sm:hidden"),
-  );
-  const desktopUserAvatars = userAvatars.filter((avatar) =>
-    avatar.parentElement?.className.includes("hidden shrink-0 sm:flex"),
-  );
 
-  expect(inlineUserAvatars).toHaveLength(1);
-  expect(desktopUserAvatars).toHaveLength(2);
+  expect(assistantAvatars).toHaveLength(3);
+  expect(userAvatars).toHaveLength(2);
+  expect(
+    assistantAvatars.some((avatar) => avatar.parentElement?.textContent?.includes("09:09")),
+  ).toBe(true);
+  expect(
+    assistantAvatars.some((avatar) => avatar.parentElement?.textContent?.includes("09:10")),
+  ).toBe(true);
+  expect(
+    userAvatars.some((avatar) => avatar.parentElement?.textContent?.includes("09:11")),
+  ).toBe(true);
+  expect(
+    userAvatars.some((avatar) => avatar.parentElement?.textContent?.includes("09:12")),
+  ).toBe(true);
 });
 
 test("assistant chat polls while idle and picks up scheduled cron runs", async () => {

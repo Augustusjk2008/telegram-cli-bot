@@ -215,10 +215,16 @@ export function TerminalScreen({
       (scrollTarget.style as CSSStyleDeclaration & { webkitOverflowScrolling?: string }).webkitOverflowScrolling = "touch";
     }
 
+    const xtermRoot = viewport.querySelector(".xterm");
+    if (xtermRoot instanceof HTMLElement) {
+      xtermRoot.style.width = "100%";
+      xtermRoot.style.minWidth = "0";
+    }
+
     const xtermScreen = viewport.querySelector(".xterm-screen");
     if (xtermScreen instanceof HTMLElement) {
       xtermScreen.style.minWidth = "100%";
-      xtermScreen.style.width = "max-content";
+      xtermScreen.style.width = "100%";
     }
   }
 
@@ -562,7 +568,7 @@ export function TerminalScreen({
             }}
             className="h-full"
           >
-            <div ref={containerRef} className="terminal-shell h-full min-h-full min-w-full px-3 py-2" />
+            <div ref={containerRef} className="terminal-shell h-full w-full min-h-full min-w-0 px-3 py-2" />
           </div>
         )}
         {!isFollowing ? (

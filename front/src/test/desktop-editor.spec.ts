@@ -88,7 +88,7 @@ test("desktop file tree opens saved file content on the first click", async ({ p
 
   await page.keyboard.insertText("reopen-once-line-1\nreopen-once-line-2");
   await page.keyboard.press("Control+S");
-  await expect(page.getByTestId("workbench-context-row").getByText("已保存")).toBeVisible();
+  await expect(page.getByTestId("desktop-workbench-statusbar").getByText("已保存")).toBeVisible();
 
   await page.getByRole("button", { name: "关闭 reopen-once.txt" }).click();
   await expect(page.getByText("从左侧文件树打开一个文件开始编辑")).toBeVisible();
@@ -96,4 +96,101 @@ test("desktop file tree opens saved file content on the first click", async ({ p
   await page.getByRole("button", { name: "打开 reopen-once.txt" }).click();
   await expect(page.getByText("reopen-once-line-1")).toBeVisible();
   await expect(page.getByText("reopen-once-line-2")).toBeVisible();
+});
+
+test("desktop editor remounts codemirror when switching between file tabs", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "新建文件", exact: true }).click();
+  await page.getByLabel("文件名").fill("first-tab.txt");
+  await page.getByRole("button", { name: "创建" }).click();
+  await page.locator(".cm-editor").waitFor();
+
+  const firstToken = await page.evaluate(() => {
+    const editor = document.querySelector(".cm-editor");
+    if (!(editor instanceof HTMLElement)) {
+      return null;
+    }
+    if (!editor.dataset.testInstanceToken) {
+      editor.dataset.testInstanceToken = crypto.randomUUID();
+    }
+    return editor.dataset.testInstanceToken;
+  });
+
+  await page.getByRole("button", { name: "新建文件", exact: true }).click();
+  await page.getByLabel("文件名").fill("second-tab.txt");
+  await page.getByRole("button", { name: "创建" }).click();
+  await page.locator(".cm-editor").waitFor();
+
+  const secondToken = await page.evaluate(() => {
+    const editor = document.querySelector(".cm-editor");
+    if (!(editor instanceof HTMLElement)) {
+      return null;
+    }
+    if (!editor.dataset.testInstanceToken) {
+      editor.dataset.testInstanceToken = crypto.randomUUID();
+    }
+    return editor.dataset.testInstanceToken;
+  });
+
+  expect(firstToken).not.toBeNull();
+  expect(secondToken).not.toBeNull();
+  expect(secondToken).not.toBe(firstToken);
+
+  await page.getByRole("tab", { name: /first-tab\.txt/ }).click();
+
+  const switchedBackToken = await page.evaluate(() => {
+    const editor = document.querySelector(".cm-editor");
+    if (!(editor instanceof HTMLElement)) {
+      return null;
+    }
+    if (!editor.dataset.testInstanceToken) {
+      editor.dataset.testInstanceToken = crypto.randomUUID();
+    }
+    return editor.dataset.testInstanceToken;
+  });
+
+  expect(switchedBackToken).not.toBeNull();
+  expect(switchedBackToken).not.toBe(secondToken);
+});
+
+test("desktop editor keeps insertion positions correct after opening and switching multiple tabs", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "新建文件", exact: true }).click();
+  await page.getByLabel("文件名").fill("cursor-first.txt");
+  await page.getByRole("button", { name: "创建" }).click();
+  await page.locator(".cm-editor").waitFor();
+  await page.keyboard.insertText("alpha");
+
+  await page.getByRole("button", { name: "新建文件", exact: true }).click();
+  await page.getByLabel("文件名").fill("cursor-second.txt");
+  await page.getByRole("button", { name: "创建" }).click();
+  await page.locator(".cm-editor").waitFor();
+  await page.keyboard.insertText("beta");
+
+  await page.getByRole("tab", { name: /cursor-first\.txt/ }).click();
+  await page.locator(".cm-editor").waitFor();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText("-one");
+
+  await page.getByRole("tab", { name: /cursor-second\.txt/ }).click();
+  await page.locator(".cm-editor").waitFor();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText("-two");
+
+  const firstText = await page.evaluate(() => {
+    const editor = document.querySelector(".cm-editor");
+    return editor?.textContent || "";
+  });
+  expect(firstText).toContain("beta-two");
+
+  await page.getByRole("tab", { name: /cursor-first\.txt/ }).click();
+  await page.locator(".cm-editor").waitFor();
+
+  const secondText = await page.evaluate(() => {
+    const editor = document.querySelector(".cm-editor");
+    return editor?.textContent || "";
+  });
+  expect(secondText).toContain("alpha-one");
 });

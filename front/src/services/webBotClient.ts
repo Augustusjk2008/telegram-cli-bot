@@ -24,6 +24,7 @@ import type {
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  ChatAttachmentUploadResult,
   PublicHostInfo,
   SessionState,
   SystemScript,
@@ -56,6 +57,7 @@ export interface WebBotClient {
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
+  uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string): Promise<void>;
   resetSession(botAlias: string): Promise<void>;

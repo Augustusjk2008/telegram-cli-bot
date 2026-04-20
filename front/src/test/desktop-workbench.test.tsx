@@ -305,7 +305,7 @@ test("desktop workbench clamps invalid stored pane sizes and restores them after
 
   await waitFor(() => {
     expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
-      gridTemplateColumns: "420px 8px minmax(0, 1fr) 8px 260px",
+      gridTemplateColumns: "440px 8px minmax(0, 1fr) 8px 260px",
     });
   });
   expect(screen.getByTestId("desktop-workbench-center-rows")).toHaveStyle({
@@ -319,13 +319,13 @@ test("desktop workbench clamps invalid stored pane sizes and restores them after
 
   await user.click(screen.getByRole("button", { name: "展开侧边栏" }));
   expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
-    gridTemplateColumns: "420px 8px minmax(0, 1fr) 8px 260px",
+    gridTemplateColumns: "440px 8px minmax(0, 1fr) 8px 260px",
   });
 
   expect(screen.getByTestId("desktop-pane-files")).not.toHaveClass("rounded-2xl");
 });
 
-test("desktop preview dialog follows the editor pane and can be dragged", async () => {
+test("desktop preview dialog defaults to a page-sized maximized window", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
 
@@ -437,10 +437,10 @@ test("desktop preview dialog follows the editor pane and can be dragged", async 
 
   const previewWindow = await screen.findByTestId("desktop-workbench-preview-window");
   expect(previewWindow).toHaveStyle({
-    left: "252px",
-    top: "182px",
-    width: "796px",
-    height: "516px",
+    left: "12px",
+    top: "12px",
+    width: "1576px",
+    height: "1176px",
   });
 
   const dragHandle = screen.getByTestId("desktop-preview-drag-handle");
@@ -449,8 +449,8 @@ test("desktop preview dialog follows the editor pane and can be dragged", async 
   fireEvent.pointerUp(window, { pointerId: 1, clientX: 380, clientY: 280 });
 
   expect(previewWindow).toHaveStyle({
-    left: "312px",
-    top: "242px",
+    left: "12px",
+    top: "12px",
   });
 });
 

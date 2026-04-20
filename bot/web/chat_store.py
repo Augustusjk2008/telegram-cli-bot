@@ -6,10 +6,20 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
+from bot.runtime_paths import (
+    get_chat_history_db_path,
+    get_chat_workspace_key,
+    get_chat_workspace_metadata_path,
+    get_legacy_project_chat_db_path,
+    normalize_workspace_dir,
+)
+
 LOCAL_HISTORY_BACKEND = "local_v1"
-LOCAL_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
+LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
+_STORE_PREPARE_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -31,17 +41,83 @@ def _parse_json(value: str | None) -> Any:
 
 
 class ChatStore:
-    def __init__(self, repo_root: Path | str) -> None:
-        self.repo_root = Path(repo_root)
-        self.db_path = self.repo_root / LOCAL_CHAT_DB_RELATIVE_PATH
+    def __init__(self, workspace_dir: Path | str) -> None:
+        self.workspace_dir = Path(workspace_dir)
+        self.workspace_key = get_chat_workspace_key(self.workspace_dir)
+        self.db_path = get_chat_history_db_path(self.workspace_dir)
+        self.metadata_path = get_chat_workspace_metadata_path(self.workspace_dir)
+        self.legacy_db_path = get_legacy_project_chat_db_path(self.workspace_dir)
 
-    def _connect(self) -> sqlite3.Connection:
+    def _db_exists(self) -> bool:
+        return self.db_path.is_file()
+
+    def _write_workspace_metadata(
+        self,
+        *,
+        migrated_from_legacy_project_store: bool,
+        legacy_project_db_path: Path | None = None,
+    ) -> None:
+        now = _utc_now()
+        existing: dict[str, Any] = {}
+        if self.metadata_path.is_file():
+            existing = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+        payload = {
+            "workspace_key": self.workspace_key,
+            "working_dir": str(self.workspace_dir),
+            "normalized_working_dir": normalize_workspace_dir(self.workspace_dir),
+            "created_at": existing.get("created_at") or now,
+            "last_accessed_at": now,
+            "store_backend": LOCAL_HISTORY_BACKEND,
+            "migrated_from_legacy_project_store": bool(
+                existing.get("migrated_from_legacy_project_store")
+            )
+            or migrated_from_legacy_project_store,
+            "legacy_project_db_path": str(legacy_project_db_path or existing.get("legacy_project_db_path") or ""),
+            "migration_completed_at": (
+                now if migrated_from_legacy_project_store else existing.get("migration_completed_at")
+            ),
+        }
+        self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        self.metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _migrate_legacy_store(self) -> None:
+        if self._db_exists() or not self.legacy_db_path.is_file():
+            return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.legacy_db_path) as source, sqlite3.connect(self.db_path) as target:
+            source.backup(target)
+        self._write_workspace_metadata(
+            migrated_from_legacy_project_store=True,
+            legacy_project_db_path=self.legacy_db_path,
+        )
+
+    def _prepare_store(self, *, create: bool) -> bool:
+        with _STORE_PREPARE_LOCK:
+            if self._db_exists():
+                self._write_workspace_metadata(migrated_from_legacy_project_store=False)
+                return True
+            if self.legacy_db_path.is_file():
+                self._migrate_legacy_store()
+                return True
+            if not create:
+                return False
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_workspace_metadata(migrated_from_legacy_project_store=False)
+            return True
+
+    def _connect(self, *, create: bool) -> sqlite3.Connection | None:
+        if not self._prepare_store(create=create):
+            return None
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         self._ensure_schema(conn)
+        return conn
+
+    def _connect_for_write(self) -> sqlite3.Connection:
+        conn = self._connect(create=True)
+        assert conn is not None
         return conn
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
@@ -273,7 +349,7 @@ class ChatStore:
         turn_id = f"turn_{uuid.uuid4().hex}"
         user_message_id = f"msg_{uuid.uuid4().hex}"
         assistant_message_id = f"msg_{uuid.uuid4().hex}"
-        with self._connect() as conn:
+        with self._connect_for_write() as conn:
             conversation_id, next_seq = self._get_or_create_conversation(
                 conn,
                 bot_id=bot_id,
@@ -381,7 +457,7 @@ class ChatStore:
 
     def replace_assistant_content(self, handle: ChatTurnHandle, content: str, *, state: str = "streaming") -> None:
         now = _utc_now()
-        with self._connect() as conn:
+        with self._connect_for_write() as conn:
             conn.execute(
                 "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
                 (content, state, now, handle.assistant_message_id),
@@ -406,7 +482,7 @@ class ChatStore:
         now = _utc_now()
         trace_id = f"trace_{uuid.uuid4().hex}"
         payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
-        with self._connect() as conn:
+        with self._connect_for_write() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
                 (turn_id,),
@@ -455,7 +531,7 @@ class ChatStore:
     ) -> dict[str, Any]:
         now = _utc_now()
         message_state = "done" if completion_state == "completed" else "error"
-        with self._connect() as conn:
+        with self._connect_for_write() as conn:
             conn.execute(
                 "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
                 (content, message_state, now, handle.assistant_message_id),
@@ -531,7 +607,10 @@ class ChatStore:
         }
 
     def get_message(self, message_id: str) -> dict[str, Any]:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(message_id)
+        with conn:
             row = conn.execute(
                 """
                 SELECT
@@ -556,7 +635,10 @@ class ChatStore:
             return self._message_from_row(conn, row)
 
     def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+        with conn:
             rows = conn.execute(
                 """
                 SELECT
@@ -593,7 +675,10 @@ class ChatStore:
         session_epoch: int,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+        with conn:
             conversation_id = self._get_active_conversation_id(
                 conn,
                 bot_id=bot_id,
@@ -614,7 +699,10 @@ class ChatStore:
         working_dir: str,
         session_epoch: int,
     ) -> int:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        with conn:
             conversation_id = self._get_active_conversation_id(
                 conn,
                 bot_id=bot_id,
@@ -638,7 +726,10 @@ class ChatStore:
         working_dir: str,
         session_epoch: int,
     ) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with conn:
             conversation_id = self._get_active_conversation_id(
                 conn,
                 bot_id=bot_id,
@@ -681,7 +772,10 @@ class ChatStore:
         working_dir: str,
         session_epoch: int,
     ) -> None:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            return
+        with conn:
             conn.execute(
                 """
                 DELETE FROM conversations
@@ -691,7 +785,10 @@ class ChatStore:
             )
 
     def get_message_trace(self, message_id: str) -> dict[str, Any]:
-        with self._connect() as conn:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(message_id)
+        with conn:
             row = conn.execute(
                 "SELECT turn_id FROM messages WHERE id = ?",
                 (message_id,),

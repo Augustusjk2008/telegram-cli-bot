@@ -1,4 +1,4 @@
-import { type ComponentType, useEffect, useRef, useState } from "react";
+import { type ComponentType, useEffect, useState } from "react";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
 type Props = {
@@ -21,12 +21,42 @@ type CodeMirrorComponent = ComponentType<{
   className?: string;
   height?: string;
   width?: string;
+  theme?: "light" | "dark";
   extensions?: unknown[];
   autoFocus?: boolean;
   editable?: boolean;
   basicSetup?: unknown;
   onChange?: (value: string) => void;
 }>;
+
+function createEditorTheme(
+  EditorView: typeof import("@codemirror/view").EditorView,
+  themeMode: "light" | "dark",
+) {
+  return EditorView.theme({
+    "&": {
+      backgroundColor: "var(--editor-bg)",
+      color: "var(--editor-text)",
+    },
+    ".cm-content": {
+      caretColor: "var(--editor-text)",
+    },
+    ".cm-gutters": {
+      backgroundColor: "var(--editor-gutter-bg)",
+      color: "var(--editor-gutter-text)",
+      borderRight: "1px solid var(--border)",
+    },
+    ".cm-activeLine, .cm-activeLineGutter": {
+      backgroundColor: "var(--accent-soft)",
+    },
+    ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+      backgroundColor: "var(--accent-soft-strong)",
+    },
+    ".cm-cursor, .cm-dropCursor": {
+      borderLeftColor: "var(--editor-text)",
+    },
+  }, { dark: themeMode === "dark" });
+}
 
 export function FileEditorSurface({
   path,
@@ -44,8 +74,10 @@ export function FileEditorSurface({
 }: Props) {
   const [CodeMirrorEditor, setCodeMirrorEditor] = useState<CodeMirrorComponent | null>(null);
   const [editorExtensions, setEditorExtensions] = useState<unknown[]>([]);
-  const editorHostRef = useRef<HTMLDivElement | null>(null);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
+  const codeMirrorTheme = typeof document !== "undefined" && document.documentElement.dataset.theme === "classic"
+    ? "light"
+    : "dark";
 
   useEffect(() => {
     let active = true;
@@ -57,13 +89,17 @@ export function FileEditorSurface({
       };
     }
 
-    void Promise.all([import("@uiw/react-codemirror"), loadFileEditorExtensions(path)])
-      .then(([module, loadedExtensions]) => {
+    void Promise.all([
+      import("@uiw/react-codemirror"),
+      loadFileEditorExtensions(path),
+      import("@codemirror/view"),
+    ])
+      .then(([module, loadedExtensions, viewModule]) => {
         if (!active) {
           return;
         }
         setCodeMirrorEditor(() => module.default as CodeMirrorComponent);
-        setEditorExtensions(loadedExtensions);
+        setEditorExtensions([...loadedExtensions, createEditorTheme(viewModule.EditorView, codeMirrorTheme)]);
       })
       .catch(() => {
         if (!active) {
@@ -76,7 +112,7 @@ export function FileEditorSurface({
     return () => {
       active = false;
     };
-  }, [canUseCodeMirror, path]);
+  }, [canUseCodeMirror, codeMirrorTheme, path]);
 
   useEffect(() => {
     if (!canSave || loading || saving || typeof window === "undefined") {
@@ -95,59 +131,6 @@ export function FileEditorSurface({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [canSave, loading, onSave, saving]);
-
-  useEffect(() => {
-    const host = editorHostRef.current;
-    if (!host) {
-      return;
-    }
-
-    const wrapper = host.firstElementChild instanceof HTMLElement ? host.firstElementChild : null;
-    const editor = host.querySelector<HTMLElement>(".cm-editor");
-    const scroller = host.querySelector<HTMLElement>(".cm-scroller");
-    const gutters = host.querySelector<HTMLElement>(".cm-gutters");
-    const content = host.querySelector<HTMLElement>(".cm-content");
-    if (wrapper) {
-      wrapper.style.height = "100%";
-      wrapper.style.width = "100%";
-      wrapper.style.minHeight = "0";
-      wrapper.style.minWidth = "0";
-      wrapper.style.display = "flex";
-      wrapper.style.overflow = "hidden";
-    }
-    if (editor) {
-      editor.style.height = "100%";
-      editor.style.minHeight = "0";
-      editor.style.width = "100%";
-      editor.style.minWidth = "0";
-      editor.style.display = "flex";
-      editor.style.flex = "1 1 auto";
-      editor.style.flexDirection = "column";
-      editor.style.overflow = "hidden";
-    }
-    if (gutters) {
-      gutters.style.flexShrink = "0";
-    }
-    if (content) {
-      content.style.minWidth = "100%";
-    }
-    if (!scroller) {
-      return;
-    }
-
-    scroller.style.flex = "1 1 auto";
-    scroller.style.minHeight = "0";
-    scroller.style.minWidth = "0";
-    scroller.style.width = "100%";
-    scroller.style.height = "auto";
-    scroller.style.maxHeight = "none";
-    scroller.style.overflow = "auto";
-    scroller.style.touchAction = "pan-x pan-y";
-    scroller.style.overscrollBehavior = "contain";
-    scroller.style.scrollbarGutter = "stable both-edges";
-    (scroller.style as CSSStyleDeclaration & { webkitOverflowScrolling?: string }).webkitOverflowScrolling = "touch";
-  }, [CodeMirrorEditor, path]);
-
   return (
     <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]">
       {!hideHeader ? (
@@ -182,15 +165,17 @@ export function FileEditorSurface({
       <div className="min-h-0 flex-1 overflow-hidden">
         {CodeMirrorEditor ? (
           <div
-            ref={editorHostRef}
+            key={path}
             data-testid="file-editor-host"
-            className="flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--bg)]"
+            className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--editor-bg)] text-[var(--editor-text)]"
           >
             <CodeMirrorEditor
+              key={path}
               value={value}
               className="h-full min-h-0 w-full min-w-0"
               height="100%"
               width="100%"
+              theme={codeMirrorTheme}
               extensions={editorExtensions}
               autoFocus
               editable={!loading && !saving}
@@ -204,6 +189,7 @@ export function FileEditorSurface({
           </div>
         ) : (
           <textarea
+            key={path}
             aria-label="文件内容"
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -214,7 +200,7 @@ export function FileEditorSurface({
               scrollbarGutter: "stable both-edges",
               WebkitOverflowScrolling: "touch",
             }}
-            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--editor-bg)] p-4 font-mono text-sm text-[var(--editor-text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           />
         )}
       </div>

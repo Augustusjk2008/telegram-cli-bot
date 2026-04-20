@@ -23,7 +23,8 @@ function getNodeModulePackageName(id: string) {
 
 function isMarkdownVendor(packageName: string) {
   return (
-    packageName === 'react-markdown'
+    packageName === 'katex'
+    || packageName === 'react-markdown'
     || packageName === 'unified'
     || packageName === 'vfile'
     || packageName === 'bail'
@@ -54,6 +55,31 @@ function isMarkdownVendor(packageName: string) {
     || packageName.startsWith('hast-')
     || packageName.startsWith('unist-')
     || packageName.startsWith('character-entities')
+  );
+}
+
+function isMermaidVendor(packageName: string) {
+  return (
+    packageName === 'mermaid'
+    || packageName === '@braintree/sanitize-url'
+    || packageName === '@iconify/utils'
+    || packageName === '@upsetjs/venn.js'
+    || packageName === '@mermaid-js/parser'
+    || packageName === 'cytoscape'
+    || packageName === 'cytoscape-cose-bilkent'
+    || packageName === 'cytoscape-fcose'
+    || packageName === 'dagre-d3-es'
+    || packageName === 'dayjs'
+    || packageName === 'dompurify'
+    || packageName === 'khroma'
+    || packageName === 'lodash-es'
+    || packageName === 'marked'
+    || packageName === 'roughjs'
+    || packageName === 'stylis'
+    || packageName === 'ts-dedent'
+    || packageName === 'uuid'
+    || packageName === 'd3'
+    || packageName.startsWith('d3-')
   );
 }
 
@@ -100,6 +126,10 @@ function resolveVendorChunk(id: string) {
 
   if (packageName.startsWith('@xterm/')) {
     return 'terminal-vendor';
+  }
+
+  if (isMermaidVendor(packageName)) {
+    return 'mermaid-vendor';
   }
 
   if (isMarkdownVendor(packageName)) {

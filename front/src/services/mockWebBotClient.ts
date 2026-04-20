@@ -8,6 +8,7 @@ import type {
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
+  ChatAttachmentUploadResult,
   ChatMessage,
   ChatStatusUpdate,
   ChatTraceDetails,
@@ -517,6 +518,15 @@ export class MockWebBotClient implements WebBotClient {
     return {
       oldPath: path,
       path: nextName,
+    };
+  }
+
+  async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {
+    const filename = file.name || "attachment.bin";
+    return {
+      filename,
+      savedPath: `C:\\Users\\demo\\.tcb\\chat-attachments\\${botAlias}\\1001\\${filename}`,
+      size: file.size,
     };
   }
 

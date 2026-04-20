@@ -23,12 +23,12 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar }: Pro
   return (
     <div
       className={align === "right"
-        ? "mb-1 flex items-center justify-end gap-2 text-xs text-[var(--muted)]"
-        : "mb-1 flex items-center gap-2 text-xs text-[var(--muted)]"}
+        ? "mb-1 flex items-center justify-end gap-2 text-xs"
+        : "mb-1 flex items-center gap-2 text-xs"}
     >
       {align === "left" ? avatar : null}
-      <span>{name}</span>
-      <span>{formatTime(createdAt)}</span>
+      <span className="max-w-[12rem] truncate text-[var(--text)]">{name}</span>
+      <span className="text-[var(--muted)]">{formatTime(createdAt)}</span>
       {align === "right" ? avatar : null}
     </div>
   );

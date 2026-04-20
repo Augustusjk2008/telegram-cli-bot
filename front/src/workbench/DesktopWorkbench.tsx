@@ -413,7 +413,7 @@ export function DesktopWorkbench({
         <div
           data-testid="desktop-workbench-columns"
           ref={columnsRef}
-          className="grid h-full min-h-0 p-3"
+          className="grid h-full min-h-0 p-0.5"
           style={{ gridTemplateColumns: columnTemplate }}
         >
           <section

@@ -161,6 +161,12 @@ export type FileRenameResult = {
   path: string;
 };
 
+export type ChatAttachmentUploadResult = {
+  filename: string;
+  savedPath: string;
+  size: number;
+};
+
 export type PublicHostInfo = {
   username: string;
   operatingSystem: string;

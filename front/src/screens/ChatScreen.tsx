@@ -12,6 +12,7 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   BotOverview,
+  ChatAttachmentUploadResult,
   ChatMessage,
   ChatMessageMetaInfo,
   ChatTraceEvent,
@@ -45,6 +46,10 @@ type Props = {
   onToggleImmersive?: () => void;
   onUnreadResult?: (botAlias: string) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
+};
+
+type PendingChatAttachment = ChatAttachmentUploadResult & {
+  id: string;
 };
 
 const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
@@ -178,6 +183,18 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
+function buildComposedMessageText(text: string, attachments: PendingChatAttachment[]) {
+  const trimmedText = text.trim();
+  const attachmentBlock = attachments
+    .map((attachment) => `附件路径为：${attachment.savedPath}`)
+    .join("\n");
+
+  if (trimmedText && attachmentBlock) {
+    return `${trimmedText}\n\n${attachmentBlock}`;
+  }
+  return trimmedText || attachmentBlock;
+}
+
 function getMessageClientStateKey(item: ChatMessage) {
   const provider = item.meta?.nativeSource?.provider || "";
   const sessionId = item.meta?.nativeSource?.sessionId || "";
@@ -257,6 +274,42 @@ function updateMessageByIdOrClientStateKey(
   return updateMessageByClientStateKey(items, messageClientStateKey, updater);
 }
 
+function updateLatestAssistantMessage(
+  items: ChatMessage[],
+  preferredMessageId: string,
+  streamStartedAtMs: number,
+  updater: (item: ChatMessage) => ChatMessage,
+) {
+  const updatedById = updateMessageById(items, preferredMessageId, updater);
+  if (updatedById !== items) {
+    return updatedById;
+  }
+
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.role !== "assistant") {
+      continue;
+    }
+
+    const createdAtMs = Date.parse(item.createdAt || "");
+    const isRecentAssistant = !Number.isNaN(createdAtMs) && createdAtMs >= streamStartedAtMs - 1000;
+    if (item.state !== "streaming" && !isRecentAssistant) {
+      continue;
+    }
+
+    const next = updater(item);
+    if (next === item) {
+      return items;
+    }
+
+    const nextItems = items.slice();
+    nextItems[index] = next;
+    return nextItems;
+  }
+
+  return items;
+}
+
 function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
   if (previousItems.length === 0 || nextItems.length === 0) {
     return nextItems;
@@ -286,7 +339,6 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
 
 type ChatMessageRowProps = {
   item: ChatMessage;
-  previousRole: string;
   assistantName: string;
   assistantAvatarName?: string;
   userAvatarName?: string;
@@ -301,7 +353,6 @@ type ChatMessageRowProps = {
 
 const ChatMessageRow = memo(function ChatMessageRow({
   item,
-  previousRole,
   assistantName,
   assistantAvatarName,
   userAvatarName,
@@ -329,83 +380,70 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const hasTracePanel = item.role === "assistant" && traceCount > 0;
   const canCopyAssistantMessage = item.role === "assistant" && item.state !== "streaming" && item.state !== "error";
-  const showInlineMobileAvatar = previousRole !== item.role;
-  const inlineAvatar = showInlineMobileAvatar ? (
-    <span className="sm:hidden">
-      <ChatAvatar
-        alt={`${messageName} 头像`}
-        avatarName={isUser ? userAvatarName : assistantAvatarName}
-        kind={isUser ? "user" : "bot"}
-        size={20}
-      />
-    </span>
-  ) : null;
+  const inlineAvatar = (
+    <ChatAvatar
+      alt={`${messageName} 头像`}
+      avatarName={isUser ? userAvatarName : assistantAvatarName}
+      kind={isUser ? "user" : "bot"}
+      size={24}
+    />
+  );
 
   return (
     <div className={isUser ? "flex justify-end" : "flex justify-start"}>
-      <div className={`flex max-w-[94%] items-start gap-3 sm:max-w-[88%] ${isUser ? "flex-row-reverse" : "flex-row"}`}>
-        <div className="hidden shrink-0 sm:flex items-start">
-          <ChatAvatar
-            alt={`${messageName} 头像`}
-            avatarName={isUser ? userAvatarName : assistantAvatarName}
-            kind={isUser ? "user" : "bot"}
-            size={32}
-          />
+      <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
+        <ChatMessageMeta
+          name={messageName}
+          createdAt={item.createdAt}
+          align={isUser ? "right" : "left"}
+          avatar={inlineAvatar}
+        />
+        <div
+          className={
+            isUser
+              ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
+              : item.state === "error"
+                ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
+                : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
+          }
+        >
+          {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+            <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+          ) : (
+            <ChatPlainTextMessage
+              content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
+              className={isUser ? "text-white" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
+            />
+          )}
         </div>
-        <div className="min-w-0">
-          <ChatMessageMeta
-            name={messageName}
-            createdAt={item.createdAt}
-            align={isUser ? "right" : "left"}
-            avatar={inlineAvatar}
-          />
-          <div
-            className={
-              isUser
-                ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
-                : item.state === "error"
-                  ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
-                  : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
-            }
-          >
-            {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
-              <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
-            ) : (
-              <ChatPlainTextMessage
-                content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
-                className={isUser ? "text-white" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
-              />
-            )}
+        {item.role === "assistant" && item.state === "streaming" ? (
+          <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            <span>正在输出</span>
           </div>
-          {item.role === "assistant" && item.state === "streaming" ? (
-            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              <span>正在输出</span>
-            </div>
-          ) : null}
-          {hasTracePanel ? (
-            <ChatTracePanel
-              messageId={item.id}
-              trace={trace}
-              traceCount={traceCount}
-              toolCallCount={item.meta?.toolCallCount}
-              processCount={item.meta?.processCount}
-              elapsedSeconds={item.elapsedSeconds}
-              expanded={tracePanelExpanded}
-              onToggleExpanded={onToggleTracePanel}
-              isLoading={Boolean(traceLoadState?.loading)}
-              loadError={traceLoadState?.error}
-              onLoadTrace={() => void onLoadTrace(item.id)}
-            />
-          ) : null}
-          {canCopyAssistantMessage && !hasTracePanel ? (
-            <ChatMessageActions
-              elapsedSeconds={item.elapsedSeconds}
-              copyLabel={isCopied ? "已复制" : "复制"}
-              onCopy={() => void onCopyMessage(item)}
-            />
-          ) : null}
-        </div>
+        ) : null}
+        {hasTracePanel ? (
+          <ChatTracePanel
+            messageId={item.id}
+            trace={trace}
+            traceCount={traceCount}
+            toolCallCount={item.meta?.toolCallCount}
+            processCount={item.meta?.processCount}
+            elapsedSeconds={item.elapsedSeconds}
+            expanded={tracePanelExpanded}
+            onToggleExpanded={onToggleTracePanel}
+            isLoading={Boolean(traceLoadState?.loading)}
+            loadError={traceLoadState?.error}
+            onLoadTrace={() => void onLoadTrace(item.id)}
+          />
+        ) : null}
+        {canCopyAssistantMessage && !hasTracePanel ? (
+          <ChatMessageActions
+            elapsedSeconds={item.elapsedSeconds}
+            copyLabel={isCopied ? "已复制" : "复制"}
+            onCopy={() => void onCopyMessage(item)}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -434,6 +472,8 @@ export function ChatScreen({
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill" | "scripts">("");
+  const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [showScripts, setShowScripts] = useState(false);
   const [scripts, setScripts] = useState<SystemScript[]>([]);
   const [scriptError, setScriptError] = useState("");
@@ -463,6 +503,7 @@ export function ChatScreen({
   const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
   const assistantPollTimerRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
+  const assistantSendVersionRef = useRef(0);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -537,8 +578,16 @@ export function ChatScreen({
   }, [stopAssistantPoll]);
 
   pollAssistantStateRef.current = async () => {
+    const sendVersion = assistantSendVersionRef.current;
+    if (streamModeRef.current === "sse") {
+      return;
+    }
+
     try {
       const overview = await client.getBotOverview(botAlias);
+      if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current === "sse") {
+        return;
+      }
 
       setBotOverview(overview);
       setWorkingDir(overview.workingDir || "");
@@ -562,6 +611,9 @@ export function ChatScreen({
       const messages = shouldRefreshMessages
         ? await client.listMessages(botAlias)
         : itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
+      if (sendVersion !== assistantSendVersionRef.current || streamModeRef.current === "sse") {
+        return;
+      }
 
       const refreshedPendingRuns = resolvePendingCronRuns(nextPendingRuns, messages);
       if (refreshedPendingRuns.length !== nextPendingRuns.length) {
@@ -620,6 +672,8 @@ export function ChatScreen({
     setPreviewResult(null);
     setBotOverview(null);
     setPendingCronRuns([]);
+    setPendingAttachments([]);
+    setUploadingAttachments(false);
     setCopiedMessageId("");
     setExpandedTracePanels({});
     setTraceLoadState({});
@@ -839,12 +893,46 @@ export function ChatScreen({
     }
   }, [botAlias, client]);
 
+  const handleAttachFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+
+    setError("");
+    setUploadingAttachments(true);
+    try {
+      const uploadedAttachments: PendingChatAttachment[] = [];
+      for (const file of files) {
+        const uploaded = await client.uploadChatAttachment(botAlias, file);
+        uploadedAttachments.push({
+          ...uploaded,
+          id: `${uploaded.savedPath}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        });
+      }
+      setPendingAttachments((prev) => [...prev, ...uploadedAttachments]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "上传附件失败");
+    } finally {
+      setUploadingAttachments(false);
+    }
+  }, [botAlias, client]);
+
+  const handleRemoveAttachment = useCallback((attachmentId: string) => {
+    setPendingAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
+  }, []);
+
   const handleSend = useCallback(async (text: string) => {
+    const composedText = buildComposedMessageText(text, pendingAttachments);
+    if (!composedText) {
+      return;
+    }
+
     const localStartedAtMs = Date.now();
+    assistantSendVersionRef.current += 1;
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
-      text,
+      text: composedText,
       createdAt: new Date().toISOString(),
       state: "done",
     };
@@ -858,6 +946,8 @@ export function ChatScreen({
     };
 
     setError("");
+    setPendingAttachments([]);
+    stopAssistantPoll();
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
@@ -869,12 +959,12 @@ export function ChatScreen({
       let usingPreviewReplace = false;
       const finalMessage = await client.sendMessage(
         botAlias,
-        text,
+        composedText,
         (chunk) => {
           if (usingPreviewReplace) {
             return;
           }
-          setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+          setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
             text: item.text + chunk,
             state: "streaming",
@@ -886,7 +976,7 @@ export function ChatScreen({
           }
           if (status.previewText) {
             usingPreviewReplace = true;
-            setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+            setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
               ...item,
               text: status.previewText || item.text,
               state: "streaming",
@@ -894,7 +984,12 @@ export function ChatScreen({
           }
         },
         (traceEvent) => {
-          setItems((prev) => updateMessageById(prev, assistantId, (item) => appendTraceToMessage(item, traceEvent)));
+          setItems((prev) => updateLatestAssistantMessage(
+            prev,
+            assistantId,
+            localStartedAtMs,
+            (item) => appendTraceToMessage(item, traceEvent),
+          ));
         },
       );
 
@@ -906,7 +1001,7 @@ export function ChatScreen({
         elapsedSeconds,
       };
 
-      setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+      setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
         ...finalizedMessage,
         meta: mergeMessageMeta(item.meta, finalizedMessage.meta),
       })));
@@ -916,7 +1011,7 @@ export function ChatScreen({
     } catch (err) {
       const message = err instanceof Error ? err.message : "发送失败";
       setError(message);
-      setItems((prev) => updateMessageById(prev, assistantId, (item) => ({
+      setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
         ...item,
         text: message,
         state: "error",
@@ -926,7 +1021,7 @@ export function ChatScreen({
       setStreamMode("");
       setStreamStartedAtMs(null);
     }
-  }, [botAlias, client, onUnreadResult]);
+  }, [botAlias, client, onUnreadResult, pendingAttachments, stopAssistantPoll]);
 
   async function handleResetSession() {
     setActionLoading("reset");
@@ -1096,11 +1191,10 @@ export function ChatScreen({
             暂无消息，开始聊天吧
           </div>
         ) : null}
-        {items.map((item, index) => (
+        {items.map((item) => (
           <ChatMessageRow
             key={item.id}
             item={item}
-            previousRole={index > 0 ? items[index - 1]?.role : ""}
             assistantName={assistantName}
             assistantAvatarName={assistantAvatarName}
             userAvatarName={userAvatarName}
@@ -1144,7 +1238,15 @@ export function ChatScreen({
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
-      <ChatComposer onSend={handleSend} disabled={isStreaming || loading} compact={isImmersive || embedded} />
+      <ChatComposer
+        onSend={handleSend}
+        onAttachFiles={handleAttachFiles}
+        onRemoveAttachment={handleRemoveAttachment}
+        attachments={pendingAttachments}
+        disabled={isStreaming || loading}
+        compact={isImmersive || embedded}
+        uploadingAttachments={uploadingAttachments}
+      />
 
       {previewName ? (
         <FilePreviewDialog

@@ -35,6 +35,10 @@
   --hero-glow: rgba(56, 130, 246, 0.24);
   --code-bg: #121b2c;
   --code-text: #edf5ff;
+  --editor-bg: #0c1526;
+  --editor-text: #eaf4ff;
+  --editor-gutter-bg: #101a2c;
+  --editor-gutter-text: #88a3c5;
   --terminal-bg: #07111d;
   --terminal-text: #dce7f3;
   --terminal-muted: #9fb3ca;
@@ -79,7 +83,11 @@
   --hero-glow: rgba(217, 139, 43, 0.18);
   --code-bg: #243042;
   --code-text: #f4f6fb;
-  --terminal-bg: #132033;
-  --terminal-text: #edf3f8;
-  --terminal-muted: #c0cad7;
+  --editor-bg: #fffaf3;
+  --editor-text: #1d1b18;
+  --editor-gutter-bg: #f2eadf;
+  --editor-gutter-text: #6d675f;
+  --terminal-bg: #fbf7ef;
+  --terminal-text: #1d1b18;
+  --terminal-muted: #6d675f;
 }

@@ -62,7 +62,7 @@ export const MIN_CHAT_WIDTH_PX = 260;
 export const MIN_EDITOR_HEIGHT_PX = 220;
 export const MIN_TERMINAL_HEIGHT_PX = 160;
 export const MIN_CENTER_WIDTH_PX = 480;
-export const WORKBENCH_HORIZONTAL_PADDING_PX = 24;
+export const WORKBENCH_HORIZONTAL_PADDING_PX = 4;
 
 export const DEFAULT_DESKTOP_PANE_STATE: DesktopPaneState = {
   sidebarCollapsed: false,

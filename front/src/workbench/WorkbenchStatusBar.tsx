@@ -60,13 +60,13 @@ export function WorkbenchStatusBar({
   return (
     <footer
       data-testid="desktop-workbench-statusbar"
-      className="flex items-center justify-between gap-3 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-3 py-1.5 text-xs text-[var(--text)]"
+      className="flex items-center justify-between gap-2 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-2 py-1 text-xs text-[var(--text)]"
     >
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2">
         <span className="truncate font-mono">{activeFilePath || "未打开文件"}</span>
         <span>{fileDirty ? "未保存" : "已保存"}</span>
       </div>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 items-center gap-2">
         <span>{terminalStatus.connectionText}</span>
         <span className="max-w-[24rem] truncate font-mono">{terminalStatus.overrideCwd || terminalStatus.currentCwd}</span>
         {branchName ? <span className="font-mono">{branchName}</span> : null}

@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateSet("default", "web")]
     [string]$Mode = "default"
 )

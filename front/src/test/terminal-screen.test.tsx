@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TerminalScreen } from "../screens/TerminalScreen";
+import { getTerminalTheme } from "../theme";
 
 const createTerminalSessionMock = vi.hoisted(() => vi.fn());
 const terminalEventHandlers = vi.hoisted(() => ({
@@ -23,6 +24,18 @@ const terminalSessionMock = vi.hoisted(() => ({
 
 vi.mock("../services/terminalSession", () => ({
   createTerminalSession: createTerminalSessionMock.mockImplementation((_container: HTMLElement, options: { onOpen?: () => void }) => ({
+    ...(() => {
+      const xtermRoot = document.createElement("div");
+      xtermRoot.className = "xterm";
+      const xtermViewport = document.createElement("div");
+      xtermViewport.className = "xterm-viewport";
+      const xtermScreen = document.createElement("div");
+      xtermScreen.className = "xterm-screen";
+      xtermRoot.appendChild(xtermViewport);
+      xtermRoot.appendChild(xtermScreen);
+      _container.appendChild(xtermRoot);
+      return {};
+    })(),
     term: {
       onWriteParsed: vi.fn((handler: () => void) => {
         terminalEventHandlers.onWriteParsed = handler;
@@ -116,10 +129,21 @@ test("uses a smaller terminal font and a viewport that supports bidirectional dr
   );
 
   const viewport = await screen.findByTestId("terminal-viewport");
+  const container = viewport.querySelector(".terminal-shell");
+  const xtermRoot = viewport.querySelector(".xterm");
+  const xtermScreen = viewport.querySelector(".xterm-screen");
 
   expect(viewport).toHaveStyle({
     overflow: "scroll",
     touchAction: "pan-x pan-y",
+  });
+  expect(container).toHaveClass("w-full");
+  expect(container).toHaveClass("min-w-0");
+  await waitFor(() => {
+    expect((xtermRoot as HTMLElement).style.width).toBe("100%");
+    expect((xtermRoot as HTMLElement).style.minWidth).toBe("0px");
+    expect((xtermScreen as HTMLElement).style.width).toBe("100%");
+    expect((xtermScreen as HTMLElement).style.minWidth).toBe("100%");
   });
   expect(createTerminalSessionMock).toHaveBeenCalledWith(
     expect.any(HTMLElement),
@@ -129,6 +153,14 @@ test("uses a smaller terminal font and a viewport that supports bidirectional dr
       themeName: "deep-space",
     }),
   );
+});
+
+test("classic terminal theme uses a light background with dark text", () => {
+  const theme = getTerminalTheme("classic");
+
+  expect(theme.background).toBe("#fbf7ef");
+  expect(theme.foreground).toBe("#1d1b18");
+  expect(theme.cursor).toBe("#0f8c78");
 });
 
 afterEach(() => {
@@ -171,12 +203,14 @@ test("shows a jump-to-latest action after scrolling away from terminal output bo
   );
 
   const viewport = await screen.findByTestId("terminal-viewport");
-  Object.defineProperty(viewport, "scrollTop", { value: 20, writable: true });
-  Object.defineProperty(viewport, "scrollHeight", { value: 500, writable: true });
-  Object.defineProperty(viewport, "clientHeight", { value: 200, writable: true });
+  const scrollTarget = viewport.querySelector(".xterm-viewport") as HTMLDivElement;
+  Object.defineProperty(scrollTarget, "scrollTop", { value: 20, writable: true });
+  Object.defineProperty(scrollTarget, "scrollHeight", { value: 500, writable: true });
+  Object.defineProperty(scrollTarget, "clientHeight", { value: 200, writable: true });
 
   await act(async () => {
-    fireEvent.scroll(viewport);
+    fireEvent.scroll(scrollTarget);
+    terminalEventHandlers.onScroll?.();
   });
 
   expect(await screen.findByRole("button", { name: "回到最新输出" })).toBeInTheDocument();

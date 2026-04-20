@@ -1,42 +1,71 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
+let codemirrorMountCount = 0;
+
 vi.mock("../utils/fileEditorLanguage", () => ({
   loadFileEditorExtensions: vi.fn(async () => []),
 }));
 
-vi.mock("@uiw/react-codemirror", () => ({
-  default: ({
-    className,
-    height,
-    width,
-    autoFocus,
-  }: {
-    className?: string;
-    height?: string;
-    width?: string;
-    autoFocus?: boolean;
-  }) => (
-    <div
-      className={className}
-      data-testid="codemirror-wrapper"
-      data-height={height}
-      data-width={width}
-      data-autofocus={autoFocus ? "true" : "false"}
-    >
-      <div className="cm-editor" data-testid="codemirror-editor">
-        <div className="cm-scroller" data-testid="codemirror-scroller">mock editor</div>
-      </div>
-    </div>
-  ),
-}));
+vi.mock("@uiw/react-codemirror", async () => {
+  const React = await import("react");
+
+  return {
+    default: ({
+      className,
+      height,
+      width,
+      theme,
+      extensions,
+      autoFocus,
+    }: {
+      className?: string;
+      height?: string;
+      width?: string;
+      theme?: "light" | "dark";
+      extensions?: unknown[];
+      autoFocus?: boolean;
+    }) => {
+      const [isReady, setIsReady] = React.useState(false);
+      const [instanceId] = React.useState(() => {
+        codemirrorMountCount += 1;
+        return `instance-${codemirrorMountCount}`;
+      });
+      React.useEffect(() => {
+        setIsReady(true);
+      }, []);
+
+      return (
+        <div
+          className={className}
+          data-testid="codemirror-wrapper"
+          data-height={height}
+          data-width={width}
+          data-theme={theme}
+          data-extension-count={String(extensions?.length ?? 0)}
+          data-autofocus={autoFocus ? "true" : "false"}
+          data-instance-id={instanceId}
+        >
+          {isReady ? (
+            <div className="cm-editor" data-testid="codemirror-editor">
+              <div className="cm-scroller" data-testid="codemirror-scroller">mock editor</div>
+            </div>
+          ) : null}
+        </div>
+      );
+    },
+  };
+});
 
 beforeEach(() => {
+  codemirrorMountCount = 0;
+  document.documentElement.dataset.theme = "deep-space";
   vi.stubGlobal(
     "ResizeObserver",
     class ResizeObserver {
@@ -50,6 +79,36 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+test("editor remounts codemirror when switching files inside the same surface", async () => {
+  const { rerender } = render(
+    <FileEditorSurface
+      path="notes.txt"
+      value="first"
+      onChange={() => {}}
+      onSave={() => {}}
+      onClose={() => {}}
+      hideHeader
+    />,
+  );
+
+  const firstWrapper = await screen.findByTestId("codemirror-wrapper");
+  expect(firstWrapper).toHaveAttribute("data-instance-id", "instance-1");
+
+  rerender(
+    <FileEditorSurface
+      path="README.md"
+      value="second"
+      onChange={() => {}}
+      onSave={() => {}}
+      onClose={() => {}}
+      hideHeader
+    />,
+  );
+
+  const secondWrapper = await screen.findByTestId("codemirror-wrapper");
+  expect(secondWrapper).toHaveAttribute("data-instance-id", "instance-2");
 });
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
@@ -346,35 +405,37 @@ test("editor mounts a full-size codemirror wrapper and autofocuses on open", asy
   expect(wrapper).toHaveClass("min-w-0");
   expect(wrapper).toHaveAttribute("data-height", "100%");
   expect(wrapper).toHaveAttribute("data-width", "100%");
+  expect(wrapper).toHaveAttribute("data-theme", "dark");
   expect(wrapper).toHaveAttribute("data-autofocus", "true");
 });
 
-test("editor configures the CodeMirror scroll container for pointer and touch scrolling", async () => {
+test("editor switches codemirror theme mode with the app theme", async () => {
+  const user = userEvent.setup();
+  document.documentElement.dataset.theme = "classic";
+
+  render(<FilesScreen botAlias="main" client={createClient()} />);
+
+  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
+
+  const wrapper = await screen.findByTestId("codemirror-wrapper");
+  expect(wrapper).toHaveAttribute("data-theme", "light");
+});
+
+test("editor uses a CodeMirror theme extension instead of mutating editor DOM styles", async () => {
   const user = userEvent.setup();
 
   render(<FilesScreen botAlias="main" client={createClient()} />);
 
   await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
 
+  const wrapper = await screen.findByTestId("codemirror-wrapper");
   const editor = await screen.findByTestId("codemirror-editor");
   const scroller = await screen.findByTestId("codemirror-scroller");
   await waitFor(() => {
-    expect(editor).toHaveStyle({
-      height: "100%",
-      minHeight: "0px",
-      overflow: "hidden",
-    });
-    expect(scroller).toHaveStyle({
-      flex: "1 1 auto",
-      height: "auto",
-      maxHeight: "none",
-      minHeight: "0px",
-      overflow: "auto",
-      touchAction: "pan-x pan-y",
-      overscrollBehavior: "contain",
-      scrollbarGutter: "stable both-edges",
-    });
+    expect(wrapper).toHaveAttribute("data-extension-count", "1");
   });
+  expect(editor).not.toHaveAttribute("style");
+  expect(scroller).not.toHaveAttribute("style");
 });
 
 test("editor uses a single flat surface instead of a nested rounded frame", async () => {

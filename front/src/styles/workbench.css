@@ -58,10 +58,6 @@
   animation: workbenchOverlayFadeIn 120ms ease-out;
 }
 
-.desktop-workbench-root [data-testid="workbench-context-row"] {
-  background: var(--workbench-panel-elevated-bg);
-}
-
 .desktop-workbench-root [data-highlighted="true"] {
   animation: workbenchRowHighlight 1.2s ease-out;
 }

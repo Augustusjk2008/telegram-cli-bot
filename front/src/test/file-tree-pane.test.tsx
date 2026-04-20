@@ -4,6 +4,12 @@ import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 
+function expectFileIcon(fileName: string, iconKind: string) {
+  const button = screen.getByRole("button", { name: `打开 ${fileName}` });
+  const iconKinds = Array.from(button.querySelectorAll("[data-icon]")).map((icon) => icon.getAttribute("data-icon"));
+  expect(iconKinds).toContain(iconKind);
+}
+
 test("directory click expands the tree without changing the working directory", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -53,6 +59,117 @@ test("directory click expands the tree without changing the working directory", 
     expect(screen.getByRole("button", { name: "打开 docs/project-plan.md" })).toBeInTheDocument();
   });
   expect(changeDirectorySpy).toHaveBeenCalledTimes(callsBeforeToggle);
+});
+
+test("desktop tree shows folder and file icons instead of arrow and dot markers", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [
+          { name: "docs", isDir: true },
+          { name: "README.md", isDir: false, size: 12 },
+        ],
+      };
+    }
+    return {
+      workingDir: path || "/workspace",
+      entries: [],
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const folderButton = await screen.findByRole("button", { name: "展开 docs" });
+  const fileButton = screen.getByRole("button", { name: "打开 README.md" });
+
+  expect(folderButton).not.toHaveTextContent("▸");
+  expect(folderButton.querySelector('[data-icon="folder-closed"]')).not.toBeNull();
+  expect(fileButton).not.toHaveTextContent("·");
+  expect(fileButton.querySelector('[data-icon="file-markdown"]')).not.toBeNull();
+
+  await user.click(folderButton);
+
+  expect(await screen.findByRole("button", { name: "收起 docs" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "收起 docs" }).querySelector('[data-icon="folder-open"]')).not.toBeNull();
+});
+
+test("desktop tree maps common code and document families to dedicated icons", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "main.cpp", isDir: false, size: 12 },
+      { name: "app.py", isDir: false, size: 12 },
+      { name: "index.ts", isDir: false, size: 12 },
+      { name: "build.sh", isDir: false, size: 12 },
+      { name: ".bashrc", isDir: false, size: 12 },
+      { name: "Program.cs", isDir: false, size: 12 },
+      { name: "Main.java", isDir: false, size: 12 },
+      { name: "Dockerfile", isDir: false, size: 12 },
+      { name: "CMakeLists.txt", isDir: false, size: 12 },
+      { name: "README.md", isDir: false, size: 12 },
+      { name: "notes.txt", isDir: false, size: 12 },
+      { name: "report.pdf", isDir: false, size: 12 },
+      { name: "data.csv", isDir: false, size: 12 },
+      { name: "slides.pptx", isDir: false, size: 12 },
+      { name: "logo.svg", isDir: false, size: 12 },
+      { name: "song.mp3", isDir: false, size: 12 },
+      { name: "movie.mp4", isDir: false, size: 12 },
+      { name: "font.woff2", isDir: false, size: 12 },
+      { name: "query.sql", isDir: false, size: 12 },
+      { name: "archive.zip", isDir: false, size: 12 },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 main.cpp" });
+
+  expectFileIcon("main.cpp", "file-c-cpp");
+  expectFileIcon("app.py", "file-python");
+  expectFileIcon("index.ts", "file-js-ts");
+  expectFileIcon("build.sh", "file-shell");
+  expectFileIcon(".bashrc", "file-shell");
+  expectFileIcon("Program.cs", "file-csharp");
+  expectFileIcon("Main.java", "file-code");
+  expectFileIcon("Dockerfile", "file-config");
+  expectFileIcon("CMakeLists.txt", "file-config");
+  expectFileIcon("README.md", "file-markdown");
+  expectFileIcon("notes.txt", "file-text");
+  expectFileIcon("report.pdf", "file-pdf");
+  expectFileIcon("data.csv", "file-sheet");
+  expectFileIcon("slides.pptx", "file-presentation");
+  expectFileIcon("logo.svg", "file-image");
+  expectFileIcon("song.mp3", "file-audio");
+  expectFileIcon("movie.mp4", "file-video");
+  expectFileIcon("font.woff2", "file-font");
+  expectFileIcon("query.sql", "file-database");
+  expectFileIcon("archive.zip", "file-archive");
 });
 
 test("tree can hand a directory off to embedded settings as the next workdir target", async () => {

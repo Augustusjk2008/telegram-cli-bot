@@ -223,6 +223,54 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("uploadChatAttachment posts to the chat attachment endpoint and maps saved path", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            filename: "report.txt",
+            saved_path: "C:\\Users\\demo\\.tcb\\chat-attachments\\main\\1001\\report.txt",
+            size: 5,
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const file = new File(["hello"], "report.txt", { type: "text/plain" });
+    const result = await client.uploadChatAttachment("main", file);
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/chat/attachments",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+        body: expect.any(FormData),
+      }),
+    );
+    const requestInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect((requestInit.body as FormData).get("file")).toBe(file);
+    expect(result).toEqual({
+      filename: "report.txt",
+      savedPath: "C:\\Users\\demo\\.tcb\\chat-attachments\\main\\1001\\report.txt",
+      size: 5,
+    });
+  });
+
   test("deletePath posts to the delete endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

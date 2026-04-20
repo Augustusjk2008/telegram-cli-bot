@@ -73,6 +73,7 @@ from bot.models import BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_hidden_process_kwargs
 from bot.platform.scripts import execute_script, get_scripts_dir, list_available_scripts, stream_execute_script
+from bot.runtime_paths import get_chat_attachments_dir
 from bot.sessions import (
     align_session_paths,
     get_or_create_session,
@@ -89,6 +90,7 @@ from bot.web.native_history_adapter import create_stream_trace_state, consume_st
 
 logger = logging.getLogger(__name__)
 EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
+UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -886,6 +888,30 @@ def _ensure_file_browser_supported(manager: MultiBotManager, alias: str) -> BotP
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持文件操作")
     return profile
+
+
+def _sanitize_uploaded_filename(filename: str) -> str:
+    candidate = os.path.basename(ntpath.basename(str(filename or "").strip()))
+    if not candidate or candidate in {".", ".."} or "\x00" in candidate:
+        _raise(400, "unsafe_filename", "文件名不合法")
+    return candidate
+
+
+def _build_chat_attachment_dir(alias: str, user_id: int) -> str:
+    return str(get_chat_attachments_dir(alias, user_id))
+
+
+def _resolve_unique_upload_path(base_dir: str, filename: str) -> tuple[str, str]:
+    safe_name = _sanitize_uploaded_filename(filename)
+    stem, suffix = os.path.splitext(safe_name)
+    resolved_name = safe_name
+    resolved_path = os.path.join(base_dir, resolved_name)
+    counter = 1
+    while os.path.exists(resolved_path):
+        resolved_name = f"{stem}-{counter}{suffix}"
+        resolved_path = os.path.join(base_dir, resolved_name)
+        counter += 1
+    return resolved_path, resolved_name
 
 
 def _list_directory_entries(working_dir: str) -> dict[str, Any]:
@@ -2270,11 +2296,30 @@ async def stream_assistant_run_request(
         yield event
 
 
+def save_chat_attachment(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
+    _ensure_file_browser_supported(manager, alias)
+    if not data:
+        _raise(400, "empty_file", "文件内容不能为空")
+    if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
+        _raise(400, "file_too_large", msg("upload", "file_too_large"))
+
+    attachment_dir = _build_chat_attachment_dir(alias, user_id)
+    os.makedirs(attachment_dir, exist_ok=True)
+    file_path, stored_filename = _resolve_unique_upload_path(attachment_dir, filename)
+    with open(file_path, "wb") as handle:
+        handle.write(data)
+    return {
+        "filename": stored_filename,
+        "saved_path": file_path,
+        "size": len(data),
+    }
+
+
 def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
-    if len(data) > 20 * 1024 * 1024:
+    if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
         _raise(400, "file_too_large", msg("upload", "file_too_large"))
 
     session = get_session_for_alias(manager, alias, user_id)

@@ -12,8 +12,8 @@ export function PaneResizer({ ariaLabel, axis, onResizeDelta }: PaneResizerProps
       aria-orientation={axis === "x" ? "vertical" : "horizontal"}
       className={
         axis === "x"
-          ? "bg-[var(--border)] transition-colors hover:bg-[var(--accent)] cursor-col-resize"
-          : "bg-[var(--border)] transition-colors hover:bg-[var(--accent)] cursor-row-resize"
+          ? "flex items-center justify-center bg-[var(--workbench-panel-bg)] cursor-col-resize"
+          : "flex items-center justify-center bg-[var(--workbench-panel-bg)] cursor-row-resize"
       }
       onPointerDown={(event) => {
         const start = axis === "x" ? event.clientX : event.clientY;
@@ -33,6 +33,15 @@ export function PaneResizer({ ariaLabel, axis, onResizeDelta }: PaneResizerProps
         window.addEventListener("pointerup", handleUp);
         window.addEventListener("pointercancel", handleUp);
       }}
-    />
+    >
+      <div
+        aria-hidden="true"
+        className={
+          axis === "x"
+            ? "h-full w-px bg-[var(--workbench-hairline)] transition-colors hover:bg-[var(--accent)]"
+            : "h-px w-full bg-[var(--workbench-hairline)] transition-colors hover:bg-[var(--accent)]"
+        }
+      />
+    </div>
   );
 }

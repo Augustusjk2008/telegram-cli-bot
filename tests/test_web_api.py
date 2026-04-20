@@ -18,6 +18,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
+import bot.runtime_paths as runtime_paths
 from bot.assistant_context import AssistantPromptPayload
 from bot.assistant_cron import AssistantCronService
 from bot.assistant_cron_store import save_job_runtime_state
@@ -52,6 +53,7 @@ from bot.web.api_service import (
     run_chat,
     run_cli_chat,
     run_system_script,
+    save_chat_attachment,
     save_uploaded_file,
     update_bot_workdir,
     write_file_content,
@@ -322,12 +324,16 @@ def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBot
 @pytest.mark.asyncio
 async def test_update_bot_workdir_requires_confirmation_when_local_history_exists(
     web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
+    home = tmp_path / "home"
+    home.mkdir()
     old_root = tmp_path / "old"
     new_root = tmp_path / "new"
     old_root.mkdir()
     new_root.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
     web_manager.main_profile.working_dir = str(old_root)
     session = get_session_for_alias(web_manager, "main", 1001)
     session.working_dir = str(old_root)
@@ -352,6 +358,7 @@ async def test_update_bot_workdir_requires_confirmation_when_local_history_exist
         "message_count": session.message_count,
         "bot_mode": "cli",
     }
+    assert runtime_paths.get_chat_history_db_path(old_root).exists()
 
 
 @pytest.mark.asyncio
@@ -775,6 +782,63 @@ def test_reset_user_session_clears_local_history_rows(web_manager: MultiBotManag
 
     assert result["reset"] is True
     assert history["items"] == []
+
+
+def test_save_chat_attachment_stores_file_under_home_scoped_dir(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_home = temp_dir / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: fake_home))
+
+    result = save_chat_attachment(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
+    saved_path = Path(result["saved_path"])
+
+    assert result["filename"] == "notes.txt"
+    assert saved_path == fake_home / ".tcb" / "chat-attachments" / "main" / "1001" / "notes.txt"
+    assert saved_path.read_bytes() == b"line1\nline2\n"
+
+
+def test_save_chat_attachment_deduplicates_existing_names(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_home = temp_dir / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: fake_home))
+
+    first = save_chat_attachment(web_manager, "main", 1001, "notes.txt", b"first\n")
+    second = save_chat_attachment(web_manager, "main", 1001, "notes.txt", b"second\n")
+
+    assert first["filename"] == "notes.txt"
+    assert second["filename"] == "notes-1.txt"
+    assert first["saved_path"] != second["saved_path"]
+    assert Path(second["saved_path"]).read_bytes() == b"second\n"
+
+
+def test_get_history_does_not_materialize_empty_home_store(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    web_manager.main_profile.working_dir = str(workspace)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(workspace)
+    session.session_epoch = 1
+
+    data = get_history(web_manager, "main", 1001, limit=10)
+
+    assert data["items"] == []
+    assert not runtime_paths.get_chat_history_db_path(workspace).exists()
 
 
 def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):

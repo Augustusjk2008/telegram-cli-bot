@@ -1,10 +1,19 @@
+import json
+import sqlite3
 from pathlib import Path
 
-from bot.web.chat_store import ChatStore, LOCAL_CHAT_DB_RELATIVE_PATH
+import bot.runtime_paths as runtime_paths
+from bot.web.chat_store import ChatStore, LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH
 
 
-def test_begin_turn_creates_project_local_db_and_streaming_rows(tmp_path: Path):
-    store = ChatStore(tmp_path)
+def test_begin_turn_creates_home_scoped_db_and_workspace_metadata(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
 
     handle = store.begin_turn(
         bot_id=1,
@@ -12,14 +21,20 @@ def test_begin_turn_creates_project_local_db_and_streaming_rows(tmp_path: Path):
         user_id=1001,
         bot_mode="cli",
         cli_type="codex",
-        working_dir=str(tmp_path),
+        working_dir=str(workspace),
         session_epoch=1,
         user_text="列出当前目录",
         native_provider="codex",
     )
 
-    db_path = tmp_path / LOCAL_CHAT_DB_RELATIVE_PATH
-    assert db_path.exists()
+    assert store.db_path == runtime_paths.get_chat_history_db_path(workspace)
+    assert store.db_path.exists()
+    metadata = json.loads(
+        runtime_paths.get_chat_workspace_metadata_path(workspace).read_text(encoding="utf-8")
+    )
+    assert metadata["working_dir"] == str(workspace)
+    assert metadata["migrated_from_legacy_project_store"] is False
+    assert handle.conversation_id.startswith("conv_")
 
     items = store.list_messages(handle.conversation_id)
     assert [(item["role"], item["content"], item["state"]) for item in items] == [
@@ -28,8 +43,35 @@ def test_begin_turn_creates_project_local_db_and_streaming_rows(tmp_path: Path):
     ]
 
 
-def test_begin_turn_reuses_active_conversation_within_same_session_epoch(tmp_path: Path):
-    store = ChatStore(tmp_path)
+def test_read_only_history_lookup_does_not_create_empty_home_store(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    items = store.list_active_history(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        limit=10,
+    )
+
+    assert items == []
+    assert not runtime_paths.get_chat_history_db_path(workspace).exists()
+    assert not runtime_paths.get_chat_workspace_metadata_path(workspace).exists()
+
+
+def test_begin_turn_reuses_active_conversation_within_same_session_epoch(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
 
     first = store.begin_turn(
         bot_id=1,
@@ -37,7 +79,7 @@ def test_begin_turn_reuses_active_conversation_within_same_session_epoch(tmp_pat
         user_id=1001,
         bot_mode="cli",
         cli_type="codex",
-        working_dir=str(tmp_path),
+        working_dir=str(workspace),
         session_epoch=1,
         user_text="第一问",
         native_provider="codex",
@@ -48,7 +90,7 @@ def test_begin_turn_reuses_active_conversation_within_same_session_epoch(tmp_pat
         user_id=1001,
         bot_mode="cli",
         cli_type="codex",
-        working_dir=str(tmp_path),
+        working_dir=str(workspace),
         session_epoch=1,
         user_text="第二问",
         native_provider="codex",
@@ -59,15 +101,68 @@ def test_begin_turn_reuses_active_conversation_within_same_session_epoch(tmp_pat
     assert [item["content"] for item in items] == ["第一问", "", "第二问", ""]
 
 
-def test_finalize_turn_reuses_same_assistant_message_and_exposes_trace(tmp_path: Path):
-    store = ChatStore(tmp_path)
+def test_legacy_project_store_is_migrated_to_home_store_on_first_read(monkeypatch, tmp_path: Path):
+    original_home = tmp_path / "home"
+    original_home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: original_home))
+
+    seed_store = ChatStore(workspace)
+    handle = seed_store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="hello",
+        native_provider="codex",
+    )
+    seed_store.complete_turn(handle, content="world", completion_state="completed")
+
+    legacy_db = workspace / LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH
+    legacy_db.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(seed_store.db_path) as source, sqlite3.connect(legacy_db) as target:
+        source.backup(target)
+
+    migrated_home = tmp_path / "migrated-home"
+    migrated_home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: migrated_home))
+    metadata_path = runtime_paths.get_chat_workspace_metadata_path(workspace)
+
+    migrated_store = ChatStore(workspace)
+    items = migrated_store.list_active_history(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        limit=10,
+    )
+
+    assert [item["content"] for item in items] == ["hello", "world"]
+    assert migrated_store.db_path.exists()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["migrated_from_legacy_project_store"] is True
+    assert metadata["legacy_project_db_path"] == str(legacy_db)
+
+
+def test_finalize_turn_reuses_same_assistant_message_and_exposes_trace(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
     handle = store.begin_turn(
         bot_id=1,
         bot_alias="main",
         user_id=1001,
         bot_mode="cli",
         cli_type="codex",
-        working_dir=str(tmp_path),
+        working_dir=str(workspace),
         session_epoch=1,
         user_text="列出当前目录",
         native_provider="codex",

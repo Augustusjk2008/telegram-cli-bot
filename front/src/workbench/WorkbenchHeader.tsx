@@ -23,15 +23,15 @@ export function WorkbenchHeader({
   return (
     <header
       data-testid="desktop-workbench-titlebar"
-      className="flex items-center justify-between gap-4 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-2"
+      className="flex items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"
     >
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"
           onClick={onOpenBotSwitcher}
           className={clsx(
-            "relative rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--surface)]",
-            hasUnreadOtherBots ? "pr-5" : "",
+            "relative rounded-lg border border-[var(--border)] px-2.5 py-1 text-sm font-medium hover:bg-[var(--surface)]",
+            hasUnreadOtherBots ? "pr-4.5" : "",
           )}
         >
           {hasUnreadOtherBots ? (
@@ -45,7 +45,7 @@ export function WorkbenchHeader({
         </button>
         <span className="truncate text-xs text-[var(--muted)]">{workspaceName}</span>
         {branchName ? (
-          <span className="rounded-md border border-[var(--border)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+          <span className="rounded-md border border-[var(--border)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--muted)]">
             {branchName}
           </span>
         ) : null}
@@ -61,7 +61,7 @@ export function WorkbenchHeader({
             type="button"
             onClick={() => onViewModeChange(nextMode)}
             className={clsx(
-              "rounded-md px-3 py-1 text-xs transition-colors",
+              "rounded-md px-2.5 py-0.5 text-xs transition-colors",
               viewMode === nextMode
                 ? "bg-[var(--accent)] text-white"
                 : "text-[var(--text)] hover:bg-[var(--surface-strong)]",

@@ -14,6 +14,7 @@ import type {
   BotOverview,
   BotStatus,
   BotSummary,
+  ChatAttachmentUploadResult,
   ChatMessage,
   ChatTraceDetails,
   ChatMessageMetaInfo,
@@ -161,6 +162,12 @@ type RawFileCreateResult = {
 type RawFileRenameResult = {
   old_path: string;
   path: string;
+};
+
+type RawChatAttachmentUploadResult = {
+  filename: string;
+  saved_path: string;
+  size: number;
 };
 
 type RawSystemScript = {
@@ -421,6 +428,14 @@ function mapSystemScript(raw: RawSystemScript): SystemScript {
     displayName: raw.display_name,
     description: raw.description,
     path: raw.path,
+  };
+}
+
+function mapChatAttachmentUploadResult(raw: RawChatAttachmentUploadResult): ChatAttachmentUploadResult {
+  return {
+    filename: raw.filename,
+    savedPath: raw.saved_path,
+    size: raw.size,
   };
 }
 
@@ -1170,6 +1185,19 @@ export class RealWebBotClient implements WebBotClient {
       oldPath: data.old_path,
       path: data.path,
     };
+  }
+
+  async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const data = await this.requestJson<RawChatAttachmentUploadResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/chat/attachments`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
+    return mapChatAttachmentUploadResult(data);
   }
 
   async uploadFile(botAlias: string, file: File): Promise<void> {
