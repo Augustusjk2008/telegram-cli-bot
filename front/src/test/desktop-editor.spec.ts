@@ -91,7 +91,8 @@ test("desktop file tree opens saved file content on the first click", async ({ p
   await expect(page.getByTestId("desktop-workbench-statusbar").getByText("已保存")).toBeVisible();
 
   await page.getByRole("button", { name: "关闭 reopen-once.txt" }).click();
-  await expect(page.getByText("从左侧文件树打开一个文件开始编辑")).toBeVisible();
+  await expect(page.getByText("Ctrl+P")).toBeVisible();
+  await expect(page.getByText("Ctrl+Shift+F")).toBeVisible();
 
   await page.getByRole("button", { name: "打开 reopen-once.txt" }).click();
   await expect(page.getByText("reopen-once-line-1")).toBeVisible();
