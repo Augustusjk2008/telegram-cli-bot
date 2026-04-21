@@ -44,12 +44,8 @@ export function EditorPane({
 
   if (tabs.length === 0 || !activeTab) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center p-6 text-center text-sm text-[var(--muted)]">
-        <div className="space-y-2">
-          <p>未打开文件</p>
-          <p><kbd className="font-mono text-[var(--text)]">Ctrl+P</kbd> 快速打开文件</p>
-          <p><kbd className="font-mono text-[var(--text)]">Ctrl+Shift+F</kbd> 全文搜索</p>
-        </div>
+      <div className="flex h-full min-h-0 items-center justify-center p-6 text-sm text-[var(--muted)]">
+        从左侧文件树打开一个文件开始编辑
       </div>
     );
   }

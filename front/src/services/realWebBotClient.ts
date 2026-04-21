@@ -43,17 +43,12 @@ import type {
   SessionState,
   SystemScript,
   SystemScriptResult,
-  TaskRunResult,
-  TaskRunStreamEvent,
-  TaskRunStreamOptions,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
   WorkspaceOutlineResult,
-  WorkspaceProblem,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
-  WorkspaceTask,
   WorkdirChangeConflict,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
@@ -364,9 +359,6 @@ type StreamEvent =
       type: "done";
       output?: string;
       elapsed_seconds?: number;
-      task_id?: string;
-      returncode?: number;
-      problems?: WorkspaceProblem[];
       script_name?: string;
       success?: boolean;
       message?: RawHistoryItem;
@@ -1362,94 +1354,6 @@ export class RealWebBotClient implements WebBotClient {
     return this.requestJson<WorkspaceOutlineResult>(
       `/api/bots/${encodeURIComponent(botAlias)}/workspace/outline?${params.toString()}`,
     );
-  }
-
-  async listTasks(botAlias: string): Promise<WorkspaceTask[]> {
-    const data = await this.requestJson<{ items: WorkspaceTask[] }>(`/api/bots/${encodeURIComponent(botAlias)}/tasks`);
-    return data.items || [];
-  }
-
-  async getProblems(botAlias: string): Promise<WorkspaceProblem[]> {
-    const data = await this.requestJson<{ items: WorkspaceProblem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/problems`);
-    return data.items || [];
-  }
-
-  async runTaskStream(
-    botAlias: string,
-    taskId: string,
-    onEvent: (event: TaskRunStreamEvent) => void,
-    options: TaskRunStreamOptions = {},
-  ): Promise<TaskRunResult> {
-    const response = await fetch(
-      `/api/bots/${encodeURIComponent(botAlias)}/tasks/${encodeURIComponent(taskId)}/run/stream`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        signal: options.signal,
-      },
-    );
-
-    if (!response.ok || !response.body) {
-      let message = "执行任务失败";
-      try {
-        const payload = (await response.json()) as JsonEnvelope<unknown>;
-        message = payload.error?.message || message;
-      } catch {
-        // ignore parse failures
-      }
-      throw new Error(message);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalResult: TaskRunResult | null = null;
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
-        const event = parseSseBlock(block);
-        if (!event) {
-          separatorIndex = buffer.indexOf("\n\n");
-          continue;
-        }
-
-        if (event.type === "meta") {
-          const command = Array.isArray(event.command) ? event.command.map((item) => String(item)) : undefined;
-          onEvent({ type: "meta", taskId: String(event.task_id || taskId), command });
-        } else if (event.type === "log") {
-          onEvent({ type: "log", text: event.text || "" });
-        } else if (event.type === "done") {
-          finalResult = {
-            taskId: event.task_id || taskId,
-            success: Boolean(event.success),
-            returnCode: Number(event.returncode ?? 0),
-            output: event.output || "",
-            problems: Array.isArray(event.problems) ? event.problems : [],
-          };
-          onEvent({ type: "done", result: finalResult });
-        } else if (event.type === "error") {
-          const errorEvent = { type: "error" as const, message: event.message || "执行任务失败", code: event.code };
-          onEvent(errorEvent);
-          throw new Error(errorEvent.message);
-        }
-
-        separatorIndex = buffer.indexOf("\n\n");
-      }
-    }
-
-    if (!finalResult) {
-      throw new Error("任务执行已中断");
-    }
-    return finalResult;
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

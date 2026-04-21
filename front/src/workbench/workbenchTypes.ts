@@ -1,4 +1,4 @@
-export type DesktopSidebarView = "files" | "search" | "outline" | "tasks" | "problems" | "debug" | "git" | "settings";
+export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "settings";
 
 export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_snapshot";
 
@@ -101,8 +101,6 @@ export function isDesktopSidebarView(value: unknown): value is DesktopSidebarVie
   return value === "files"
     || value === "search"
     || value === "outline"
-    || value === "tasks"
-    || value === "problems"
     || value === "debug"
     || value === "git"
     || value === "settings";

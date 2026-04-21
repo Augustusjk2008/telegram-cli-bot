@@ -191,49 +191,6 @@ export type WorkspaceOutlineResult = {
   items: WorkspaceOutlineItem[];
 };
 
-export type WorkspaceTask = {
-  id: string;
-  label: string;
-  command: string;
-  source: string;
-  detail?: string;
-};
-
-export type WorkspaceTaskResult = {
-  items: WorkspaceTask[];
-};
-
-export type WorkspaceProblem = {
-  path: string;
-  line: number;
-  column: number;
-  severity: "error" | "warning" | "info";
-  message: string;
-  source: string;
-};
-
-export type WorkspaceProblemResult = {
-  items: WorkspaceProblem[];
-};
-
-export type TaskRunResult = {
-  taskId: string;
-  success: boolean;
-  returnCode: number;
-  output: string;
-  problems: WorkspaceProblem[];
-};
-
-export type TaskRunStreamEvent =
-  | { type: "meta"; taskId: string; command?: string[] }
-  | { type: "log"; text: string }
-  | { type: "done"; result: TaskRunResult }
-  | { type: "error"; message: string; code?: string };
-
-export type TaskRunStreamOptions = {
-  signal?: AbortSignal;
-};
-
 export type ChatAttachmentUploadResult = {
   filename: string;
   savedPath: string;
