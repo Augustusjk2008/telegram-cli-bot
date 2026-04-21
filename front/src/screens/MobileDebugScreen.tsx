@@ -40,7 +40,7 @@ const VIEW_ITEMS: Array<{ value: MobileDebugView; label: string; Icon: LucideIco
 
 function phaseText(state: DebugState) {
   if (state.phase === "preparing") return "准备中";
-  if (state.phase === "starting_gdb" || state.phase === "connecting_remote") return "连接中";
+  if (state.phase === "deploying" || state.phase === "starting_gdb" || state.phase === "connecting_remote") return "连接中";
   if (state.phase === "paused") return "已暂停";
   if (state.phase === "running") return "运行中";
   if (state.phase === "terminating") return "停止中";
@@ -346,8 +346,10 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
                 key={item.id}
                 type="button"
                 onClick={() => {
-                  setActiveSource({ path: item.source, line: item.line });
-                  setView("source");
+                  if (item.sourceResolved !== false && item.source && item.source !== "??") {
+                    setActiveSource({ path: item.source, line: item.line });
+                    setView("source");
+                  }
                   void debug.selectFrame(item.id);
                 }}
                 className={`mb-2 w-full rounded-lg border px-3 py-2 text-left text-xs ${

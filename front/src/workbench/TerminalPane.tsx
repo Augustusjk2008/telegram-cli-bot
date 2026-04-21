@@ -14,6 +14,7 @@ type Props = {
   preferredWorkingDir: string;
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
+  visible?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
   onAcceptPendingWorkingDir?: () => void;
@@ -28,6 +29,7 @@ export function TerminalPane({
   preferredWorkingDir,
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
+  visible = true,
   focused = false,
   onToggleFocus,
   onAcceptPendingWorkingDir,
@@ -40,7 +42,7 @@ export function TerminalPane({
         authToken={authToken}
         botAlias={botAlias}
         client={client}
-        isVisible
+        isVisible={visible}
         preferredWorkingDir={preferredWorkingDir}
         pendingWorkingDir={pendingWorkingDir}
         themeName={themeName}

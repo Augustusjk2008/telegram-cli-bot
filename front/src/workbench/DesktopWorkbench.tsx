@@ -66,6 +66,7 @@ type Props = {
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: () => void;
   onDirtyTabsChange?: (hasDirtyTabs: boolean) => void;
+  onChatPaneVisibilityChange?: (visible: boolean) => void;
 };
 
 export function DesktopWorkbench({
@@ -93,8 +94,9 @@ export function DesktopWorkbench({
   onViewModeChange,
   onOpenBotSwitcher,
   onDirtyTabsChange,
+  onChatPaneVisibilityChange,
 }: Props) {
-  const { paneState, toggleSidebar, setSidebarView, resizePane } = useWorkbenchState();
+  const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client);
   const tabs = useEditorTabs({ botAlias, client });
   const columnsRef = useRef<HTMLDivElement | null>(null);
@@ -160,18 +162,22 @@ export function DesktopWorkbench({
       : null,
   });
 
+  const showTerminalPane = focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed);
+  const showChatPane = focusedPane === "chat" || (!focusedPane && !layoutState.chatCollapsed);
   const columnTemplate = focusedPane === "sidebar"
     ? "minmax(0, 1fr) 0px 0px 0px 0px"
     : focusedPane === "chat"
       ? "0px 0px 0px 0px minmax(0, 1fr)"
       : focusedPane === "editor" || focusedPane === "terminal"
         ? "0px 0px minmax(0, 1fr) 0px 0px"
-        : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${PANE_RESIZER_SIZE_PX}px ${layoutState.chatWidthPx}px`;
+        : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`;
   const centerRowTemplate = focusedPane === "editor"
     ? "minmax(0, 1fr) 0px 0px"
     : focusedPane === "terminal"
       ? `0px 0px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`
-      : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
+      : layoutState.terminalCollapsed
+        ? "minmax(0, 1fr) 0px 0px"
+        : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
@@ -180,6 +186,10 @@ export function DesktopWorkbench({
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);
   }, [onDirtyTabsChange, tabs.hasDirtyTabs]);
+
+  useEffect(() => {
+    onChatPaneVisibilityChange?.(showChatPane);
+  }, [onChatPaneVisibilityChange, showChatPane]);
 
   useEffect(() => {
     const updateLayoutBounds = () => {
@@ -456,6 +466,12 @@ export function DesktopWorkbench({
         branchName={gitBranchName}
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
+        sidebarVisible={!layoutState.sidebarCollapsed}
+        terminalVisible={!layoutState.terminalCollapsed}
+        chatVisible={!layoutState.chatCollapsed}
+        onToggleSidebar={toggleSidebar}
+        onToggleTerminal={toggleTerminal}
+        onToggleChat={toggleChat}
         onViewModeChange={(nextMode) => onViewModeChange?.(nextMode)}
         onOpenBotSwitcher={() => onOpenBotSwitcher?.()}
       />
@@ -551,20 +567,28 @@ export function DesktopWorkbench({
               />
             </section>
 
-            <PaneResizer
-              ariaLabel="调整编辑器高度"
-              axis="y"
-              onResizeDelta={(deltaPx) =>
-                resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
-                  containerWidthPx: layoutBounds.columnsWidthPx,
-                  containerHeightPx: layoutBounds.centerHeightPx,
-                })}
-            />
+            {!focusedPane && showTerminalPane ? (
+              <PaneResizer
+                ariaLabel="调整编辑器高度"
+                axis="y"
+                onResizeDelta={(deltaPx) =>
+                  resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
+                    containerWidthPx: layoutBounds.columnsWidthPx,
+                    containerHeightPx: layoutBounds.centerHeightPx,
+                  })}
+              />
+            ) : (
+              <div aria-hidden="true" />
+            )}
 
             <section
               data-testid="desktop-pane-terminal"
+              data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
               data-focused={focusedPane === "terminal" ? "true" : "false"}
-              className="desktop-workbench-pane min-h-0 overflow-hidden"
+              className={clsx(
+                "desktop-workbench-pane min-h-0 overflow-hidden",
+                !showTerminalPane && "hidden",
+              )}
             >
               <TerminalPane
                 authToken={authToken}
@@ -573,6 +597,7 @@ export function DesktopWorkbench({
                 preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
                 pendingWorkingDir={pendingTerminalOverride?.cwd}
                 themeName={themeName}
+                visible={showTerminalPane}
                 focused={focusedPane === "terminal"}
                 onToggleFocus={() => toggleFocusedPane("terminal")}
                 onWorkbenchStatusChange={setTerminalStatus}
@@ -589,20 +614,28 @@ export function DesktopWorkbench({
             </section>
           </div>
 
-          <PaneResizer
-            ariaLabel="调整聊天区宽度"
-            axis="x"
-            onResizeDelta={(deltaPx) =>
-              resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
-                containerWidthPx: layoutBounds.columnsWidthPx,
-                containerHeightPx: layoutBounds.centerHeightPx,
-              })}
-          />
+          {!focusedPane && showChatPane ? (
+            <PaneResizer
+              ariaLabel="调整聊天区宽度"
+              axis="x"
+              onResizeDelta={(deltaPx) =>
+                resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
+                  containerWidthPx: layoutBounds.columnsWidthPx,
+                  containerHeightPx: layoutBounds.centerHeightPx,
+                })}
+            />
+          ) : (
+            <div aria-hidden="true" />
+          )}
 
           <section
             data-testid="desktop-pane-chat"
+            data-collapsed={layoutState.chatCollapsed ? "true" : "false"}
             data-focused={focusedPane === "chat" ? "true" : "false"}
-            className="desktop-workbench-pane min-h-0 overflow-hidden"
+            className={clsx(
+              "desktop-workbench-pane min-h-0 overflow-hidden",
+              !showChatPane && "hidden",
+            )}
           >
             {chatPaneContent || (
               <ChatPane
@@ -610,6 +643,7 @@ export function DesktopWorkbench({
                 botAvatarName={botAvatarName}
                 userAvatarName={userAvatarName}
                 client={client}
+                visible={showChatPane}
                 focused={focusedPane === "chat"}
                 onToggleFocus={() => toggleFocusedPane("chat")}
                 onUnreadResult={onUnreadResult}

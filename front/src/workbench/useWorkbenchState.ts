@@ -29,6 +29,12 @@ function normalizeStoredPaneState(raw: unknown): DesktopPaneState {
       : typeof candidate.filesCollapsed === "boolean"
         ? candidate.filesCollapsed
         : DEFAULT_DESKTOP_PANE_STATE.sidebarCollapsed,
+    terminalCollapsed: typeof candidate.terminalCollapsed === "boolean"
+      ? candidate.terminalCollapsed
+      : DEFAULT_DESKTOP_PANE_STATE.terminalCollapsed,
+    chatCollapsed: typeof candidate.chatCollapsed === "boolean"
+      ? candidate.chatCollapsed
+      : DEFAULT_DESKTOP_PANE_STATE.chatCollapsed,
     sidebarView,
     sidebarWidthPx: toNumber(candidate.sidebarWidthPx, toNumber(candidate.filesWidthPx, DEFAULT_DESKTOP_PANE_STATE.sidebarWidthPx)),
     chatWidthPx: toNumber(candidate.chatWidthPx, DEFAULT_DESKTOP_PANE_STATE.chatWidthPx),
@@ -66,6 +72,20 @@ export function useWorkbenchState() {
     }));
   }
 
+  function toggleTerminal() {
+    setPaneState((current) => ({
+      ...current,
+      terminalCollapsed: !current.terminalCollapsed,
+    }));
+  }
+
+  function toggleChat() {
+    setPaneState((current) => ({
+      ...current,
+      chatCollapsed: !current.chatCollapsed,
+    }));
+  }
+
   function setSidebarView(sidebarView: DesktopSidebarView) {
     setPaneState((current) => ({
       ...current,
@@ -93,6 +113,8 @@ export function useWorkbenchState() {
   return {
     paneState,
     toggleSidebar,
+    toggleTerminal,
+    toggleChat,
     setSidebarView,
     resizePane,
   };

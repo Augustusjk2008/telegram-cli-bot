@@ -190,6 +190,8 @@ export type SessionState = {
 };
 
 export type DebugProfile = {
+  specVersion?: number;
+  language?: string;
   configName: string;
   program: string;
   cwd: string;
@@ -202,12 +204,25 @@ export type DebugProfile = {
   remoteUser: string;
   remoteDir: string;
   remotePort: number;
+  target?: Record<string, unknown>;
+  prepare?: Record<string, unknown>;
+  remote?: Record<string, unknown>;
+  gdb?: Record<string, unknown>;
+  sourceMaps?: Array<{ remote: string; local: string }>;
+  capabilities?: Record<string, boolean>;
 };
 
 export type DebugBreakpoint = {
   source: string;
   line: number;
   verified: boolean;
+  status?: "pending" | "verified" | "rejected";
+  type?: "line" | "function";
+  function?: string;
+  condition?: string;
+  hitCondition?: string;
+  logMessage?: string;
+  message?: string;
 };
 
 export type DebugFrame = {
@@ -215,6 +230,9 @@ export type DebugFrame = {
   name: string;
   source: string;
   line: number;
+  sourceResolved?: boolean;
+  sourceReason?: string;
+  originalSource?: string;
 };
 
 export type DebugScope = {
@@ -230,7 +248,7 @@ export type DebugVariable = {
 };
 
 export type DebugState = {
-  phase: "idle" | "preparing" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
+  phase: "idle" | "preparing" | "deploying" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
   message: string;
   breakpoints: DebugBreakpoint[];
   frames: DebugFrame[];

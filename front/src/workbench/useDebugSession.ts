@@ -83,6 +83,13 @@ function mapDebugState(raw: Record<string, unknown>): DebugState {
           source: String(item.source || ""),
           line: Number(item.line || 0),
           verified: Boolean(item.verified),
+          status: String(item.status || (item.verified ? "verified" : "pending")) as DebugBreakpoint["status"],
+          type: String(item.type || "line") as DebugBreakpoint["type"],
+          function: String(item.function || ""),
+          condition: String(item.condition || ""),
+          hitCondition: String(item.hitCondition || item.hit_condition || ""),
+          logMessage: String(item.logMessage || item.log_message || ""),
+          message: String(item.message || ""),
         } satisfies DebugBreakpoint))
       : [],
     frames: Array.isArray(raw.frames)
@@ -93,6 +100,9 @@ function mapDebugState(raw: Record<string, unknown>): DebugState {
           name: String(item.name || ""),
           source: String(item.source || ""),
           line: Number(item.line || 0),
+          sourceResolved: Boolean(item.sourceResolved ?? item.source_resolved ?? true),
+          sourceReason: String(item.sourceReason || item.source_reason || ""),
+          originalSource: String(item.originalSource || item.original_source || ""),
         } satisfies DebugFrame))
       : [],
     currentFrameId: String(raw.current_frame_id || raw.currentFrameId || ""),
@@ -122,7 +132,7 @@ function statusText(phase: DebugState["phase"]) {
   if (phase === "preparing") {
     return "调试准备中";
   }
-  if (phase === "starting_gdb" || phase === "connecting_remote") {
+  if (phase === "deploying" || phase === "starting_gdb" || phase === "connecting_remote") {
     return "调试连接中";
   }
   if (phase === "paused") {
@@ -197,6 +207,13 @@ export function useDebugSession({
             source: String(item.source || ""),
             line: Number(item.line || 0),
             verified: Boolean(item.verified),
+            status: String(item.status || (item.verified ? "verified" : "pending")) as DebugBreakpoint["status"],
+            type: String(item.type || "line") as DebugBreakpoint["type"],
+            function: String(item.function || ""),
+            condition: String(item.condition || ""),
+            hitCondition: String(item.hitCondition || item.hit_condition || ""),
+            logMessage: String(item.logMessage || item.log_message || ""),
+            message: String(item.message || ""),
           })),
       }));
       return;
@@ -212,6 +229,9 @@ export function useDebugSession({
             name: String(item.name || ""),
             source: String(item.source || ""),
             line: Number(item.line || 0),
+            sourceResolved: Boolean(item.sourceResolved ?? item.source_resolved ?? true),
+            sourceReason: String(item.sourceReason || item.source_reason || ""),
+            originalSource: String(item.originalSource || item.original_source || ""),
           })),
       }));
       return;
@@ -249,7 +269,9 @@ export function useDebugSession({
       return;
     }
     if (event.type === "stopped") {
-      revealLocation(String(payload.source || ""), Number(payload.line || 0));
+      if (payload.sourceResolved !== false) {
+        revealLocation(String(payload.source || ""), Number(payload.line || 0));
+      }
       return;
     }
     if (event.type === "error") {
@@ -446,7 +468,7 @@ export function useDebugSession({
     },
     selectFrame: async (frameId: string) => {
       const frame = state.frames.find((item) => item.id === frameId);
-      if (frame) {
+      if (frame?.sourceResolved !== false && frame.source && frame.source !== "??") {
         revealLocation(frame.source, frame.line);
       }
       await sendCommand("selectFrame", { frameId });
@@ -486,7 +508,7 @@ export function useDebugSession({
     )).sort((left, right) => left - right),
     currentLineForPath: (path: string) => {
       const frame = currentFrame(state);
-      if (!frame || !pathsMatch(frame.source, path)) {
+      if (!frame || frame.sourceResolved === false || !pathsMatch(frame.source, path)) {
         return null;
       }
       return frame.line || null;

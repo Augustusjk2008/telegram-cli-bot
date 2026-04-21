@@ -35,7 +35,7 @@ export type ChatWorkbenchStatus = {
 };
 
 export type DebugWorkbenchStatus = {
-  phase: "idle" | "preparing" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
+  phase: "idle" | "preparing" | "deploying" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
   connectionText: string;
   targetText?: string;
   currentSourcePath?: string;
@@ -56,6 +56,8 @@ export type PersistedWorkbenchSession = {
 
 export type DesktopPaneState = {
   sidebarCollapsed: boolean;
+  terminalCollapsed: boolean;
+  chatCollapsed: boolean;
   sidebarView: DesktopSidebarView;
   sidebarWidthPx: number;
   chatWidthPx: number;
@@ -74,6 +76,8 @@ export const WORKBENCH_HORIZONTAL_PADDING_PX = 4;
 
 export const DEFAULT_DESKTOP_PANE_STATE: DesktopPaneState = {
   sidebarCollapsed: false,
+  terminalCollapsed: false,
+  chatCollapsed: false,
   sidebarView: "files",
   sidebarWidthPx: 320,
   chatWidthPx: 384,

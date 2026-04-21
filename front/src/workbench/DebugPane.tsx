@@ -53,7 +53,7 @@ function phaseText(state: DebugState) {
   if (state.phase === "preparing") {
     return "准备中";
   }
-  if (state.phase === "starting_gdb" || state.phase === "connecting_remote") {
+  if (state.phase === "deploying" || state.phase === "starting_gdb" || state.phase === "connecting_remote") {
     return "连接中";
   }
   if (state.phase === "paused") {
@@ -378,7 +378,7 @@ export function DebugPane({
           {state.breakpoints.length > 0 ? state.breakpoints.map((item) => (
             <div key={`${item.source}:${item.line}`} className="rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-xs">
               <div className="break-all font-mono text-[var(--text)]">{item.source}</div>
-              <div className="mt-1 text-[var(--muted)]">第 {item.line} 行 {item.verified ? "已验证" : "未验证"}</div>
+              <div className="mt-1 text-[var(--muted)]">第 {item.line} 行 {item.status === "rejected" ? `已拒绝 ${item.message || ""}` : item.verified ? "已验证" : "待验证"}</div>
             </div>
           )) : <p className="text-xs text-[var(--muted)]">暂无断点</p>}
         </div>
@@ -399,7 +399,7 @@ export function DebugPane({
               }`}
             >
               <div className="break-all font-mono text-[var(--text)]">{frame.name}</div>
-              <div className="mt-1 break-all text-[var(--muted)]">{frame.source}:{frame.line}</div>
+              <div className="mt-1 break-all text-[var(--muted)]">{frame.source || "??"}:{frame.line || 0}</div>
             </button>
           )) : <p className="text-xs text-[var(--muted)]">暂无调用栈</p>}
         </div>

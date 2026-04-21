@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,6 +17,27 @@ class GdbMiError(RuntimeError):
         self.code = code
         self.message = message
         self.command = command
+
+
+@dataclass(frozen=True)
+class GdbCommandResult:
+    done: bool
+    notify_events: list[dict[str, object]] = field(default_factory=list)
+    console: list[str] = field(default_factory=list)
+    error: dict[str, object] | None = None
+    records: list[dict[str, Any]] = field(default_factory=list)
+    request_id: str = ""
+
+    def to_api(self) -> dict[str, object]:
+        return {
+            "done": self.done,
+            "notifyEvents": list(self.notify_events),
+            "notify_events": list(self.notify_events),
+            "console": list(self.console),
+            "error": self.error,
+            "requestId": self.request_id,
+            "request_id": self.request_id,
+        }
 
 
 def _default_controller_factory(argv: list[str]):
@@ -43,6 +65,13 @@ def _mi_quote(value: str) -> str:
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
     return value
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class GdbMiSession:
@@ -74,6 +103,12 @@ class GdbMiSession:
         return self._controller
 
     def _raise_on_result_error(self, command: str, records: list[dict[str, Any]]) -> None:
+        error = self._result_error(command, records)
+        if error is None:
+            return
+        raise GdbMiError(str(error["code"]), str(error["message"]), command=command)
+
+    def _result_error(self, command: str, records: list[dict[str, Any]]) -> dict[str, object] | None:
         for record in records:
             if record.get("type") != "result" or record.get("message") != "error":
                 continue
@@ -85,19 +120,51 @@ class GdbMiSession:
                 code = "breakpoint_set_failed"
             elif command.startswith("-stack"):
                 code = "stack_fetch_failed"
+            elif command.startswith("-exec") or command.startswith("-data") or command.startswith("-thread"):
+                code = "gdb_command_failed"
             else:
                 code = "gdb_start_failed"
-            raise GdbMiError(code, message, command=command)
+            return {"code": code, "message": message, "command": command}
+        return None
 
-    def _write(self, command: str) -> list[dict[str, Any]]:
+    def _raw_write(self, command: str) -> list[dict[str, Any]]:
         try:
-            records = list(self._controller_instance().write(command))
+            return list(self._controller_instance().write(command))
         except GdbMiError:
             raise
         except Exception as exc:
             raise GdbMiError("gdb_start_failed", str(exc), command=command) from exc
+
+    def _write(self, command: str) -> list[dict[str, Any]]:
+        records = self._raw_write(command)
         self._raise_on_result_error(command, records)
         return records
+
+    def _console_lines(self, records: list[dict[str, Any]]) -> list[str]:
+        lines: list[str] = []
+        for record in records:
+            if record.get("type") not in {"console", "target", "log"}:
+                continue
+            payload = record.get("payload")
+            if isinstance(payload, str):
+                lines.append(payload)
+            elif isinstance(payload, dict):
+                text = payload.get("string") or payload.get("msg")
+                if text:
+                    lines.append(str(text))
+        return lines
+
+    def write_command(self, command: str, *, request_id: str = "") -> GdbCommandResult:
+        records = self._raw_write(command)
+        error = self._result_error(command, records)
+        return GdbCommandResult(
+            done=error is None,
+            notify_events=self._map_notify_events(records),
+            console=self._console_lines(records),
+            error=error,
+            records=records,
+            request_id=request_id,
+        )
 
     def launch(self, host: str, port: int) -> list[dict[str, object]]:
         self._write("-gdb-set mi-async on")
@@ -119,12 +186,60 @@ class GdbMiSession:
                 raise
         return self._map_notify_events(self._write(f"-target-select remote {host}:{port}"))
 
-    def replace_breakpoints(self, items: Iterable[tuple[str, int]]) -> list[DebugBreakpoint]:
+    def _breakpoint_command(self, item: DebugBreakpoint) -> str:
+        options: list[str] = []
+        if item.condition:
+            options.extend(["-c", _mi_quote(item.condition)])
+        if item.hit_condition:
+            options.extend(["-i", _mi_quote(item.hit_condition)])
+        if item.log_message:
+            escaped_log = item.log_message.replace("\\", "\\\\").replace('"', '\\"')
+            options.extend(["-dprintf-insert", _mi_quote(escaped_log)])
+        location = item.function if item.type == "function" and item.function else f"{item.source}:{item.line}"
+        option_text = f"{' '.join(options)} " if options else ""
+        return f"-break-insert {option_text}{_mi_quote(location)}".strip()
+
+    def _coerce_breakpoint(self, item: tuple[str, int] | DebugBreakpoint) -> DebugBreakpoint:
+        if isinstance(item, DebugBreakpoint):
+            return item
+        source, line = item
+        return DebugBreakpoint(source=source, line=int(line), status="pending")
+
+    def replace_breakpoints(self, items: Iterable[tuple[str, int] | DebugBreakpoint]) -> list[DebugBreakpoint]:
         self._write("-break-delete")
         breakpoints: list[DebugBreakpoint] = []
-        for source, line in items:
-            self._write(f"-break-insert {source}:{line}")
-            breakpoints.append(DebugBreakpoint(source=source, line=int(line), verified=True))
+        for raw_item in items:
+            item = self._coerce_breakpoint(raw_item)
+            result = self.write_command(self._breakpoint_command(item))
+            if result.error:
+                breakpoints.append(
+                    DebugBreakpoint(
+                        source=item.source,
+                        line=item.line,
+                        verified=False,
+                        status="rejected",
+                        type=item.type,
+                        function=item.function,
+                        condition=item.condition,
+                        hit_condition=item.hit_condition,
+                        log_message=item.log_message,
+                        message=str(result.error.get("message") or ""),
+                    )
+                )
+                continue
+            breakpoints.append(
+                DebugBreakpoint(
+                    source=item.source,
+                    line=item.line,
+                    verified=True,
+                    status="verified",
+                    type=item.type,
+                    function=item.function,
+                    condition=item.condition,
+                    hit_condition=item.hit_condition,
+                    log_message=item.log_message,
+                )
+            )
         return breakpoints
 
     def set_breakpoints(self, source: str, lines: list[int]) -> list[DebugBreakpoint]:
@@ -170,7 +285,7 @@ class GdbMiSession:
                         id=_frame_id(frame.get("level")),
                         name=str(frame.get("func") or frame.get("name") or ""),
                         source=str(frame.get("fullname") or frame.get("file") or ""),
-                        line=int(frame.get("line") or 0),
+                        line=_safe_int(frame.get("line")),
                     )
                 )
             return frames
@@ -202,7 +317,67 @@ class GdbMiSession:
     def list_variables(self, variables_reference: str, frame_id: str | None = None) -> list[DebugVariable]:
         if variables_reference.endswith(":locals"):
             return self.list_locals(frame_id)
+        records = self._write(f"-var-list-children --all-values {_mi_quote(variables_reference)}")
+        for record in records:
+            payload = record.get("payload") or {}
+            children = payload.get("children") or []
+            if not isinstance(children, list):
+                continue
+            variables: list[DebugVariable] = []
+            for item in children:
+                child = item.get("child") if isinstance(item, dict) and isinstance(item.get("child"), dict) else item
+                if not isinstance(child, dict):
+                    continue
+                variables.append(
+                    DebugVariable(
+                        name=str(child.get("exp") or child.get("name") or ""),
+                        value=str(child.get("value") or ""),
+                        type=str(child.get("type") or "") or None,
+                        variables_reference=str(child.get("name") or "") or None,
+                    )
+                )
+            return variables
         return []
+
+    def evaluate_expression(self, expression: str, frame_id: str | None = None) -> dict[str, object]:
+        if frame_id:
+            self.select_frame(frame_id)
+        records = self._write(f"-data-evaluate-expression {_mi_quote(expression)}")
+        for record in records:
+            payload = record.get("payload") or {}
+            if "value" in payload:
+                return {"expression": expression, "value": str(payload.get("value") or "")}
+        return {"expression": expression, "value": ""}
+
+    def list_threads(self) -> list[dict[str, object]]:
+        records = self._write("-thread-info")
+        for record in records:
+            payload = record.get("payload") or {}
+            threads = payload.get("threads") or []
+            if not isinstance(threads, list):
+                continue
+            return [
+                {
+                    "id": str(item.get("id") or ""),
+                    "targetId": str(item.get("target-id") or item.get("targetId") or ""),
+                    "state": str(item.get("state") or ""),
+                    "name": str(item.get("name") or ""),
+                }
+                for item in threads
+                if isinstance(item, dict)
+            ]
+        return []
+
+    def select_thread(self, thread_id: str) -> None:
+        self._write(f"-thread-select {thread_id}")
+
+    def read_memory(self, address: str, length: int) -> dict[str, object]:
+        records = self._write(f"-data-read-memory-bytes {_mi_quote(address)} {max(0, int(length))}")
+        for record in records:
+            payload = record.get("payload") or {}
+            if payload:
+                return dict(payload)
+        return {"memory": []}
 
     def _map_notify_events(self, records: list[dict[str, Any]]) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
@@ -222,7 +397,7 @@ class GdbMiSession:
             frame_id = ""
             if isinstance(frame, dict):
                 source = str(frame.get("fullname") or frame.get("file") or "")
-                line = int(frame.get("line") or 0)
+                line = _safe_int(frame.get("line"))
                 frame_id = _frame_id(frame.get("level"))
             events.append(
                 {

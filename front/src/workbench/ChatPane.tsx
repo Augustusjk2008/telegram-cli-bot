@@ -7,6 +7,7 @@ type Props = {
   botAvatarName?: string;
   userAvatarName?: string;
   client: WebBotClient;
+  visible?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
   onUnreadResult?: (botAlias: string) => void;
@@ -18,6 +19,7 @@ export function ChatPane({
   botAvatarName,
   userAvatarName,
   client,
+  visible = true,
   focused = false,
   onToggleFocus,
   onUnreadResult,
@@ -29,7 +31,7 @@ export function ChatPane({
       botAvatarName={botAvatarName}
       userAvatarName={userAvatarName}
       client={client}
-      isVisible
+      isVisible={visible}
       embedded
       focused={focused}
       onToggleFocus={onToggleFocus}

@@ -45,6 +45,48 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
 });
 
+test("desktop titlebar layout controls toggle visible panes", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(screen.getByRole("group", { name: "布局开关" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "隐藏底部终端" }));
+  expect(screen.getByTestId("desktop-pane-terminal")).toHaveAttribute("data-collapsed", "true");
+  expect(screen.queryByRole("separator", { name: "调整编辑器高度" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-center-rows")).toHaveStyle({
+    gridTemplateRows: "minmax(0, 1fr) 0px 0px",
+  });
+  expect(localStorage.getItem("web-workbench-pane-state")).toContain("\"terminalCollapsed\":true");
+
+  await user.click(screen.getByRole("button", { name: "隐藏右侧聊天" }));
+  expect(screen.getByTestId("desktop-pane-chat")).toHaveAttribute("data-collapsed", "true");
+  expect(screen.queryByRole("separator", { name: "调整聊天区宽度" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
+    gridTemplateColumns: "320px 8px minmax(0, 1fr) 0px 0px",
+  });
+  expect(localStorage.getItem("web-workbench-pane-state")).toContain("\"chatCollapsed\":true");
+
+  await user.click(screen.getByRole("button", { name: "隐藏左侧栏" }));
+  expect(screen.getByTestId("desktop-pane-files")).toHaveAttribute("data-collapsed", "true");
+  expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
+    gridTemplateColumns: "48px 8px minmax(0, 1fr) 0px 0px",
+  });
+});
+
 test("desktop workbench shows the status bar and uses the left rail to switch sidebar content", async () => {
   const user = userEvent.setup();
 

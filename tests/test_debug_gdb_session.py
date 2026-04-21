@@ -282,3 +282,30 @@ def test_custom_controller_factory_skips_local_path_check() -> None:
     session.close()
 
     assert controller.exited is True
+
+
+def test_breakpoint_pending_and_rejected_states() -> None:
+    controller = _FakeController()
+    controller.responses["-break-insert C:/demo/src/main.cpp:42"] = [
+        {"type": "result", "message": "error", "payload": {"msg": "No source file named main.cpp."}}
+    ]
+    session = GdbMiSession(_make_profile(), controller_factory=lambda _argv: controller)
+
+    breakpoints = session.replace_breakpoints([("C:/demo/src/main.cpp", 42)])
+
+    assert breakpoints[0].status == "rejected"
+    assert breakpoints[0].verified is False
+    assert breakpoints[0].message == "No source file named main.cpp."
+
+
+def test_evaluate_expression_returns_value() -> None:
+    controller = _FakeController()
+    controller.responses["-stack-select-frame 0"] = [{"type": "result", "message": "done", "payload": {}}]
+    controller.responses['-data-evaluate-expression "argc + 1"'] = [
+        {"type": "result", "message": "done", "payload": {"value": "2"}}
+    ]
+    session = GdbMiSession(_make_profile(), controller_factory=lambda _argv: controller)
+
+    result = session.evaluate_expression("argc + 1", "frame-0")
+
+    assert result == {"expression": "argc + 1", "value": "2"}

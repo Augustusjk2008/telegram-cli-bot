@@ -224,6 +224,7 @@ export function App() {
   const [publicHostInfo, setPublicHostInfo] = useState<PublicHostInfo | null>(null);
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [desktopChatStatusByBot, setDesktopChatStatusByBot] = useState<Record<string, ChatWorkbenchStatus>>({});
+  const [desktopChatPaneVisible, setDesktopChatPaneVisible] = useState(true);
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
@@ -450,6 +451,7 @@ export function App() {
     setUnreadBots([]);
     setMountedChatBots([]);
     setDesktopChatStatusByBot({});
+    setDesktopChatPaneVisible(true);
     setLoginError("");
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
@@ -650,7 +652,7 @@ export function App() {
                     client={client}
                     botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
                     userAvatarName={userAvatarName}
-                    isVisible={alias === currentBot}
+                    isVisible={alias === currentBot && desktopChatPaneVisible}
                     embedded
                     onUnreadResult={markBotUnread}
                     onWorkbenchStatusChange={(status) => {
@@ -680,6 +682,7 @@ export function App() {
             void openBotSwitcher();
           }}
           onDirtyTabsChange={setDesktopHasDirtyTabs}
+          onChatPaneVisibilityChange={setDesktopChatPaneVisible}
         />
         {switcher}
       </>

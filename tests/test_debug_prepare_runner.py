@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from bot.debug.prepare_runner import PrepareRunError, build_prepare_command, build_prepare_display_command, stream_prepare
+from bot.debug.prepare_runner import (
+    PrepareRunError,
+    build_prepare_command,
+    build_prepare_display_command,
+    stream_prepare,
+    stream_prepare_events,
+)
 
 
 class _FakeStdout:
@@ -24,6 +30,9 @@ class _FakeProcess:
 
     async def wait(self) -> int:
         return self._return_code
+
+    def kill(self) -> None:
+        self._return_code = -9
 
 
 class _InheritedPipeStdout:
@@ -130,3 +139,31 @@ async def test_stream_prepare_does_not_wait_forever_for_inherited_stdout_pipe(
         return [line async for line in stream_prepare(tmp_path, request)]
 
     assert await asyncio.wait_for(collect_lines(), timeout=1) == [r".\debug.bat"]
+
+
+@pytest.mark.asyncio
+async def test_v2_prepare_timeout_kills_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    process = _FakeProcess([])
+    killed = False
+
+    async def slow_wait() -> int:
+        await asyncio.Event().wait()
+        return 0
+
+    def kill() -> None:
+        nonlocal killed
+        killed = True
+
+    process.wait = slow_wait  # type: ignore[method-assign]
+    process.kill = kill  # type: ignore[method-assign]
+
+    async def fake_create_subprocess_exec(*_command, **_kwargs):
+        return process
+
+    monkeypatch.setattr("bot.debug.prepare_runner.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+
+    with pytest.raises(PrepareRunError) as exc_info:
+        [event async for event in stream_prepare_events(tmp_path, {"prepare_command": r".\debug.bat", "timeoutSeconds": 0.001})]
+
+    assert exc_info.value.code == "prepare_timeout"
+    assert killed is True

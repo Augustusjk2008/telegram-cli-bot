@@ -809,6 +809,48 @@ class WebApiServer:
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await self._debug_service.get_state(alias, auth.user_id)})
 
+    async def patch_debug_profile_overrides(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        return _json({"ok": True, "data": await self._debug_service.patch_profile_overrides(alias, auth.user_id, body)})
+
+    async def post_debug_launch(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        return _json({"ok": True, "data": await self._debug_service.launch(alias, auth.user_id, body)})
+
+    async def post_debug_stop(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": await self._debug_service.stop(alias, auth.user_id)})
+
+    async def post_debug_command(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        action = str(body.get("action") or body.get("command") or body.get("type") or "").strip()
+        payload = body.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {
+            key: value
+            for key, value in body.items()
+            if key not in {"action", "command", "type"}
+        }
+        return _json({"ok": True, "data": await self._debug_service.command(alias, auth.user_id, action, payload_dict)})
+
+    async def post_debug_breakpoints(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        return _json({"ok": True, "data": await self._debug_service.set_breakpoints(alias, auth.user_id, body)})
+
+    async def post_debug_evaluate(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        return _json({"ok": True, "data": await self._debug_service.evaluate(alias, auth.user_id, body)})
+
     async def debug_ws(self, request: web.Request) -> web.WebSocketResponse:
         auth = await self._with_auth(request)
         alias = str(request.query.get("alias") or "").strip().lower()
@@ -1386,7 +1428,15 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
         app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
         app.router.add_get("/api/bots/{alias}/debug/profile", self.get_debug_profile)
+        app.router.add_patch("/api/bots/{alias}/debug/profile", self.patch_debug_profile_overrides)
+        app.router.add_patch("/api/bots/{alias}/debug/profile-overrides", self.patch_debug_profile_overrides)
         app.router.add_get("/api/bots/{alias}/debug/state", self.get_debug_state)
+        app.router.add_post("/api/bots/{alias}/debug/launch", self.post_debug_launch)
+        app.router.add_post("/api/bots/{alias}/debug/stop", self.post_debug_stop)
+        app.router.add_post("/api/bots/{alias}/debug/command", self.post_debug_command)
+        app.router.add_post("/api/bots/{alias}/debug/control", self.post_debug_command)
+        app.router.add_post("/api/bots/{alias}/debug/breakpoints", self.post_debug_breakpoints)
+        app.router.add_post("/api/bots/{alias}/debug/evaluate", self.post_debug_evaluate)
         app.router.add_get("/debug/ws", self.debug_ws)
         app.router.add_get("/terminal/ws", self.terminal_ws)
         app.router.add_get("/api/bots/{alias}/pwd", self.get_pwd)

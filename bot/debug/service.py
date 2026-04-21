@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import ntpath
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from .gdb_session import GdbMiError, GdbMiSession
-from .models import DebugBreakpoint, DebugFrame, DebugProfile, DebugScope, DebugState, DebugVariable
+from .models import DebugBreakpoint, DebugErrorInfo, DebugFrame, DebugProfile, DebugScope, DebugState, DebugVariable
 from .prepare_runner import PrepareRunError, stream_prepare
 from .profile_loader import DebugProfileLoadError, load_debug_profile, require_debug_profile
+from .source_resolver import resolve_source
 
 
 class DebugServiceError(RuntimeError):
@@ -97,21 +97,31 @@ class DebugService:
         )
 
     def _resolve_source_path(self, workspace: Path | None, source: str, remote_dir: object = "") -> str:
-        candidate = str(source or "").strip()
-        if not candidate:
-            return ""
-        remote_root = str(remote_dir or "").rstrip("/")
-        if workspace is not None and PurePosixPath(candidate).is_absolute() and remote_root:
-            normalized = candidate.replace("\\", "/")
-            if normalized == remote_root or normalized.startswith(f"{remote_root}/"):
-                relative_source = normalized[len(remote_root):].lstrip("/")
-                return str((workspace / relative_source).resolve())
-            return candidate
-        if ntpath.isabs(candidate) or Path(candidate).is_absolute():
-            return str(Path(candidate))
         if workspace is None:
-            return candidate
-        return str((workspace / candidate).resolve())
+            return str(source or "").strip()
+        profile = DebugProfile(
+            kind="compat_source_resolver",
+            workspace=str(workspace),
+            config_name="compat",
+            program="",
+            cwd=str(workspace),
+            mi_mode="gdb",
+            mi_debugger_path="",
+            compile_commands=None,
+            prepare_command=r".\debug.bat",
+            stop_at_entry=True,
+            setup_commands=[],
+            remote_host="",
+            remote_user="",
+            remote_dir=str(remote_dir or ""),
+            remote_port=0,
+        )
+        return str(resolve_source(workspace, profile, source, {"line": 1}).get("path") or "")
+
+    def _resolve_frame_source(self, runtime: _Runtime, source: str, line: int) -> dict[str, object]:
+        if runtime.workspace is None or runtime.profile is None:
+            return {"path": source, "line": line, "resolved": bool(source), "reason": "raw"}
+        return resolve_source(runtime.workspace, runtime.profile, source, {"line": line})
 
     def _sort_breakpoints(self, breakpoints: list[DebugBreakpoint]) -> list[DebugBreakpoint]:
         deduped: dict[tuple[str, int], DebugBreakpoint] = {}
@@ -140,8 +150,7 @@ class DebugService:
             return True
         if current_frame.name.strip() == "main":
             return False
-        source = current_frame.source.strip()
-        if current_frame.line > 0 and self._is_workspace_source(runtime.workspace, source):
+        if current_frame.line > 0 and current_frame.source_resolved:
             return False
         return True
 
@@ -174,18 +183,27 @@ class DebugService:
             code = "internal_error"
             message = str(exc)
             data = {}
+        phase = runtime.state.phase
+        logs = data.get("logs") if isinstance(data, dict) else None
+        logs_tail = [str(item) for item in logs[-20:]] if isinstance(logs, list) else []
+        error_info = DebugErrorInfo(
+            code=code,
+            message=message,
+            detail=str(data.get("detail") or data.get("details") or "") if isinstance(data, dict) else "",
+            phase=phase,
+            command=str(data.get("command") or "") if isinstance(data, dict) else "",
+            recoverable=bool(data.get("recoverable", True)) if isinstance(data, dict) else True,
+            logs_tail=logs_tail,
+        )
         runtime.state.phase = "error"
         runtime.state.message = message
+        runtime.state.error_info = error_info
         runtime.state.reset_runtime_views()
         self._broadcast(
             runtime,
             {
                 "type": "error",
-                "payload": {
-                    "code": code,
-                    "message": message,
-                    "data": data,
-                },
+                "payload": {**error_info.to_api(), "data": data},
             },
         )
         self._broadcast_state(runtime)
@@ -251,15 +269,21 @@ class DebugService:
             frames = runtime.gdb.stack_trace()
         except GdbMiError as exc:
             raise DebugServiceError(exc.code, exc.message) from exc
-        resolved_frames = [
-            DebugFrame(
-                id=item.id,
-                name=item.name,
-                source=self._resolve_source_path(runtime.workspace, item.source, runtime.saved_launch.get("remote_dir")),
-                line=item.line,
+        resolved_frames: list[DebugFrame] = []
+        for item in frames:
+            result = self._resolve_frame_source(runtime, item.source, item.line)
+            resolved = bool(result.get("resolved"))
+            resolved_frames.append(
+                DebugFrame(
+                    id=item.id,
+                    name=item.name,
+                    source=str(result.get("path") or item.source or "??"),
+                    line=item.line,
+                    source_resolved=resolved,
+                    source_reason=str(result.get("reason") or ""),
+                    original_source=item.source,
+                )
             )
-            for item in frames
-        ]
         runtime.state.frames = resolved_frames
         current_frame_id = resolved_frames[0].id if resolved_frames else ""
         runtime.state.current_frame_id = current_frame_id
@@ -274,16 +298,23 @@ class DebugService:
         reason = str((payload or {}).get("reason") or "")
         runtime.state.message = "命中断点" if reason == "breakpoint-hit" else "调试已暂停"
         current_frame = resolved_frames[0] if resolved_frames else None
+        fallback_source = ""
+        fallback_line = int((payload or {}).get("line") or 0)
+        if current_frame is None and payload:
+            fallback_result = self._resolve_frame_source(
+                runtime,
+                str(payload.get("source") or ""),
+                fallback_line,
+            )
+            if bool(fallback_result.get("resolved")):
+                fallback_source = str(fallback_result.get("path") or "")
         stopped_payload = {
             "reason": reason or "unknown",
             "threadId": str((payload or {}).get("threadId") or ""),
-            "source": current_frame.source if current_frame else self._resolve_source_path(
-                runtime.workspace,
-                str((payload or {}).get("source") or ""),
-                runtime.saved_launch.get("remote_dir"),
-            ),
+            "source": current_frame.source if current_frame and current_frame.source_resolved else fallback_source,
             "line": current_frame.line if current_frame else int((payload or {}).get("line") or 0),
             "frameId": current_frame.id if current_frame else str((payload or {}).get("frameId") or ""),
+            "sourceResolved": bool(current_frame.source_resolved) if current_frame else bool(fallback_source),
         }
         self._broadcast(runtime, {"type": "stopped", "payload": stopped_payload})
         self._broadcast(runtime, {"type": "stackTrace", "payload": {"frames": [item.to_api() for item in runtime.state.frames]}})
@@ -363,6 +394,7 @@ class DebugService:
         runtime.state.phase = "idle"
         runtime.state.message = ""
         runtime.state.breakpoints = preserved_breakpoints
+        runtime.state.error_info = None
         runtime.state.reset_runtime_views()
         self._broadcast_state(runtime)
 
@@ -386,6 +418,10 @@ class DebugService:
             ),
             "prepare_command": str(payload.get("prepareCommand") or runtime.saved_launch.get("prepare_command") or profile.prepare_command),
             "stop_at_entry": bool(payload["stopAtEntry"]) if "stopAtEntry" in payload else bool(runtime.saved_launch.get("stop_at_entry", profile.stop_at_entry)),
+            "timeout_seconds": self._coerce_port(
+                payload.get("timeoutSeconds") or payload.get("timeout_seconds") or runtime.saved_launch.get("timeout_seconds"),
+                int(profile.prepare.timeout_seconds if profile.prepare else 300),
+            ),
             "password": str(payload.get("password") or ""),
         }
         runtime.saved_launch = {
@@ -395,21 +431,33 @@ class DebugService:
             "remote_port": merged_launch["remote_port"],
             "prepare_command": merged_launch["prepare_command"],
             "stop_at_entry": merged_launch["stop_at_entry"],
+            "timeout_seconds": merged_launch["timeout_seconds"],
         }
         runtime.workspace = workspace
         runtime.profile = self._merge_profile(profile, runtime.saved_launch)
         runtime.prepare_logs = []
         runtime.state.phase = "preparing"
         runtime.state.message = "准备调试环境"
+        runtime.state.error_info = None
         runtime.state.reset_runtime_views()
         self._broadcast_state(runtime)
 
         try:
             async for line in stream_prepare(workspace, merged_launch):
-                runtime.prepare_logs.append(line)
-                self._broadcast(runtime, {"type": "prepareLog", "payload": {"line": line}})
+                if isinstance(line, dict):
+                    event_line = str(line.get("line") or "")
+                    event_payload = dict(line)
+                else:
+                    event_line = str(line)
+                    event_payload = {"line": event_line, "type": "line"}
+                runtime.prepare_logs.append(event_line)
+                self._broadcast(runtime, {"type": "prepareLog", "payload": event_payload})
         except PrepareRunError as exc:
-            raise DebugServiceError(exc.code, exc.message, data={"logs": exc.logs}) from exc
+            raise DebugServiceError(exc.code, exc.message, data={"logs": exc.logs, "command": exc.command}) from exc
+
+        runtime.state.phase = "deploying"
+        runtime.state.message = "准备结果校验"
+        self._broadcast_state(runtime)
 
         try:
             runtime.profile = self._merge_profile(require_debug_profile(workspace), runtime.saved_launch)
@@ -418,7 +466,7 @@ class DebugService:
 
         program_path = Path(runtime.profile.program)
         if not program_path.exists():
-            raise DebugServiceError("program_not_found", f"未找到程序: {runtime.profile.program}")
+            raise DebugServiceError("program_missing", f"未找到程序: {runtime.profile.program}")
 
         runtime.state.phase = "starting_gdb"
         runtime.state.message = "启动 GDB"
@@ -432,7 +480,7 @@ class DebugService:
             launch_events = runtime.gdb.launch(str(merged_launch["remote_host"]), int(merged_launch["remote_port"])) or []
             if runtime.state.breakpoints:
                 runtime.state.breakpoints = self._sort_breakpoints(
-                    runtime.gdb.replace_breakpoints((item.source, item.line) for item in runtime.state.breakpoints)
+                    runtime.gdb.replace_breakpoints(runtime.state.breakpoints)
                 )
                 self._broadcast(
                     runtime,
@@ -467,22 +515,32 @@ class DebugService:
 
     async def _set_breakpoints(self, runtime: _Runtime, payload: dict[str, object]) -> None:
         source = str(payload.get("source") or "").strip()
-        lines_raw = payload.get("lines", [])
-        lines = sorted({int(item) for item in lines_raw if isinstance(item, int) and int(item) > 0})
+        lines_raw = payload.get("lines", payload.get("breakpoints", []))
+        lines: list[int] = []
+        if isinstance(lines_raw, list):
+            for item in lines_raw:
+                raw_line = item.get("line") if isinstance(item, dict) else item
+                try:
+                    line = int(raw_line)
+                except (TypeError, ValueError):
+                    continue
+                if line > 0:
+                    lines.append(line)
+        lines = sorted(set(lines))
         runtime.state.breakpoints = self._sort_breakpoints(
             [
                 item
                 for item in runtime.state.breakpoints
                 if item.source != source
             ] + [
-                DebugBreakpoint(source=source, line=line, verified=True)
+                DebugBreakpoint(source=source, line=line, verified=False, status="pending")
                 for line in lines
             ]
         )
         if runtime.gdb is not None:
             try:
                 runtime.state.breakpoints = self._sort_breakpoints(
-                    runtime.gdb.replace_breakpoints((item.source, item.line) for item in runtime.state.breakpoints)
+                    runtime.gdb.replace_breakpoints(runtime.state.breakpoints)
                 )
             except GdbMiError as exc:
                 raise DebugServiceError(exc.code, exc.message) from exc
@@ -490,6 +548,7 @@ class DebugService:
             runtime,
             {"type": "breakpoints", "payload": {"items": [item.to_api() for item in runtime.state.breakpoints]}},
         )
+        self._broadcast(runtime, {"type": "breakpoint", "payload": {"items": [item.to_api() for item in runtime.state.breakpoints]}})
         self._broadcast_state(runtime)
 
     async def _select_frame(self, runtime: _Runtime, frame_id: str) -> None:
@@ -542,7 +601,14 @@ class DebugService:
             )
 
     async def _emit_variables(self, runtime: _Runtime, variables_reference: str) -> None:
-        items = runtime.state.variables.get(variables_reference, [])
+        items = runtime.state.variables.get(variables_reference)
+        if items is None and runtime.gdb is not None:
+            try:
+                items = runtime.gdb.list_variables(variables_reference, runtime.state.current_frame_id)
+            except GdbMiError as exc:
+                raise DebugServiceError(exc.code, exc.message) from exc
+            runtime.state.variables[variables_reference] = items
+        items = items or []
         self._broadcast(
             runtime,
             {
@@ -553,6 +619,63 @@ class DebugService:
                 },
             },
         )
+
+    async def _evaluate(self, runtime: _Runtime, expression: str, frame_id: str = "") -> dict[str, object]:
+        if runtime.gdb is None:
+            raise DebugServiceError("session_not_started", "调试会话未启动")
+        try:
+            result = runtime.gdb.evaluate_expression(expression, frame_id or runtime.state.current_frame_id)
+        except GdbMiError as exc:
+            raise DebugServiceError(exc.code, exc.message) from exc
+        self._broadcast(runtime, {"type": "evaluate", "payload": result})
+        return result
+
+    async def patch_profile_overrides(self, alias: str, user_id: int, payload: dict[str, object]) -> dict[str, object] | None:
+        runtime = await self._get_runtime(alias, user_id)
+        profile = load_debug_profile(self._workspace_path(alias, user_id))
+        if profile is None:
+            return None
+        runtime.saved_launch.update(
+            {
+                key: value
+                for key, value in {
+                    "remote_host": payload.get("remoteHost", payload.get("remote_host")),
+                    "remote_user": payload.get("remoteUser", payload.get("remote_user")),
+                    "remote_dir": payload.get("remoteDir", payload.get("remote_dir")),
+                    "remote_port": payload.get("remotePort", payload.get("remote_port")),
+                    "prepare_command": payload.get("prepareCommand", payload.get("prepare_command")),
+                    "stop_at_entry": payload.get("stopAtEntry", payload.get("stop_at_entry")),
+                    "timeout_seconds": payload.get("timeoutSeconds", payload.get("timeout_seconds")),
+                }.items()
+                if value is not None
+            }
+        )
+        return self._merge_profile(profile, runtime.saved_launch).to_api()
+
+    async def launch(self, alias: str, user_id: int, payload: dict[str, object]) -> dict[str, object]:
+        await self.handle_ws_message(alias, user_id, {"type": "launch", "payload": payload})
+        return await self.get_state(alias, user_id)
+
+    async def stop(self, alias: str, user_id: int) -> dict[str, object]:
+        await self.handle_ws_message(alias, user_id, {"type": "stop"})
+        return await self.get_state(alias, user_id)
+
+    async def command(self, alias: str, user_id: int, action: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+        await self.handle_ws_message(alias, user_id, {"type": action, "payload": payload or {}})
+        return await self.get_state(alias, user_id)
+
+    async def set_breakpoints(self, alias: str, user_id: int, payload: dict[str, object]) -> dict[str, object]:
+        await self.handle_ws_message(alias, user_id, {"type": "setBreakpoints", "payload": payload})
+        return await self.get_state(alias, user_id)
+
+    async def evaluate(self, alias: str, user_id: int, payload: dict[str, object]) -> dict[str, object]:
+        runtime = await self._get_runtime(alias, user_id)
+        async with runtime.command_lock:
+            return await self._evaluate(
+                runtime,
+                str(payload.get("expression") or ""),
+                str(payload.get("frameId") or payload.get("frame_id") or ""),
+            )
 
     async def handle_ws_message(self, alias: str, user_id: int, message: dict[str, object]) -> None:
         runtime = await self._get_runtime(alias, user_id)
@@ -614,6 +737,9 @@ class DebugService:
                     return
                 if action == "variables":
                     await self._emit_variables(runtime, str(body.get("variablesReference") or ""))
+                    return
+                if action == "evaluate":
+                    await self._evaluate(runtime, str(body.get("expression") or ""), str(body.get("frameId") or ""))
                     return
                 if action == "selectFrame":
                     await self._select_frame(runtime, str(body.get("frameId") or ""))

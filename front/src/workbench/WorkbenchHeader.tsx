@@ -1,4 +1,12 @@
 import { clsx } from "clsx";
+import {
+  PanelBottom,
+  PanelBottomDashed,
+  PanelLeft,
+  PanelLeftDashed,
+  PanelRight,
+  PanelRightDashed,
+} from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 
 type Props = {
@@ -7,6 +15,12 @@ type Props = {
   viewMode: ViewMode;
   branchName?: string;
   hasUnreadOtherBots?: boolean;
+  sidebarVisible: boolean;
+  terminalVisible: boolean;
+  chatVisible: boolean;
+  onToggleSidebar: () => void;
+  onToggleTerminal: () => void;
+  onToggleChat: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onOpenBotSwitcher: () => void;
 };
@@ -17,9 +31,39 @@ export function WorkbenchHeader({
   viewMode,
   branchName = "",
   hasUnreadOtherBots = false,
+  sidebarVisible,
+  terminalVisible,
+  chatVisible,
+  onToggleSidebar,
+  onToggleTerminal,
+  onToggleChat,
   onViewModeChange,
   onOpenBotSwitcher,
 }: Props) {
+  const layoutControls = [
+    {
+      id: "sidebar",
+      visible: sidebarVisible,
+      Icon: sidebarVisible ? PanelLeft : PanelLeftDashed,
+      label: sidebarVisible ? "隐藏左侧栏" : "显示左侧栏",
+      onToggle: onToggleSidebar,
+    },
+    {
+      id: "terminal",
+      visible: terminalVisible,
+      Icon: terminalVisible ? PanelBottom : PanelBottomDashed,
+      label: terminalVisible ? "隐藏底部终端" : "显示底部终端",
+      onToggle: onToggleTerminal,
+    },
+    {
+      id: "chat",
+      visible: chatVisible,
+      Icon: chatVisible ? PanelRight : PanelRightDashed,
+      label: chatVisible ? "隐藏右侧聊天" : "显示右侧聊天",
+      onToggle: onToggleChat,
+    },
+  ];
+
   return (
     <header
       data-testid="desktop-workbench-titlebar"
@@ -50,26 +94,52 @@ export function WorkbenchHeader({
           </span>
         ) : null}
       </div>
-      <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
-        {([
-          ["auto", "自动"],
-          ["mobile", "手机版"],
-          ["desktop", "桌面版"],
-        ] as const).map(([nextMode, label]) => (
-          <button
-            key={nextMode}
-            type="button"
-            onClick={() => onViewModeChange(nextMode)}
-            className={clsx(
-              "rounded-md px-2.5 py-0.5 text-xs transition-colors",
-              viewMode === nextMode
-                ? "bg-[var(--accent)] text-white"
-                : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
-            )}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="flex shrink-0 items-center gap-2">
+        <div
+          aria-label="布局开关"
+          className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5"
+          role="group"
+        >
+          {layoutControls.map(({ id, visible, Icon, label, onToggle }) => (
+            <button
+              key={id}
+              type="button"
+              aria-label={label}
+              aria-pressed={visible}
+              title={label}
+              onClick={onToggle}
+              className={clsx(
+                "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                visible
+                  ? "bg-[var(--surface-strong)] text-[var(--text)]"
+                  : "text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
+              )}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
+        </div>
+        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+          {([
+            ["auto", "自动"],
+            ["mobile", "手机版"],
+            ["desktop", "桌面版"],
+          ] as const).map(([nextMode, label]) => (
+            <button
+              key={nextMode}
+              type="button"
+              onClick={() => onViewModeChange(nextMode)}
+              className={clsx(
+                "rounded-md px-2.5 py-0.5 text-xs transition-colors",
+                viewMode === nextMode
+                  ? "bg-[var(--accent)] text-white"
+                  : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
     </header>
   );

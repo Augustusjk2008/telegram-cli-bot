@@ -838,6 +838,13 @@ function mapDebugState(raw: Record<string, unknown>): DebugState {
           source: String(item.source || ""),
           line: Number(item.line || 0),
           verified: Boolean(item.verified),
+          status: String(item.status || (item.verified ? "verified" : "pending")) as DebugBreakpoint["status"],
+          type: String(item.type || "line") as DebugBreakpoint["type"],
+          function: String(item.function || ""),
+          condition: String(item.condition || ""),
+          hitCondition: String(item.hitCondition || item.hit_condition || ""),
+          logMessage: String(item.logMessage || item.log_message || ""),
+          message: String(item.message || ""),
         } satisfies DebugBreakpoint))
       : [],
     frames: Array.isArray(raw.frames)
@@ -848,6 +855,9 @@ function mapDebugState(raw: Record<string, unknown>): DebugState {
           name: String(item.name || ""),
           source: String(item.source || ""),
           line: Number(item.line || 0),
+          sourceResolved: Boolean(item.sourceResolved ?? item.source_resolved ?? true),
+          sourceReason: String(item.sourceReason || item.source_reason || ""),
+          originalSource: String(item.originalSource || item.original_source || ""),
         } satisfies DebugFrame))
       : [],
     currentFrameId: String(raw.current_frame_id || raw.currentFrameId || ""),
@@ -1141,7 +1151,10 @@ export class RealWebBotClient implements WebBotClient {
     if (!data) {
       return null;
     }
+    const rawSourceMaps = data.sourceMaps || data.source_maps;
     return {
+      specVersion: Number(data.specVersion || data.spec_version || 1),
+      language: String(data.language || "cpp"),
       configName: String(data.config_name || ""),
       program: String(data.program || ""),
       cwd: String(data.cwd || ""),
@@ -1154,6 +1167,16 @@ export class RealWebBotClient implements WebBotClient {
       remoteUser: String(data.remote_user || ""),
       remoteDir: String(data.remote_dir || ""),
       remotePort: Number(data.remote_port || 0),
+      target: data.target && typeof data.target === "object" ? data.target as Record<string, unknown> : undefined,
+      prepare: data.prepare && typeof data.prepare === "object" ? data.prepare as Record<string, unknown> : undefined,
+      remote: data.remote && typeof data.remote === "object" ? data.remote as Record<string, unknown> : undefined,
+      gdb: data.gdb && typeof data.gdb === "object" ? data.gdb as Record<string, unknown> : undefined,
+      sourceMaps: Array.isArray(rawSourceMaps)
+        ? rawSourceMaps
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => ({ remote: String(item.remote || ""), local: String(item.local || "") }))
+        : undefined,
+      capabilities: data.capabilities && typeof data.capabilities === "object" ? data.capabilities as Record<string, boolean> : undefined,
     };
   }
 
