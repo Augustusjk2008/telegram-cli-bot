@@ -22,7 +22,7 @@ const EMPTY_CREATE_DRAFT: CreateDraft = {
   cliType: "codex",
   cliPath: "",
   workingDir: "",
-  avatarName: "bot-default.png",
+  avatarName: "",
 };
 
 export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange }: Props) {
@@ -168,7 +168,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
 
   async function updateExistingBotAvatar(bot: BotSummary, avatarName: string) {
     const nextAvatarName = pickAvailableAvatarName(avatarName, avatarAssets, "bot");
-    if (nextAvatarName === (bot.avatarName || "bot-default.png")) {
+    if (nextAvatarName === pickAvailableAvatarName(bot.avatarName, avatarAssets, "bot")) {
       return;
     }
 
@@ -315,7 +315,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                 <div className="flex items-start gap-3">
                   <AvatarPicker
                     assets={avatarAssets}
-                    selectedName={bot.avatarName || "bot-default.png"}
+                    selectedName={bot.avatarName || ""}
                     previewAlt={`${bot.alias} 头像`}
                     selectLabel={`${bot.alias} 头像`}
                     disabled={savingAction !== ""}

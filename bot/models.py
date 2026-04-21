@@ -30,7 +30,7 @@ class BotProfile:
     working_dir: str = WORKING_DIR
     enabled: bool = True
     bot_mode: str = "cli"  # "cli" | "assistant"
-    avatar_name: str = "bot-default.png"
+    avatar_name: str = ""
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
 
     def to_dict(self) -> dict:
@@ -41,8 +41,9 @@ class BotProfile:
             "working_dir": self.working_dir,
             "enabled": self.enabled,
             "bot_mode": self.bot_mode,
-            "avatar_name": self.avatar_name,
         }
+        if self.avatar_name:
+            result["avatar_name"] = self.avatar_name
         # 添加 CLI 参数配置（如果有非默认配置）
         params_dict = self.cli_params.to_dict()
         # 检查是否有自定义配置
@@ -72,7 +73,7 @@ class BotProfile:
             working_dir=data.get("working_dir", WORKING_DIR),
             enabled=data.get("enabled", True),
             bot_mode=data.get("bot_mode", "cli"),
-            avatar_name=str(data.get("avatar_name", "bot-default.png") or "bot-default.png"),
+            avatar_name=str(data.get("avatar_name", "") or ""),
             cli_params=cli_params,
         )
 

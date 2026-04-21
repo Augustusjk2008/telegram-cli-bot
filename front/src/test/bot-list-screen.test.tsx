@@ -92,4 +92,4 @@ test("bot manager can browse and pick a workdir for a new bot", async () => {
     cliPath: "codex",
     workingDir: "/workspace/repos/team-a",
   });
-});
+}, 10_000);

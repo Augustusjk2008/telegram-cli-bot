@@ -22,8 +22,8 @@ test("desktop workbench shows four panes and persists collapse state", async () 
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       themeName="deep-space"
       viewMode="desktop"
@@ -52,8 +52,8 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       themeName="deep-space"
       viewMode="desktop"
@@ -98,8 +98,8 @@ test("desktop debug pane uses generic unsupported C++ message", async () => {
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={client}
       themeName="deep-space"
       viewMode="desktop"
@@ -136,8 +136,8 @@ test("desktop workbench keeps chat session actions visible in the embedded chat 
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       themeName="deep-space"
       viewMode="desktop"
@@ -173,8 +173,8 @@ test("focused panes maximize into the available workbench area", async () => {
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={client}
       themeName="deep-space"
       viewMode="desktop"
@@ -224,8 +224,8 @@ test("desktop workbench restores persisted pane sizes from storage", () => {
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       themeName="deep-space"
       viewMode="desktop"
@@ -247,8 +247,8 @@ test("desktop workbench updates pane sizes when separators are dragged", () => {
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       themeName="deep-space"
       viewMode="desktop"
@@ -345,8 +345,8 @@ test("desktop workbench clamps invalid stored pane sizes and restores them after
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       themeName="deep-space"
       viewMode="desktop"
@@ -475,8 +475,8 @@ test("desktop preview dialog defaults to a page-sized maximized window", async (
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={client}
       themeName="deep-space"
       viewMode="desktop"
@@ -542,8 +542,8 @@ test("desktop file clicks open tabs and sync rename and delete actions", async (
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={client}
       themeName="deep-space"
       viewMode="desktop"
@@ -591,8 +591,8 @@ test("desktop file tree loads file content on the first click", async () => {
     <DesktopWorkbench
       authToken="123"
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={client}
       themeName="deep-space"
       viewMode="desktop"

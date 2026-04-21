@@ -394,7 +394,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     status,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
-    avatarName: raw.avatar_name || "bot-default.png",
+    avatarName: raw.avatar_name || "",
   };
   if (raw.cli_path) {
     summary.cliPath = raw.cli_path;

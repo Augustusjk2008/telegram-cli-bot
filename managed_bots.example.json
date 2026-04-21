@@ -7,7 +7,7 @@
       "working_dir": "/path/to/project",
       "enabled": false,
       "bot_mode": "cli",
-      "avatar_name": "bot-default.png"
+      "avatar_name": "avatar_01.png"
     }
   ]
 }

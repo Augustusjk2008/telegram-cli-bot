@@ -1696,7 +1696,7 @@ test("renders sender names timestamps avatars and avoids duplicating elapsed tex
       status: "running",
       workingDir: "C:\\workspace",
       isProcessing: false,
-      avatarName: "claude-blue.png",
+      avatarName: "avatar_02.png",
     }),
     listMessages: async (): Promise<ChatMessage[]> => [
       {
@@ -1758,7 +1758,7 @@ test("uses inline mobile avatars and only shows the first avatar in consecutive 
       status: "running",
       workingDir: "C:\\workspace",
       isProcessing: false,
-      avatarName: "claude-blue.png",
+      avatarName: "avatar_02.png",
     }),
     listMessages: async (): Promise<ChatMessage[]> => [
       {

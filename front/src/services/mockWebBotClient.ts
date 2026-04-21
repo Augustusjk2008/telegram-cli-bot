@@ -144,10 +144,10 @@ export class MockWebBotClient implements WebBotClient {
     lastError: "",
   };
   private readonly avatarAssets: AvatarAsset[] = [
-    { name: "user-default.png", url: "/assets/avatars/user-default.png" },
-    { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
-    { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
-    { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
+    { name: "avatar_01.png", url: "/assets/avatars/avatar_01.png" },
+    { name: "avatar_02.png", url: "/assets/avatars/avatar_02.png" },
+    { name: "avatar_03.png", url: "/assets/avatars/avatar_03.png" },
+    { name: "avatar_04.png", url: "/assets/avatars/avatar_04.png" },
   ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
@@ -173,7 +173,7 @@ export class MockWebBotClient implements WebBotClient {
         status: "running",
         workingDir: DEMO_MAIN_WORKDIR,
         lastActiveText: "运行中",
-        avatarName: "bot-default.png",
+        avatarName: "avatar_01.png",
         cliPath: "codex",
         botMode: "cli",
         enabled: true,
@@ -849,7 +849,7 @@ export class MockWebBotClient implements WebBotClient {
     const current = this.getBotSummary(botAlias);
     this.bots.set(botAlias, {
       ...current,
-      avatarName: avatarName.trim() || "bot-default.png",
+      avatarName: avatarName.trim(),
     });
     return this.getBotSummary(botAlias);
   }
@@ -987,7 +987,7 @@ export class MockWebBotClient implements WebBotClient {
       status: "running",
       workingDir: input.workingDir.trim(),
       lastActiveText: "运行中",
-      avatarName: input.avatarName || "bot-default.png",
+      avatarName: input.avatarName,
       enabled: true,
       isMain: false,
     };

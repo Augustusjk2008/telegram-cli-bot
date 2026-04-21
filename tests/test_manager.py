@@ -449,7 +449,7 @@ class TestManagerValidation:
             cli_type="claude",
             cli_path="claude",
             working_dir=str(temp_dir),
-            avatar_name="bot-default.png",
+            avatar_name="avatar_01.png",
         )
 
         await manager.set_bot_avatar("team2", "mint-teal.png")
@@ -484,7 +484,7 @@ class TestManagerValidation:
                     "working_dir": str(temp_dir),
                     "enabled": True,
                     "bot_mode": "cli",
-                    "avatar_name": "bot-default.png",
+                    "avatar_name": "avatar_01.png",
                 }
             ]
         }), encoding="utf-8")
@@ -511,7 +511,7 @@ class TestManagerValidation:
                     "working_dir": str(temp_dir),
                     "enabled": True,
                     "bot_mode": "cli",
-                    "avatar_name": "bot-default.png",
+                    "avatar_name": "avatar_01.png",
                 }
             ]
         }), encoding="utf-8")
@@ -536,7 +536,8 @@ class TestManagerValidation:
 
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
-        assert restored.managed_profiles["team2"].avatar_name == "bot-default.png"
+        assert restored.managed_profiles["team2"].avatar_name == ""
+        assert "avatar_name" not in json.loads(storage.read_text(encoding="utf-8"))["bots"][0]
 
     @pytest.mark.asyncio
     async def test_start_profile_is_web_only_noop(self, temp_dir: Path):

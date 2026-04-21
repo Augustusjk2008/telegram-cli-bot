@@ -92,7 +92,6 @@ from bot.web.native_history_adapter import create_stream_trace_state, consume_st
 logger = logging.getLogger(__name__)
 EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
 UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
-DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
@@ -304,7 +303,7 @@ def list_avatar_assets() -> dict[str, Any]:
 def _normalize_avatar_name(value: Any, *, require_existing: bool) -> str:
     candidate = str(value or "").strip()
     if not candidate:
-        return DEFAULT_BOT_AVATAR_NAME
+        return ""
     if not _is_safe_avatar_name(candidate):
         _raise(400, "invalid_avatar_name", "头像文件名不合法")
     if require_existing:
@@ -562,7 +561,7 @@ def build_bot_summary(
         "cli_type": profile.cli_type,
         "cli_path": profile.cli_path,
         "working_dir": working_dir,
-        "avatar_name": profile.avatar_name or DEFAULT_BOT_AVATAR_NAME,
+        "avatar_name": profile.avatar_name or "",
         "is_main": alias == manager.main_profile.alias,
         "status": _build_run_status(manager, alias, profile),
         "is_processing": is_processing,

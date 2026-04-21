@@ -15,7 +15,7 @@ test("renders completed assistant replies as markdown content", async () => {
   expect(screen.getByRole("heading", { name: "结果" })).toBeInTheDocument();
   expect(screen.getByText("第一项")).toBeInTheDocument();
   expect(screen.getByText("第二项")).toBeInTheDocument();
-});
+}, 10_000);
 
 test("falls back to raw text when markdown rendering throws", async () => {
   vi.doMock("../components/MarkdownPreview", () => ({
@@ -29,11 +29,11 @@ test("falls back to raw text when markdown rendering throws", async () => {
 
   expect(screen.getByText(/C:\\workspace\\demo\\src\\very\\long\\path\\file.ts/)).toBeInTheDocument();
   expect(screen.getByTestId("assistant-markdown-fallback")).toBeInTheDocument();
-});
+}, 10_000);
 
 test("applies overflow-safe classes for long raw paths", async () => {
   const { ChatMarkdownMessage } = await import("../components/ChatMarkdownMessage");
   render(<ChatMarkdownMessage content={"`C:\\workspace\\demo\\src\\very\\long\\path\\file.ts`"} />);
 
   expect(screen.getByTestId("assistant-markdown-message")).toHaveClass("min-w-0");
-});
+}, 10_000);

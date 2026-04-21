@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  Bug,
   Folder,
   GitBranch,
   Menu,
@@ -11,7 +12,7 @@ import {
 import { clsx } from "clsx";
 import type { ViewMode } from "./layoutMode";
 
-export type AppTab = "chat" | "files" | "terminal" | "git" | "settings";
+export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "settings";
 
 type Props = {
   currentBot: string;
@@ -39,6 +40,7 @@ export function MobileShell({
   const navItems: Array<{ tab: AppTab; label: string; Icon: LucideIcon }> = [
     { tab: "chat", label: "聊天", Icon: MessageSquare },
     { tab: "files", label: "文件", Icon: Folder },
+    { tab: "debug", label: "调试", Icon: Bug },
     { tab: "terminal", label: "终端", Icon: SquareTerminal },
     { tab: "git", label: "Git", Icon: GitBranch },
     { tab: "settings", label: "设置", Icon: Settings },
@@ -94,17 +96,17 @@ export function MobileShell({
       </div>
 
       {!hideOuterChrome ? (
-        <nav className="flex items-center justify-around p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
+        <nav className="flex items-center justify-around gap-1 p-2 bg-[var(--surface-strong)] border-t border-[var(--border)] shrink-0 pb-safe">
           {navItems.map(({ tab, label, Icon }) => (
             <button
               key={tab}
               onClick={() => onTabChange(tab)}
               className={clsx(
-                "flex flex-col items-center p-2 rounded-xl min-w-[64px]",
+                "flex min-w-0 flex-1 flex-col items-center rounded-xl p-1.5",
                 currentTab === tab ? "text-[var(--accent)]" : "text-[var(--muted)]",
               )}
             >
-              <Icon className="w-6 h-6 mb-1" />
+              <Icon className="mb-1 h-5 w-5" />
               <span className="text-[10px] font-medium">{label}</span>
             </button>
           ))}

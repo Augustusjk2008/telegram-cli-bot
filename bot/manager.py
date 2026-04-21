@@ -101,7 +101,7 @@ class MultiBotManager:
                 ),
                 "enabled": bool(item.get("enabled", True)),
                 "bot_mode": bot_mode,
-                "avatar_name": str(item.get("avatar_name", "bot-default.png") or "bot-default.png"),
+                "avatar_name": str(item.get("avatar_name", "") or ""),
             }
             if "cli_params" in item:
                 profile_data["cli_params"] = item["cli_params"]
@@ -328,7 +328,7 @@ class MultiBotManager:
                 working_dir=resolved_working_dir,
                 enabled=True,
                 bot_mode=resolved_bot_mode,
-                avatar_name=(avatar_name or "bot-default.png").strip() or "bot-default.png",
+                avatar_name=str(avatar_name or "").strip(),
             )
 
             if resolved_bot_mode == "assistant":
@@ -343,7 +343,7 @@ class MultiBotManager:
 
     async def set_bot_avatar(self, alias: str, avatar_name: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
-        normalized_avatar_name = str(avatar_name or "").strip() or "bot-default.png"
+        normalized_avatar_name = str(avatar_name or "").strip()
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)

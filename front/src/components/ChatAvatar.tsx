@@ -17,7 +17,8 @@ export function ChatAvatar({ alt, avatarName, kind, size = 32 }: Props) {
     setFailed(false);
   }, [avatarName, kind]);
 
-  if (failed) {
+  const imageUrl = buildAvatarUrl(currentName, kind);
+  if (failed || !imageUrl) {
     return (
       <div
         role="img"
@@ -32,7 +33,7 @@ export function ChatAvatar({ alt, avatarName, kind, size = 32 }: Props) {
 
   return (
     <img
-      src={buildAvatarUrl(currentName, kind)}
+      src={imageUrl}
       alt={alt}
       width={size}
       height={size}

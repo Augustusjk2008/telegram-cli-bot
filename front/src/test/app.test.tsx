@@ -442,11 +442,11 @@ test("desktop settings can switch and persist appearance preferences", async () 
   expect(localStorage.getItem("web-chat-body-paragraph-spacing")).toBe("relaxed");
   expect(document.documentElement.style.getPropertyValue("--chat-body-paragraph-spacing")).toBe("1.1em");
 
-  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/user-default.png");
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_01.png");
   await user.click(screen.getByRole("button", { name: "我的头像" }));
-  await user.click(screen.getByRole("button", { name: "选择头像 claude-blue.png" }));
-  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
-  expect(localStorage.getItem("web-user-avatar-name")).toBe("claude-blue.png");
+  await user.click(screen.getByRole("button", { name: "选择头像 avatar_02.png" }));
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_02.png");
+  expect(localStorage.getItem("web-user-avatar-name")).toBe("avatar_02.png");
 });
 
 test("team2 settings hide the main appearance module", async () => {
@@ -916,13 +916,13 @@ test("bot manager uses compact avatar dropdowns and saves avatar choices immedia
   const createScope = within(createSection as HTMLElement);
   expect(createScope.queryByText("规格固定为 64x64，建议使用 PNG/JPG/WebP。")).not.toBeInTheDocument();
   expect(createScope.getByRole("button", { name: "新 Bot 头像" })).toBeInTheDocument();
-  expect(createScope.queryByRole("button", { name: "选择头像 claude-blue.png" })).not.toBeInTheDocument();
-  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/bot-default.png");
+  expect(createScope.queryByRole("button", { name: "选择头像 avatar_02.png" })).not.toBeInTheDocument();
+  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_01.png");
 
   await user.click(createScope.getByRole("button", { name: "新 Bot 头像" }));
-  await user.click(createScope.getByRole("button", { name: "选择头像 claude-blue.png" }));
+  await user.click(createScope.getByRole("button", { name: "选择头像 avatar_02.png" }));
 
-  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
+  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_02.png");
 
   await user.type(screen.getByLabelText("新 Bot 别名"), "team-avatar");
   await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
@@ -931,7 +931,7 @@ test("bot manager uses compact avatar dropdowns and saves avatar choices immedia
 
   expect(addBotSpy).toHaveBeenCalledWith(expect.objectContaining({
     alias: "team-avatar",
-    avatarName: "claude-blue.png",
+    avatarName: "avatar_02.png",
   }));
   expect(await screen.findByRole("img", { name: "team-avatar 头像" })).toBeInTheDocument();
 
@@ -946,9 +946,9 @@ test("bot manager uses compact avatar dropdowns and saves avatar choices immedia
   expect(within(actionRow).getByRole("button", { name: "重命名 team2" })).toBeInTheDocument();
   expect(within(actionRow).getByRole("button", { name: "删除 team2" })).toBeInTheDocument();
   await user.click(teamScope.getByRole("button", { name: "team2 头像" }));
-  await user.click(teamScope.getByRole("button", { name: "选择头像 codex-slate.png" }));
+  await user.click(teamScope.getByRole("button", { name: "选择头像 avatar_03.png" }));
 
-  expect(updateAvatarSpy).toHaveBeenCalledWith("team2", "codex-slate.png");
+  expect(updateAvatarSpy).toHaveBeenCalledWith("team2", "avatar_03.png");
   expect(await screen.findByText("已更新 team2 的头像")).toBeInTheDocument();
 });
 
@@ -964,11 +964,11 @@ test("settings can change my avatar and chat uses the selected image", async () 
   await user.click(screen.getByRole("button", { name: "设置" }));
 
   expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/user-default.png");
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_01.png");
   await user.click(screen.getByRole("button", { name: "我的头像" }));
-  await user.click(screen.getByRole("button", { name: "选择头像 claude-blue.png" }));
-  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/claude-blue.png");
-  expect(localStorage.getItem("web-user-avatar-name")).toBe("claude-blue.png");
+  await user.click(screen.getByRole("button", { name: "选择头像 avatar_02.png" }));
+  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_02.png");
+  expect(localStorage.getItem("web-user-avatar-name")).toBe("avatar_02.png");
 
   await user.click(screen.getByRole("button", { name: "聊天" }));
   await user.type(screen.getByPlaceholderText("输入消息"), "测试头像");
@@ -977,7 +977,7 @@ test("settings can change my avatar and chat uses the selected image", async () 
   expect(await screen.findByText("测试头像")).toBeInTheDocument();
   const userAvatars = screen.getAllByRole("img", { name: "你 头像" });
   expect(userAvatars.length).toBeGreaterThan(0);
-  expect(userAvatars.every((avatar) => avatar.getAttribute("src") === "/assets/avatars/claude-blue.png")).toBe(true);
+  expect(userAvatars.every((avatar) => avatar.getAttribute("src") === "/assets/avatars/avatar_02.png")).toBe(true);
 });
 
 test("bot switcher and bot-specific pages show avatars before bot names", async () => {

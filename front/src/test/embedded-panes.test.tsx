@@ -25,8 +25,8 @@ test("embedded chat hides immersive controls but keeps the composer", async () =
   render(
     <ChatScreen
       botAlias="main"
-      botAvatarName="bot-default.png"
-      userAvatarName="user-default.png"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
       isVisible
       embedded

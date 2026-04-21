@@ -85,7 +85,7 @@ test("assistant bots lock the default workdir in settings", async () => {
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\assistant1",
-    avatarName: "bot-default.png",
+    avatarName: "avatar_01.png",
   });
 
   render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
@@ -163,7 +163,7 @@ test("settings screen asks for confirmation before resetting the current workdir
       status: "running",
       workingDir: "C:\\workspace\\new",
       lastActiveText: "运行中",
-      avatarName: "bot-default.png",
+      avatarName: "avatar_01.png",
     });
 
   const client = new MockWebBotClient();
@@ -234,7 +234,7 @@ test("manual assistant automation dispatches a chat handoff event", async () => 
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\assistant1",
-    avatarName: "bot-default.png",
+    avatarName: "avatar_01.png",
   });
   await client.createAssistantCronJob("assistant1", {
     id: "email_recvbox_check",
@@ -282,7 +282,7 @@ test("dream assistant automation stays silent and does not dispatch a chat hando
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\assistant1",
-    avatarName: "bot-default.png",
+    avatarName: "avatar_01.png",
   });
   await client.createAssistantCronJob("assistant1", {
     id: "daily_dream",
@@ -338,7 +338,7 @@ test("settings screen shows dream fields when cron mode switches to dream", asyn
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\assistant1",
-    avatarName: "bot-default.png",
+    avatarName: "avatar_01.png",
   });
 
   render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);

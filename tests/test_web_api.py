@@ -244,7 +244,7 @@ def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyP
 
 
 def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: Path):
-    web_manager.main_profile.avatar_name = "bot-default.png"
+    web_manager.main_profile.avatar_name = "avatar_01.png"
     web_manager.managed_profiles["team2"] = BotProfile(
         alias="team2",
         token="",
@@ -258,7 +258,7 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
     items = list_bots(web_manager, 1001)
 
     assert items[0]["alias"] == "main"
-    assert items[0]["avatar_name"] == "bot-default.png"
+    assert items[0]["avatar_name"] == "avatar_01.png"
     assert next(item for item in items if item["alias"] == "team2")["avatar_name"] == "claude-blue.png"
 
 
@@ -2067,7 +2067,7 @@ async def test_admin_avatar_assets_route_lists_available_files(
 
     avatar_dir = temp_dir / "assets" / "avatars"
     avatar_dir.mkdir(parents=True)
-    (avatar_dir / "bot-default.png").write_bytes(_png_bytes(64, 64))
+    (avatar_dir / "avatar_01.png").write_bytes(_png_bytes(64, 64))
     (avatar_dir / "claude-blue.png").write_bytes(_png_bytes(64, 64))
     (avatar_dir / "too-small.png").write_bytes(_png_bytes(32, 32))
     monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [avatar_dir], raising=False)
@@ -2080,7 +2080,7 @@ async def test_admin_avatar_assets_route_lists_available_files(
             payload = await resp.json()
 
     assert payload["data"]["items"] == [
-        {"name": "bot-default.png", "url": "/assets/avatars/bot-default.png"},
+        {"name": "avatar_01.png", "url": "/assets/avatars/avatar_01.png"},
         {"name": "claude-blue.png", "url": "/assets/avatars/claude-blue.png"},
     ]
 
@@ -2146,7 +2146,7 @@ async def test_admin_update_avatar_route_persists_avatar_selection(
         cli_path="claude",
         working_dir=str(temp_dir),
         enabled=True,
-        avatar_name="bot-default.png",
+        avatar_name="avatar_01.png",
     )
 
     app = WebApiServer(web_manager)._build_app()
@@ -2180,7 +2180,7 @@ async def test_admin_update_avatar_route_rejects_invalid_filename(
         cli_path="claude",
         working_dir=str(temp_dir),
         enabled=True,
-        avatar_name="bot-default.png",
+        avatar_name="avatar_01.png",
     )
 
     app = WebApiServer(web_manager)._build_app()

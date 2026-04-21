@@ -23,6 +23,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
 import { LoginScreen } from "../screens/LoginScreen";
+import { MobileDebugScreen } from "../screens/MobileDebugScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
@@ -537,6 +538,16 @@ export function App() {
           key={`files-${currentBot}`}
           botAlias={currentBot}
           botAvatarName={currentBotSummary?.avatarName}
+          client={client}
+        />
+      </div>
+    );
+  } else if (currentTab === "debug") {
+    activeScreen = (
+      <div className="absolute inset-0">
+        <MobileDebugScreen
+          authToken={readStoredToken()}
+          botAlias={currentBot}
           client={client}
         />
       </div>

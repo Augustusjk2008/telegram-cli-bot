@@ -78,7 +78,7 @@ describe("RealWebBotClient", () => {
         status: "busy",
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
-        avatarName: "bot-default.png",
+        avatarName: "",
       },
     ]);
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -708,7 +708,7 @@ describe("RealWebBotClient", () => {
       status: "running",
       workingDir: "C:\\workspace\\next",
       lastActiveText: "运行中",
-      avatarName: "bot-default.png",
+      avatarName: "",
     });
   });
 
@@ -809,7 +809,7 @@ describe("RealWebBotClient", () => {
       workingDir: "C:\\workspace\\demo",
       lastActiveText: "运行中",
       cliPath: "claude.cmd",
-      avatarName: "bot-default.png",
+      avatarName: "",
     });
   });
 
@@ -850,7 +850,7 @@ describe("RealWebBotClient", () => {
       cliType: "codex",
       cliPath: "codex",
       workingDir: "C:\\workspace\\team3",
-      avatarName: "bot-default.png",
+      avatarName: "avatar_01.png",
     });
 
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -867,7 +867,7 @@ describe("RealWebBotClient", () => {
           cli_type: "codex",
           cli_path: "codex",
           working_dir: "C:\\workspace\\team3",
-          avatar_name: "bot-default.png",
+          avatar_name: "avatar_01.png",
         }),
       }),
     );

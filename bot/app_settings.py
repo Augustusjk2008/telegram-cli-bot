@@ -28,7 +28,6 @@ _DEFAULT_SETTINGS = {
     "update_last_error": "",
 }
 _PORT_ERROR_MESSAGE = "代理端口必须是 1 到 65535 之间的整数"
-_DEFAULT_BOT_AVATAR_NAME = "bot-default.png"
 
 _UPDATE_TEXT_FIELDS = (
     "update_channel",
@@ -104,8 +103,9 @@ def _normalize_bot_avatar_names(value: Any) -> dict[str, str]:
         alias = str(raw_alias or "").strip().lower()
         if not alias:
             continue
-        avatar_name = str(raw_avatar_name or "").strip() or _DEFAULT_BOT_AVATAR_NAME
-        normalized[alias] = avatar_name
+        avatar_name = str(raw_avatar_name or "").strip()
+        if avatar_name:
+            normalized[alias] = avatar_name
     return normalized
 
 
@@ -189,10 +189,10 @@ def update_bot_avatar_name(alias: str, avatar_name: Any) -> str:
     if not normalized_alias:
         raise ValueError("bot alias 不能为空")
 
-    normalized_avatar_name = str(avatar_name or "").strip() or _DEFAULT_BOT_AVATAR_NAME
+    normalized_avatar_name = str(avatar_name or "").strip()
     settings = _load_settings()
     avatar_names = dict(settings["bot_avatar_names"])
-    if normalized_avatar_name == _DEFAULT_BOT_AVATAR_NAME:
+    if not normalized_avatar_name:
         avatar_names.pop(normalized_alias, None)
     else:
         avatar_names[normalized_alias] = normalized_avatar_name

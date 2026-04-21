@@ -4,9 +4,9 @@ import { test, expect, vi } from "vitest";
 import { AvatarPicker } from "../components/AvatarPicker";
 
 const avatarAssets = [
-  { name: "bot-default.png", url: "/assets/avatars/bot-default.png" },
-  { name: "claude-blue.png", url: "/assets/avatars/claude-blue.png" },
-  { name: "codex-slate.png", url: "/assets/avatars/codex-slate.png" },
+  { name: "avatar_01.png", url: "/assets/avatars/avatar_01.png" },
+  { name: "avatar_02.png", url: "/assets/avatars/avatar_02.png" },
+  { name: "avatar_03.png", url: "/assets/avatars/avatar_03.png" },
 ];
 
 test("keeps the avatar dropdown inside the viewport when the trigger is near the left edge", async () => {
@@ -22,7 +22,7 @@ test("keeps the avatar dropdown inside the viewport when the trigger is near the
   render(
     <AvatarPicker
       assets={avatarAssets}
-      selectedName="bot-default.png"
+      selectedName="avatar_01.png"
       previewAlt="Bot 头像预览"
       selectLabel="Bot 头像"
       onSelect={() => undefined}
@@ -45,7 +45,7 @@ test("keeps the avatar dropdown inside the viewport when the trigger is near the
 
   await user.click(trigger);
 
-  const optionButton = screen.getByRole("button", { name: "选择头像 claude-blue.png" });
+  const optionButton = screen.getByRole("button", { name: "选择头像 avatar_02.png" });
   const panel = optionButton.parentElement?.parentElement as HTMLDivElement;
 
   expect(panel.style.left).toBe("0px");
