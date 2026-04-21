@@ -3,7 +3,6 @@ import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Square, Termi
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
-import { ChatMessageActions } from "../components/ChatMessageActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
@@ -385,7 +384,6 @@ type ChatMessageRowProps = {
   assistantName: string;
   assistantAvatarName?: string;
   userAvatarName?: string;
-  isCopied: boolean;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
   tracePanelExpanded: boolean;
@@ -394,7 +392,6 @@ type ChatMessageRowProps = {
   onFileLinkClick: (href: string) => void;
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: () => void;
-  onCopyMessage: (item: ChatMessage) => void;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -402,7 +399,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   assistantName,
   assistantAvatarName,
   userAvatarName,
-  isCopied,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
   tracePanelExpanded,
@@ -411,7 +407,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onFileLinkClick,
   onLoadTrace,
   onToggleTracePanel,
-  onCopyMessage,
 }: ChatMessageRowProps) {
   if (item.role === "system") {
     return (
@@ -431,7 +426,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const trace = item.meta?.trace;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const hasTracePanel = item.role === "assistant" && traceCount > 0;
-  const canCopyAssistantMessage = item.role === "assistant" && item.state !== "streaming" && item.state !== "error";
   const inlineAvatar = (
     <ChatAvatar
       alt={`${messageName} 头像`}
@@ -526,19 +520,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
             traceCount={traceCount}
             toolCallCount={item.meta?.toolCallCount}
             processCount={item.meta?.processCount}
-            elapsedSeconds={item.elapsedSeconds}
             expanded={tracePanelExpanded}
             onToggleExpanded={onToggleTracePanel}
             isLoading={Boolean(traceLoadState?.loading)}
             loadError={traceLoadState?.error}
             onLoadTrace={() => void onLoadTrace(item.id)}
-          />
-        ) : null}
-        {canCopyAssistantMessage && !hasTracePanel ? (
-          <ChatMessageActions
-            elapsedSeconds={item.elapsedSeconds}
-            copyLabel={isCopied ? "已复制" : "复制"}
-            onCopy={() => void onCopyMessage(item)}
           />
         ) : null}
       </div>
@@ -582,7 +568,6 @@ export function ChatScreen({
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
-  const [copiedMessageId, setCopiedMessageId] = useState("");
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
   const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
   const [expandedTracePanels, setExpandedTracePanels] = useState<Record<string, boolean>>({});
@@ -844,7 +829,6 @@ export function ChatScreen({
     setPendingCronRuns([]);
     setPendingAttachments([]);
     setUploadingAttachments(false);
-    setCopiedMessageId("");
     setDeletedAttachmentKeys({});
     setDeletingAttachmentKeys({});
     setExpandedTracePanels({});
@@ -1342,21 +1326,6 @@ export function ChatScreen({
     }
   }
 
-  const handleCopyMessage = useCallback(async (item: ChatMessage) => {
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("当前环境不支持复制");
-      }
-      await navigator.clipboard.writeText(item.text);
-      setCopiedMessageId(item.id);
-      window.setTimeout(() => {
-        setCopiedMessageId((prev) => (prev === item.id ? "" : prev));
-      }, 1200);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "复制失败");
-    }
-  }, []);
-
   const killTaskActive = isStreaming || actionLoading === "kill";
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
@@ -1454,7 +1423,6 @@ export function ChatScreen({
             assistantName={assistantName}
             assistantAvatarName={assistantAvatarName}
             userAvatarName={userAvatarName}
-            isCopied={copiedMessageId === item.id}
             deletedAttachmentKeys={deletedAttachmentKeys}
             deletingAttachmentKeys={deletingAttachmentKeys}
             tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
@@ -1482,7 +1450,6 @@ export function ChatScreen({
                 return nextState;
               });
             }}
-            onCopyMessage={handleCopyMessage}
           />
         ))}
         <div ref={bottomAnchorRef} aria-hidden="true" />

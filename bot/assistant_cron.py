@@ -53,6 +53,17 @@ class AssistantCronService:
         value = int.from_bytes(digest[:8], "big") & 0x7FFF_FFFF_FFFF_FFFF
         return -max(1, value)
 
+    @staticmethod
+    def _elapsed_seconds(started_at: str, finished_at: str) -> int:
+        if not started_at or not finished_at:
+            return 0
+        try:
+            started = datetime.fromisoformat(started_at)
+            finished = datetime.fromisoformat(finished_at)
+        except ValueError:
+            return 0
+        return max(0, int((finished - started).total_seconds()))
+
     async def start(self) -> None:
         if self._loop_task is not None and not self._loop_task.done():
             return
@@ -246,6 +257,7 @@ class AssistantCronService:
             now = self.now_func().isoformat()
             state = load_job_runtime_state(self.assistant_home, job_id)
             started_at = state.last_started_at or state.last_enqueued_at
+            elapsed_seconds = int(result.get("elapsed_seconds") or self._elapsed_seconds(started_at, now))
             save_job_runtime_state(
                 self.assistant_home,
                 job_id,
@@ -276,7 +288,7 @@ class AssistantCronService:
                     "started_at": started_at,
                     "finished_at": now,
                     "status": "success",
-                    "elapsed_seconds": int(result.get("elapsed_seconds") or 0),
+                    "elapsed_seconds": elapsed_seconds,
                     "queue_wait_seconds": 0,
                     "timed_out": bool(result.get("timed_out", False)),
                     "prompt_excerpt": self._excerpt(""),
@@ -289,6 +301,8 @@ class AssistantCronService:
         except Exception as exc:
             now = self.now_func().isoformat()
             state = load_job_runtime_state(self.assistant_home, job_id)
+            started_at = state.last_started_at or state.last_enqueued_at
+            elapsed_seconds = self._elapsed_seconds(started_at, now)
             save_job_runtime_state(
                 self.assistant_home,
                 job_id,
@@ -298,6 +312,7 @@ class AssistantCronService:
                         "pending_run_id": "",
                         "pending_scheduled_at": "",
                         "current_run_id": "",
+                        "last_started_at": started_at,
                         "last_finished_at": now,
                         "last_status": "error",
                         "last_error": str(exc),
@@ -314,10 +329,10 @@ class AssistantCronService:
                     "trigger_source": trigger_source,
                     "scheduled_at": state.pending_scheduled_at or state.last_scheduled_at,
                     "enqueued_at": state.last_enqueued_at,
-                    "started_at": state.last_started_at or state.last_enqueued_at,
+                    "started_at": started_at,
                     "finished_at": now,
                     "status": "error",
-                    "elapsed_seconds": 0,
+                    "elapsed_seconds": elapsed_seconds,
                     "queue_wait_seconds": 0,
                     "timed_out": False,
                     "prompt_excerpt": self._excerpt(""),

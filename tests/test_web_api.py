@@ -21,7 +21,7 @@ from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandsh
 import bot.runtime_paths as runtime_paths
 from bot.assistant_context import AssistantPromptPayload
 from bot.assistant_cron import AssistantCronService
-from bot.assistant_cron_store import save_job_runtime_state
+from bot.assistant_cron_store import load_job_runtime_state, read_job_run_audit, save_job_runtime_state
 from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
 from bot.assistant_dream import AssistantDreamPreparedPrompt, AssistantDreamApplyResult
 from bot.assistant_docs import ManagedPromptSyncResult
@@ -495,6 +495,16 @@ class _FakeAssistantRuntimeCoordinator:
         return {"run_id": run_id, "elapsed_seconds": 0}
 
 
+class _FailingAssistantRuntimeCoordinator(_FakeAssistantRuntimeCoordinator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def wait_for_run(self, run_id: str):
+        await self.release.wait()
+        raise RuntimeError("dream 结果处理失败")
+
+
 def _build_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
     return AssistantCronJob.from_dict(
         {
@@ -613,6 +623,42 @@ async def test_dream_assistant_cron_run_uses_synthetic_session_and_context_user(
     assert request.context_user_id == 1001
     assert request.task_mode == "dream"
     assert request.task_payload["mode"] == "dream"
+
+
+@pytest.mark.asyncio
+async def test_cron_watch_run_error_preserves_started_at_and_elapsed_seconds(temp_dir: Path):
+    home = bootstrap_assistant_home(temp_dir)
+    coordinator = _FailingAssistantRuntimeCoordinator()
+    start = datetime(2026, 4, 21, 1, 0, 0, 122677, tzinfo=ZoneInfo("Asia/Shanghai"))
+    finish = datetime(2026, 4, 21, 1, 2, 47, 624192, tzinfo=ZoneInfo("Asia/Shanghai"))
+    current = [start]
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+        web_user_id=1001,
+        now_func=lambda: current[0],
+    )
+    await service.save_job(_build_dream_assistant_cron_job("daily_dream", "根据近期工作做自我完善"))
+
+    result = await service.run_job_now("daily_dream")
+    assert result["status"] == "queued"
+
+    current[0] = finish
+    coordinator.release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    state = load_job_runtime_state(home, "daily_dream")
+    records = read_job_run_audit(home, "daily_dream")
+    await service.stop()
+
+    assert state.last_status == "error"
+    assert state.last_started_at == start.isoformat()
+    assert state.last_finished_at == finish.isoformat()
+    assert records[-1]["started_at"] == start.isoformat()
+    assert records[-1]["elapsed_seconds"] == 167
+    assert records[-1]["error"] == "dream 结果处理失败"
 
 
 def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: MultiBotManager):

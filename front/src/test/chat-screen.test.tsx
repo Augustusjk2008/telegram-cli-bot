@@ -231,7 +231,7 @@ test("shows a user message after sending text", async () => {
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "修一下这个 bug");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
   expect(await screen.findByText("修一下这个 bug")).toBeInTheDocument();
-  expect(await screen.findByText("用时 3 秒")).toBeInTheDocument();
+  expect(screen.queryByText("用时 3 秒")).not.toBeInTheDocument();
 });
 
 test("uploads chat attachments and appends absolute paths to the sent message", async () => {
@@ -1668,7 +1668,7 @@ test("chat screen does not render restored synthetic reply bubbles after refresh
   expect(screen.getAllByText("恢复到上次可见输出")).toHaveLength(1);
 });
 
-test("shows persisted elapsed badge from loaded history", async () => {
+test("does not show elapsed badge from loaded history", async () => {
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [{
       id: "assistant-1",
@@ -1683,7 +1683,7 @@ test("shows persisted elapsed badge from loaded history", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("历史结果")).toBeInTheDocument();
-  expect(screen.getByText("用时 8 秒")).toBeInTheDocument();
+  expect(screen.queryByText("用时 8 秒")).not.toBeInTheDocument();
 });
 
 test("renders sender names timestamps avatars and avoids duplicating elapsed text in expanded trace details", async () => {
@@ -1743,7 +1743,6 @@ test("renders sender names timestamps avatars and avoids duplicating elapsed tex
   expect(mainAvatar).toBeDefined();
   expect(within(mainAvatar?.parentElement as HTMLElement).getByText("main")).toBeInTheDocument();
 
-  expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
   expect(screen.queryByText("用时 5 秒")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "展开过程详情" }));

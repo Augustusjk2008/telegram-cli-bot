@@ -16,7 +16,7 @@ import {
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import type { BotSummary, PublicHostInfo } from "../services/types";
+import type { BotStatus, BotSummary, PublicHostInfo } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -153,6 +153,41 @@ function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
   });
 }
 
+const BOT_SWITCHER_STATUS_PRIORITY: Record<BotStatus, number> = {
+  unread: 0,
+  running: 1,
+  busy: 2,
+  offline: 3,
+};
+
+function isMainBot(bot: BotSummary) {
+  return Boolean(bot.isMain || bot.alias === "main");
+}
+
+function sortBotsForSwitcher(bots: BotSummary[]) {
+  return [...bots].sort((left, right) => {
+    const leftIsMain = isMainBot(left);
+    const rightIsMain = isMainBot(right);
+    if (leftIsMain !== rightIsMain) {
+      return leftIsMain ? -1 : 1;
+    }
+
+    const statusDelta = BOT_SWITCHER_STATUS_PRIORITY[left.status] - BOT_SWITCHER_STATUS_PRIORITY[right.status];
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    return left.alias.localeCompare(right.alias, "zh-CN", {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+}
+
+function buildDisplayBots(bots: BotSummary[], unreadBots: string[]) {
+  return sortBotsForSwitcher(applyUnreadStatus(bots, unreadBots));
+}
+
 function updateMountedChatBots(prev: string[], currentBot: string | null) {
   if (!currentBot) {
     return prev;
@@ -191,7 +226,7 @@ export function App() {
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
-  const displayBots = useMemo(() => applyUnreadStatus(bots, unreadBots), [bots, unreadBots]);
+  const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots), [bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
   const hasUnreadOtherBots = useMemo(() => {
     if (unreadBots.length === 0) {

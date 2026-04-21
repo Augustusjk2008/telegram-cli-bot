@@ -1086,6 +1086,84 @@ test("bot switcher disables offline bots", async () => {
   expect(screen.getByRole("button", { name: /team2/i })).toBeDisabled();
 });
 
+test("bot switcher sorts bots by main first, then status, then alias", async () => {
+  const user = userEvent.setup();
+  localStorage.setItem("web-unread-bots", JSON.stringify(["omega", "beta"]));
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "zeta",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\zeta",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "alpha",
+      cliType: "claude",
+      status: "busy",
+      workingDir: "C:\\workspace\\alpha",
+      lastActiveText: "处理中",
+    },
+    {
+      alias: "gamma",
+      cliType: "claude",
+      status: "offline",
+      workingDir: "C:\\workspace\\gamma",
+      lastActiveText: "离线",
+    },
+    {
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\main",
+      lastActiveText: "运行中",
+      isMain: true,
+    },
+    {
+      alias: "omega",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\omega",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "delta",
+      cliType: "claude",
+      status: "running",
+      workingDir: "C:\\workspace\\delta",
+      lastActiveText: "运行中",
+    },
+    {
+      alias: "beta",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\beta",
+      lastActiveText: "运行中",
+    },
+  ] satisfies BotSummary[]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await screen.findByText("切换 Bot");
+
+  const optionButtons = screen.getAllByRole("button").filter((button) => (
+    button.textContent?.includes("C:\\workspace\\")
+  ));
+  const orderedAliases = optionButtons.map((button) => {
+    const alias = ["main", "beta", "omega", "delta", "zeta", "alpha", "gamma"].find((candidate) => (
+      button.textContent?.includes(candidate)
+    ));
+    return alias || "";
+  });
+
+  expect(orderedAliases).toEqual(["main", "beta", "omega", "delta", "zeta", "alpha", "gamma"]);
+});
+
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {
   const user = userEvent.setup();
   render(<App />);

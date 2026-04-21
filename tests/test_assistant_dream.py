@@ -63,6 +63,8 @@ def test_prepare_dream_prompt_uses_recent_history_and_captures(temp_dir: Path):
     assert "最近要把 dream 跑起来" in prepared.prompt_text
     assert "这条太旧，不该进入上下文" not in prepared.prompt_text
     assert "用户提醒要后台静默执行" in prepared.prompt_text
+    assert "knowledge_entries 每项必须包含 bucket/title/body" in prepared.prompt_text
+    assert "proposal 若非 null，必须包含 kind/title/body" in prepared.prompt_text
     assert prepared.context_stats["history_count"] == 1
     assert prepared.context_stats["capture_count"] == 1
 
@@ -121,6 +123,63 @@ def test_apply_dream_result_writes_working_memory_knowledge_proposal_and_audit(t
     assert proposal["kind"] == "rule"
     assert result.proposal_id == proposal["id"]
     assert Path(result.audit_path).is_file()
+
+
+def test_apply_dream_result_accepts_legacy_schema_and_normalizes_it(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    raw_output = """
+这轮 dream 完成了整理。
+
+<DREAM_RESULT>{
+  "summary": "完成 dream 整理",
+  "working_memory": {
+    "current_goal": ["补齐 dream 后台执行闭环"]
+  },
+  "knowledge_entries": [
+    {
+      "title": "长书播客稿先卡片化压缩，不整本直写",
+      "type": "workflow",
+      "content": ["长书先做切块，再汇总成章卡和全书卡。"],
+      "evidence": ["用户确认主体只抓 1-3 个命题。"]
+    }
+  ],
+  "proposal": {
+    "title": "长书转播客文案 skill v1",
+    "type": "skill_proposal",
+    "reason": "需把范文证据转成可执行 skill。",
+    "scope": ["输入：书全文或章节、目标时长、可选命题、范文样本。"],
+    "blocked_by": ["待用户提供满意范文样本。"]
+  }
+}</DREAM_RESULT>
+""".strip()
+
+    result = apply_dream_result(
+        home,
+        raw_output=raw_output,
+        visible_text="执行 dream",
+        prompt_excerpt="dream prompt excerpt",
+        context_stats={"history_count": 2, "capture_count": 1},
+        run_id="run_legacy",
+        job_id="daily_dream",
+        scheduled_at="2026-04-20T09:00:00+08:00",
+        context_user_id=1001,
+        synthetic_user_id=-42,
+    )
+
+    assert result.summary == "完成 dream 整理"
+    knowledge_files = list((home.root / "memory" / "knowledge" / "self-improving-agent").glob("*.md"))
+    assert len(knowledge_files) == 1
+    knowledge_text = knowledge_files[0].read_text(encoding="utf-8")
+    assert "长书先做切块" in knowledge_text
+    assert "证据：" in knowledge_text
+    proposal_files = list((home.root / "proposals").glob("*.json"))
+    assert len(proposal_files) == 1
+    proposal = json.loads(proposal_files[0].read_text(encoding="utf-8"))
+    assert proposal["kind"] == "skill_proposal"
+    assert "Reason" in proposal["body"]
+    assert "Blocked By" in proposal["body"]
 
 
 def test_apply_dream_result_rejects_invalid_working_memory_key_and_still_writes_audit(temp_dir: Path):

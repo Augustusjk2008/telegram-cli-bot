@@ -9,9 +9,6 @@ type Props = {
   traceCount?: number;
   toolCallCount?: number;
   processCount?: number;
-  elapsedSeconds?: number;
-  copyLabel?: string;
-  onCopy?: () => void;
   expanded: boolean;
   onToggleExpanded: () => void;
   isLoading?: boolean;
@@ -38,8 +35,6 @@ function ChatTracePanelInner({
   traceCount,
   toolCallCount,
   processCount,
-  copyLabel,
-  onCopy,
   expanded,
   onToggleExpanded,
   isLoading = false,
@@ -65,7 +60,6 @@ function ChatTracePanelInner({
   }
 
   const buttonLabel = `${expanded ? "收起" : "展开"}过程详情`;
-  const showActions = Boolean(copyLabel && onCopy);
   let toolIndex = 0;
 
   return (
@@ -142,19 +136,6 @@ function ChatTracePanelInner({
               </div>
             );
           })}
-          {showActions ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2">
-              {copyLabel && onCopy ? (
-                <button
-                  type="button"
-                  onClick={onCopy}
-                  className="ml-auto inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                >
-                  {copyLabel}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </section>

@@ -15,7 +15,12 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClo
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-[var(--surface)] rounded-t-2xl shadow-lg max-h-[80vh] flex flex-col animate-in slide-in-from-bottom-full duration-200">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="切换 Bot"
+        className="relative bg-[var(--surface)] rounded-t-2xl shadow-lg max-h-[80vh] flex flex-col animate-in slide-in-from-bottom-full duration-200"
+      >
         <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
           <h2 className="text-lg font-bold">切换 Bot</h2>
           <button onClick={onClose} className="p-2 -mr-2 rounded-full hover:bg-[var(--border)]">

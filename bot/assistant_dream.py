@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 _DREAM_RESULT_RE = re.compile(r"<DREAM_RESULT>\s*(\{.*\})\s*</DREAM_RESULT>\s*$", re.DOTALL)
 _SAFE_BUCKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SAFE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_DEFAULT_KNOWLEDGE_BUCKET = "self-improving-agent"
 _WORKING_MEMORY_LIMITS: dict[str, tuple[int, int]] = {
     "current_goal": (3, 180),
     "open_loops": (8, 180),
@@ -181,6 +182,11 @@ def prepare_dream_prompt(
                 "working_memory 只允许 current_goal/open_loops/user_prefs/recent_summary 四个 key；"
                 "knowledge_entries 是数组；proposal 可以为 null。"
             ),
+            (
+                "knowledge_entries 每项必须包含 bucket/title/body，其中 bucket 推荐写 self-improving-agent，"
+                "body 必须是字符串或字符串数组；proposal 若非 null，必须包含 kind/title/body。"
+            ),
+            "不要输出 type/content/evidence/reason/scope/blocked_by 这类替代字段。",
             f"用户配置的 dream 提示词：{config.prompt}",
             f"当前这轮任务的可见提示词：{visible_text}",
             "## 当前工作记忆",
@@ -276,11 +282,18 @@ def _normalize_knowledge_entries(payload: Any) -> list[tuple[str, str, str]]:
     for item in payload:
         if not isinstance(item, dict):
             raise ValueError("dream knowledge entry 必须是对象")
-        bucket = str(item.get("bucket") or "").strip()
+        bucket = str(item.get("bucket") or item.get("knowledge_bucket") or "").strip() or _DEFAULT_KNOWLEDGE_BUCKET
         if not _SAFE_BUCKET_RE.fullmatch(bucket):
             raise ValueError(f"非法 knowledge bucket: {bucket}")
         title = _clip_text(str(item.get("title") or "").strip(), limit=120)
         body_items = _normalize_list_items(item.get("body"), max_items=12, max_chars=220)
+        if not body_items:
+            content_items = _normalize_list_items(item.get("content"), max_items=8, max_chars=220)
+            evidence_items = _normalize_list_items(item.get("evidence"), max_items=4, max_chars=220)
+            body_items = [
+                *content_items,
+                *(f"证据：{item}" for item in evidence_items),
+            ][:12]
         if not body_items:
             raise ValueError("dream knowledge entry 不能为空")
         body = _render_markdown_list(body_items)
@@ -295,9 +308,21 @@ def _normalize_proposal(payload: Any) -> dict[str, str] | None:
         raise ValueError("dream proposal 必须是对象或 null")
     title = str(payload.get("title") or "").strip()
     body = str(payload.get("body") or "").strip()
+    if not body:
+        reason = str(payload.get("reason") or "").strip()
+        scope_items = _normalize_list_items(payload.get("scope"), max_items=12, max_chars=220)
+        blocked_items = _normalize_list_items(payload.get("blocked_by"), max_items=12, max_chars=220)
+        sections: list[str] = []
+        if reason:
+            sections.append(f"## Reason\n- {reason}")
+        if scope_items:
+            sections.append(f"## Scope\n{_render_markdown_list(scope_items)}")
+        if blocked_items:
+            sections.append(f"## Blocked By\n{_render_markdown_list(blocked_items)}")
+        body = "\n\n".join(section for section in sections if section).strip()
     if not title or not body:
         raise ValueError("dream proposal 需要 title 和 body")
-    kind = str(payload.get("kind") or "rule").strip() or "rule"
+    kind = str(payload.get("kind") or payload.get("type") or "rule").strip() or "rule"
     return {
         "kind": kind,
         "title": _clip_text(title, limit=120),
