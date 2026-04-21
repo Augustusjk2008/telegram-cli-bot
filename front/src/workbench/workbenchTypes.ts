@@ -1,4 +1,4 @@
-export type DesktopSidebarView = "files" | "git" | "settings";
+export type DesktopSidebarView = "files" | "debug" | "git" | "settings";
 
 export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_snapshot";
 
@@ -32,6 +32,14 @@ export type ChatWorkbenchStatus = {
   processing: boolean;
   elapsedSeconds?: number;
   lastError?: string;
+};
+
+export type DebugWorkbenchStatus = {
+  phase: "idle" | "preparing" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
+  connectionText: string;
+  targetText?: string;
+  currentSourcePath?: string;
+  currentLine?: number;
 };
 
 export type PersistedWorkbenchSession = {
@@ -86,7 +94,7 @@ type ClampPaneStateOptions = {
 };
 
 export function isDesktopSidebarView(value: unknown): value is DesktopSidebarView {
-  return value === "files" || value === "git" || value === "settings";
+  return value === "files" || value === "debug" || value === "git" || value === "settings";
 }
 
 export function clampPaneState(

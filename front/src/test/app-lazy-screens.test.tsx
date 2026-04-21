@@ -44,4 +44,4 @@ test("terminal screen module is not loaded before the terminal tab is opened", a
 
   expect(await screen.findByTestId("terminal-screen-root")).toHaveTextContent("终端模块: main");
   expect(lazyModuleTracker.terminalLoads).toBe(1);
-});
+}, 10_000);

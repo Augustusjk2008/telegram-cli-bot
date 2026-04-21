@@ -845,7 +845,7 @@ export function ChatScreen({
         setWorkingDir(overview.workingDir || "");
         applyHistoryView(messages, overview, []);
         setLoading(false);
-        if (isVisible && (overview.isProcessing || overview.botMode === "assistant")) {
+        if (isVisibleRef.current && (overview.isProcessing || overview.botMode === "assistant")) {
           scheduleAssistantPoll(
             overview.isProcessing ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS : IDLE_ASSISTANT_POLL_INTERVAL_MS,
           );
@@ -864,7 +864,7 @@ export function ChatScreen({
       stopAssistantPoll();
       stopSseRecoveryWatch();
     };
-  }, [applyHistoryView, botAlias, client, isVisible, scheduleAssistantPoll, stopAssistantPoll, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, scheduleAssistantPoll, stopAssistantPoll, stopSseRecoveryWatch]);
 
   useEffect(() => {
     const handleAssistantCronRunEnqueued = (event: Event) => {

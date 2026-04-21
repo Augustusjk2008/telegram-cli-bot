@@ -1723,6 +1723,22 @@ async def test_api_routes_disable_cache(web_manager: MultiBotManager, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_index_route_disables_cache(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/")
+            assert resp.status == 200
+            assert resp.headers["Cache-Control"] == "no-store, no-cache, must-revalidate"
+            assert resp.headers["Pragma"] == "no-cache"
+            assert resp.headers["Expires"] == "0"
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
@@ -3967,3 +3983,136 @@ async def test_post_chat_stream_continues_processing_after_client_disconnect(web
     assert response is response_holder["response"]
     assert consumed == ["meta", "status", "done"]
     assert response_holder["response"].write_eof_called is False
+
+
+@pytest.mark.asyncio
+async def test_debug_profile_route_returns_service_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    server = WebApiServer(web_manager)
+    fake_profile = {"config_name": "(gdb) Remote Debug", "remote_host": "192.168.1.29"}
+    server._debug_service = MagicMock()
+    server._debug_service.get_profile = AsyncMock(return_value=fake_profile)
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/debug/profile")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"] == fake_profile
+    server._debug_service.get_profile.assert_awaited_once_with("main", 1001)
+
+
+@pytest.mark.asyncio
+async def test_debug_state_route_returns_service_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    server = WebApiServer(web_manager)
+    fake_state = {
+        "phase": "paused",
+        "message": "命中断点",
+        "breakpoints": [],
+        "frames": [],
+        "current_frame_id": "frame-0",
+        "scopes": [{"name": "Locals", "variablesReference": "frame-0:locals"}],
+        "variables": {},
+    }
+    server._debug_service = MagicMock()
+    server._debug_service.get_state = AsyncMock(return_value=fake_state)
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/debug/state")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"] == fake_state
+    server._debug_service.get_state.assert_awaited_once_with("main", 1001)
+
+
+@pytest.mark.asyncio
+async def test_debug_websocket_forwards_service_events_and_client_messages(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    server = WebApiServer(web_manager)
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    server._debug_service = MagicMock()
+    server._debug_service.subscribe = AsyncMock(return_value=queue)
+    server._debug_service.get_state = AsyncMock(
+        return_value={
+            "phase": "preparing",
+            "message": "准备调试环境",
+            "breakpoints": [],
+            "frames": [],
+            "current_frame_id": "",
+            "scopes": [],
+            "variables": {},
+        }
+    )
+
+    async def fake_handle(alias: str, user_id: int, payload: dict[str, object]) -> None:
+        assert alias == "main"
+        assert user_id == 1001
+        assert payload == {"type": "launch", "payload": {"remoteHost": "192.168.1.29", "remotePort": 1234}}
+        queue.put_nowait({"type": "prepareLog", "payload": {"line": "debug.ps1 ready"}})
+
+    server._debug_service.handle_ws_message = AsyncMock(side_effect=fake_handle)
+    server._debug_service.unsubscribe = AsyncMock()
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            ws = await client.ws_connect("/debug/ws?token=secret&alias=main")
+            first = await ws.receive_json()
+            await ws.send_json({"type": "launch", "payload": {"remoteHost": "192.168.1.29", "remotePort": 1234}})
+            second = await ws.receive_json()
+            await ws.close()
+            for _ in range(20):
+                if server._debug_service.unsubscribe.await_count:
+                    break
+                await asyncio.sleep(0.01)
+
+    assert first["type"] == "state"
+    assert first["payload"]["phase"] == "preparing"
+    assert second == {"type": "prepareLog", "payload": {"line": "debug.ps1 ready"}}
+    server._debug_service.subscribe.assert_awaited_once_with("main", 1001)
+    server._debug_service.handle_ws_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_web_server_stop_closes_debug_resources(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+    runner = MagicMock()
+    runner.cleanup = AsyncMock()
+    server._runner = runner
+    server._site = object()
+    server._tunnel_service = MagicMock()
+    server._tunnel_service.stop = AsyncMock()
+    server._debug_service = MagicMock()
+    server._debug_service.shutdown = AsyncMock()
+
+    debug_ws = MagicMock()
+    debug_ws.close = AsyncMock()
+    server._debug_sockets.add(debug_ws)
+    debug_task = asyncio.create_task(asyncio.sleep(60))
+    server._debug_tasks.add(debug_task)
+
+    await server.stop()
+
+    assert debug_task.cancelled() is True
+    debug_ws.close.assert_awaited_once()
+    server._debug_service.shutdown.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    server._tunnel_service.stop.assert_awaited_once()

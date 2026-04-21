@@ -24,6 +24,12 @@ import type {
   CliParamsPayload,
   CliType,
   CreateBotInput,
+  DebugBreakpoint,
+  DebugFrame,
+  DebugProfile,
+  DebugScope,
+  DebugState,
+  DebugVariable,
   DirectoryListing,
   AvatarAsset,
   FileCreateResult,
@@ -810,6 +816,63 @@ function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
   };
 }
 
+function mapDebugVariable(raw: Record<string, unknown>): DebugVariable {
+  return {
+    name: String(raw.name || ""),
+    value: String(raw.value || ""),
+    ...(raw.type ? { type: String(raw.type) } : {}),
+    ...(raw.variablesReference || raw.variables_reference
+      ? { variablesReference: String(raw.variablesReference || raw.variables_reference || "") }
+      : {}),
+  };
+}
+
+function mapDebugState(raw: Record<string, unknown>): DebugState {
+  return {
+    phase: raw.phase as DebugState["phase"],
+    message: String(raw.message || ""),
+    breakpoints: Array.isArray(raw.breakpoints)
+      ? raw.breakpoints
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          source: String(item.source || ""),
+          line: Number(item.line || 0),
+          verified: Boolean(item.verified),
+        } satisfies DebugBreakpoint))
+      : [],
+    frames: Array.isArray(raw.frames)
+      ? raw.frames
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          id: String(item.id || ""),
+          name: String(item.name || ""),
+          source: String(item.source || ""),
+          line: Number(item.line || 0),
+        } satisfies DebugFrame))
+      : [],
+    currentFrameId: String(raw.current_frame_id || raw.currentFrameId || ""),
+    scopes: Array.isArray(raw.scopes)
+      ? raw.scopes
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          name: String(item.name || ""),
+          variablesReference: String(item.variablesReference || item.variables_reference || ""),
+        } satisfies DebugScope))
+      : [],
+    variables: Object.fromEntries(
+      Object.entries(raw.variables && typeof raw.variables === "object" ? raw.variables as Record<string, unknown> : {})
+        .map(([key, value]) => [
+          key,
+          Array.isArray(value)
+            ? value
+              .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+              .map(mapDebugVariable)
+            : [],
+        ]),
+    ) as Record<string, DebugVariable[]>,
+  };
+}
+
 function parseSseBlock(block: string): StreamEvent | null {
   const lines = block.split("\n");
   let eventType = "message";
@@ -1071,6 +1134,32 @@ export class RealWebBotClient implements WebBotClient {
       ...(typeof finalElapsedSeconds === "number" ? { elapsedSeconds: finalElapsedSeconds } : {}),
       ...(meta ? { meta } : {}),
     };
+  }
+
+  async getDebugProfile(botAlias: string): Promise<DebugProfile | null> {
+    const data = await this.requestJson<Record<string, unknown> | null>(`/api/bots/${encodeURIComponent(botAlias)}/debug/profile`);
+    if (!data) {
+      return null;
+    }
+    return {
+      configName: String(data.config_name || ""),
+      program: String(data.program || ""),
+      cwd: String(data.cwd || ""),
+      miDebuggerPath: String(data.mi_debugger_path || ""),
+      compileCommands: typeof data.compile_commands === "string" ? data.compile_commands : undefined,
+      prepareCommand: String(data.prepare_command || ".\\debug.bat"),
+      stopAtEntry: Boolean(data.stop_at_entry),
+      setupCommands: Array.isArray(data.setup_commands) ? data.setup_commands.map((item) => String(item)) : [],
+      remoteHost: String(data.remote_host || ""),
+      remoteUser: String(data.remote_user || ""),
+      remoteDir: String(data.remote_dir || ""),
+      remotePort: Number(data.remote_port || 0),
+    };
+  }
+
+  async getDebugState(botAlias: string): Promise<DebugState> {
+    const data = await this.requestJson<Record<string, unknown>>(`/api/bots/${encodeURIComponent(botAlias)}/debug/state`);
+    return mapDebugState(data);
   }
 
   async getCurrentPath(botAlias: string): Promise<string> {

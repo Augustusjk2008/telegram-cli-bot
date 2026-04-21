@@ -35,6 +35,7 @@
   --hero-glow: rgba(56, 130, 246, 0.24);
   --code-bg: #121b2c;
   --code-text: #edf5ff;
+  --code-font-family: "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
   --editor-bg: #0c1526;
   --editor-text: #eaf4ff;
   --editor-gutter-bg: #101a2c;

@@ -189,6 +189,56 @@ export type SessionState = {
   canAdmin: boolean;
 };
 
+export type DebugProfile = {
+  configName: string;
+  program: string;
+  cwd: string;
+  miDebuggerPath: string;
+  compileCommands?: string;
+  prepareCommand: string;
+  stopAtEntry: boolean;
+  setupCommands: string[];
+  remoteHost: string;
+  remoteUser: string;
+  remoteDir: string;
+  remotePort: number;
+};
+
+export type DebugBreakpoint = {
+  source: string;
+  line: number;
+  verified: boolean;
+};
+
+export type DebugFrame = {
+  id: string;
+  name: string;
+  source: string;
+  line: number;
+};
+
+export type DebugScope = {
+  name: string;
+  variablesReference: string;
+};
+
+export type DebugVariable = {
+  name: string;
+  value: string;
+  type?: string;
+  variablesReference?: string;
+};
+
+export type DebugState = {
+  phase: "idle" | "preparing" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
+  message: string;
+  breakpoints: DebugBreakpoint[];
+  frames: DebugFrame[];
+  currentFrameId: string;
+  scopes: DebugScope[];
+  variables: Record<string, DebugVariable[]>;
+};
+
 export type DirectoryListing = {
   workingDir: string;
   entries: FileEntry[];

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
+import { WorkbenchStatusBar } from "../workbench/WorkbenchStatusBar";
 
 beforeEach(() => {
   localStorage.clear();
@@ -72,11 +73,62 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   await user.click(screen.getByRole("button", { name: "Git" }));
   expect(await screen.findByText("当前分支")).toBeInTheDocument();
 
+  await user.click(screen.getByRole("button", { name: "调试" }));
+  expect(await screen.findByTestId("debug-pane")).toBeInTheDocument();
+  expect(screen.getByText("(gdb) Remote Debug")).toBeInTheDocument();
+  expect(screen.queryByLabelText("准备命令")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开远端参数" }));
+  expect(screen.getByLabelText("准备命令")).toHaveValue(".\\debug.bat");
+  expect(screen.getByRole("toolbar", { name: "调试控制" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "启动调试" })).toBeInTheDocument();
+
   await user.click(screen.getByRole("button", { name: "设置" }));
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
+});
+
+test("desktop debug pane uses generic unsupported C++ message", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getDebugProfile").mockResolvedValue(null);
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="bot-default.png"
+      userAvatarName="user-default.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "调试" }));
+
+  expect(await screen.findByText("当前工作目录不支持 C++ 调试")).toBeInTheDocument();
+  expect(screen.queryByText("当前工作目录不支持 MB_DDF 调试")).not.toBeInTheDocument();
+});
+
+test("status bar shows debug phase alongside terminal and AI state", () => {
+  render(
+    <WorkbenchStatusBar
+      activeFilePath="src/main.cpp"
+      fileDirty={false}
+      terminalStatus={{ connected: true, connectionText: "终端已连接", currentCwd: "C:\\workspace" }}
+      chatStatus={{ state: "idle", processing: false }}
+      debugStatus={{ phase: "paused", connectionText: "调试已暂停", targetText: "192.168.1.29:1234" }}
+      restoreState="clean"
+      viewMode="desktop"
+    />,
+  );
+
+  expect(screen.getByText("调试已暂停")).toBeInTheDocument();
+  expect(screen.getByText("192.168.1.29:1234")).toBeInTheDocument();
 });
 
 test("desktop workbench keeps chat session actions visible in the embedded chat pane", async () => {

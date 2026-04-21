@@ -12,6 +12,8 @@ import type {
   UpdateAssistantCronJobInput,
   CliParamsPayload,
   CreateBotInput,
+  DebugProfile,
+  DebugState,
   DirectoryListing,
   FileCreateResult,
   FileReadResult,
@@ -48,6 +50,8 @@ export interface WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
   ): Promise<ChatMessage>;
+  getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
+  getDebugState(botAlias: string): Promise<DebugState>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
   changeDirectory(botAlias: string, path: string): Promise<string>;

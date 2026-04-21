@@ -8,9 +8,12 @@ type Props = {
   saving?: boolean;
   dirty?: boolean;
   canSave?: boolean;
+  breakpointLines?: number[];
+  currentLine?: number | null;
   statusText?: string;
   error?: string;
   hideHeader?: boolean;
+  onToggleBreakpoint?: (line: number) => void;
   onChange: (value: string) => void;
   onSave: () => void;
   onClose: () => void;
@@ -26,8 +29,11 @@ type CodeMirrorComponent = ComponentType<{
   autoFocus?: boolean;
   editable?: boolean;
   basicSetup?: unknown;
+  onCreateEditor?: (view: import("@codemirror/view").EditorView) => void;
   onChange?: (value: string) => void;
 }>;
+
+type CodeMirrorEditorView = import("@codemirror/view").EditorView;
 
 function createEditorTheme(
   EditorView: typeof import("@codemirror/view").EditorView,
@@ -37,14 +43,20 @@ function createEditorTheme(
     "&": {
       backgroundColor: "var(--editor-bg)",
       color: "var(--editor-text)",
+      fontFamily: "var(--code-font-family)",
+    },
+    ".cm-scroller": {
+      fontFamily: "var(--code-font-family)",
     },
     ".cm-content": {
       caretColor: "var(--editor-text)",
+      fontFamily: "var(--code-font-family)",
     },
     ".cm-gutters": {
       backgroundColor: "var(--editor-gutter-bg)",
       color: "var(--editor-gutter-text)",
       borderRight: "1px solid var(--border)",
+      fontFamily: "var(--code-font-family)",
     },
     ".cm-activeLine, .cm-activeLineGutter": {
       backgroundColor: "var(--accent-soft)",
@@ -58,6 +70,79 @@ function createEditorTheme(
   }, { dark: themeMode === "dark" });
 }
 
+function createDebugExtensions(
+  viewModule: typeof import("@codemirror/view"),
+  stateModule: typeof import("@codemirror/state"),
+  breakpointLines: number[],
+  currentLine: number | null,
+  onToggleBreakpoint?: (line: number) => void,
+) {
+  const { Decoration, EditorView, GutterMarker, gutter } = viewModule;
+  const { RangeSetBuilder } = stateModule;
+  const activeBreakpoints = Array.from(new Set(breakpointLines.filter((line) => line > 0))).sort((left, right) => left - right);
+  const BreakpointMarker = class extends GutterMarker {
+    toDOM() {
+      const dot = document.createElement("span");
+      dot.className = "cm-debug-breakpoint-marker";
+      return dot;
+    }
+  };
+  const marker = new BreakpointMarker();
+  const extensions: unknown[] = [
+    gutter({
+      class: "cm-debug-breakpoint-gutter",
+      markers(view) {
+        const builder = new RangeSetBuilder<InstanceType<typeof BreakpointMarker>>();
+        activeBreakpoints.forEach((lineNumber) => {
+          if (lineNumber > view.state.doc.lines) {
+            return;
+          }
+          const line = view.state.doc.line(lineNumber);
+          builder.add(line.from, line.from, marker);
+        });
+        return builder.finish();
+      },
+      domEventHandlers: onToggleBreakpoint ? {
+        mousedown(view, block, event) {
+          event.preventDefault();
+          onToggleBreakpoint(view.state.doc.lineAt(block.from).number);
+          return true;
+        },
+      } : {},
+    }),
+    EditorView.baseTheme({
+      ".cm-debug-breakpoint-gutter": {
+        width: "16px",
+      },
+      ".cm-debug-breakpoint-marker": {
+        display: "inline-block",
+        width: "10px",
+        height: "10px",
+        borderRadius: "9999px",
+        backgroundColor: "#dc2626",
+        boxShadow: "0 0 0 1px rgba(255, 255, 255, 0.15)",
+      },
+      ".cm-debug-current-line": {
+        backgroundColor: "rgba(56, 189, 248, 0.14)",
+      },
+    }),
+  ];
+
+  if (currentLine && currentLine > 0) {
+    extensions.push(EditorView.decorations.of((view) => {
+      const builder = new RangeSetBuilder<import("@codemirror/view").Decoration>();
+      if (currentLine > view.state.doc.lines) {
+        return builder.finish();
+      }
+      const line = view.state.doc.line(currentLine);
+      builder.add(line.from, line.from, Decoration.line({ class: "cm-debug-current-line" }));
+      return builder.finish();
+    }));
+  }
+
+  return extensions;
+}
+
 export function FileEditorSurface({
   path,
   value,
@@ -65,15 +150,19 @@ export function FileEditorSurface({
   saving = false,
   dirty = false,
   canSave = false,
+  breakpointLines = [],
+  currentLine = null,
   statusText = "",
   error = "",
   hideHeader = false,
+  onToggleBreakpoint,
   onChange,
   onSave,
   onClose,
 }: Props) {
   const [CodeMirrorEditor, setCodeMirrorEditor] = useState<CodeMirrorComponent | null>(null);
   const [editorExtensions, setEditorExtensions] = useState<unknown[]>([]);
+  const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
   const codeMirrorTheme = typeof document !== "undefined" && document.documentElement.dataset.theme === "classic"
     ? "light"
@@ -92,14 +181,19 @@ export function FileEditorSurface({
     void Promise.all([
       import("@uiw/react-codemirror"),
       loadFileEditorExtensions(path),
+      import("@codemirror/state"),
       import("@codemirror/view"),
     ])
-      .then(([module, loadedExtensions, viewModule]) => {
+      .then(([module, loadedExtensions, stateModule, viewModule]) => {
         if (!active) {
           return;
         }
         setCodeMirrorEditor(() => module.default as CodeMirrorComponent);
-        setEditorExtensions([...loadedExtensions, createEditorTheme(viewModule.EditorView, codeMirrorTheme)]);
+        setEditorExtensions([
+          ...loadedExtensions,
+          ...createDebugExtensions(viewModule, stateModule, breakpointLines, currentLine, onToggleBreakpoint),
+          createEditorTheme(viewModule.EditorView, codeMirrorTheme),
+        ]);
       })
       .catch(() => {
         if (!active) {
@@ -107,12 +201,30 @@ export function FileEditorSurface({
         }
         setCodeMirrorEditor(null);
         setEditorExtensions([]);
+        setEditorView(null);
       });
 
     return () => {
       active = false;
     };
-  }, [canUseCodeMirror, codeMirrorTheme, path]);
+  }, [breakpointLines, canUseCodeMirror, codeMirrorTheme, currentLine, onToggleBreakpoint, path]);
+
+  useEffect(() => {
+    if (!editorView || !currentLine || currentLine <= 0) {
+      return;
+    }
+    if (currentLine > editorView.state.doc.lines) {
+      return;
+    }
+    const line = editorView.state.doc.line(currentLine);
+    const lineBlock = editorView.lineBlockAt(line.from);
+    const targetTop = Math.max(0, lineBlock.top - editorView.scrollDOM.clientHeight / 2);
+    if (typeof editorView.scrollDOM.scrollTo === "function") {
+      editorView.scrollDOM.scrollTo({ top: targetTop });
+      return;
+    }
+    editorView.scrollDOM.scrollTop = targetTop;
+  }, [currentLine, editorView]);
 
   useEffect(() => {
     if (!canSave || loading || saving || typeof window === "undefined") {
@@ -179,6 +291,9 @@ export function FileEditorSurface({
               extensions={editorExtensions}
               autoFocus
               editable={!loading && !saving}
+              onCreateEditor={(view) => {
+                setEditorView(view);
+              }}
               basicSetup={{
                 lineNumbers: true,
                 foldGutter: true,
@@ -195,6 +310,7 @@ export function FileEditorSurface({
             onChange={(event) => onChange(event.target.value)}
             spellCheck={false}
             style={{
+              fontFamily: "var(--code-font-family)",
               touchAction: "pan-x pan-y",
               overscrollBehavior: "contain",
               scrollbarGutter: "stable both-edges",

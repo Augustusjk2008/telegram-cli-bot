@@ -16,6 +16,8 @@ import type {
   ChatTraceEvent,
   CliParamsPayload,
   CreateBotInput,
+  DebugProfile,
+  DebugState,
   DirectoryListing,
   AvatarAsset,
   FileCreateResult,
@@ -277,6 +279,40 @@ export class MockWebBotClient implements WebBotClient {
       toolCallCount: 0,
       processCount: 0,
       trace: [],
+    };
+  }
+
+  async getDebugProfile(_botAlias: string): Promise<DebugProfile | null> {
+    return {
+      configName: "(gdb) Remote Debug",
+      program: "H:\\Resources\\RTLinux\\Demos\\MB_DDF\\build\\aarch64\\Debug\\MB_DDF",
+      cwd: "H:\\Resources\\RTLinux\\Demos\\MB_DDF",
+      miDebuggerPath: "D:\\Toolchain\\aarch64-none-linux-gnu-gdb.exe",
+      compileCommands: "H:\\Resources\\RTLinux\\Demos\\MB_DDF\\.vscode\\compile_commands.json",
+      prepareCommand: ".\\debug.bat",
+      stopAtEntry: true,
+      setupCommands: [
+        "-enable-pretty-printing",
+        "set print thread-events off",
+        "set pagination off",
+        "set sysroot H:/Resources/RTLinux/Demos/MB_DDF/build/aarch64/sysroot",
+      ],
+      remoteHost: "192.168.1.29",
+      remoteUser: "root",
+      remoteDir: "/home/sast8/tmp",
+      remotePort: 1234,
+    };
+  }
+
+  async getDebugState(_botAlias: string): Promise<DebugState> {
+    return {
+      phase: "idle",
+      message: "",
+      breakpoints: [],
+      frames: [],
+      currentFrameId: "",
+      scopes: [],
+      variables: {},
     };
   }
 

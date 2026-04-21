@@ -1,6 +1,7 @@
 import type { ViewMode } from "../app/layoutMode";
 import type {
   ChatWorkbenchStatus,
+  DebugWorkbenchStatus,
   TerminalWorkbenchStatus,
   WorkbenchRestoreState,
 } from "./workbenchTypes";
@@ -10,6 +11,7 @@ type Props = {
   fileDirty: boolean;
   terminalStatus: TerminalWorkbenchStatus;
   chatStatus: ChatWorkbenchStatus;
+  debugStatus: DebugWorkbenchStatus;
   restoreState: WorkbenchRestoreState;
   branchName?: string;
   viewMode: ViewMode;
@@ -48,15 +50,26 @@ function restoreLabel(state: WorkbenchRestoreState) {
   return "新会话";
 }
 
+function debugLocationLabel(status: DebugWorkbenchStatus) {
+  if (!status.currentSourcePath || !status.currentLine) {
+    return "";
+  }
+  const basename = status.currentSourcePath.split(/[\\/]/).filter(Boolean).pop() || status.currentSourcePath;
+  return `${basename}:${status.currentLine}`;
+}
+
 export function WorkbenchStatusBar({
   activeFilePath,
   fileDirty,
   terminalStatus,
   chatStatus,
+  debugStatus,
   restoreState,
   branchName = "",
   viewMode,
 }: Props) {
+  const debugLocation = debugLocationLabel(debugStatus);
+
   return (
     <footer
       data-testid="desktop-workbench-statusbar"
@@ -67,6 +80,9 @@ export function WorkbenchStatusBar({
         <span>{fileDirty ? "未保存" : "已保存"}</span>
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        <span>{debugStatus.connectionText}</span>
+        {debugStatus.targetText ? <span className="font-mono">{debugStatus.targetText}</span> : null}
+        {debugLocation ? <span className="max-w-[16rem] truncate font-mono">{debugLocation}</span> : null}
         <span>{terminalStatus.connectionText}</span>
         <span className="max-w-[24rem] truncate font-mono">{terminalStatus.overrideCwd || terminalStatus.currentCwd}</span>
         {branchName ? <span className="font-mono">{branchName}</span> : null}

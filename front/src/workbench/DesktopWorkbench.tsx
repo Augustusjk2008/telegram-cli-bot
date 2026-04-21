@@ -17,6 +17,7 @@ import type {
 } from "../theme";
 import { getFilePreviewStatusText, isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
 import { ChatPane } from "./ChatPane";
+import { DebugPane } from "./DebugPane";
 import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
 import { PaneResizer } from "./PaneResizer";
@@ -24,6 +25,7 @@ import { TerminalPane } from "./TerminalPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
+import { useDebugSession } from "./useDebugSession";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileTree } from "./useFileTree";
 import { useWorkbenchSession } from "./useWorkbenchSession";
@@ -132,6 +134,15 @@ export function DesktopWorkbench({
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
     containerHeightPx: layoutBounds.centerHeightPx,
+  });
+  const debug = useDebugSession({
+    authToken,
+    botAlias,
+    client,
+    enabled: layoutState.sidebarView === "debug",
+    onRevealLocation: ({ sourcePath }) => {
+      void tabs.openFile(sourcePath);
+    },
   });
 
   const session = useWorkbenchSession({
@@ -307,6 +318,46 @@ export function DesktopWorkbench({
   }
 
   function renderSidebarContent() {
+    if (layoutState.sidebarView === "debug") {
+      return (
+        <DebugPane
+          profile={debug.profile}
+          profileLoading={debug.profileLoading}
+          state={debug.state}
+          prepareLogs={debug.prepareLogs}
+          launchForm={debug.launchForm}
+          onLaunchFormChange={debug.updateLaunchForm}
+          onLaunch={() => {
+            void debug.launch();
+          }}
+          onContinue={() => {
+            void debug.continueExecution();
+          }}
+          onPause={() => {
+            void debug.pauseExecution();
+          }}
+          onNext={() => {
+            void debug.next();
+          }}
+          onStepIn={() => {
+            void debug.stepIn();
+          }}
+          onStepOut={() => {
+            void debug.stepOut();
+          }}
+          onStop={() => {
+            void debug.stop();
+          }}
+          onSelectFrame={(frameId) => {
+            void debug.selectFrame(frameId);
+          }}
+          onRequestVariables={(variablesReference) => {
+            void debug.requestVariables(variablesReference);
+          }}
+        />
+      );
+    }
+
     if (layoutState.sidebarView === "git") {
       return (
         <GitScreen
@@ -473,6 +524,13 @@ export function DesktopWorkbench({
                 tabs={tabs.tabs}
                 activeTab={tabs.activeTab}
                 activeTabPath={tabs.activeTabPath}
+                breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                currentLine={tabs.activeTab ? debug.currentLineForPath(tabs.activeTab.path) : null}
+                onToggleBreakpoint={tabs.activeTab
+                  ? (line) => {
+                      void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                    }
+                  : undefined}
                 onActivateTab={(path) => {
                   void tabs.activateTab(path);
                 }}
@@ -567,6 +625,7 @@ export function DesktopWorkbench({
         fileDirty={Boolean(tabs.activeTab?.dirty)}
         terminalStatus={terminalStatus}
         chatStatus={externalChatStatus || localChatStatus}
+        debugStatus={debug.statusBar}
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}

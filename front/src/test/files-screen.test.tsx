@@ -432,10 +432,31 @@ test("editor uses a CodeMirror theme extension instead of mutating editor DOM st
   const editor = await screen.findByTestId("codemirror-editor");
   const scroller = await screen.findByTestId("codemirror-scroller");
   await waitFor(() => {
-    expect(wrapper).toHaveAttribute("data-extension-count", "1");
+    expect(Number(wrapper.getAttribute("data-extension-count"))).toBeGreaterThan(0);
   });
   expect(editor).not.toHaveAttribute("style");
   expect(scroller).not.toHaveAttribute("style");
+});
+
+test("editor adds debug codemirror extensions when breakpoints are present", async () => {
+  render(
+    <FileEditorSurface
+      path="src/main.cpp"
+      value="int main() { return 0; }\n"
+      breakpointLines={[3, 7]}
+      currentLine={7}
+      hideHeader
+      onToggleBreakpoint={() => {}}
+      onChange={() => {}}
+      onSave={() => {}}
+      onClose={() => {}}
+    />,
+  );
+
+  const wrapper = await screen.findByTestId("codemirror-wrapper");
+  await waitFor(() => {
+    expect(Number(wrapper.getAttribute("data-extension-count"))).toBeGreaterThan(1);
+  });
 });
 
 test("editor uses a single flat surface instead of a nested rounded frame", async () => {

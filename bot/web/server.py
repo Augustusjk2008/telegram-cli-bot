@@ -32,6 +32,7 @@ from bot.config import (
     WEB_TUNNEL_STATE_FILE,
     request_restart,
 )
+from bot.debug.service import DebugService
 from bot.manager import MultiBotManager
 from bot.platform.runtime import get_default_shell
 from bot.platform.terminal import create_shell_process
@@ -370,6 +371,9 @@ class WebApiServer:
         self._update_task: asyncio.Task[None] | None = None
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
+        self._debug_service = DebugService(manager)
+        self._debug_sockets: set[web.WebSocketResponse] = set()
+        self._debug_tasks: set[asyncio.Task[Any]] = set()
         self._tunnel_service = tunnel_service or TunnelService(
             host=self._host,
             port=self._port,
@@ -794,6 +798,78 @@ class WebApiServer:
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit)})
+
+    async def get_debug_profile(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": await self._debug_service.get_profile(alias, auth.user_id)})
+
+    async def get_debug_state(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": await self._debug_service.get_state(alias, auth.user_id)})
+
+    async def debug_ws(self, request: web.Request) -> web.WebSocketResponse:
+        auth = await self._with_auth(request)
+        alias = str(request.query.get("alias") or "").strip().lower()
+        if not alias:
+            raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
+        ws = web.WebSocketResponse(heartbeat=30.0)
+        await ws.prepare(request)
+
+        queue = await self._debug_service.subscribe(alias, auth.user_id)
+        current_task = asyncio.current_task()
+        self._debug_sockets.add(ws)
+        if current_task is not None:
+            self._debug_tasks.add(current_task)
+
+        async def sender() -> None:
+            initial_state = await self._debug_service.get_state(alias, auth.user_id)
+            await ws.send_json({"type": "state", "payload": initial_state})
+            while True:
+                event = await queue.get()
+                await ws.send_json(event)
+
+        sender_task = asyncio.create_task(sender())
+        try:
+            async for message in ws:
+                if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                    break
+                if message.type != WSMsgType.TEXT:
+                    continue
+                try:
+                    payload = json.loads(message.data or "{}")
+                except json.JSONDecodeError:
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "payload": {
+                                "code": "invalid_json",
+                                "message": "调试消息不是合法 JSON",
+                            },
+                        }
+                    )
+                    continue
+                if not isinstance(payload, dict):
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "payload": {
+                                "code": "invalid_json",
+                                "message": "调试消息必须是对象",
+                            },
+                        }
+                    )
+                    continue
+                await self._debug_service.handle_ws_message(alias, auth.user_id, payload)
+        finally:
+            sender_task.cancel()
+            await asyncio.gather(sender_task, return_exceptions=True)
+            await self._debug_service.unsubscribe(alias, auth.user_id, queue)
+            self._debug_sockets.discard(ws)
+            if current_task is not None:
+                self._debug_tasks.discard(current_task)
+        return ws
 
     async def get_history_trace_view(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -1309,6 +1385,9 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
         app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
+        app.router.add_get("/api/bots/{alias}/debug/profile", self.get_debug_profile)
+        app.router.add_get("/api/bots/{alias}/debug/state", self.get_debug_state)
+        app.router.add_get("/debug/ws", self.debug_ws)
         app.router.add_get("/terminal/ws", self.terminal_ws)
         app.router.add_get("/api/bots/{alias}/pwd", self.get_pwd)
         app.router.add_get("/api/bots/{alias}/ls", self.get_ls)
@@ -1419,7 +1498,11 @@ class WebApiServer:
         """Serve index.html for SPA routes."""
         index_path = Path(self._get_static_dir()) / "index.html"
         if index_path.exists():
-            return web.FileResponse(str(index_path))
+            response = web.FileResponse(str(index_path))
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         return web.Response(text="Not found", status=404)
 
     async def start(self):
@@ -1469,6 +1552,20 @@ class WebApiServer:
                 await ws.close(code=WSCloseCode.GOING_AWAY, message=b"server shutdown")
             except Exception:
                 pass
+        debug_tasks = list(self._debug_tasks)
+        self._debug_tasks.clear()
+        for task in debug_tasks:
+            task.cancel()
+        if debug_tasks:
+            await asyncio.gather(*debug_tasks, return_exceptions=True)
+        debug_sockets = list(self._debug_sockets)
+        self._debug_sockets.clear()
+        for ws in debug_sockets:
+            try:
+                await ws.close(code=WSCloseCode.GOING_AWAY, message=b"server shutdown")
+            except Exception:
+                pass
+        await self._debug_service.shutdown()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:

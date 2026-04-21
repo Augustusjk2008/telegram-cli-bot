@@ -7,6 +7,9 @@ type Props = {
   tabs: EditorTab[];
   activeTab: EditorTab | null;
   activeTabPath: string;
+  breakpointLines?: number[];
+  currentLine?: number | null;
+  onToggleBreakpoint?: (line: number) => void;
   onActivateTab: (path: string) => void | Promise<void>;
   onCloseTab: (path: string) => boolean;
   onChangeActiveContent: (content: string) => void;
@@ -23,6 +26,9 @@ export function EditorPane({
   tabs,
   activeTab,
   activeTabPath,
+  breakpointLines = [],
+  currentLine = null,
+  onToggleBreakpoint,
   onActivateTab,
   onCloseTab,
   onChangeActiveContent,
@@ -188,9 +194,12 @@ export function EditorPane({
           saving={activeTab.saving}
           dirty={activeTab.dirty}
           canSave={activeTab.dirty && !activeTab.missing}
+          breakpointLines={breakpointLines}
+          currentLine={currentLine}
           statusText=""
           error=""
           hideHeader
+          onToggleBreakpoint={onToggleBreakpoint}
           onChange={onChangeActiveContent}
           onSave={onSaveActiveTab}
           onClose={() => {
