@@ -115,6 +115,10 @@ from .workspace_search_service import (
     quick_open_files,
     search_workspace_text,
 )
+from .task_service import (
+    discover_tasks,
+    run_task_stream,
+)
 
 logger = logging.getLogger(__name__)
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
@@ -379,6 +383,7 @@ class WebApiServer:
         self._debug_service = DebugService(manager)
         self._debug_sockets: set[web.WebSocketResponse] = set()
         self._debug_tasks: set[asyncio.Task[Any]] = set()
+        self._task_problem_cache: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
         self._tunnel_service = tunnel_service or TunnelService(
             host=self._host,
             port=self._port,
@@ -777,6 +782,52 @@ class WebApiServer:
         workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
         path = request.query.get("path", "")
         return _json({"ok": True, "data": build_file_outline(workspace, path)})
+
+    async def get_tasks(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        return _json({"ok": True, "data": discover_tasks(workspace)})
+
+    async def get_problems(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        return _json({"ok": True, "data": {"items": self._task_problem_cache.get((alias, auth.user_id, workspace), [])}})
+
+    async def post_task_run_stream(self, request: web.Request) -> web.StreamResponse:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        task_id = request.match_info.get("task_id", "")
+        cache_key = (alias, auth.user_id, workspace)
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        client_disconnected = False
+        async for event in run_task_stream(workspace, task_id):
+            if event.get("type") == "done":
+                problems = event.get("problems")
+                self._task_problem_cache[cache_key] = problems if isinstance(problems, list) else []
+            if client_disconnected:
+                continue
+            try:
+                await response.write(_format_sse(str(event.get("type", "message")), event))
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                client_disconnected = True
+                logger.info("任务 SSE 客户端已断开，继续在后台执行: alias=%s task=%s", alias, task_id)
+
+        if not client_disconnected:
+            await response.write_eof()
+        return response
 
     async def post_cd(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -1472,6 +1523,9 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/workspace/quick-open", self.get_workspace_quick_open)
         app.router.add_get("/api/bots/{alias}/workspace/search", self.get_workspace_search)
         app.router.add_get("/api/bots/{alias}/workspace/outline", self.get_workspace_outline)
+        app.router.add_get("/api/bots/{alias}/tasks", self.get_tasks)
+        app.router.add_post("/api/bots/{alias}/tasks/{task_id}/run/stream", self.post_task_run_stream)
+        app.router.add_get("/api/bots/{alias}/problems", self.get_problems)
         app.router.add_post("/api/bots/{alias}/cd", self.post_cd)
         app.router.add_post("/api/bots/{alias}/reset", self.post_reset)
         app.router.add_post("/api/bots/{alias}/kill", self.post_kill)

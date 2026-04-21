@@ -33,10 +33,15 @@ import type {
   SystemScript,
   SystemScriptResult,
   TunnelSnapshot,
+  TaskRunResult,
+  TaskRunStreamEvent,
+  TaskRunStreamOptions,
   UpdateBotWorkdirOptions,
   WorkspaceOutlineResult,
+  WorkspaceProblem,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  WorkspaceTask,
 } from "./types";
 
 export interface WebBotClient {
@@ -68,6 +73,14 @@ export interface WebBotClient {
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
+  listTasks(botAlias: string): Promise<WorkspaceTask[]>;
+  runTaskStream(
+    botAlias: string,
+    taskId: string,
+    onEvent: (event: TaskRunStreamEvent) => void,
+    options?: TaskRunStreamOptions,
+  ): Promise<TaskRunResult>;
+  getProblems(botAlias: string): Promise<WorkspaceProblem[]>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

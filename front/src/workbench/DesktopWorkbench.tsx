@@ -23,7 +23,9 @@ import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
 import { OutlinePane } from "./OutlinePane";
 import { PaneResizer } from "./PaneResizer";
+import { ProblemsPane } from "./ProblemsPane";
 import { SearchPane } from "./SearchPane";
+import { TasksPane } from "./TasksPane";
 import { TerminalPane } from "./TerminalPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
@@ -137,6 +139,7 @@ export function DesktopWorkbench({
   const [gitBranchName, setGitBranchName] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
+  const [problemsRefreshKey, setProblemsRefreshKey] = useState(0);
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -385,6 +388,27 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           activeFilePath={tabs.activeTab?.path || ""}
+          onOpenFile={openWorkspaceFile}
+        />
+      );
+    }
+
+    if (layoutState.sidebarView === "tasks") {
+      return (
+        <TasksPane
+          botAlias={botAlias}
+          client={client}
+          onProblemsChanged={() => setProblemsRefreshKey((current) => current + 1)}
+        />
+      );
+    }
+
+    if (layoutState.sidebarView === "problems") {
+      return (
+        <ProblemsPane
+          botAlias={botAlias}
+          client={client}
+          refreshKey={problemsRefreshKey}
           onOpenFile={openWorkspaceFile}
         />
       );

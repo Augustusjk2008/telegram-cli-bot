@@ -31,12 +31,17 @@ import type {
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TaskRunResult,
+  TaskRunStreamEvent,
+  TaskRunStreamOptions,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
   WorkspaceOutlineResult,
+  WorkspaceProblem,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  WorkspaceTask,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
@@ -154,6 +159,7 @@ export class MockWebBotClient implements WebBotClient {
   ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
+  private taskProblems = new Map<string, WorkspaceProblem[]>();
   private fileContents = new Map<string, string>();
   private fileVersions = new Map<string, number>();
 
@@ -632,6 +638,47 @@ export class MockWebBotClient implements WebBotClient {
       }
     });
     return { items };
+  }
+
+  async listTasks(_botAlias: string): Promise<WorkspaceTask[]> {
+    return [
+      { id: "npm:test", label: "npm test", command: "npm run test", source: "package.json", detail: "vitest" },
+      { id: "npm:build", label: "npm build", command: "npm run build", source: "package.json", detail: "vite build" },
+      { id: "python:pytest", label: "pytest", command: "python -m pytest", source: "tests", detail: "运行 Python 测试" },
+    ];
+  }
+
+  async runTaskStream(
+    botAlias: string,
+    taskId: string,
+    onEvent: (event: TaskRunStreamEvent) => void,
+    options: TaskRunStreamOptions = {},
+  ): Promise<TaskRunResult> {
+    if (options.signal?.aborted) {
+      throw new Error("任务已取消");
+    }
+    onEvent({ type: "meta", taskId, command: taskId.startsWith("npm:") ? ["npm", "run", taskId.slice(4)] : ["python", "-m", "pytest"] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    if (options.signal?.aborted) {
+      throw new Error("任务已取消");
+    }
+    const text = `mock task ${taskId}`;
+    onEvent({ type: "log", text });
+    const problems: WorkspaceProblem[] = [];
+    const result = {
+      taskId,
+      success: true,
+      returnCode: 0,
+      output: `${text}\n`,
+      problems,
+    };
+    this.taskProblems.set(botAlias, problems);
+    onEvent({ type: "done", result });
+    return result;
+  }
+
+  async getProblems(botAlias: string): Promise<WorkspaceProblem[]> {
+    return [...(this.taskProblems.get(botAlias) || [])];
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

@@ -1644,6 +1644,65 @@ async def test_workspace_search_routes_use_current_working_directory(
 
 
 @pytest.mark.asyncio
+async def test_task_routes_discover_run_and_cache_problems(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    (workspace / "package.json").write_text('{"scripts":{"test":"vitest"}}', encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    problems = [{
+        "path": "src/app.ts",
+        "line": 12,
+        "column": 8,
+        "severity": "error",
+        "message": "TS2322: bad type",
+        "source": "tsc",
+    }]
+
+    async def fake_run_task_stream(workspace_arg, task_id):
+        assert Path(workspace_arg) == workspace
+        assert task_id == "npm:test"
+        yield {"type": "log", "text": "running tests"}
+        yield {
+            "type": "done",
+            "task_id": task_id,
+            "success": False,
+            "returncode": 1,
+            "output": "src/app.ts(12,8): error TS2322: bad type\n",
+            "problems": problems,
+        }
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            tasks_resp = await client.get("/api/bots/main/tasks")
+            assert tasks_resp.status == 200
+            tasks_payload = await tasks_resp.json()
+            assert tasks_payload["data"]["items"][0]["id"] == "npm:test"
+
+            with patch("bot.web.server.run_task_stream", fake_run_task_stream):
+                run_resp = await client.post("/api/bots/main/tasks/npm:test/run/stream")
+                assert run_resp.status == 200
+                body = await run_resp.text()
+                assert "event: log" in body
+                assert "event: done" in body
+
+            problems_resp = await client.get("/api/bots/main/problems")
+            assert problems_resp.status == 200
+            problems_payload = await problems_resp.json()
+            assert problems_payload["data"]["items"] == problems
+
+
+@pytest.mark.asyncio
 async def test_write_file_route_updates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
