@@ -161,6 +161,36 @@ export type FileRenameResult = {
   path: string;
 };
 
+export type WorkspaceQuickOpenItem = {
+  path: string;
+  score: number;
+};
+
+export type WorkspaceQuickOpenResult = {
+  items: WorkspaceQuickOpenItem[];
+};
+
+export type WorkspaceSearchMatch = {
+  path: string;
+  line: number;
+  column: number;
+  preview: string;
+};
+
+export type WorkspaceSearchResult = {
+  items: WorkspaceSearchMatch[];
+};
+
+export type WorkspaceOutlineItem = {
+  name: string;
+  kind: "class" | "function" | "method" | "heading";
+  line: number;
+};
+
+export type WorkspaceOutlineResult = {
+  items: WorkspaceOutlineItem[];
+};
+
 export type ChatAttachmentUploadResult = {
   filename: string;
   savedPath: string;

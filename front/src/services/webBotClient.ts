@@ -34,6 +34,9 @@ import type {
   SystemScriptResult,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
+  WorkspaceOutlineResult,
+  WorkspaceQuickOpenResult,
+  WorkspaceSearchResult,
 } from "./types";
 
 export interface WebBotClient {
@@ -62,6 +65,9 @@ export interface WebBotClient {
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
+  quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
+  searchWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceSearchResult>;
+  getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

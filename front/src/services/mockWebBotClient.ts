@@ -34,6 +34,9 @@ import type {
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
+  WorkspaceOutlineResult,
+  WorkspaceQuickOpenResult,
+  WorkspaceSearchResult,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
@@ -556,6 +559,79 @@ export class MockWebBotClient implements WebBotClient {
       oldPath: path,
       path: nextName,
     };
+  }
+
+  async quickOpenWorkspace(botAlias: string, query: string, limit = 50): Promise<WorkspaceQuickOpenResult> {
+    const q = query.trim().toLowerCase();
+    const botFiles = mockFiles[botAlias] || {};
+    const rootPath = this.getBrowserPath(botAlias).replace(/\\/g, "/");
+    const items = Object.entries(botFiles)
+      .flatMap(([directory, entries]) => entries
+        .filter((entry) => !entry.isDir)
+        .map((entry) => {
+          const normalizedDir = directory.replace(/\\/g, "/");
+          const relativeDir = normalizedDir === rootPath
+            ? ""
+            : normalizedDir.startsWith(`${rootPath}/`)
+              ? normalizedDir.slice(rootPath.length + 1)
+              : normalizedDir.replace(/^\/+/, "");
+          const path = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+          const lowerPath = path.toLowerCase();
+          const basename = entry.name.toLowerCase();
+          const score = basename.includes(q) ? 1000 : lowerPath.includes(q) ? 300 : 0;
+          return { path, score };
+        }))
+      .filter((item) => !q || item.path.toLowerCase().includes(q))
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path, "zh-CN"))
+      .slice(0, limit);
+    return { items };
+  }
+
+  async searchWorkspace(botAlias: string, query: string, limit = 100): Promise<WorkspaceSearchResult> {
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      return { items: [] };
+    }
+    const quick = await this.quickOpenWorkspace(botAlias, "", 500);
+    const root = this.getBrowserPath(botAlias);
+    const items = quick.items.flatMap((item) => {
+      const content = this.getFileContent(botAlias, root, item.path);
+      const lines = content.split(/\r?\n/);
+      return lines.flatMap((line, index) => {
+        const column = line.toLowerCase().indexOf(q);
+        return column >= 0
+          ? [{
+              path: item.path,
+              line: index + 1,
+              column: column + 1,
+              preview: line,
+            }]
+          : [];
+      });
+    }).slice(0, limit);
+    return { items };
+  }
+
+  async getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult> {
+    const content = this.getFileContent(botAlias, this.getBrowserPath(botAlias), path);
+    const items: WorkspaceOutlineResult["items"] = [];
+    content.split(/\r?\n/).forEach((line, index) => {
+      const classMatch = line.match(/^\s*class\s+([A-Za-z_][\w]*)/);
+      if (classMatch) {
+        items.push({ name: classMatch[1], kind: "class", line: index + 1 });
+        return;
+      }
+      const functionMatch = line.match(/^\s*(?:async\s+)?def\s+([A-Za-z_][\w]*)|^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/);
+      if (functionMatch) {
+        items.push({ name: functionMatch[1] || functionMatch[2], kind: "function", line: index + 1 });
+        return;
+      }
+      const headingMatch = line.match(/^#{1,6}\s+(.+)/);
+      if (headingMatch) {
+        items.push({ name: headingMatch[1].trim(), kind: "heading", line: index + 1 });
+      }
+    });
+    return { items };
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

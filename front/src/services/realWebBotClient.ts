@@ -46,6 +46,9 @@ import type {
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
+  WorkspaceOutlineResult,
+  WorkspaceQuickOpenResult,
+  WorkspaceSearchResult,
   WorkdirChangeConflict,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
@@ -1324,6 +1327,33 @@ export class RealWebBotClient implements WebBotClient {
       oldPath: data.old_path,
       path: data.path,
     };
+  }
+
+  async quickOpenWorkspace(botAlias: string, query: string, limit = 50): Promise<WorkspaceQuickOpenResult> {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    });
+    return this.requestJson<WorkspaceQuickOpenResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/quick-open?${params.toString()}`,
+    );
+  }
+
+  async searchWorkspace(botAlias: string, query: string, limit = 100): Promise<WorkspaceSearchResult> {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    });
+    return this.requestJson<WorkspaceSearchResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/search?${params.toString()}`,
+    );
+  }
+
+  async getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult> {
+    const params = new URLSearchParams({ path });
+    return this.requestJson<WorkspaceOutlineResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/outline?${params.toString()}`,
+    );
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

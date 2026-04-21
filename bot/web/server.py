@@ -110,6 +110,11 @@ from .git_service import (
     stash_git_changes,
     unstage_git_paths,
 )
+from .workspace_search_service import (
+    build_file_outline,
+    quick_open_files,
+    search_workspace_text,
+)
 
 logger = logging.getLogger(__name__)
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
@@ -749,6 +754,29 @@ class WebApiServer:
         alias = self._manager_alias(request)
         target_path = request.query.get("path") or None
         return _json({"ok": True, "data": get_directory_listing(self.manager, alias, auth.user_id, path=target_path)})
+
+    async def get_workspace_quick_open(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        query = request.query.get("q", "")
+        limit = int(request.query.get("limit", "50"))
+        return _json({"ok": True, "data": quick_open_files(workspace, query, limit=limit)})
+
+    async def get_workspace_search(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        query = request.query.get("q", "")
+        limit = int(request.query.get("limit", "100"))
+        return _json({"ok": True, "data": search_workspace_text(workspace, query, limit=limit)})
+
+    async def get_workspace_outline(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        path = request.query.get("path", "")
+        return _json({"ok": True, "data": build_file_outline(workspace, path)})
 
     async def post_cd(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
@@ -1441,6 +1469,9 @@ class WebApiServer:
         app.router.add_get("/terminal/ws", self.terminal_ws)
         app.router.add_get("/api/bots/{alias}/pwd", self.get_pwd)
         app.router.add_get("/api/bots/{alias}/ls", self.get_ls)
+        app.router.add_get("/api/bots/{alias}/workspace/quick-open", self.get_workspace_quick_open)
+        app.router.add_get("/api/bots/{alias}/workspace/search", self.get_workspace_search)
+        app.router.add_get("/api/bots/{alias}/workspace/outline", self.get_workspace_outline)
         app.router.add_post("/api/bots/{alias}/cd", self.post_cd)
         app.router.add_post("/api/bots/{alias}/reset", self.post_reset)
         app.router.add_post("/api/bots/{alias}/kill", self.post_kill)

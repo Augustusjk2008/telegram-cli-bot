@@ -17,10 +17,13 @@ import type {
 } from "../theme";
 import { getFilePreviewStatusText, isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
 import { ChatPane } from "./ChatPane";
+import { CommandPalette } from "./CommandPalette";
 import { DebugPane } from "./DebugPane";
 import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
+import { OutlinePane } from "./OutlinePane";
 import { PaneResizer } from "./PaneResizer";
+import { SearchPane } from "./SearchPane";
 import { TerminalPane } from "./TerminalPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
@@ -132,6 +135,8 @@ export function DesktopWorkbench({
     currentCwd: "",
   });
   const [gitBranchName, setGitBranchName] = useState("");
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -182,6 +187,11 @@ export function DesktopWorkbench({
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
+  const activeEditorLine = tabs.activeTab && editorReveal?.path === tabs.activeTab.path
+    ? editorReveal.line
+    : tabs.activeTab
+      ? debug.currentLineForPath(tabs.activeTab.path)
+      : null;
 
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);
@@ -300,6 +310,30 @@ export function DesktopWorkbench({
     }
   }, [fileTree.rootPath, terminalStatus.currentCwd]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const primary = event.ctrlKey || event.metaKey;
+      if (!primary) {
+        return;
+      }
+      if (!event.shiftKey && key === "p") {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+      if (event.shiftKey && key === "f") {
+        event.preventDefault();
+        setSidebarView("search");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [setSidebarView]);
+
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
   }
@@ -319,6 +353,13 @@ export function DesktopWorkbench({
     }
   }
 
+  async function openWorkspaceFile(path: string, line?: number) {
+    await tabs.openFile(path);
+    if (line && line > 0) {
+      setEditorReveal({ path, line });
+    }
+  }
+
   async function handleUpload(files: File[]) {
     for (const file of files) {
       await client.uploadFile(botAlias, file);
@@ -328,6 +369,27 @@ export function DesktopWorkbench({
   }
 
   function renderSidebarContent() {
+    if (layoutState.sidebarView === "search") {
+      return (
+        <SearchPane
+          botAlias={botAlias}
+          client={client}
+          onOpenFile={openWorkspaceFile}
+        />
+      );
+    }
+
+    if (layoutState.sidebarView === "outline") {
+      return (
+        <OutlinePane
+          botAlias={botAlias}
+          client={client}
+          activeFilePath={tabs.activeTab?.path || ""}
+          onOpenFile={openWorkspaceFile}
+        />
+      );
+    }
+
     if (layoutState.sidebarView === "debug") {
       return (
         <DebugPane
@@ -541,7 +603,7 @@ export function DesktopWorkbench({
                 activeTab={tabs.activeTab}
                 activeTabPath={tabs.activeTabPath}
                 breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                currentLine={tabs.activeTab ? debug.currentLineForPath(tabs.activeTab.path) : null}
+                currentLine={activeEditorLine}
                 onToggleBreakpoint={tabs.activeTab
                   ? (line) => {
                       void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
@@ -663,6 +725,14 @@ export function DesktopWorkbench({
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
+      />
+
+      <CommandPalette
+        open={commandPaletteOpen}
+        botAlias={botAlias}
+        client={client}
+        onClose={() => setCommandPaletteOpen(false)}
+        onOpenFile={openWorkspaceFile}
       />
 
       {previewName ? (

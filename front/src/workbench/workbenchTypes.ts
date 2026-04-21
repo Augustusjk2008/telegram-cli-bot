@@ -1,4 +1,4 @@
-export type DesktopSidebarView = "files" | "debug" | "git" | "settings";
+export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "settings";
 
 export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_snapshot";
 
@@ -98,7 +98,12 @@ type ClampPaneStateOptions = {
 };
 
 export function isDesktopSidebarView(value: unknown): value is DesktopSidebarView {
-  return value === "files" || value === "debug" || value === "git" || value === "settings";
+  return value === "files"
+    || value === "search"
+    || value === "outline"
+    || value === "debug"
+    || value === "git"
+    || value === "settings";
 }
 
 export function clampPaneState(

@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { Bug, Files, GitBranch, PanelLeftClose, PanelLeftOpen, Settings2 } from "lucide-react";
+import { Bug, Files, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, Search, Settings2 } from "lucide-react";
 import type { DesktopSidebarView } from "./workbenchTypes";
 
 type Props = {
@@ -11,6 +11,8 @@ type Props = {
 
 const ITEMS: Array<{ id: DesktopSidebarView; label: string; icon: typeof Files }> = [
   { id: "files", label: "文件", icon: Files },
+  { id: "search", label: "搜索", icon: Search },
+  { id: "outline", label: "大纲", icon: ListTree },
   { id: "debug", label: "调试", icon: Bug },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "settings", label: "设置", icon: Settings2 },

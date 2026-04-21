@@ -1604,6 +1604,46 @@ async def test_file_routes_serialize_last_modified_ns_as_string(
 
 
 @pytest.mark.asyncio
+async def test_workspace_search_routes_use_current_working_directory(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "main.py").write_text("class App:\n    def run(self):\n        needle = True\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            quick_resp = await client.get("/api/bots/main/workspace/quick-open?q=main&limit=5")
+            search_resp = await client.get("/api/bots/main/workspace/search?q=needle&limit=5")
+            outline_resp = await client.get("/api/bots/main/workspace/outline?path=src/main.py")
+
+            assert quick_resp.status == 200
+            quick_payload = await quick_resp.json()
+            assert quick_payload["data"]["items"][0]["path"] == "src/main.py"
+
+            assert search_resp.status == 200
+            search_payload = await search_resp.json()
+            assert search_payload["data"]["items"][0]["path"] == "src/main.py"
+            assert search_payload["data"]["items"][0]["line"] == 3
+
+            assert outline_resp.status == 200
+            outline_payload = await outline_resp.json()
+            assert outline_payload["data"]["items"] == [
+                {"name": "App", "kind": "class", "line": 1},
+                {"name": "run", "kind": "function", "line": 2},
+            ]
+
+
+@pytest.mark.asyncio
 async def test_write_file_route_updates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
