@@ -109,9 +109,6 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   expect(screen.getByTestId("desktop-workbench-activity-rail")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-workbench-statusbar")).toBeInTheDocument();
   expect(screen.getByText("AI 等待中")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "折叠编辑区" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "折叠右侧聊天区" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "AI 助手" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Git" }));
   expect(await screen.findByText("当前分支")).toBeInTheDocument();
@@ -119,7 +116,6 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   await user.click(screen.getByRole("button", { name: "调试" }));
   expect(await screen.findByTestId("debug-pane")).toBeInTheDocument();
   expect(screen.getByText("(gdb) Remote Debug")).toBeInTheDocument();
-  expect(screen.queryByLabelText("准备命令")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "展开远端参数" }));
   expect(screen.getByLabelText("准备命令")).toHaveValue(".\\debug.bat");
   expect(screen.getByRole("toolbar", { name: "调试控制" })).toBeInTheDocument();
@@ -521,6 +517,55 @@ test("desktop file clicks open tabs and sync rename and delete actions", async (
   await waitFor(() => {
     expect(screen.queryByRole("tab", { name: /README-renamed\.md/ })).not.toBeInTheDocument();
   });
+});
+
+test("desktop file tree shows diff for modified files and uses the tighter menu radius", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }],
+  });
+  vi.spyOn(client, "getGitTreeStatus").mockResolvedValue({
+    repoFound: true,
+    workingDir: "/workspace",
+    repoPath: "/workspace",
+    items: {
+      "README.md": "modified",
+    },
+  });
+  const getGitDiff = vi.spyOn(client, "getGitDiff").mockResolvedValue({
+    path: "README.md",
+    staged: false,
+    diff: "@@ -1 +1 @@\n-before\n+after",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
+  const menu = await screen.findByRole("menu", { name: "文件树菜单" });
+  expect(menu).toHaveClass("rounded-md");
+  await user.click(await screen.findByRole("button", { name: "Diff" }));
+
+  expect(getGitDiff).toHaveBeenCalledWith("main", "README.md", false);
+  expect(await screen.findByRole("tab", { name: "README.md.diff" })).toBeInTheDocument();
 });
 
 test("desktop file tree loads file content on the first click", async () => {

@@ -130,6 +130,8 @@ from .api_service import (
 )
 from .git_service import (
     commit_git_changes,
+    discard_all_git_changes,
+    discard_git_paths,
     fetch_git_remote,
     get_git_diff,
     get_git_overview,
@@ -1252,6 +1254,19 @@ class WebApiServer:
         overview = unstage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已取消暂存所选文件", "overview": overview}})
 
+    async def post_git_discard(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        overview = discard_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
+        return _json({"ok": True, "data": {"message": "已丢弃所选文件改动", "overview": overview}})
+
+    async def post_git_discard_all(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        overview = discard_all_git_changes(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": {"message": "已丢弃全部改动", "overview": overview}})
+
     async def post_git_commit(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
@@ -1787,6 +1802,8 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/git/diff", self.get_git_diff_view)
         app.router.add_post("/api/bots/{alias}/git/stage", self.post_git_stage)
         app.router.add_post("/api/bots/{alias}/git/unstage", self.post_git_unstage)
+        app.router.add_post("/api/bots/{alias}/git/discard", self.post_git_discard)
+        app.router.add_post("/api/bots/{alias}/git/discard-all", self.post_git_discard_all)
         app.router.add_post("/api/bots/{alias}/git/commit", self.post_git_commit)
         app.router.add_post("/api/bots/{alias}/git/fetch", self.post_git_fetch)
         app.router.add_post("/api/bots/{alias}/git/pull", self.post_git_pull)

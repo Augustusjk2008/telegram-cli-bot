@@ -93,7 +93,7 @@ function CollapseHeader({
     >
       <Icon className="h-4 w-4 shrink-0 text-[var(--muted)]" />
       <span className="shrink-0 text-sm font-semibold text-[var(--text)]">{title}</span>
-      {summary ? <span className="min-w-0 truncate font-mono text-xs text-[var(--muted)]">{summary}</span> : null}
+      {summary ? <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{summary}</span> : null}
     </button>
   );
 }
@@ -261,26 +261,26 @@ export function DebugPane({
           onToggle={() => setSessionExpanded((current) => !current)}
         />
         {sessionExpanded ? (
-          <dl className="mt-3 space-y-2 text-xs">
+          <dl className="mt-3 space-y-2 text-[12px]">
             <div>
               <dt className="text-[var(--muted)]">配置名</dt>
-              <dd className="break-all font-mono text-[var(--text)]">{profile.configName}</dd>
+              <dd className="break-all text-[var(--text)]">{profile.configName}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">program</dt>
-              <dd className="break-all font-mono text-[var(--text)]">{profile.program}</dd>
+              <dd className="break-all text-[var(--text)]">{profile.program}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">miDebuggerPath</dt>
-              <dd className="break-all font-mono text-[var(--text)]">{profile.miDebuggerPath}</dd>
+              <dd className="break-all text-[var(--text)]">{profile.miDebuggerPath}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">sysroot</dt>
-              <dd className="break-all font-mono text-[var(--text)]">{sysroot || "-"}</dd>
+              <dd className="break-all text-[var(--text)]">{sysroot || "-"}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">compile_commands.json</dt>
-              <dd className="break-all font-mono text-[var(--text)]">{profile.compileCommands || "-"}</dd>
+              <dd className="break-all text-[var(--text)]">{profile.compileCommands || "-"}</dd>
             </div>
           </dl>
         ) : null}
@@ -300,7 +300,7 @@ export function DebugPane({
             <input
               value={launchForm.prepareCommand}
               onChange={(event) => onLaunchFormChange({ prepareCommand: event.target.value })}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-sm text-[var(--text)]"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-[12px] leading-5 text-[var(--text)]"
             />
           </label>
           <label className="block text-xs">
@@ -308,7 +308,7 @@ export function DebugPane({
             <input
               value={launchForm.remoteHost}
               onChange={(event) => onLaunchFormChange({ remoteHost: event.target.value })}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-sm text-[var(--text)]"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-[12px] leading-5 text-[var(--text)]"
             />
           </label>
           <label className="block text-xs">
@@ -316,7 +316,7 @@ export function DebugPane({
             <input
               value={launchForm.remoteUser}
               onChange={(event) => onLaunchFormChange({ remoteUser: event.target.value })}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-sm text-[var(--text)]"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-[12px] leading-5 text-[var(--text)]"
             />
           </label>
           <label className="block text-xs">
@@ -324,7 +324,7 @@ export function DebugPane({
             <input
               value={launchForm.remoteDir}
               onChange={(event) => onLaunchFormChange({ remoteDir: event.target.value })}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-sm text-[var(--text)]"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-[12px] leading-5 text-[var(--text)]"
             />
           </label>
           <label className="block text-xs">
@@ -333,7 +333,7 @@ export function DebugPane({
               value={launchForm.remotePort}
               inputMode="numeric"
               onChange={(event) => onLaunchFormChange({ remotePort: event.target.value })}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-sm text-[var(--text)]"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-[12px] leading-5 text-[var(--text)]"
             />
           </label>
           <label className="block text-xs">
@@ -342,7 +342,7 @@ export function DebugPane({
               type="password"
               value={launchForm.password}
               onChange={(event) => onLaunchFormChange({ password: event.target.value })}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-sm text-[var(--text)]"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-[12px] leading-5 text-[var(--text)]"
             />
           </label>
           <label className="flex items-center gap-2 text-sm text-[var(--text)]">

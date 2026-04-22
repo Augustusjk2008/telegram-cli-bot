@@ -11,6 +11,8 @@ from .protocol import decode_message, encode_request
 
 logger = logging.getLogger(__name__)
 
+PLUGIN_STDIO_LIMIT = 64 * 1024 * 1024
+
 
 @dataclass
 class _PluginProcess:
@@ -81,6 +83,7 @@ class PluginRuntime:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(manifest.root),
+            limit=PLUGIN_STDIO_LIMIT,
         )
         wrapped = _PluginProcess(process=process)
         wrapped.stderr_task = asyncio.create_task(self._read_stderr(manifest.plugin_id, process))

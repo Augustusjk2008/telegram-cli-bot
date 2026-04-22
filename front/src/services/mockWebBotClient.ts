@@ -1156,6 +1156,25 @@ export class MockWebBotClient implements WebBotClient {
     }));
   }
 
+  async discardGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已丢弃所选文件改动", (overview) => {
+      const changedFiles = overview.changedFiles.filter((item) => !paths.includes(item.path));
+      return {
+        ...overview,
+        changedFiles,
+        isClean: changedFiles.length === 0,
+      };
+    });
+  }
+
+  async discardAllGitChanges(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已丢弃全部改动", (overview) => ({
+      ...overview,
+      isClean: true,
+      changedFiles: [],
+    }));
+  }
+
   async commitGitChanges(botAlias: string, message: string): Promise<GitActionResult> {
     const subject = (message || "").trim() || "mock commit";
     return this.actionWithOverview(botAlias, "已创建提交", (overview) => ({

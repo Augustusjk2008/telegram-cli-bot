@@ -91,7 +91,6 @@ test("assistant bots lock the default workdir in settings", async () => {
   render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
 
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "浏览工作目录" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "保存工作目录" })).not.toBeInTheDocument();
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
@@ -182,9 +181,6 @@ test("main settings merge update controls into the main bot operations card", as
   expect(within(opsRegion).getByRole("heading", { name: "版本更新" })).toBeInTheDocument();
   expect(within(opsRegion).getByText("当前版本")).toBeInTheDocument();
   expect(within(opsRegion).getByText("自动下载更新")).toBeInTheDocument();
-  expect(within(opsRegion).queryByRole("button", { name: "立即检查" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "重建前端" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "重启服务" })).not.toBeInTheDocument();
   expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
 });
 

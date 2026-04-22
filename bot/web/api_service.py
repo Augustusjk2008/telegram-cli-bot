@@ -900,6 +900,31 @@ def _stat_file_version(path: str) -> int:
     return os.stat(path).st_mtime_ns
 
 
+def _ensure_file_version_advanced(path: str, previous_mtime_ns: int) -> int:
+    current_mtime_ns = _stat_file_version(path)
+    if current_mtime_ns > previous_mtime_ns:
+        return current_mtime_ns
+
+    for step_ns in (
+        100,
+        1_000,
+        10_000,
+        100_000,
+        1_000_000,
+        10_000_000,
+        100_000_000,
+        1_000_000_000,
+        2_000_000_000,
+    ):
+        adjusted_mtime_ns = previous_mtime_ns + step_ns
+        os.utime(path, ns=(adjusted_mtime_ns, adjusted_mtime_ns))
+        current_mtime_ns = _stat_file_version(path)
+        if current_mtime_ns > previous_mtime_ns:
+            return current_mtime_ns
+
+    _raise(500, "write_file_failed", "文件版本更新失败")
+
+
 def _resolve_new_directory_path(base_dir: str, name: str) -> tuple[str, str]:
     candidate = str(name or "").strip()
     if not candidate or candidate in {".", ".."} or "\x00" in candidate:
@@ -1372,6 +1397,38 @@ def _finalize_assistant_chat_turn(
     )
     if compaction_result in {"changed", "noop"}:
         sync_managed_prompt_files(assistant_home)
+
+
+def _log_assistant_chat_finalize_failure(task: asyncio.Task[Any], *, user_id: int) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
+
+
+def _schedule_assistant_chat_turn_finalization(
+    assistant_home,
+    *,
+    user_id: int,
+    user_text: str,
+    response: str,
+    assistant_pre_surface: dict[str, str],
+    compaction_prompt_active: bool,
+) -> None:
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            _finalize_assistant_chat_turn,
+            assistant_home,
+            user_id=user_id,
+            user_text=user_text,
+            response=response,
+            assistant_pre_surface=assistant_pre_surface,
+            compaction_prompt_active=compaction_prompt_active,
+        )
+    )
+    task.add_done_callback(lambda done_task: _log_assistant_chat_finalize_failure(done_task, user_id=user_id))
 
 
 def _chunk_text(text: str, size: int = 160) -> list[str]:
@@ -2061,20 +2118,17 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 error_message=None if completion_state == "completed" else response,
             )
             if assistant_home is not None:
-                try:
-                    _finalize_assistant_chat_turn(
-                        assistant_home,
-                        user_id=user_id,
-                        user_text=text,
-                        response=str(done_message.get("content") or response),
-                        assistant_pre_surface=assistant_pre_surface,
-                        compaction_prompt_active=compaction_prompt_active,
-                    )
-                except Exception as exc:
-                    logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
+                _schedule_assistant_chat_turn_finalization(
+                    assistant_home,
+                    user_id=user_id,
+                    user_text=text,
+                    response=str(done_message.get("content") or response),
+                    assistant_pre_surface=assistant_pre_surface,
+                    compaction_prompt_active=compaction_prompt_active,
+                )
             with session._lock:
                 session.is_processing = False
-            yield {
+            done_event = {
                 "type": "done",
                 "output": str(done_message.get("content") or response),
                 "message": done_message,
@@ -2082,6 +2136,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 "returncode": returncode,
                 "session": build_session_snapshot(profile, session),
             }
+            yield done_event
             return
     finally:
         with session._lock:
@@ -2522,13 +2577,14 @@ def write_file_content(
 
     try:
         _write_text_file_atomically(file_path, content)
+        next_mtime_ns = _ensure_file_version_advanced(file_path, current_mtime_ns)
     except Exception as exc:
         _raise(500, "write_file_failed", str(exc))
 
     return {
         "path": path,
         "file_size_bytes": os.path.getsize(file_path),
-        "last_modified_ns": _stat_file_version(file_path),
+        "last_modified_ns": next_mtime_ns,
     }
 
 

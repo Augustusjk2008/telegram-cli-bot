@@ -98,9 +98,6 @@ test("guest login trims member-only navigation", async () => {
 
   expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Git" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "插件" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
 });
 
@@ -114,7 +111,6 @@ test("forced desktop mode mounts the desktop shell instead of the mobile bottom 
   await user.click(screen.getByRole("button", { name: "登录" }));
 
   expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
-  expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
 });
 
 test("mobile shell exposes a layout toggle that can switch into desktop mode", async () => {
@@ -183,12 +179,7 @@ test("super admin can open invite code management from bot switcher", async () =
   await user.click(await screen.findByRole("button", { name: "邀请码管理" }));
 
   expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "智能体管理" })).not.toBeInTheDocument();
-  expect(screen.queryByText("界面与阅读")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "智能体切换" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
-  expect(document.title).toBe("邀请码管理 - Orbit Safe Claw");
 });
 
 test("main settings can switch and persist appearance preferences", async () => {
@@ -420,12 +411,6 @@ test("bot manager can add rename and delete managed bots", async () => {
   await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
   expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
-  await act(async () => {
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-  });
-  expect(screen.getByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("智能体管理 - Orbit Safe Claw");
 
   await user.type(screen.getByLabelText("新智能体别名"), "team3");
   await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");

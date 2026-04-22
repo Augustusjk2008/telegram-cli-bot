@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -121,41 +122,50 @@ def _parse_status_header(header: str) -> tuple[str, int, int]:
 def _parse_changed_files(lines: list[str]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for raw_line in lines:
-        if not raw_line:
-            continue
-        if raw_line.startswith("## "):
-            continue
-
-        if raw_line.startswith("?? "):
-            path = raw_line[3:].strip()
-            items.append(
-                {
-                    "path": path,
-                    "status": "??",
-                    "staged": False,
-                    "unstaged": False,
-                    "untracked": True,
-                }
-            )
+        entry = _parse_porcelain_entry(raw_line)
+        if entry is None:
             continue
 
-        status = raw_line[:2]
-        path_text = raw_line[3:].strip()
-        if " -> " in path_text:
-            path_text = path_text.split(" -> ", 1)[1].strip()
-
-        staged = status[0] not in (" ", "?")
-        unstaged = status[1] != " "
         items.append(
             {
-                "path": path_text,
-                "status": status,
-                "staged": staged,
-                "unstaged": unstaged,
-                "untracked": False,
+                "path": entry["path"],
+                "status": entry["status"],
+                "staged": entry["staged"],
+                "unstaged": entry["unstaged"],
+                "untracked": entry["untracked"],
             }
         )
     return items
+
+
+def _parse_porcelain_entry(raw_line: str) -> dict[str, Any] | None:
+    if not raw_line or raw_line.startswith("## "):
+        return None
+
+    if raw_line.startswith("?? "):
+        return {
+            "path": raw_line[3:].strip(),
+            "original_path": "",
+            "status": "??",
+            "staged": False,
+            "unstaged": False,
+            "untracked": True,
+        }
+
+    status = raw_line[:2]
+    path_text = raw_line[3:].strip()
+    original_path = ""
+    if " -> " in path_text:
+        original_path, path_text = [part.strip() for part in path_text.split(" -> ", 1)]
+
+    return {
+        "path": path_text,
+        "original_path": original_path,
+        "status": status,
+        "staged": status[0] not in (" ", "?"),
+        "unstaged": status[1] != " ",
+        "untracked": False,
+    }
 
 
 def _parse_tree_status_kind(status: str) -> Optional[str]:
@@ -341,6 +351,124 @@ def _require_repo_root(manager: MultiBotManager, alias: str, user_id: int) -> tu
     return working_dir, repo_root
 
 
+def _get_status_entries(repo_root: str, paths: list[str] | None = None) -> list[dict[str, Any]]:
+    args = ["status", "--porcelain=1", "--untracked-files=all"]
+    if paths:
+        args.extend(["--", *paths])
+    result = _run_git(repo_root, args)
+    entries: list[dict[str, Any]] = []
+    for raw_line in (result.stdout or "").splitlines():
+        entry = _parse_porcelain_entry(raw_line)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def _unique_paths(paths: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        ordered.append(path)
+    return ordered
+
+
+def _repo_has_head_commit(repo_root: str) -> bool:
+    return _run_git(repo_root, ["rev-parse", "--verify", "HEAD"], check=False).returncode == 0
+
+
+def _resolve_repo_worktree_path(repo_root: str, relative_path: str) -> str:
+    repo_root_abs = os.path.abspath(repo_root)
+    target_path = os.path.abspath(os.path.join(repo_root_abs, relative_path))
+    if os.path.commonpath([repo_root_abs, target_path]) != repo_root_abs:
+        _raise(400, "unsafe_git_path", "Git 文件路径不安全")
+    return target_path
+
+
+def _delete_worktree_path(repo_root: str, relative_path: str) -> None:
+    target_path = _resolve_repo_worktree_path(repo_root, relative_path)
+    if os.path.isdir(target_path) and not os.path.islink(target_path):
+        shutil.rmtree(target_path, ignore_errors=True)
+    elif os.path.lexists(target_path):
+        os.remove(target_path)
+
+    repo_root_abs = os.path.abspath(repo_root)
+    parent = os.path.dirname(target_path)
+    while parent and parent != repo_root_abs:
+        try:
+            os.rmdir(parent)
+        except OSError:
+            break
+        parent = os.path.dirname(parent)
+
+
+def _restore_git_paths(repo_root: str, paths: list[str], *, error_code: str) -> None:
+    if not paths:
+        return
+    if not _repo_has_head_commit(repo_root):
+        _raise(400, error_code, "当前仓库还没有可恢复的提交")
+
+    try:
+        _run_git(repo_root, ["restore", "--source=HEAD", "--staged", "--worktree", "--", *paths])
+        return
+    except GitCommandError:
+        try:
+            _run_git(repo_root, ["reset", "HEAD", "--", *paths])
+            _run_git(repo_root, ["checkout", "--", *paths])
+            return
+        except GitCommandError as exc:
+            _raise(400, error_code, str(exc))
+
+
+def _unstage_added_git_paths(repo_root: str, paths: list[str], *, error_code: str) -> None:
+    if not paths:
+        return
+    try:
+        _run_git(repo_root, ["rm", "--cached", "-f", "--", *paths])
+    except GitCommandError as exc:
+        _raise(400, error_code, str(exc))
+
+
+def _discard_status_entries(repo_root: str, entries: list[dict[str, Any]], *, error_code: str) -> None:
+    restore_paths: list[str] = []
+    unstage_and_remove_paths: list[str] = []
+    remove_paths: list[str] = []
+
+    for entry in entries:
+        path = entry["path"]
+        status = entry["status"]
+        original_path = entry.get("original_path") or ""
+
+        if entry["untracked"]:
+            remove_paths.append(path)
+            continue
+
+        if "R" in status and original_path:
+            restore_paths.append(original_path)
+            if path != original_path:
+                remove_paths.append(path)
+            continue
+
+        if "C" in status and original_path:
+            remove_paths.append(path)
+            continue
+
+        if status.startswith("A"):
+            unstage_and_remove_paths.append(path)
+            remove_paths.append(path)
+            continue
+
+        restore_paths.append(path)
+
+    _restore_git_paths(repo_root, _unique_paths(restore_paths), error_code=error_code)
+    _unstage_added_git_paths(repo_root, _unique_paths(unstage_and_remove_paths), error_code=error_code)
+
+    for path in _unique_paths(remove_paths):
+        _delete_worktree_path(repo_root, path)
+
+
 def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, staged: bool = False) -> dict[str, Any]:
     _, repo_root = _require_repo_root(manager, alias, user_id)
     relative_path = _normalize_repo_relative_path(path)
@@ -389,6 +517,24 @@ def unstage_git_paths(manager: MultiBotManager, alias: str, user_id: int, paths:
         except GitCommandError as exc:
             _raise(400, "git_unstage_failed", str(exc))
 
+    return _build_git_overview(working_dir, repo_root)
+
+
+def discard_git_paths(manager: MultiBotManager, alias: str, user_id: int, paths: list[str]) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    normalized = _unique_paths([_normalize_repo_relative_path(path) for path in paths if str(path).strip()])
+    if not normalized:
+        _raise(400, "missing_git_paths", "至少选择一个文件")
+
+    entries = _get_status_entries(repo_root, normalized)
+    _discard_status_entries(repo_root, entries, error_code="git_discard_failed")
+    return _build_git_overview(working_dir, repo_root)
+
+
+def discard_all_git_changes(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    entries = _get_status_entries(repo_root)
+    _discard_status_entries(repo_root, entries, error_code="git_discard_all_failed")
     return _build_git_overview(working_dir, repo_root)
 
 

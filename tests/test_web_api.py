@@ -6,6 +6,7 @@ import asyncio
 import json
 import struct
 import subprocess
+import threading
 import time
 import zlib
 from datetime import datetime, timedelta
@@ -70,6 +71,8 @@ from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.git_service import (
     commit_git_changes,
+    discard_all_git_changes,
+    discard_git_paths,
     get_git_diff,
     get_git_overview,
     get_git_tree_status,
@@ -1282,6 +1285,60 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
 
     committed = commit_git_changes(web_manager, "main", 1001, "feat: update tracked")
     assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
+
+
+def test_discard_git_paths_restores_tracked_and_added_files(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    added = repo_dir / "added.txt"
+    added.write_text("draft\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "added.txt")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    overview = discard_git_paths(web_manager, "main", 1001, ["tracked.txt", "added.txt"])
+
+    assert tracked.read_text(encoding="utf-8") == "before\n"
+    assert not added.exists()
+    assert not any(item["path"] == "tracked.txt" for item in overview["changed_files"])
+    assert not any(item["path"] == "added.txt" for item in overview["changed_files"])
+
+
+def test_discard_all_git_changes_restores_repo_state(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    added = repo_dir / "added.txt"
+    added.write_text("draft\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "added.txt")
+    untracked = repo_dir / "scratch.txt"
+    untracked.write_text("temp\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    overview = discard_all_git_changes(web_manager, "main", 1001)
+
+    assert overview["is_clean"] is True
+    assert overview["changed_files"] == []
+    assert tracked.read_text(encoding="utf-8") == "before\n"
+    assert not added.exists()
+    assert not untracked.exists()
+
 
 def test_get_git_tree_status_filters_to_working_dir_and_marks_added_modified_and_ignored(
     web_manager: MultiBotManager,
@@ -3414,6 +3471,10 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
         events = [event async for event in _stream_cli_chat(web_manager, "assistant1", 1001, "继续。")]
+        for _ in range(20):
+            if sync_mock.call_count == 2 and finalize_mock.call_count == 1:
+                break
+            await asyncio.sleep(0.05)
 
     compiler.assert_called_once_with(
         "继续。",
@@ -3431,6 +3492,70 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
     assert build_mock.call_args.kwargs["user_text"] == "继续。"
     assert any(event["type"] == "done" for event in events)
     assert session.managed_prompt_hash_seen == "hash-new"
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_emits_done_before_assistant_finalize_completes(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root-stream-finalize"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    session = get_session_for_alias(web_manager, "assistant1", 1001)
+
+    fake_stdout = MagicMock()
+    fake_stdout.readline.return_value = ""
+    fake_stdout.read.return_value = ""
+
+    fake_process = MagicMock()
+    fake_process.stdout = fake_stdout
+    fake_process.poll.return_value = 0
+    fake_process.wait.return_value = 0
+
+    finalize_started = threading.Event()
+    finalize_release = threading.Event()
+
+    def delayed_finalize(*args, **kwargs):
+        finalize_started.set()
+        finalize_release.wait(timeout=2.0)
+
+    async def collect_events():
+        return [event async for event in _stream_cli_chat(web_manager, "assistant1", 1001, "继续。")]
+
+    try:
+        with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+             patch("bot.web.api_service.is_compaction_prompt_active", return_value=False), \
+             patch(
+                 "bot.web.api_service.sync_managed_prompt_files",
+                 return_value=ManagedPromptSyncResult(False, False, "hash-new"),
+             ), \
+             patch(
+                 "bot.web.api_service.compile_assistant_prompt",
+                 return_value=AssistantPromptPayload(
+                     prompt_text="继续。",
+                     managed_prompt_hash_seen="hash-new",
+                 ),
+             ), \
+             patch("bot.web.api_service._finalize_assistant_chat_turn", side_effect=delayed_finalize) as finalize_mock, \
+             patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+             patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+            events = await asyncio.wait_for(collect_events(), timeout=0.5)
+            assert await asyncio.to_thread(finalize_started.wait, 0.5)
+            assert finalize_mock.call_count == 1
+
+        done_event = next(event for event in events if event["type"] == "done")
+        assert done_event["session"]["is_processing"] is False
+        assert session.is_processing is False
+    finally:
+        finalize_release.set()
+        await asyncio.sleep(0.05)
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trace_error(

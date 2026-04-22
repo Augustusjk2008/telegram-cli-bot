@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   SendHorizontal,
+  Trash2,
   UploadCloud,
 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
@@ -315,6 +316,16 @@ export function GitScreen({
                                     ) : null}
                                     <button
                                       type="button"
+                                      aria-label={`丢弃 ${item.path}`}
+                                      title={`丢弃 ${item.path}`}
+                                      onClick={() => void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]))}
+                                      disabled={actionLoading !== ""}
+                                      className={iconButtonClass()}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </button>
+                                    <button
+                                      type="button"
                                       aria-label={`在编辑器打开 ${item.path}`}
                                       title={`在编辑器打开 ${item.path}`}
                                       onClick={() => void openChangedDiff(item.path, item.staged && !item.unstaged)}
@@ -438,6 +449,15 @@ export function GitScreen({
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" />
                       暂存全部
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runAction("discard-all", () => client.discardAllGitChanges(botAlias))}
+                      disabled={actionLoading !== "" || overview.isClean}
+                      className={buttonClass()}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      丢弃全部
                     </button>
                     <button
                       type="button"

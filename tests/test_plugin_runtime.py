@@ -62,6 +62,62 @@ for line in sys.stdin:
     (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_large_payload_plugin(root: Path) -> None:
+    plugin_dir = root / "large-wave"
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+
+large_blob = "x" * 100_000
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "plugin.initialize":
+        result = {"name": "large-wave"}
+    elif method == "plugin.render_view":
+        result = {
+            "renderer": "waveform",
+            "title": "large.vcd",
+            "payload": {
+                "path": request["params"]["input"]["path"],
+                "timescale": "1ns",
+                "startTime": 0,
+                "endTime": 10,
+                "tracks": [],
+                "blob": large_blob,
+            },
+        }
+    elif method == "plugin.shutdown":
+        result = {"ok": True}
+    else:
+        result = {"method": method}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\\n")
+    sys.stdout.flush()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "schemaVersion": 1,
+        "id": "large-wave",
+        "name": "Large Wave",
+        "version": "0.1.0",
+        "description": "large runtime test",
+        "runtime": {
+            "type": "python",
+            "entry": "backend/main.py",
+            "protocol": "jsonrpc-stdio",
+        },
+        "views": [{"id": "waveform", "title": "波形预览", "renderer": "waveform"}],
+        "fileHandlers": [],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @pytest.mark.asyncio
 async def test_plugin_runtime_initializes_renders_and_shuts_down(tmp_path: Path) -> None:
     plugins_root = tmp_path / "plugins"
@@ -74,4 +130,19 @@ async def test_plugin_runtime_initializes_renders_and_shuts_down(tmp_path: Path)
 
     assert result["renderer"] == "waveform"
     assert result["payload"]["path"] == "waves/trace.vcd"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_runtime_reads_large_jsonrpc_response_lines(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_large_payload_plugin(plugins_root)
+    registry = PluginRegistry(plugins_root)
+    manifest = registry.discover()["large-wave"]
+
+    runtime = PluginRuntime()
+    result = await runtime.render_view(manifest, "waveform", {"path": "waves/large.vcd"})
+
+    assert result["renderer"] == "waveform"
+    assert len(result["payload"]["blob"]) == 100_000
     await runtime.shutdown()

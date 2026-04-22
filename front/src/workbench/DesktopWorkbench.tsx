@@ -534,6 +534,9 @@ export function DesktopWorkbench({
           onRequestPreview={(path) => {
             void loadPreview(path, "preview");
           }}
+          onRequestDiff={(path) => {
+            void openGitDiffInEditor(path, false);
+          }}
           onRequestUpload={handleUpload}
           gitDecorations={gitDecorations}
           onRefreshGitDecorations={refreshGitDecorations}

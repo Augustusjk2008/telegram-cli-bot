@@ -2045,6 +2045,52 @@ describe("RealWebBotClient", () => {
     expect(message.elapsedSeconds).toBe(4);
   });
 
+  test("sendMessage resolves once done arrives even if the stream stays open", async () => {
+    const encoder = new TextEncoder();
+    let cancelled = false;
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: meta\ndata: {\"type\":\"meta\",\"cli_type\":\"codex\"}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\",\"elapsed_seconds\":4}\n\n"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const messagePromise = client.sendMessage("main", "hello", () => undefined);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error("sendMessage did not resolve after done")), 200);
+    });
+    const message = await Promise.race([messagePromise, timeoutPromise]);
+
+    expect(message.text).toBe("最终结果");
+    expect(message.elapsedSeconds).toBe(4);
+    expect(cancelled).toBe(true);
+  });
+
   test("sendMessage forwards trace events and prefers done.message over done.output", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

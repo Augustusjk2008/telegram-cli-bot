@@ -12,6 +12,7 @@ type Props = {
   onRenamedFile: (oldPath: string, nextPath: string) => void;
   onDeletedFile: (path: string) => void;
   onRequestPreview: (path: string) => void;
+  onRequestDiff?: (path: string) => void | Promise<void>;
   onRequestUpload: (files: File[]) => Promise<void>;
   gitDecorations: Record<string, GitTreeDecorationKind>;
   onRefreshGitDecorations: () => Promise<void>;
@@ -830,6 +831,7 @@ export function FileTreePane({
   onRenamedFile,
   onDeletedFile,
   onRequestPreview,
+  onRequestDiff,
   onRequestUpload,
   gitDecorations,
   onRefreshGitDecorations,
@@ -850,6 +852,9 @@ export function FileTreePane({
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [dragDepth, setDragDepth] = useState(0);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const contextMenuDecoration = contextMenu
+    ? resolveGitDecoration(contextMenu.entry.path, contextMenu.entry.isDir, gitDecorations)
+    : undefined;
 
   function closeContextMenu() {
     setContextMenu(null);
@@ -1177,7 +1182,7 @@ export function FileTreePane({
           <div
             role="menu"
             aria-label="文件树菜单"
-            className="fixed z-30 min-w-36 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+            className="fixed z-30 min-w-36 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
             onContextMenu={(event) => {
               event.preventDefault();
@@ -1190,7 +1195,7 @@ export function FileTreePane({
                   onRequestSetWorkdir(contextMenu.absolutePath);
                   closeContextMenu();
                 }}
-                className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
               >
                 设为工作目录
               </button>
@@ -1202,17 +1207,29 @@ export function FileTreePane({
                     onRequestPreview(contextMenu.entry.path);
                     closeContextMenu();
                   }}
-                  className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                 >
                   预览
                 </button>
+                {contextMenuDecoration === "modified" && onRequestDiff ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onRequestDiff(contextMenu.entry.path);
+                      closeContextMenu();
+                    }}
+                    className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    Diff
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
                     openRenameDialog(contextMenu.entry.path, contextMenu.entry.name);
                     closeContextMenu();
                   }}
-                  className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                 >
                   改名
                 </button>
@@ -1222,7 +1239,7 @@ export function FileTreePane({
                     void tree.downloadFile(contextMenu.entry.path);
                     closeContextMenu();
                   }}
-                  className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                 >
                   下载
                 </button>
@@ -1234,7 +1251,7 @@ export function FileTreePane({
                 closeContextMenu();
                 void handleDelete(contextMenu.entry);
               }}
-              className="flex w-full rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+              className="flex w-full rounded-sm px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
             >
               删除
             </button>

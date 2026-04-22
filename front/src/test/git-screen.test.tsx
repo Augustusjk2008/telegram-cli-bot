@@ -194,6 +194,14 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       message: "已取消暂存",
       overview: buildRepoOverview(),
     }),
+    discardGitPaths: async (): Promise<GitActionResult> => ({
+      message: "已丢弃所选文件改动",
+      overview: buildRepoOverview({ changedFiles: [{ path: "draft.txt", status: "??", staged: false, unstaged: false, untracked: true }] }),
+    }),
+    discardAllGitChanges: async (): Promise<GitActionResult> => ({
+      message: "已丢弃全部改动",
+      overview: buildRepoOverview({ isClean: true, changedFiles: [] }),
+    }),
     commitGitChanges: async (): Promise<GitActionResult> => ({
       message: "已提交",
       overview: buildRepoOverview(),
@@ -361,6 +369,63 @@ test("disables the stage-all button when there are no unstaged or untracked file
   );
 
   expect(await screen.findByRole("button", { name: "暂存全部" })).toBeDisabled();
+});
+
+test("discards a single changed file", async () => {
+  const user = userEvent.setup();
+  const discardSpy = vi.fn(async () => ({
+    message: "已丢弃所选文件改动",
+    overview: buildRepoOverview({
+      changedFiles: [
+        {
+          path: "draft.txt",
+          status: "??",
+          staged: false,
+          unstaged: false,
+          untracked: true,
+        },
+      ],
+    }),
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        discardGitPaths: discardSpy,
+      })}
+    />,
+  );
+
+  await user.click(await screen.findByLabelText("丢弃 tracked.txt"));
+
+  expect(discardSpy).toHaveBeenCalledWith("main", ["tracked.txt"]);
+  expect(await screen.findByText("已丢弃所选文件改动")).toBeInTheDocument();
+});
+
+test("discards all changes from the commit panel", async () => {
+  const user = userEvent.setup();
+  const discardAllSpy = vi.fn(async () => ({
+    message: "已丢弃全部改动",
+    overview: buildRepoOverview({
+      isClean: true,
+      changedFiles: [],
+    }),
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        discardAllGitChanges: discardAllSpy,
+      })}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "丢弃全部" }));
+
+  expect(discardAllSpy).toHaveBeenCalledWith("main");
+  expect(await screen.findByText("已丢弃全部改动")).toBeInTheDocument();
 });
 
 test("opens changed file diff in the editor instead of rendering diff in git", async () => {

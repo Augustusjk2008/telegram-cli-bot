@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
 from bot.plugins.service import PluginService
+
+
+def _load_vcd_parser():
+    parser_path = Path("examples/plugins/vivado-waveform/backend/vcd_parser.py")
+    spec = importlib.util.spec_from_file_location("vivado_waveform_vcd_parser", parser_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_fixture_vcd_contains_expected_signals() -> None:
@@ -13,6 +26,41 @@ def test_fixture_vcd_contains_expected_signals() -> None:
     assert "$var wire 1 \" rst_n $end" in text
     assert "$var wire 4 # counter $end" in text
     assert "b1011 #" in text
+
+
+def test_vcd_parser_scales_large_ps_traces_and_skips_zero_width_parameters(tmp_path: Path) -> None:
+    lines = [
+        "$timescale",
+        "  1ps",
+        "$end",
+        "$scope module tb $end",
+        "$var wire 1 ! clk $end",
+        "$var wire 8 \" data [7:0] $end",
+        "$var parameter 0 # CLK_HZ $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+        "#0",
+        "0!",
+        "b00000000 \"",
+        "b10101010 #",
+    ]
+    for index in range(1, 5006):
+        lines.append(f"#{index * 1_000_000}")
+        lines.append(("1" if index % 2 else "0") + "!")
+    lines.extend(["#5005000000", "b11110000 \""])
+    wave_file = tmp_path / "large_ps.vcd"
+    wave_file.write_text("\n".join(lines), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    payload = parser.parse_vcd(wave_file)
+
+    assert payload["timescale"] == "1us"
+    assert payload["endTime"] == pytest.approx(5005)
+    assert payload["display"]["pixelsPerTime"] < 18
+    labels = [track["label"] for track in payload["tracks"]]
+    assert "tb.CLK_HZ" not in labels
+    clk_track = next(track for track in payload["tracks"] if track["label"] == "tb.clk")
+    assert len(clk_track["segments"]) <= 4001
 
 
 @pytest.mark.asyncio

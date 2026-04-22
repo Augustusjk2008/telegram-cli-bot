@@ -115,6 +115,8 @@ export interface WebBotClient {
   getGitDiff(botAlias: string, path: string, staged?: boolean): Promise<GitDiffPayload>;
   stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;
   unstageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;
+  discardGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;
+  discardAllGitChanges(botAlias: string): Promise<GitActionResult>;
   commitGitChanges(botAlias: string, message: string): Promise<GitActionResult>;
   fetchGitRemote(botAlias: string): Promise<GitActionResult>;
   pullGitRemote(botAlias: string): Promise<GitActionResult>;

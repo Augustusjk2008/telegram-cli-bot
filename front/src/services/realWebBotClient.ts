@@ -1263,8 +1263,9 @@ export class RealWebBotClient implements WebBotClient {
     let finalElapsedSeconds: number | undefined;
     let finalMessage: ChatMessage | null = null;
     const streamedTrace: ChatTraceEvent[] = [];
+    let streamFinished = false;
 
-    while (true) {
+    while (!streamFinished) {
       const { value, done } = await reader.read();
       if (done) {
         break;
@@ -1310,6 +1311,9 @@ export class RealWebBotClient implements WebBotClient {
           if (typeof event.elapsed_seconds === "number") {
             finalElapsedSeconds = event.elapsed_seconds;
           }
+          streamFinished = true;
+          await reader.cancel().catch(() => undefined);
+          break;
         } else if (event.type === "error") {
           throw new Error(event.message || "流式响应失败");
         }
@@ -1869,6 +1873,24 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ paths }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async discardGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/discard`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ paths }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async discardAllGitChanges(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/discard-all`, {
+      method: "POST",
     });
     return mapGitActionResult(data);
   }
