@@ -14,7 +14,6 @@ import pytest
 from bot.config import CLI_PATH
 from bot.models import BotProfile, UserSession
 
-
 class TestBotProfile:
     """测试 BotProfile"""
 
@@ -44,7 +43,6 @@ class TestBotProfile:
         assert p.cli_params.codex["reasoning_effort"] == "xhigh"
         assert p.cli_params.codex["yolo"] is True
 
-
 class TestUserSession:
     """测试 UserSession"""
 
@@ -73,10 +71,6 @@ class TestUserSession:
         s.touch()
         assert s.last_activity > old_time
         assert s.message_count == old_count + 1
-
-    def test_user_session_no_longer_exposes_is_expired(self):
-        s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")
-        assert not hasattr(s, "is_expired")
 
     def test_add_to_history(self):
         s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")

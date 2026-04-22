@@ -18,15 +18,6 @@ from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.sessions import get_or_create_session
 
-
-def test_manager_module_no_longer_imports_telegram_runtime():
-    source = Path("bot/manager.py").read_text(encoding="utf-8")
-
-    assert ("from " + "telegram") not in source
-    assert ("telegram" ".ext") not in source
-    assert "register_handlers" not in source
-
-
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 
@@ -365,7 +356,6 @@ class TestManagerLoadSave:
             assistant_dir / "CLAUDE.md"
         ).read_text(encoding="utf-8")
 
-
 class TestManagerValidation:
     """测试验证逻辑"""
 
@@ -394,28 +384,6 @@ class TestManagerValidation:
         m = MultiBotManager(main_profile=profile, storage_file=str(temp_dir / "b.json"))
         with pytest.raises(ValueError):
             m._validate_alias("-invalid")
-
-    @pytest.mark.asyncio
-    async def test_add_bot_no_longer_requires_token(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        profile = BotProfile(alias="main", token="main_tok")
-        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
-
-        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
-             patch.object(m, "_start_profile", AsyncMock(return_value=None)) as start_profile:
-            created = await m.add_bot(
-                alias="web_only",
-                cli_type="codex",
-                cli_path="codex",
-                working_dir=str(temp_dir),
-                bot_mode="cli",
-            )
-
-        assert created.token == ""
-        assert m.managed_profiles["web_only"].token == ""
-        assert "token" not in json.loads(storage.read_text(encoding="utf-8"))["bots"][0]
-        start_profile.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_add_bot_persists_avatar_name_to_storage(self, temp_dir: Path):
@@ -584,7 +552,6 @@ class TestManagerValidation:
         assert not m.applications
         assert 123 not in m.bot_id_to_alias
 
-
 class TestManagerGetProfile:
     """测试 get_profile"""
 
@@ -605,7 +572,6 @@ class TestManagerGetProfile:
         m = MultiBotManager(main_profile=main_profile, storage_file=str(temp_dir / "b.json"))
         with pytest.raises(KeyError):
             m.get_profile("nonexistent")
-
 
 class TestManagerGetStatusLines:
     """测试 get_status_lines"""

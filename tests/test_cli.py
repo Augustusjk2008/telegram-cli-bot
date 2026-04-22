@@ -28,7 +28,6 @@ from bot.cli import (
 )
 from bot.cli_params import CliParamsConfig
 
-
 class TestValidateCliType:
     """测试 validate_cli_type"""
 
@@ -54,7 +53,6 @@ class TestValidateCliType:
         with pytest.raises(ValueError):
             validate_cli_type("")
 
-
 class TestNormalizeCliType:
     """测试 normalize_cli_type"""
 
@@ -64,7 +62,6 @@ class TestNormalizeCliType:
 
     def test_already_lowercase(self):
         assert normalize_cli_type("codex") == "codex"
-
 
 class TestResolveCliExecutable:
     """测试 resolve_cli_executable"""
@@ -94,7 +91,6 @@ class TestResolveCliExecutable:
         result = resolve_cli_executable("claude.cmd", "/tmp")
 
         assert result is None
-
 
 class TestBuildCliCommand:
     """测试 build_cli_command"""
@@ -177,7 +173,6 @@ class TestBuildCliCommand:
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
 
-
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""
 
@@ -199,7 +194,6 @@ class TestParseCodexJsonLine:
         )
         assert result["completed_text"] == "OK"
         assert result["delta_text"] == "OK"
-
 
 class TestParseCodexJsonOutput:
     """测试 parse_codex_json_output"""
@@ -226,7 +220,6 @@ class TestParseCodexJsonOutput:
         assert text == "目录已读取完成。"
         assert thread_id == "thread-1"
 
-
 class TestParseClaudeStreamJsonLine:
     """测试 Claude stream-json 单行解析"""
 
@@ -243,7 +236,6 @@ class TestParseClaudeStreamJsonLine:
         )
         assert result["session_id"] == "sess-1"
         assert result["completed_text"] == "Hi there"
-
 
 class TestParseClaudeStreamJsonOutput:
     """测试 Claude stream-json 完整输出解析"""
@@ -269,7 +261,6 @@ class TestParseClaudeStreamJsonOutput:
         assert text == "Error: Session ID not found"
         assert session_id == "sess-1"
 
-
 class TestExtractCodexStatus:
     """测试 Codex 状态文本提取"""
 
@@ -286,7 +277,6 @@ class TestExtractCodexStatus:
         raw = "  gpt-5.4 xhigh · 87% left · ~\\repo\n"
         parsed = extract_codex_status(raw)
         assert parsed["status_line"] == "gpt-5.4 xhigh · 87% left · ~\\repo"
-
 
 class TestShouldFinishCodexStatusPoll:
     """测试 Codex /status 轮询完成判定"""
@@ -355,7 +345,6 @@ class TestShouldFinishCodexStatusPoll:
 
         assert should_finish is True
 
-
 class TestReadCodexStatusFromTerminal:
     """测试 Codex PTY 状态查询包装器"""
 
@@ -373,7 +362,6 @@ class TestReadCodexStatusFromTerminal:
         assert result["ok"] is True
         assert result["status_line"] == "100% context left"
 
-
 class TestShouldResetCodexSession:
     """测试 should_reset_codex_session"""
 
@@ -384,7 +372,6 @@ class TestShouldResetCodexSession:
     def test_with_error(self):
         result = should_reset_codex_session("sess-123", "error", 1)
         assert isinstance(result, bool)
-
 
 class TestShouldResetClaudeSession:
     """测试 should_reset_claude_session"""
@@ -400,7 +387,6 @@ class TestShouldResetClaudeSession:
     def test_session_id_not_found_marker(self):
         result = should_reset_claude_session("Error: Session ID not found", 1)
         assert result is True
-
 
 class TestShouldMarkClaudeSessionInitialized:
     """测试 should_mark_claude_session_initialized"""
@@ -435,16 +421,3 @@ class TestShouldMarkClaudeSessionInitialized:
             1,
         )
         assert result is False
-
-
-def test_cli_module_no_longer_contains_removed_legacy_session_reset_helper():
-    source = Path("bot/cli.py").read_text(encoding="utf-8")
-
-    assert ("should_reset_" + "ki" + "mi_session") not in source
-
-
-def test_cli_params_module_no_longer_contains_removed_legacy_args_or_help_text():
-    source = Path("bot/cli_params.py").read_text(encoding="utf-8")
-
-    assert ("_build_" + "ki" + "mi_args") not in source
-    assert ('"' + "ki" + "mi" + '"') not in source

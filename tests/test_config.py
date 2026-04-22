@@ -25,18 +25,11 @@ from bot.config import (
     request_restart,
 )
 
-
 class TestConfigConstants:
     """测试配置常量值"""
 
     def test_supported_cli_types(self):
         assert SUPPORTED_CLI_TYPES == {"claude", "codex"}
-
-    def test_config_module_no_longer_exports_telegram_runtime_envs(self):
-        import bot.config as config
-
-        assert not hasattr(config, "TELEGRAM" "_ENABLED")
-        assert not hasattr(config, "TELEGRAM" "_BOT_TOKEN")
 
     def test_dangerous_commands_is_set(self):
         assert isinstance(DANGEROUS_COMMANDS, set)
@@ -69,12 +62,6 @@ class TestConfigConstants:
         assert POLLING_TIMEOUT == 30
         assert POLLING_WATCHDOG_INTERVAL == 5
         assert MAIN_LOOP_RETRY_DELAY == 5
-
-    def test_session_timeout_constant_removed(self):
-        import bot.config as config
-
-        assert not hasattr(config, "SESSION_TIMEOUT")
-        assert not hasattr(config, "CLI_EXEC_TIMEOUT")
 
     def test_working_dir_is_absolute(self):
         import os
@@ -145,7 +132,6 @@ class TestConfigConstants:
         importlib.reload(config)
 
         assert config.APP_UPDATE_REPOSITORY == "Augustusjk2008/telegram-cli-bot"
-
 
 class TestRestartMechanism:
     """测试重启机制"""

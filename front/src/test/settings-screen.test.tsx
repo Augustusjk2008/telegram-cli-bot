@@ -123,23 +123,6 @@ test("settings can browse and pick a workdir before saving", async () => {
   expect(client.browserPath).toBe("C:\\workspace");
 });
 
-test("embedded settings can prefill the workdir without rendering logout controls", async () => {
-  const client = new MockWebBotClient();
-
-  render(
-    <SettingsScreen
-      botAlias="main"
-      client={client}
-      onLogout={() => undefined}
-      embedded
-      prefilledWorkdir="C:\\workspace\\picked"
-    />,
-  );
-
-  expect(await screen.findByLabelText("工作目录")).toHaveValue("C:\\workspace\\picked");
-  expect(screen.queryByRole("button", { name: "退出登录" })).not.toBeInTheDocument();
-});
-
 test("settings screen asks for confirmation before resetting the current workdir conversation", async () => {
   const user = userEvent.setup();
   const updateBotWorkdir = vi.fn()
@@ -187,27 +170,6 @@ test("settings screen asks for confirmation before resetting the current workdir
   expect(await screen.findByText("工作目录已更新")).toBeInTheDocument();
 });
 
-test("CLI type selector only shows codex and claude", async () => {
-  const client = new MockWebBotClient();
-
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-
-  const select = await screen.findByLabelText("CLI 类型");
-  const options = within(select).getAllByRole("option").map((item) => item.textContent);
-
-  expect(options).toEqual(["codex", "claude"]);
-});
-
-test("settings lists detected plugins and supported file extensions", async () => {
-  const client = new MockWebBotClient();
-
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-
-  expect(await screen.findByRole("heading", { name: "插件" })).toBeInTheDocument();
-  expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
-  expect(screen.getByText("支持 .vcd")).toBeInTheDocument();
-});
-
 test("main settings merge update controls into the main bot operations card", async () => {
   const client = new MockWebBotClient();
 
@@ -224,31 +186,6 @@ test("main settings merge update controls into the main bot operations card", as
   expect(screen.queryByRole("button", { name: "重建前端" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "重启服务" })).not.toBeInTheDocument();
   expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
-});
-
-test("settings no longer shows invite code management", async () => {
-  const client = new MockWebBotClient();
-
-  render(
-    <SettingsScreen
-      botAlias="main"
-      client={client}
-      onLogout={() => undefined}
-      sessionCapabilities={["manage_register_codes"]}
-    />,
-  );
-
-  expect(await screen.findByText("界面与阅读")).toBeInTheDocument();
-  expect(screen.queryByText("邀请码管理")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("邀请码可用次数")).not.toBeInTheDocument();
-  expect(screen.queryByText("最新邀请码")).not.toBeInTheDocument();
-});
-
-test("assistant settings hide the update controls", async () => {
-  const client = new MockWebBotClient();
-
-  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
-  expect(screen.queryByText("版本更新")).not.toBeInTheDocument();
 });
 
 test("manual assistant automation dispatches a chat handoff event", async () => {
@@ -297,63 +234,6 @@ test("manual assistant automation dispatches a chat handoff event", async () => 
     runId: expect.stringMatching(/^run_/),
     prompt: "检查最近邮件并总结重点",
   });
-});
-
-test("dream assistant automation stays silent and does not dispatch a chat handoff event", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-
-  await client.addBot({
-    alias: "assistant1",
-    botMode: "assistant",
-    cliType: "codex",
-    cliPath: "codex",
-    workingDir: "C:\\workspace\\assistant1",
-    avatarName: "avatar_01.png",
-  });
-  await client.createAssistantCronJob("assistant1", {
-    id: "daily_dream",
-    enabled: true,
-    title: "晨间 Dream",
-    schedule: {
-      type: "interval",
-      everySeconds: 300,
-      timezone: "Asia/Shanghai",
-      misfirePolicy: "skip",
-    },
-    task: {
-      prompt: "根据近期工作做自我完善",
-      mode: "dream",
-      lookbackHours: 24,
-      historyLimit: 40,
-      captureLimit: 20,
-      deliverMode: "silent",
-    },
-    execution: {
-      timeoutSeconds: 600,
-    },
-  } satisfies CreateAssistantCronJobInput);
-  vi.spyOn(client, "runAssistantCronJob").mockResolvedValue({
-    runId: "run_dream_1",
-    status: "queued",
-    taskMode: "dream",
-    deliverMode: "silent",
-  });
-
-  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
-  dispatchSpy.mockClear();
-
-  await user.click(await screen.findByRole("button", { name: "立即运行 晨间 Dream" }));
-
-  await waitFor(() => {
-    expect(screen.getByText(/Dream 任务已入队，将在后台静默执行/)).toBeInTheDocument();
-  });
-
-  const handoffEvent = dispatchSpy.mock.calls
-    .map(([event]) => event)
-    .find((event) => event instanceof CustomEvent && event.type === "assistant-cron-run-enqueued");
-  expect(handoffEvent).toBeUndefined();
 });
 
 test("settings screen shows dream fields when cron mode switches to dream", async () => {

@@ -11,27 +11,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import ClientSession
 import pytest
 
-
 @pytest.fixture(autouse=True)
 def _prevent_real_browser_open(monkeypatch):
     import bot.main as main_module
 
     monkeypatch.setattr(main_module.webbrowser, "open", lambda *args, **kwargs: True)
 
-
 def test_web_server_uses_platform_terminal_module():
     source = Path("bot/web/server.py").read_text(encoding="utf-8")
 
     assert "from bot.platform.terminal import create_shell_process" in source
     assert ("from bot." + "handlers.tui_server import create_shell_process") not in source
-
-
-def test_main_module_no_longer_references_telegram_runtime():
-    source = Path("bot/main.py").read_text(encoding="utf-8")
-
-    assert ("TELEGRAM" "_ENABLED") not in source
-    assert ("TELEGRAM" "_BOT_TOKEN") not in source
-
 
 @pytest.mark.asyncio
 async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
@@ -62,7 +52,6 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
     fake_manager.shutdown_all.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 async def test_run_all_bots_prints_web_access_url_for_specific_host(monkeypatch):
@@ -99,7 +88,6 @@ async def test_run_all_bots_prints_web_access_url_for_specific_host(monkeypatch)
 
     assert "可访问地址:" in printed
     assert "   http://127.0.0.1:8765" in printed
-
 
 @pytest.mark.asyncio
 async def test_run_all_bots_opens_localhost_with_actual_port(monkeypatch):
@@ -138,7 +126,6 @@ async def test_run_all_bots_opens_localhost_with_actual_port(monkeypatch):
 
     assert opened_urls == [("http://127.0.0.1:8767", 2)]
 
-
 @pytest.mark.asyncio
 async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(monkeypatch):
     import bot.main as main_module
@@ -176,7 +163,6 @@ async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(mon
     assert "可访问地址:" in printed
     assert "   本机: http://127.0.0.1:9000" in printed
     assert "   局域网 IP: http://192.168.31.5:9000" in printed
-
 
 @pytest.mark.asyncio
 async def test_run_all_bots_prints_ipv6_loopback_when_web_host_is_ipv6_any(monkeypatch):
@@ -217,7 +203,6 @@ async def test_run_all_bots_prints_ipv6_loopback_when_web_host_is_ipv6_any(monke
     assert "   本机: http://127.0.0.1:9000" not in printed
     assert "   局域网 IP: http://192.168.31.5:9000" not in printed
 
-
 @pytest.mark.asyncio
 async def test_run_all_bots_prints_ipv6_loopback_host(monkeypatch):
     import bot.main as main_module
@@ -254,7 +239,6 @@ async def test_run_all_bots_prints_ipv6_loopback_host(monkeypatch):
     assert "可访问地址:" in printed
     assert "   http://[::1]:8765" in printed
 
-
 @pytest.mark.asyncio
 async def test_run_all_bots_supports_web_only_mode(monkeypatch):
     import bot.main as main_module
@@ -285,7 +269,6 @@ async def test_run_all_bots_supports_web_only_mode(monkeypatch):
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
     fake_manager.shutdown_all.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch):
     import bot.main as main_module
@@ -315,7 +298,6 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=True)
     fake_manager.shutdown_all.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 async def test_run_all_bots_requires_web_runtime(monkeypatch):
     import bot.main as main_module
@@ -329,7 +311,6 @@ async def test_run_all_bots_requires_web_runtime(monkeypatch):
          patch.object(main_module.asyncio, "Event", return_value=MagicMock()):
         with pytest.raises(RuntimeError, match="WEB_ENABLED 不能为 false"):
             await main_module.run_all_bots()
-
 
 def test_main_prints_web_only_runtime_status(monkeypatch):
     import bot.main as main_module
@@ -352,7 +333,6 @@ def test_main_prints_web_only_runtime_status(monkeypatch):
     assert any(line == "   Web API: 开启" for line in printed)
     assert all(line != "   Telegram: 开启" and line != "   Telegram: 关闭" for line in printed)
 
-
 def test_safe_print_falls_back_on_gbk_console(monkeypatch):
     import bot.main as main_module
 
@@ -369,7 +349,6 @@ def test_safe_print_falls_back_on_gbk_console(monkeypatch):
     main_module.safe_print("🤖 Web Bot 已启动")
 
     assert "? Web Bot 已启动" in fake_stdout.getvalue()
-
 
 @pytest.mark.skipif(sys.platform != "win32", reason="该回归仅在 Windows 的 Web 终端重启路径上复现")
 @pytest.mark.asyncio

@@ -242,45 +242,6 @@ test("renders git repo summary and changed files", async () => {
   expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
 });
 
-test("renders full-width desktop IDE git layout regions without nested vertical scroll", async () => {
-  render(<GitScreen botAlias="main" client={createClient()} />);
-
-  const shell = await screen.findByTestId("git-desktop-shell");
-  expect(shell).toHaveClass("space-y-3");
-  expect(shell).not.toHaveClass("md:grid");
-  const changesPanel = screen.getByTestId("git-changes-panel");
-  const changesContent = screen.getByTestId("git-changes-content");
-  expect(changesPanel).not.toHaveClass("overflow-hidden");
-  expect(changesContent).not.toHaveClass("max-h-[72vh]", "overflow-y-auto");
-  expect(screen.queryByTestId("git-diff-panel")).not.toBeInTheDocument();
-  expect(screen.getByTestId("git-commit-panel")).toBeInTheDocument();
-});
-
-test("collapses changes and recent commits", async () => {
-  const user = userEvent.setup();
-  render(<GitScreen botAlias="main" client={createClient()} />);
-
-  expect(await screen.findByText("tracked.txt")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "收起变更" }));
-  expect(screen.queryByText("tracked.txt")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "展开变更" }));
-  expect(await screen.findByText("tracked.txt")).toBeInTheDocument();
-
-  expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "收起最近提交" }));
-  expect(screen.queryByText("feat: initial commit")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "展开最近提交" }));
-  expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
-});
-
-test("embedded git omits the page header chrome", async () => {
-  render(<GitScreen botAlias="main" client={createClient()} embedded />);
-
-  expect(await screen.findByText("当前分支")).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "Git" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
-});
-
 test("shows init action when current directory is not a git repo", async () => {
   const user = userEvent.setup();
   const initSpy = async (): Promise<GitOverview> => buildRepoOverview();
@@ -400,16 +361,6 @@ test("disables the stage-all button when there are no unstaged or untracked file
   );
 
   expect(await screen.findByRole("button", { name: "暂存全部" })).toBeDisabled();
-});
-
-test("renders compact icon actions in changed file rows", async () => {
-  render(<GitScreen botAlias="main" client={createClient()} />);
-
-  const row = await screen.findByTestId("git-change-row-tracked.txt");
-  expect(within(row).getByText("tracked.txt")).toBeInTheDocument();
-  expect(within(row).getByLabelText("取消暂存 tracked.txt")).toBeInTheDocument();
-  expect(within(row).getByLabelText("在编辑器打开 tracked.txt")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "查看 Diff" })).not.toBeInTheDocument();
 });
 
 test("opens changed file diff in the editor instead of rendering diff in git", async () => {

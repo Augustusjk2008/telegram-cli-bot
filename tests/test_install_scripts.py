@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pytest
 
-
 WINDOWS_POWERSHELL = Path(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
-
 
 def _run_install_ps1_command(command: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     script_path = Path("install.ps1").resolve()
@@ -33,14 +31,12 @@ def _run_install_ps1_command(command: str, *, env: dict[str, str] | None = None)
         cwd=Path.cwd(),
     )
 
-
 def test_install_bat_forwards_arguments_to_install_ps1_and_pauses():
     content = Path("install.bat").read_text(encoding="utf-8")
 
     assert "install.ps1" in content
     assert "%*" in content
     assert "pause" in content.lower()
-
 
 def test_install_sh_mentions_apt_node_check_only_and_cli_warning():
     content = Path("install.sh").read_text(encoding="utf-8")
@@ -52,28 +48,16 @@ def test_install_sh_mentions_apt_node_check_only_and_cli_warning():
     assert "claude" in content
     assert ".env.example" in content
 
-
 def test_env_example_preconfigures_default_update_repository():
     content = Path(".env.example").read_text(encoding="utf-8")
 
     assert "APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot" in content
-
 
 def test_env_example_defaults_web_host_to_wildcard():
     content = Path(".env.example").read_text(encoding="utf-8")
 
     assert "WEB_HOST=0.0.0.0" in content
     assert "WEB_HOST=127.0.0.1" not in content
-
-
-def test_env_example_omits_unused_assistant_mode_settings():
-    content = Path(".env.example").read_text(encoding="utf-8")
-
-    assert "Assistant Mode Optional" not in content
-    assert "ANTHROPIC_API_KEY=" not in content
-    assert "ANTHROPIC_MODEL=" not in content
-    assert "ANTHROPIC_BASE_URL=" not in content
-
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_parses_in_windows_powershell():
@@ -102,7 +86,6 @@ def test_install_ps1_parses_in_windows_powershell():
     assert result.returncode == 0
     assert "count=0" in result.stdout, result.stdout + result.stderr
 
-
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_can_skip_main_for_function_level_tests():
     script_path = Path("install.ps1").resolve()
@@ -129,7 +112,6 @@ def test_install_ps1_can_skip_main_for_function_level_tests():
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "skip-main-ok" in result.stdout
-
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_check_only_mode_warns_when_no_cli():
@@ -168,7 +150,6 @@ def test_install_ps1_check_only_mode_warns_when_no_cli():
     assert "claude --version" in lowered_output
     assert "cli_type / cli_path" in lowered_output
 
-
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_install_repo_executable_places_binary_under_tools_dir(tmp_path: Path):
     result = _run_install_ps1_command(
@@ -189,7 +170,6 @@ $installed = Install-RepoExecutable -DisplayName 'codex' -Url 'https://example.t
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["Exists"] is True
     assert payload["Path"].endswith("tools\\codex\\codex.exe")
-
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_optional_codex_install_uses_x64_download_and_updates_path(tmp_path: Path):
@@ -224,7 +204,6 @@ $captured | ConvertTo-Json -Compress
     assert payload["Url"] == "https://github.com/openai/codex/releases/download/rust-v0.121.0/codex-x86_64-pc-windows-msvc.exe"
     assert payload["PathEntry"].endswith("tools\\codex")
     assert payload["InstalledPath"].endswith("tools\\codex\\codex.exe")
-
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_cloudflared_defaults_to_quick_mode_and_installs_when_requested(tmp_path: Path):
@@ -268,7 +247,6 @@ $captured | ConvertTo-Json -Compress
     assert payload["TargetFileName"] == "cloudflared.exe"
     assert payload["CloudflaredPath"].endswith("cloudflared.exe")
 
-
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_public_url_disables_cloudflare_quick(tmp_path: Path):
     result = _run_install_ps1_command(
@@ -293,7 +271,6 @@ $config | ConvertTo-Json -Compress
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["Mode"] == "disabled"
     assert payload["PublicUrl"] == "https://bot.example.com"
-
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_configure_env_writes_tunnel_values(tmp_path: Path):

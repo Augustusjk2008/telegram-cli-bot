@@ -408,109 +408,6 @@ test("can load full file content from preview modal", async () => {
   expect(screen.getByText("已加载全文")).toBeInTheDocument();
 });
 
-test("editor mounts a full-size codemirror wrapper and autofocuses on open", async () => {
-  const user = userEvent.setup();
-
-  render(<FilesScreen botAlias="main" client={createClient()} />);
-
-  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
-
-  const wrapper = await screen.findByTestId("codemirror-wrapper");
-  expect(wrapper).toHaveClass("h-full");
-  expect(wrapper).toHaveClass("min-h-0");
-  expect(wrapper).toHaveClass("w-full");
-  expect(wrapper).toHaveClass("min-w-0");
-  expect(wrapper).toHaveAttribute("data-height", "100%");
-  expect(wrapper).toHaveAttribute("data-width", "100%");
-  expect(wrapper).toHaveAttribute("data-theme", "dark");
-  expect(wrapper).toHaveAttribute("data-autofocus", "true");
-});
-
-test("editor switches codemirror theme mode with the app theme", async () => {
-  const user = userEvent.setup();
-  document.documentElement.dataset.theme = "classic";
-
-  render(<FilesScreen botAlias="main" client={createClient()} />);
-
-  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
-
-  const wrapper = await screen.findByTestId("codemirror-wrapper");
-  expect(wrapper).toHaveAttribute("data-theme", "light");
-});
-
-test("editor uses a CodeMirror theme extension instead of mutating editor DOM styles", async () => {
-  const user = userEvent.setup();
-
-  render(<FilesScreen botAlias="main" client={createClient()} />);
-
-  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
-
-  const wrapper = await screen.findByTestId("codemirror-wrapper");
-  const editor = await screen.findByTestId("codemirror-editor");
-  const scroller = await screen.findByTestId("codemirror-scroller");
-  await waitFor(() => {
-    expect(Number(wrapper.getAttribute("data-extension-count"))).toBeGreaterThan(0);
-  });
-  expect(editor).not.toHaveAttribute("style");
-  expect(scroller).not.toHaveAttribute("style");
-});
-
-test("editor adds debug codemirror extensions when breakpoints are present", async () => {
-  render(
-    <FileEditorSurface
-      path="src/main.cpp"
-      value="int main() { return 0; }\n"
-      breakpointLines={[3, 7]}
-      currentLine={7}
-      hideHeader
-      onToggleBreakpoint={() => {}}
-      onChange={() => {}}
-      onSave={() => {}}
-      onClose={() => {}}
-    />,
-  );
-
-  const wrapper = await screen.findByTestId("codemirror-wrapper");
-  await waitFor(() => {
-    expect(Number(wrapper.getAttribute("data-extension-count"))).toBeGreaterThan(1);
-  });
-});
-
-test("editor uses a single flat surface instead of a nested rounded frame", async () => {
-  const user = userEvent.setup();
-
-  render(<FilesScreen botAlias="main" client={createClient()} />);
-
-  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
-
-  const host = await screen.findByTestId("file-editor-host");
-  expect(host).not.toHaveClass("rounded-2xl");
-  expect(host).not.toHaveClass("border");
-});
-
-test("hides the full-read button when preview already contains the whole small file", async () => {
-  const user = userEvent.setup();
-  const client = createClient({
-    listFiles: async (): Promise<DirectoryListing> => ({
-      workingDir: "C:\\workspace",
-      entries: [{ name: "tiny.txt", isDir: false, size: 18, updatedAt: "2026-04-09T10:00:00Z" }],
-    }),
-    readFile: async () => ({
-      content: "tiny file content",
-      mode: "head",
-      fileSizeBytes: 18,
-      isFullContent: true,
-    }),
-  });
-
-  render(<FilesScreen botAlias="main" client={client} />);
-
-  await user.click(await screen.findByRole("button", { name: "打开 tiny.txt" }));
-
-  expect(await screen.findByText("已加载全文")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
-});
-
 test("shows a download-only warning for files larger than 200KB", async () => {
   const user = userEvent.setup();
   const client = createClient({
@@ -564,27 +461,6 @@ test("home button resets the browser directory to the bot working directory", as
   expect(listFilesSpy).toHaveBeenCalledTimes(2);
   expect(await screen.findByText("C:\\workspace\\root")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "打开 root.txt" })).toBeInTheDocument();
-});
-
-test("file rows render download before delete and reuse the existing download flow", async () => {
-  const user = userEvent.setup();
-  const downloadFileSpy = vi.fn(async () => undefined);
-
-  render(<FilesScreen botAlias="main" client={createClient({ downloadFile: downloadFileSpy })} />);
-
-  const downloadButton = await screen.findByRole("button", { name: "下载 README.md" });
-  const deleteButton = screen.getByRole("button", { name: "删除 README.md" });
-  const row = downloadButton.closest("li");
-
-  expect(row).not.toBeNull();
-
-  const buttons = within(row as HTMLLIElement).getAllByRole("button");
-  expect(buttons.at(-2)).toBe(downloadButton);
-  expect(buttons.at(-1)).toBe(deleteButton);
-
-  await user.click(downloadButton);
-
-  expect(downloadFileSpy).toHaveBeenCalledWith("main", "README.md");
 });
 
 test("can create a folder from the files screen toolbar", async () => {

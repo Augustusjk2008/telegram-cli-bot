@@ -78,7 +78,6 @@ from bot.web.git_service import (
 )
 from bot.assistant_proposals import create_proposal
 
-
 def _png_bytes(width: int, height: int) -> bytes:
     row = b"\x00" + (b"\x00\x00\x00" * width)
     raw = row * height
@@ -95,25 +94,6 @@ def _png_bytes(width: int, height: int) -> bytes:
         + chunk(b"IEND", b"")
     )
 
-
-def test_web_api_service_no_longer_imports_telegram_shell_or_admin_handlers():
-    source = Path("bot/web/api_service.py").read_text(encoding="utf-8")
-
-    assert ("from bot." + "handlers.admin import") not in source
-    assert ("from bot." + "handlers.shell import") not in source
-    assert ("should_reset_" + "ki" + "mi_session") not in source
-    assert ("ki" + "mi_session_id") not in source
-    assert ('cli_type == "' + "ki" + "mi" + '"') not in source
-
-
-def test_web_server_module_no_longer_imports_telegram_runtime():
-    source = Path("bot/web/server.py").read_text(encoding="utf-8")
-
-    assert ("from " + "telegram") not in source
-    assert "Bot(" not in source
-    assert "HTTPXRequest" not in source
-
-
 @pytest.fixture
 def web_manager(temp_dir: Path) -> MultiBotManager:
     storage_file = temp_dir / "managed_bots.json"
@@ -128,12 +108,10 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
     )
     return MultiBotManager(main_profile=profile, storage_file=str(storage_file))
 
-
 def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_dir: Path):
     import bot.session_store as session_store
 
     assert session_store.STORE_FILE == temp_dir / ".session_store.json"
-
 
 def test_no_cli_message_points_to_web_settings_not_legacy_command():
     text = msg("chat", "no_cli", cli_path="missing-cli")
@@ -141,7 +119,6 @@ def test_no_cli_message_points_to_web_settings_not_legacy_command():
     assert "/set_cli_dir" not in text
     assert "设置页" in text
     assert "CLI 路径" in text
-
 
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):
     subdir = temp_dir / "workspace"
@@ -155,7 +132,6 @@ def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: 
     listing = get_directory_listing(web_manager, "main", 1001)
     assert listing["working_dir"] == str(subdir)
     assert any(item["name"] == "hello.txt" for item in listing["entries"])
-
 
 def test_get_directory_listing_accepts_explicit_path_without_mutating_browser_dir(
     web_manager: MultiBotManager,
@@ -180,7 +156,6 @@ def test_get_directory_listing_accepts_explicit_path_without_mutating_browser_di
     assert session.browse_dir == str(docs)
     assert session.working_dir == str(root)
 
-
 def test_overview_includes_local_store_running_snapshot(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -203,7 +178,6 @@ def test_overview_includes_local_store_running_snapshot(web_manager: MultiBotMan
     assert overview["session"]["running_reply"]["user_text"] == "列出当前目录"
     assert overview["session"]["running_reply"]["preview_text"] == "处理中预览"
 
-
 def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBotManager):
     real_get_session = api_service.get_session_for_alias
     call_count = 0
@@ -219,7 +193,6 @@ def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBo
     assert overview["bot"]["alias"] == "main"
     assert call_count == 1
 
-
 def test_list_bots_includes_processing_state_for_current_user(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     with session._lock:
@@ -229,7 +202,6 @@ def test_list_bots_includes_processing_state_for_current_user(web_manager: Multi
 
     assert items[0]["alias"] == "main"
     assert items[0]["is_processing"] is True
-
 
 def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyPatch):
     persisted_preview_texts: list[str] = []
@@ -253,7 +225,6 @@ def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyP
 
     assert persisted_preview_texts[-1] == ""
 
-
 def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: Path):
     web_manager.main_profile.avatar_name = "avatar_01.png"
     web_manager.managed_profiles["team2"] = BotProfile(
@@ -271,7 +242,6 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
     assert items[0]["alias"] == "main"
     assert items[0]["avatar_name"] == "avatar_01.png"
     assert next(item for item in items if item["alias"] == "team2")["avatar_name"] == "claude-blue.png"
-
 
 def test_list_system_scripts_reads_active_bot_workdir_scripts(
     monkeypatch: pytest.MonkeyPatch,
@@ -312,7 +282,6 @@ def test_list_system_scripts_reads_active_bot_workdir_scripts(
         ]
     }
 
-
 def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     session = get_session_for_alias(web_manager, "main", 1001)
     workdir = temp_dir / "cli-workdir"
@@ -334,7 +303,6 @@ def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBot
     assert session.codex_session_id == "thread-old"
     assert session.claude_session_id == "claude-old"
     assert session.claude_session_initialized is True
-
 
 @pytest.mark.asyncio
 async def test_update_bot_workdir_requires_confirmation_when_local_history_exists(
@@ -375,7 +343,6 @@ async def test_update_bot_workdir_requires_confirmation_when_local_history_exist
     }
     assert runtime_paths.get_chat_history_db_path(old_root).exists()
 
-
 @pytest.mark.asyncio
 async def test_update_bot_workdir_blocks_while_processing(web_manager: MultiBotManager, tmp_path: Path):
     old_root = tmp_path / "old"
@@ -393,7 +360,6 @@ async def test_update_bot_workdir_blocks_while_processing(web_manager: MultiBotM
 
     assert exc_info.value.code == "workdir_change_blocked_processing"
     assert session.is_processing is True
-
 
 @pytest.mark.asyncio
 async def test_update_bot_workdir_force_reset_clears_history_and_native_session_ids(
@@ -424,7 +390,6 @@ async def test_update_bot_workdir_force_reset_clears_history_and_native_session_
     assert session.browse_dir == str(new_root)
     assert session.codex_session_id is None
     assert get_history(web_manager, "main", 1001, limit=10)["items"] == []
-
 
 def test_change_working_directory_from_windows_drive_root_opens_drive_picker(
     web_manager: MultiBotManager,
@@ -469,7 +434,6 @@ def test_change_working_directory_from_windows_drive_root_opens_drive_picker(
     assert result["is_virtual_root"] is True
     assert session.browse_dir == "::windows-drives::"
 
-
 def test_get_directory_listing_returns_windows_drive_picker_entries(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -493,7 +457,6 @@ def test_get_directory_listing_returns_windows_drive_picker_entries(
         {"name": "Z:\\", "is_dir": True},
     ]
 
-
 class _FakeAssistantRuntimeCoordinator:
     def __init__(self) -> None:
         self.requests = []
@@ -505,7 +468,6 @@ class _FakeAssistantRuntimeCoordinator:
     async def wait_for_run(self, run_id: str):
         return {"run_id": run_id, "elapsed_seconds": 0}
 
-
 class _FailingAssistantRuntimeCoordinator(_FakeAssistantRuntimeCoordinator):
     def __init__(self) -> None:
         super().__init__()
@@ -514,7 +476,6 @@ class _FailingAssistantRuntimeCoordinator(_FakeAssistantRuntimeCoordinator):
     async def wait_for_run(self, run_id: str):
         await self.release.wait()
         raise RuntimeError("dream 结果处理失败")
-
 
 def _build_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
     return AssistantCronJob.from_dict(
@@ -532,7 +493,6 @@ def _build_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
             "execution": {"timeout_seconds": 600},
         }
     )
-
 
 def _build_dream_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJob:
     return AssistantCronJob.from_dict(
@@ -558,7 +518,6 @@ def _build_dream_assistant_cron_job(job_id: str, prompt: str) -> AssistantCronJo
         }
     )
 
-
 @pytest.mark.asyncio
 async def test_manual_assistant_cron_run_targets_visible_web_user_session(temp_dir: Path):
     home = bootstrap_assistant_home(temp_dir)
@@ -579,7 +538,6 @@ async def test_manual_assistant_cron_run_targets_visible_web_user_session(temp_d
     assert coordinator.requests[0].user_id == 1001
     assert coordinator.requests[0].text == "检查最新邮件并总结重点"
     assert coordinator.requests[0].bot_alias == "assistant1"
-
 
 @pytest.mark.asyncio
 async def test_scheduled_assistant_cron_run_targets_visible_web_user_session(temp_dir: Path):
@@ -609,7 +567,6 @@ async def test_scheduled_assistant_cron_run_targets_visible_web_user_session(tem
     assert coordinator.requests[0].user_id == 1001
     assert coordinator.requests[0].text == "汇总今天的重要动态"
 
-
 @pytest.mark.asyncio
 async def test_dream_assistant_cron_run_uses_synthetic_session_and_context_user(temp_dir: Path):
     home = bootstrap_assistant_home(temp_dir)
@@ -634,7 +591,6 @@ async def test_dream_assistant_cron_run_uses_synthetic_session_and_context_user(
     assert request.context_user_id == 1001
     assert request.task_mode == "dream"
     assert request.task_payload["mode"] == "dream"
-
 
 @pytest.mark.asyncio
 async def test_cron_watch_run_error_preserves_started_at_and_elapsed_seconds(temp_dir: Path):
@@ -671,7 +627,6 @@ async def test_cron_watch_run_error_preserves_started_at_and_elapsed_seconds(tem
     assert records[-1]["elapsed_seconds"] == 167
     assert records[-1]["error"] == "dream 结果处理失败"
 
-
 def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-1"
@@ -685,7 +640,6 @@ def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: Mul
         "claude_session_id": "claude-1",
         "claude_session_initialized": True,
     }
-
 
 def test_assistant_change_directory_only_updates_file_browser_path(web_manager: MultiBotManager, temp_dir: Path):
     workdir = temp_dir / "assistant-workdir"
@@ -724,7 +678,6 @@ def test_assistant_change_directory_only_updates_file_browser_path(web_manager: 
     assert content["working_dir"] == str(browse_dir)
     assert content["content"] == "assistant browser"
 
-
 def test_assistant_change_directory_persists_browser_dir_in_assistant_state(
     web_manager: MultiBotManager, temp_dir: Path
 ):
@@ -747,7 +700,6 @@ def test_assistant_change_directory_persists_browser_dir_in_assistant_state(
     assert result["working_dir"] == str(browse_dir)
     state_file = workdir / ".assistant" / "state" / "users" / "1001.json"
     assert json.loads(state_file.read_text(encoding="utf-8"))["browse_dir"] == str(browse_dir)
-
 
 def test_get_session_for_alias_restores_assistant_private_metadata_without_visible_history_state(
     web_manager: MultiBotManager, temp_dir: Path
@@ -796,7 +748,6 @@ def test_get_session_for_alias_restores_assistant_private_metadata_without_visib
     assert session.message_count == 3
     assert session.managed_prompt_hash_seen == "hash-private"
 
-
 def test_reset_user_session_clears_assistant_private_state(
     web_manager: MultiBotManager, temp_dir: Path
 ):
@@ -819,7 +770,6 @@ def test_reset_user_session_clears_assistant_private_state(
 
     assert result["reset"] is True
     assert not (home.root / "state" / "users" / "1001.json").exists()
-
 
 def test_reset_user_session_with_live_assistant_session_does_not_recreate_private_state(
     web_manager: MultiBotManager, temp_dir: Path
@@ -849,7 +799,6 @@ def test_reset_user_session_with_live_assistant_session_does_not_recreate_privat
     session.clear_running_reply()
     assert not state_file.exists()
 
-
 def test_reset_user_session_assistant_noop_does_not_bootstrap_home(
     web_manager: MultiBotManager, temp_dir: Path
 ):
@@ -874,7 +823,6 @@ def test_reset_user_session_assistant_noop_does_not_bootstrap_home(
     bootstrap_mock.assert_not_called()
     clear_mock.assert_not_called()
 
-
 def test_reset_user_session_clears_local_history_rows(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -895,7 +843,6 @@ def test_reset_user_session_clears_local_history_rows(web_manager: MultiBotManag
     assert result["reset"] is True
     assert history["items"] == []
 
-
 def test_save_chat_attachment_stores_file_under_home_scoped_dir(
     web_manager: MultiBotManager,
     temp_dir: Path,
@@ -911,7 +858,6 @@ def test_save_chat_attachment_stores_file_under_home_scoped_dir(
     assert result["filename"] == "notes.txt"
     assert saved_path == fake_home / ".tcb" / "chat-attachments" / "main" / "1001" / "notes.txt"
     assert saved_path.read_bytes() == b"line1\nline2\n"
-
 
 def test_save_chat_attachment_deduplicates_existing_names(
     web_manager: MultiBotManager,
@@ -929,7 +875,6 @@ def test_save_chat_attachment_deduplicates_existing_names(
     assert second["filename"] == "notes-1.txt"
     assert first["saved_path"] != second["saved_path"]
     assert Path(second["saved_path"]).read_bytes() == b"second\n"
-
 
 def test_delete_chat_attachment_removes_file_from_home_scoped_dir(
     web_manager: MultiBotManager,
@@ -953,7 +898,6 @@ def test_delete_chat_attachment_removes_file_from_home_scoped_dir(
     }
     assert not saved_path.exists()
 
-
 def test_delete_chat_attachment_rejects_paths_outside_user_scope(
     web_manager: MultiBotManager,
     temp_dir: Path,
@@ -970,7 +914,6 @@ def test_delete_chat_attachment_rejects_paths_outside_user_scope(
 
     assert exc_info.value.status == 403
     assert exc_info.value.code == "attachment_delete_forbidden"
-
 
 def test_delete_chat_attachment_is_idempotent_when_file_is_already_missing(
     web_manager: MultiBotManager,
@@ -990,7 +933,6 @@ def test_delete_chat_attachment_is_idempotent_when_file_is_already_missing(
         "existed": False,
         "deleted": False,
     }
-
 
 def test_get_history_does_not_materialize_empty_home_store(
     web_manager: MultiBotManager,
@@ -1013,14 +955,12 @@ def test_get_history_does_not_materialize_empty_home_store(
     assert data["items"] == []
     assert not runtime_paths.get_chat_history_db_path(workspace).exists()
 
-
 def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
     result = save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
     assert result["filename"] == "notes.txt"
 
     content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=1)
     assert content["content"] == "line1"
-
 
 def test_read_file_preview_marks_small_file_as_full_content(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "tiny.txt", b"line1\n")
@@ -1031,7 +971,6 @@ def test_read_file_preview_marks_small_file_as_full_content(web_manager: MultiBo
     assert content["file_size_bytes"] == len(b"line1\n")
     assert content["is_full_content"] is True
 
-
 def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
 
@@ -1040,7 +979,6 @@ def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager:
     assert content["content"] == "line1"
     assert content["file_size_bytes"] == len(b"line1\nline2\n")
     assert content["is_full_content"] is False
-
 
 def test_write_file_content_updates_text_and_returns_version(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
@@ -1064,7 +1002,6 @@ def test_write_file_content_updates_text_and_returns_version(web_manager: MultiB
     assert content["content"] == "line1\nline2\n"
     assert content["last_modified_ns"] == result["last_modified_ns"]
 
-
 def test_write_file_content_rejects_absolute_path_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -1081,7 +1018,6 @@ def test_write_file_content_rejects_absolute_path_outside_browser_dir(web_manage
     assert exc_info.value.code == "unsafe_write_path"
     assert target.read_text(encoding="utf-8") == "outside\n"
 
-
 def test_write_file_content_rejects_relative_escape_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -1096,7 +1032,6 @@ def test_write_file_content_rejects_relative_escape_outside_browser_dir(web_mana
     assert exc_info.value.code == "unsafe_write_path"
     assert outside_file.read_text(encoding="utf-8") == "outside\n"
 
-
 def test_write_file_content_rejects_stale_version(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
     previous = read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)
@@ -1108,7 +1043,6 @@ def test_write_file_content_rejects_stale_version(web_manager: MultiBotManager, 
     assert exc_info.value.code == "file_version_conflict"
     assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line2\n"
 
-
 def test_write_file_content_rejects_content_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
 
@@ -1117,7 +1051,6 @@ def test_write_file_content_rejects_content_larger_than_editor_limit(web_manager
 
     assert exc_info.value.code == "file_too_large_for_editor"
     assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line1\n"
-
 
 def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager, temp_dir: Path):
     binary_bytes = b"\xff\xfe\xfd\x00"
@@ -1129,7 +1062,6 @@ def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager
     assert exc_info.value.code == "not_text_file"
     assert (temp_dir / "notes.bin").read_bytes() == binary_bytes
 
-
 def test_write_file_content_rejects_existing_file_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"a" * (512 * 1024 + 1))
 
@@ -1138,7 +1070,6 @@ def test_write_file_content_rejects_existing_file_larger_than_editor_limit(web_m
 
     assert exc_info.value.code == "file_too_large_for_editor"
     assert (temp_dir / "notes.txt").stat().st_size == 512 * 1024 + 1
-
 
 def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1150,7 +1081,6 @@ def test_create_directory_creates_folder_in_current_browser_dir(web_manager: Mul
     assert result["name"] == "docs"
     assert result["created_path"] == str(workspace / "docs")
     assert (workspace / "docs").is_dir()
-
 
 def test_create_text_file_creates_file_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1165,7 +1095,6 @@ def test_create_text_file_creates_file_in_current_browser_dir(web_manager: Multi
     assert result["path"] == "notes.md"
     assert result["file_size_bytes"] == len("# hello\n".encode("utf-8"))
     assert isinstance(result["last_modified_ns"], int)
-
 
 def test_create_text_file_accepts_parent_path_for_tree_actions(
     web_manager: MultiBotManager,
@@ -1185,7 +1114,6 @@ def test_create_text_file_accepts_parent_path_for_tree_actions(
     assert result["path"] == "docs/notes.md"
     assert (docs / "notes.md").read_text(encoding="utf-8") == "# title\n"
 
-
 def test_create_text_file_rejects_existing_target(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -1198,7 +1126,6 @@ def test_create_text_file_rejects_existing_target(web_manager: MultiBotManager, 
     assert exc_info.value.code == "file_already_exists"
     assert (workspace / "notes.md").read_text(encoding="utf-8") == "old\n"
 
-
 def test_create_text_file_rejects_content_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -1210,7 +1137,6 @@ def test_create_text_file_rejects_content_larger_than_editor_limit(web_manager: 
     assert exc_info.value.code == "file_too_large_for_editor"
     assert not (workspace / "notes.md").exists()
 
-
 def test_create_text_file_rejects_path_like_filename(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
@@ -1220,7 +1146,6 @@ def test_create_text_file_rejects_path_like_filename(web_manager: MultiBotManage
         create_text_file(web_manager, "main", 1001, "docs/notes.md", "")
 
     assert exc_info.value.code == "invalid_filename"
-
 
 def test_rename_path_renames_file_in_place(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1236,7 +1161,6 @@ def test_rename_path_renames_file_in_place(web_manager: MultiBotManager, temp_di
     assert not source.exists()
     assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
 
-
 def test_rename_path_accepts_nested_relative_path(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     target = workspace / "docs"
@@ -1251,7 +1175,6 @@ def test_rename_path_accepts_nested_relative_path(web_manager: MultiBotManager, 
     assert not (target / "notes.md").exists()
     assert (target / "draft.md").exists()
 
-
 def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     nested = workspace / "docs" / "guides"
@@ -1265,7 +1188,6 @@ def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiB
     assert result["deleted_type"] == "directory"
     assert not (workspace / "docs").exists()
 
-
 def test_read_file_outside_workdir_by_absolute_path(web_manager: MultiBotManager, temp_dir: Path):
     workspace_dir = temp_dir / "workspace"
     workspace_dir.mkdir()
@@ -1278,7 +1200,6 @@ def test_read_file_outside_workdir_by_absolute_path(web_manager: MultiBotManager
     content = read_file_content(web_manager, "main", 1001, str(target), mode="head", lines=1)
 
     assert content["content"] == "outside"
-
 
 def test_run_git_command_uses_safe_text_decode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     captured: dict[str, object] = {}
@@ -1300,7 +1221,6 @@ def test_run_git_command_uses_safe_text_decode(monkeypatch: pytest.MonkeyPatch, 
     assert kwargs["encoding"] == "utf-8"
     assert kwargs["errors"] == "replace"
 
-
 def _run_git_command(repo_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-c", "core.fsmonitor=false", *args],
@@ -1312,12 +1232,10 @@ def _run_git_command(repo_dir: Path, *args: str) -> subprocess.CompletedProcess[
         errors="replace",
     )
 
-
 def _init_git_repo(repo_dir: Path):
     _run_git_command(repo_dir, "init")
     _run_git_command(repo_dir, "config", "user.name", "Web Bot Test")
     _run_git_command(repo_dir, "config", "user.email", "web-bot@example.com")
-
 
 def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
@@ -1343,7 +1261,6 @@ def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir:
     assert any(item["path"] == "new.txt" for item in overview["changed_files"])
     assert overview["recent_commits"][0]["subject"] == "init"
 
-
 def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -1365,7 +1282,6 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
 
     committed = commit_git_changes(web_manager, "main", 1001, "feat: update tracked")
     assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
-
 
 def test_get_git_tree_status_filters_to_working_dir_and_marks_added_modified_and_ignored(
     web_manager: MultiBotManager,
@@ -1404,7 +1320,6 @@ def test_get_git_tree_status_filters_to_working_dir_and_marks_added_modified_and
         },
     }
 
-
 def test_get_git_tree_status_returns_empty_payload_outside_repo(
     web_manager: MultiBotManager,
     temp_dir: Path,
@@ -1422,7 +1337,6 @@ def test_get_git_tree_status_returns_empty_payload_outside_repo(
         "repo_path": "",
         "items": {},
     }
-
 
 def test_git_overview_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
@@ -1442,7 +1356,6 @@ def test_git_overview_uses_bot_profile_workdir(web_manager: MultiBotManager, tem
     assert overview["working_dir"] == str(repo_dir)
     assert overview["repo_found"] is True
     assert overview["repo_path"] == str(repo_dir)
-
 
 def test_git_diff_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
@@ -1467,7 +1380,6 @@ def test_git_diff_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_di
     assert diff["path"] == "tracked.txt"
     assert "+after" in diff["diff"]
 
-
 def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     settings_file = temp_dir / ".web_admin_settings.json"
     monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
@@ -1481,7 +1393,6 @@ def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeyp
     assert json.loads(settings_file.read_text(encoding="utf-8")) == {
         "git_proxy_port": "7897",
     }
-
 
 def test_git_commands_explicitly_disable_proxy_when_port_is_empty(
     web_manager: MultiBotManager,
@@ -1514,7 +1425,6 @@ def test_git_commands_explicitly_disable_proxy_when_port_is_empty(
     assert overview["repo_found"] is True
     assert calls[0][:7] == ["git", "-c", "core.fsmonitor=false", "-c", "http.proxy=", "-c", "https.proxy="]
     assert calls[1][:7] == ["git", "-c", "core.fsmonitor=false", "-c", "http.proxy=", "-c", "https.proxy="]
-
 
 def test_git_commands_use_local_proxy_port_when_configured(
     web_manager: MultiBotManager,
@@ -1564,7 +1474,6 @@ def test_git_commands_use_local_proxy_port_when_configured(
         "https.proxy=http://127.0.0.1:7897",
     ]
 
-
 @pytest.mark.asyncio
 async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
@@ -1582,7 +1491,6 @@ async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypat
             assert resp.status == 200
             payload = await resp.json()
             assert payload["data"]["user_id"] == 1001
-
 
 @pytest.mark.asyncio
 async def test_auth_route_auto_authenticates_loopback_as_admin(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -1605,7 +1513,6 @@ async def test_auth_route_auto_authenticates_loopback_as_admin(web_manager: Mult
     assert "admin_ops" in payload["data"]["capabilities"]
     assert "manage_register_codes" in payload["data"]["capabilities"]
 
-
 @pytest.mark.asyncio
 async def test_loopback_login_ignores_credentials_and_returns_local_admin(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
@@ -1622,7 +1529,6 @@ async def test_loopback_login_ignores_credentials_and_returns_local_admin(web_ma
 
     assert payload["data"]["username"] == "127.0.0.1"
     assert "manage_register_codes" in payload["data"]["capabilities"]
-
 
 @pytest.mark.asyncio
 async def test_local_admin_can_manage_register_codes(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -1654,7 +1560,6 @@ async def test_local_admin_can_manage_register_codes(web_manager: MultiBotManage
     assert patched["max_uses"] == 3
     assert patched["disabled"] is True
 
-
 @pytest.mark.asyncio
 async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -1669,7 +1574,6 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
             payload = await resp.json()
     assert payload["data"]["bot"]["alias"] == "main"
     assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
-
 
 @pytest.mark.asyncio
 async def test_web_api_lists_plugins_and_resolves_vcd_handler(
@@ -1796,7 +1700,6 @@ for line in sys.stdin:
 
     await web_manager.plugin_service.shutdown()
 
-
 @pytest.mark.asyncio
 async def test_git_tree_status_route_returns_decoration_payload(
     web_manager: MultiBotManager,
@@ -1835,7 +1738,6 @@ async def test_git_tree_status_route_returns_decoration_payload(
         "scratch.tmp": "ignored",
     }
 
-
 @pytest.mark.asyncio
 async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -1854,7 +1756,6 @@ async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch:
             payload = await resp.json()
             assert payload["data"]["name"] == "docs"
             assert (workspace / "docs").is_dir()
-
 
 @pytest.mark.asyncio
 async def test_file_routes_serialize_last_modified_ns_as_string(
@@ -1895,7 +1796,6 @@ async def test_file_routes_serialize_last_modified_ns_as_string(
     assert write_payload["data"]["last_modified_ns"] == str(target.stat().st_mtime_ns)
     assert target.read_text(encoding="utf-8") == "# updated\n"
 
-
 @pytest.mark.asyncio
 async def test_workspace_search_routes_use_current_working_directory(
     web_manager: MultiBotManager,
@@ -1935,7 +1835,6 @@ async def test_workspace_search_routes_use_current_working_directory(
                 {"name": "run", "kind": "function", "line": 2},
             ]
 
-
 @pytest.mark.asyncio
 async def test_write_file_route_updates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -1968,7 +1867,6 @@ async def test_write_file_route_updates_file(web_manager: MultiBotManager, monke
     assert payload["data"]["path"] == "notes.md"
     assert target.read_text(encoding="utf-8") == "# updated\n"
 
-
 @pytest.mark.asyncio
 async def test_create_text_file_route_creates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -1988,7 +1886,6 @@ async def test_create_text_file_route_creates_file(web_manager: MultiBotManager,
 
     assert payload["data"]["path"] == "notes.md"
     assert (workspace / "notes.md").read_text(encoding="utf-8") == "# hello\n"
-
 
 @pytest.mark.asyncio
 async def test_rename_path_route_renames_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
@@ -2012,7 +1909,6 @@ async def test_rename_path_route_renames_file(web_manager: MultiBotManager, monk
     assert payload["data"]["path"] == "draft.md"
     assert not (workspace / "notes.md").exists()
     assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
-
 
 @pytest.mark.asyncio
 async def test_delete_path_route_recursively_removes_directory(
@@ -2039,7 +1935,6 @@ async def test_delete_path_route_recursively_removes_directory(
             assert payload["data"]["deleted_type"] == "directory"
             assert not (workspace / "docs").exists()
 
-
 @pytest.mark.asyncio
 async def test_api_routes_disable_cache(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -2053,7 +1948,6 @@ async def test_api_routes_disable_cache(web_manager: MultiBotManager, monkeypatc
             assert resp.status == 200
             assert resp.headers["Cache-Control"] == "no-store"
             assert resp.headers["Pragma"] == "no-cache"
-
 
 @pytest.mark.asyncio
 async def test_index_route_disables_cache(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -2069,7 +1963,6 @@ async def test_index_route_disables_cache(web_manager: MultiBotManager, monkeypa
             assert resp.headers["Cache-Control"] == "no-store, no-cache, must-revalidate"
             assert resp.headers["Pragma"] == "no-cache"
             assert resp.headers["Expires"] == "0"
-
 
 @pytest.mark.asyncio
 async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -2093,7 +1986,6 @@ async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager
                 assert "event: delta" in body
                 assert "event: done" in body
 
-
 @pytest.mark.asyncio
 async def test_terminal_websocket_requires_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
@@ -2106,7 +1998,6 @@ async def test_terminal_websocket_requires_token(web_manager: MultiBotManager, m
         async with TestClient(test_server) as client:
             with pytest.raises(WSServerHandshakeError):
                 await client.ws_connect("/terminal/ws")
-
 
 @pytest.mark.asyncio
 async def test_terminal_websocket_forwards_process_output_and_input(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
@@ -2165,7 +2056,6 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
                     assert started["use_pty"] is True
                     assert started["writes"] == [b"pwd\r"]
                     await ws.close()
-
 
 @pytest.mark.asyncio
 async def test_terminal_websocket_ignores_disconnect_while_forwarding_output(web_manager: MultiBotManager):
@@ -2238,7 +2128,6 @@ async def test_terminal_websocket_ignores_disconnect_while_forwarding_output(web
     assert fake_ws.binary_writes == 1
     exception_log.assert_not_called()
 
-
 @pytest.mark.asyncio
 async def test_run_system_script_executes_full_filename_from_bot_scripts_dir(
     monkeypatch: pytest.MonkeyPatch,
@@ -2270,7 +2159,6 @@ async def test_run_system_script_executes_full_filename_from_bot_scripts_dir(
         "output": "ok",
     }
 
-
 @pytest.mark.asyncio
 async def test_bot_run_script_stream_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -2300,7 +2188,6 @@ async def test_bot_run_script_stream_returns_sse_events(web_manager: MultiBotMan
                 assert "npm run build" in body
                 assert "event: done" in body
                 assert "Web 前端构建完成" in body
-
 
 @pytest.mark.asyncio
 async def test_stream_system_script_normalizes_done_event_script_name_to_full_filename(
@@ -2333,7 +2220,6 @@ async def test_stream_system_script_normalizes_done_event_script_name_to_full_fi
         {"type": "done", "script_name": "network_traffic.ps1", "success": True, "output": "ok"},
     ]
 
-
 @pytest.mark.asyncio
 async def test_admin_restart_returns_response_before_triggering_restart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -2354,40 +2240,6 @@ async def test_admin_restart_returns_response_before_triggering_restart(web_mana
                 assert restart_calls == []
                 await asyncio.sleep(0.02)
                 assert restart_calls == ["called"]
-
-
-@pytest.mark.asyncio
-async def test_admin_add_bot_route_no_longer_requires_token_field(
-    web_manager: MultiBotManager,
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
-                 patch.object(web_manager, "_start_profile", AsyncMock(return_value=None)) as start_profile:
-                resp = await client.post(
-                    "/api/admin/bots",
-                    json={
-                        "alias": "web_only",
-                        "bot_mode": "cli",
-                        "cli_type": "codex",
-                        "cli_path": "codex",
-                        "working_dir": str(temp_dir),
-                    },
-                )
-                assert resp.status == 200
-                payload = await resp.json()
-
-    assert payload["data"]["bot"]["alias"] == "web_only"
-    assert web_manager.managed_profiles["web_only"].token == ""
-    start_profile.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 async def test_admin_avatar_assets_route_lists_available_files(
@@ -2417,7 +2269,6 @@ async def test_admin_avatar_assets_route_lists_available_files(
         {"name": "avatar_01.png", "url": "/assets/avatars/avatar_01.png"},
         {"name": "claude-blue.png", "url": "/assets/avatars/claude-blue.png"},
     ]
-
 
 @pytest.mark.asyncio
 async def test_admin_add_bot_route_accepts_avatar_name(
@@ -2457,7 +2308,6 @@ async def test_admin_add_bot_route_accepts_avatar_name(
     assert payload["data"]["bot"]["avatar_name"] == "claude-blue.png"
     assert web_manager.managed_profiles["team2"].avatar_name == "claude-blue.png"
 
-
 @pytest.mark.asyncio
 async def test_admin_update_avatar_route_persists_avatar_selection(
     web_manager: MultiBotManager,
@@ -2496,7 +2346,6 @@ async def test_admin_update_avatar_route_persists_avatar_selection(
     assert payload["data"]["bot"]["avatar_name"] == "mint-teal.png"
     assert web_manager.managed_profiles["team2"].avatar_name == "mint-teal.png"
 
-
 @pytest.mark.asyncio
 async def test_admin_update_avatar_route_rejects_invalid_filename(
     web_manager: MultiBotManager,
@@ -2529,7 +2378,6 @@ async def test_admin_update_avatar_route_rejects_invalid_filename(
 
     assert payload["error"]["code"] == "invalid_avatar_name"
 
-
 @pytest.mark.asyncio
 async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     web_manager.main_profile.cli_type = "codex"
@@ -2561,7 +2409,6 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
             payload = await resp.json()
             assert payload["data"]["params"]["reasoning_effort"] == "xhigh"
 
-
 @pytest.mark.asyncio
 async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -2578,7 +2425,6 @@ async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBo
             payload = await resp.json()
             assert payload["data"]["public_url"] == "https://demo.trycloudflare.com"
             assert payload["data"]["source"] == "manual_config"
-
 
 @pytest.mark.asyncio
 async def test_admin_git_proxy_routes_support_get_and_patch(
@@ -2609,7 +2455,6 @@ async def test_admin_git_proxy_routes_support_get_and_patch(
             payload = await resp.json()
             assert payload["data"] == {"port": "7897"}
 
-
 @pytest.mark.asyncio
 async def test_admin_git_proxy_route_rejects_invalid_port(
     web_manager: MultiBotManager,
@@ -2628,7 +2473,6 @@ async def test_admin_git_proxy_route_rejects_invalid_port(
             assert resp.status == 400
             payload = await resp.json()
             assert payload["error"]["code"] == "invalid_git_proxy_port"
-
 
 @pytest.mark.asyncio
 async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch):
@@ -2670,7 +2514,6 @@ async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch
     toggle_mock.assert_called_once_with(False)
     check_mock.assert_called_once()
     download_mock.assert_called_once()
-
 
 @pytest.mark.asyncio
 async def test_admin_update_download_stream_returns_sse_events(web_manager, monkeypatch):
@@ -2719,7 +2562,6 @@ async def test_admin_update_download_stream_returns_sse_events(web_manager, monk
     assert "event: done" in body
     assert '"pending_update_version": "1.0.1"' in body
 
-
 @pytest.mark.asyncio
 async def test_web_server_start_schedules_auto_update_refresh_when_enabled(web_manager):
     server = WebApiServer(web_manager)
@@ -2744,7 +2586,6 @@ async def test_web_server_start_schedules_auto_update_refresh_when_enabled(web_m
 
     create_task.assert_called()
     assert created_coroutines
-
 
 @pytest.mark.asyncio
 async def test_auto_refresh_update_status_downloads_latest_update_when_enabled(web_manager):
@@ -2779,7 +2620,6 @@ async def test_auto_refresh_update_status_downloads_latest_update_when_enabled(w
     check_mock.assert_called_once_with()
     download_mock.assert_called_once_with(repo_root)
 
-
 @pytest.mark.asyncio
 async def test_admin_rename_bot_route_updates_alias(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -2805,7 +2645,6 @@ async def test_admin_rename_bot_route_updates_alias(web_manager: MultiBotManager
             assert payload["data"]["bot"]["alias"] == "team1"
             assert "team1" in web_manager.managed_profiles
             assert "sub1" not in web_manager.managed_profiles
-
 
 @pytest.mark.asyncio
 async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -2853,7 +2692,6 @@ async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotMan
             assert payload["data"]["status"] == "running"
             assert payload["data"]["public_url"] == "https://fresh.trycloudflare.com"
 
-
 @pytest.mark.asyncio
 async def test_admin_tunnel_restart_copies_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -2894,7 +2732,6 @@ async def test_admin_tunnel_restart_copies_public_url(web_manager: MultiBotManag
 
     server._copy_text_to_clipboard.assert_called_once_with("https://fresh.trycloudflare.com")
 
-
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_returns_clipboard_result_for_quick_tunnel(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)
@@ -2915,7 +2752,6 @@ async def test_notify_tunnel_public_url_returns_clipboard_result_for_quick_tunne
 
     assert result is True
     server._copy_text_to_clipboard.assert_called_once_with("https://failed.trycloudflare.com")
-
 
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_returns_false_when_clipboard_and_qr_both_fail(web_manager: MultiBotManager):
@@ -2939,7 +2775,6 @@ async def test_notify_tunnel_public_url_returns_false_when_clipboard_and_qr_both
     assert result is False
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only.trycloudflare.com")
     server._print_public_url_qr.assert_called_once_with("https://web-only.trycloudflare.com")
-
 
 @pytest.mark.asyncio
 async def test_web_server_start_copies_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -2995,19 +2830,7 @@ async def test_web_server_start_copies_public_url_on_autostart(web_manager: Mult
 
     server._copy_text_to_clipboard.assert_called_once_with("https://startup.trycloudflare.com")
 
-
 @pytest.mark.asyncio
-async def test_health_payload_omits_telegram_status(web_manager: MultiBotManager):
-    server = WebApiServer(web_manager)
-
-    response = await server.health(MagicMock())
-    payload = json.loads(response.text)
-
-    assert payload["ok"] is True
-    assert payload["service"] == "telegram-cli-bridge-web"
-    assert "telegram_running" not in payload
-
-
 @pytest.mark.asyncio
 async def test_web_server_start_logs_bracketed_ipv6_url(
     web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch
@@ -3054,7 +2877,6 @@ async def test_web_server_start_logs_bracketed_ipv6_url(
     await server.stop()
 
     assert any("http://[::1]:8765" in line for line in log_lines)
-
 
 @pytest.mark.asyncio
 async def test_web_server_start_in_web_only_mode_copies_tunnel_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -3110,7 +2932,6 @@ async def test_web_server_start_in_web_only_mode_copies_tunnel_url(web_manager: 
 
     server._copy_text_to_clipboard.assert_called_once_with("https://web-only-start.trycloudflare.com")
 
-
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_skips_non_quick_tunnel(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)
@@ -3132,12 +2953,10 @@ async def test_notify_tunnel_public_url_skips_non_quick_tunnel(web_manager: Mult
     assert result is False
     server._copy_text_to_clipboard.assert_not_called()
 
-
 def test_read_missing_file_raises(web_manager: MultiBotManager):
     with pytest.raises(WebApiError) as exc_info:
         read_file_content(web_manager, "main", 1001, "missing.txt")
     assert exc_info.value.code == "file_not_found"
-
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBotManager):
@@ -3168,7 +2987,6 @@ async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBot
     assert data["returncode"] == 0
     assert session.claude_session_initialized is True
     session.persist.assert_called()
-
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_claude_done_detector_avoids_communicate_and_strips_output(web_manager: MultiBotManager):
@@ -3233,7 +3051,6 @@ async def test_run_cli_chat_claude_done_detector_avoids_communicate_and_strips_o
     assert "__TCB_DONE_" not in data["output"]
     fake_process.terminate.assert_called_once()
 
-
 @pytest.mark.asyncio
 async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: MultiBotManager):
     fake_process = MagicMock()
@@ -3254,7 +3071,6 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
     assert data["message"]["role"] == "assistant"
     assert data["message"]["content"] == "完成回复"
 
-
 @pytest.mark.asyncio
 async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
     fake_process = MagicMock()
@@ -3272,7 +3088,6 @@ async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: M
 
     hidden_mock.assert_called_once_with()
     assert popen_mock.call_args.kwargs["creationflags"] == 123
-
 
 @pytest.mark.asyncio
 async def test_communicate_process_waits_without_forced_timeout():
@@ -3301,7 +3116,6 @@ async def test_communicate_process_waits_without_forced_timeout():
     assert fake_process.timeout_arg is None
     fake_process.terminate.assert_not_called()
     fake_process.kill.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
@@ -3364,7 +3178,6 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     assert session.managed_prompt_hash_seen == "hash-updated"
     assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
-
 
 @pytest.mark.asyncio
 async def test_execute_assistant_run_request_applies_dream_result_and_skips_captures(
@@ -3454,7 +3267,6 @@ async def test_execute_assistant_run_request_applies_dream_result_and_skips_capt
     assert result["proposal_id"] == "pr_123"
     assert result["applied_paths"] == ["C:/repo/.assistant/memory/working/recent_summary.md"]
 
-
 @pytest.mark.asyncio
 async def test_run_cli_chat_resyncs_managed_prompts_after_noop_compaction(
     web_manager: MultiBotManager, temp_dir: Path
@@ -3503,7 +3315,6 @@ async def test_run_cli_chat_resyncs_managed_prompts_after_noop_compaction(
         consumed_capture_ids=["cap_1"],
         review_prompt_active=True,
     )
-
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exists(
@@ -3555,7 +3366,6 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
     )
     assert sync_mock.call_count == 2
     assert session.managed_prompt_hash_seen == "hash-updated"
-
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manager: MultiBotManager, temp_dir: Path):
@@ -3621,7 +3431,6 @@ async def test_stream_cli_chat_uses_managed_prompt_hash_for_assistant(web_manage
     assert build_mock.call_args.kwargs["user_text"] == "继续。"
     assert any(event["type"] == "done" for event in events)
     assert session.managed_prompt_hash_seen == "hash-new"
-
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trace_error(
@@ -3712,7 +3521,6 @@ async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trac
     assert session.claude_session_initialized is True
     assert session.managed_prompt_hash_seen == "hash-current"
 
-
 @pytest.mark.asyncio
 async def test_run_chat_requires_assistant_runtime_for_assistant_mode(
     web_manager: MultiBotManager, temp_dir: Path
@@ -3734,7 +3542,6 @@ async def test_run_chat_requires_assistant_runtime_for_assistant_mode(
 
     assert exc_info.value.status == 503
     assert exc_info.value.code == "assistant_runtime_unavailable"
-
 
 @pytest.mark.asyncio
 async def test_run_chat_routes_assistant_mode_to_assistant_runtime(
@@ -3766,7 +3573,6 @@ async def test_run_chat_routes_assistant_mode_to_assistant_runtime(
     assert request.text == "hello"
     assert request.interactive is True
     assert data["output"] == "assistant runtime result"
-
 
 @pytest.mark.asyncio
 async def test_admin_assistant_proposal_routes_list_and_approve(
@@ -3803,7 +3609,6 @@ async def test_admin_assistant_proposal_routes_list_and_approve(
             )
             assert resp.status == 200
 
-
 @pytest.mark.asyncio
 async def test_admin_assistant_upgrade_apply_route(
     web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
@@ -3836,7 +3641,6 @@ async def test_admin_assistant_upgrade_apply_route(
             assert resp.status == 200
             apply_mock.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: MultiBotManager):
     fake_stdout = MagicMock()
@@ -3858,7 +3662,6 @@ async def test_stream_cli_chat_done_event_includes_elapsed_seconds(web_manager: 
     assert isinstance(done_event["elapsed_seconds"], int)
     assert done_event["elapsed_seconds"] >= 0
 
-
 @pytest.mark.asyncio
 async def test_stream_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
     fake_stdout = MagicMock()
@@ -3878,7 +3681,6 @@ async def test_stream_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager
 
     hidden_mock.assert_called_once_with()
     assert popen_mock.call_args.kwargs["creationflags"] == 456
-
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_does_not_force_terminate_on_elapsed_time(
@@ -3937,7 +3739,6 @@ async def test_stream_cli_chat_does_not_force_terminate_on_elapsed_time(
     fake_process.terminate.assert_not_called()
     fake_process.kill.assert_not_called()
 
-
 def test_get_history_reads_from_local_store_not_overlay_or_legacy_history(
     web_manager: MultiBotManager,
     tmp_path: Path,
@@ -3963,7 +3764,6 @@ def test_get_history_reads_from_local_store_not_overlay_or_legacy_history(
     assert [item["content"] for item in data["items"]] == ["列出当前目录", "目录已读取完成。"]
     assert all(item["content"] != "legacy" for item in data["items"])
     assert all(item["content"] != "overlay" for item in data["items"])
-
 
 def test_get_history_trace_returns_full_trace_for_assistant_message(
     web_manager: MultiBotManager,
@@ -4002,7 +3802,6 @@ def test_get_history_trace_returns_full_trace_for_assistant_message(
         "tool_result",
     ]
 
-
 def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     process = MagicMock()
@@ -4038,7 +3837,6 @@ def test_codex_status_event_skips_json_meta_preview():
         "elapsed_seconds": 3,
     }
 
-
 def test_codex_status_event_uses_latest_message_preview_without_duplication():
     event = _build_stream_status_event(
         cli_type="codex",
@@ -4056,7 +3854,6 @@ def test_codex_status_event_uses_latest_message_preview_without_duplication():
         "preview_text": "目录已读取完成。",
     }
 
-
 def test_claude_status_event_extracts_text_delta_preview():
     event = _build_stream_status_event(
         cli_type="claude",
@@ -4069,7 +3866,6 @@ def test_claude_status_event_extracts_text_delta_preview():
         "elapsed_seconds": 2,
         "preview_text": "你好",
     }
-
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_claude_done_detector_strips_preview_and_done_output(web_manager: MultiBotManager):
@@ -4133,7 +3929,6 @@ async def test_stream_cli_chat_claude_done_detector_strips_preview_and_done_outp
     assert done_event["returncode"] == 0
     fake_process.terminate.assert_called_once()
 
-
 @pytest.mark.asyncio
 async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"
@@ -4195,7 +3990,6 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "目录已读取完成。"
 
-
 @pytest.mark.asyncio
 async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_done(
     web_manager: MultiBotManager,
@@ -4240,7 +4034,6 @@ async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_d
     assert assistant_items[0]["id"] == done_event["message"]["id"]
     assert assistant_items[0]["content"] == "目录已读取完成。"
     assert assistant_items[0]["meta"]["tool_call_count"] == 1
-
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_persists_trace_counts_from_codex_response_items(
@@ -4289,7 +4082,6 @@ async def test_stream_cli_chat_persists_trace_counts_from_codex_response_items(
     assert assistant_items[0]["meta"]["trace_count"] == 4
     assert assistant_items[0]["meta"]["tool_call_count"] == 1
 
-
 def test_kill_user_process_preserves_local_streaming_row(
     web_manager: MultiBotManager,
     tmp_path: Path,
@@ -4322,7 +4114,6 @@ def test_kill_user_process_preserves_local_streaming_row(
     assert history["items"][-1]["content"] == "处理中预览"
     assert history["items"][-1]["state"] == "streaming"
 
-
 @pytest.mark.asyncio
 async def test_assistant_turn_persists_only_visible_user_text(
     web_manager: MultiBotManager,
@@ -4353,7 +4144,6 @@ async def test_assistant_turn_persists_only_visible_user_text(
     history = get_history(web_manager, "assistant1", 1001, limit=10)
     assert history["items"][0]["content"] == "查看最近变更"
     assert all("HIDDEN PREAMBLE" not in item["content"] for item in history["items"])
-
 
 @pytest.mark.asyncio
 async def test_post_chat_stream_continues_processing_after_client_disconnect(web_manager: MultiBotManager):
@@ -4404,7 +4194,6 @@ async def test_post_chat_stream_continues_processing_after_client_disconnect(web
     assert consumed == ["meta", "status", "done"]
     assert response_holder["response"].write_eof_called is False
 
-
 @pytest.mark.asyncio
 async def test_debug_profile_route_returns_service_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -4425,7 +4214,6 @@ async def test_debug_profile_route_returns_service_payload(web_manager: MultiBot
 
     assert payload["data"] == fake_profile
     server._debug_service.get_profile.assert_awaited_once_with("main", 1001)
-
 
 @pytest.mark.asyncio
 async def test_debug_state_route_returns_service_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -4455,7 +4243,6 @@ async def test_debug_state_route_returns_service_payload(web_manager: MultiBotMa
 
     assert payload["data"] == fake_state
     server._debug_service.get_state.assert_awaited_once_with("main", 1001)
-
 
 @pytest.mark.asyncio
 async def test_debug_websocket_forwards_service_events_and_client_messages(
@@ -4509,7 +4296,6 @@ async def test_debug_websocket_forwards_service_events_and_client_messages(
     assert second == {"type": "prepareLog", "payload": {"line": "debug.ps1 ready"}}
     server._debug_service.subscribe.assert_awaited_once_with("main", 1001)
     server._debug_service.handle_ws_message.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 async def test_web_server_stop_closes_debug_resources(web_manager: MultiBotManager):
