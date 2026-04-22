@@ -634,9 +634,6 @@ export function App() {
       <InviteCodeManagementScreen
         client={client}
         onClose={() => setShowInviteCodeManager(false)}
-        onOpenBotSwitcher={() => {
-          void openBotSwitcher();
-        }}
       />
     );
   }
@@ -795,7 +792,7 @@ export function App() {
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-          chatPaneContent={(
+          chatPaneContent={({ requestPreview }) => (
             <div className="h-full">
               {mountedChatBots.map((alias) => (
                 <div key={`desktop-chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
@@ -808,6 +805,7 @@ export function App() {
                     readOnly={chatReadOnly}
                     allowTrace={allowTrace}
                     embedded
+                    onRequestDesktopPreview={requestPreview}
                     onUnreadResult={markBotUnread}
                     onWorkbenchStatusChange={(status) => {
                       setDesktopChatStatusByBot((prev) => {

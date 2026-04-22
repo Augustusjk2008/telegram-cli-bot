@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, ChevronsUpDown, RefreshCw, Save } from "lucide-react";
+import { ArrowLeft, RefreshCw, Save } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { RegisterCodeCreateResult, RegisterCodeItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -7,7 +7,6 @@ import type { WebBotClient } from "../services/webBotClient";
 type Props = {
   client?: WebBotClient;
   onClose: () => void;
-  onOpenBotSwitcher: () => void;
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -17,7 +16,6 @@ function getErrorMessage(error: unknown, fallback: string) {
 export function InviteCodeManagementScreen({
   client = new MockWebBotClient(),
   onClose,
-  onOpenBotSwitcher,
 }: Props) {
   const [registerCodes, setRegisterCodes] = useState<RegisterCodeItem[]>([]);
   const [registerCodeDraftUses, setRegisterCodeDraftUses] = useState("1");
@@ -134,24 +132,14 @@ export function InviteCodeManagementScreen({
             <h1 className="text-2xl font-bold text-[var(--text)]">邀请码管理</h1>
             <p className="text-sm text-[var(--muted)]">仅 127.0.0.1 超管可见。新邀请码明文只显示 1 次。</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              返回
-            </button>
-            <button
-              type="button"
-              onClick={onOpenBotSwitcher}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-            >
-              <ChevronsUpDown className="h-4 w-4" />
-              切换 Bot
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            返回
+          </button>
         </header>
 
         {error ? (

@@ -74,6 +74,7 @@ class TestConfigConstants:
         import bot.config as config
 
         assert not hasattr(config, "SESSION_TIMEOUT")
+        assert not hasattr(config, "CLI_EXEC_TIMEOUT")
 
     def test_working_dir_is_absolute(self):
         import os

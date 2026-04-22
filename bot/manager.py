@@ -310,8 +310,8 @@ class MultiBotManager:
             raise ValueError(f"工作目录不存在: {resolved_working_dir}")
         if resolve_cli_executable(resolved_cli_path, resolved_working_dir) is None:
             raise ValueError(
-                f"未找到CLI可执行文件: {resolved_cli_path} "
-                f"(请使用可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
+                f"未找到 CLI 可执行文件: {resolved_cli_path} "
+                f"(请在设置页填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
             )
 
         async with self._lock:
@@ -403,8 +403,8 @@ class MultiBotManager:
             profile = self._get_profile_for_update(normalized_alias)
             if resolve_cli_executable(resolved_cli_path, profile.working_dir) is None:
                 raise ValueError(
-                    f"未找到CLI可执行文件: {resolved_cli_path} "
-                    f"(请使用可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
+                    f"未找到 CLI 可执行文件: {resolved_cli_path} "
+                    f"(请在设置页填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
                 )
             profile.cli_type = resolved_cli_type
             profile.cli_path = resolved_cli_path

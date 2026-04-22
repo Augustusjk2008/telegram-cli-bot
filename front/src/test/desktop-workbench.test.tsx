@@ -694,7 +694,8 @@ test("desktop preview dialog defaults to a page-sized maximized window", async (
     />,
   );
 
-  await user.click(await screen.findByRole("button", { name: "预览 README.md" }));
+  fireEvent.contextMenu(await screen.findByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "预览" }));
 
   const previewWindow = await screen.findByTestId("desktop-workbench-preview-window");
   expect(previewWindow).toHaveStyle({
@@ -713,6 +714,56 @@ test("desktop preview dialog defaults to a page-sized maximized window", async (
     left: "12px",
     top: "12px",
   });
+});
+
+test("desktop chat file links reuse the workbench preview window", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }],
+  });
+  vi.spyOn(client, "listMessages").mockResolvedValue([{
+    id: "assistant-1",
+    role: "assistant",
+    text: "[查看 README](C:/workspace/README.md)",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }]);
+  const readFile = vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "# README\n\n桌面预览",
+    mode: "head",
+    fileSizeBytes: 128,
+    isFullContent: false,
+    lastModifiedNs: "1",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("link", { name: "查看 README" }));
+
+  await waitFor(() => {
+    expect(readFile).toHaveBeenCalled();
+  });
+  expect(readFile.mock.calls[0]?.[0]).toBe("main");
+  expect(String(readFile.mock.calls[0]?.[1] || "")).toMatch(/(^|[\\/])README\.md$/);
+  expect(await screen.findByTestId("desktop-workbench-preview-window")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "在编辑器中打开" })).toBeInTheDocument();
 });
 
 test("desktop file clicks open tabs and sync rename and delete actions", async () => {
@@ -764,13 +815,15 @@ test("desktop file clicks open tabs and sync rename and delete actions", async (
   await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
   expect(await screen.findByRole("tab", { name: /README\.md/ })).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "重命名 README.md" }));
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "改名" }));
   await user.clear(screen.getByLabelText("文件名"));
   await user.type(screen.getByLabelText("文件名"), "README-renamed.md");
   await user.click(screen.getByRole("button", { name: "重命名" }));
   expect(await screen.findByRole("tab", { name: /README-renamed\.md/ })).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "删除 README-renamed.md" }));
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README-renamed.md" }));
+  await user.click(await screen.findByRole("button", { name: "删除" }));
   await waitFor(() => {
     expect(screen.queryByRole("tab", { name: /README-renamed\.md/ })).not.toBeInTheDocument();
   });

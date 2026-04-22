@@ -68,7 +68,7 @@ type Props = {
   sessionCapabilities?: string[];
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
-  chatPaneContent?: ReactNode;
+  chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
   onUnreadResult?: (botAlias: string) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
@@ -398,6 +398,12 @@ export function DesktopWorkbench({
     setFocusedPane((current) => current === nextPane ? null : nextPane);
   }
 
+  function closePreview() {
+    setPreviewName("");
+    setPreviewContent("");
+    setPreviewResult(null);
+  }
+
   async function loadPreview(path: string, mode: "preview" | "full") {
     setPreviewLoading(true);
     try {
@@ -412,6 +418,14 @@ export function DesktopWorkbench({
       setPreviewLoading(false);
     }
   }
+
+  const resolvedChatPaneContent = typeof chatPaneContent === "function"
+    ? chatPaneContent({
+        requestPreview: (path) => {
+          void loadPreview(path, "preview");
+        },
+      })
+    : chatPaneContent;
 
   async function openWorkspaceFile(path: string, line?: number) {
     await Promise.allSettled([
@@ -831,7 +845,7 @@ export function DesktopWorkbench({
               !showChatPane && "hidden",
             )}
           >
-            {chatPaneContent || (
+            {resolvedChatPaneContent || (
               <ChatPane
                 botAlias={botAlias}
                 botAvatarName={botAvatarName}
@@ -844,6 +858,9 @@ export function DesktopWorkbench({
                 onToggleFocus={() => toggleFocusedPane("chat")}
                 onUnreadResult={onUnreadResult}
                 onWorkbenchStatusChange={setLocalChatStatus}
+                onRequestDesktopPreview={(path) => {
+                  void loadPreview(path, "preview");
+                }}
               />
             )}
           </section>
@@ -880,18 +897,12 @@ export function DesktopWorkbench({
           desktopAnchorRect={editorPaneBounds}
           loading={previewLoading}
           statusText={previewStatusText}
-          onClose={() => {
-            setPreviewName("");
-            setPreviewContent("");
-            setPreviewResult(null);
-          }}
+          onClose={closePreview}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={() => {
             const nextPath = previewName;
-            setPreviewName("");
-            setPreviewContent("");
-            setPreviewResult(null);
-            void tabs.openFile(nextPath);
+            closePreview();
+            void openWorkspaceFile(nextPath);
           }}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />

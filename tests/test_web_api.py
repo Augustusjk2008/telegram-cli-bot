@@ -29,6 +29,7 @@ from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_runtime import AssistantRunRequest
 from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
+from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.session_store import save_session
 from bot.web.server import WebApiServer, _TERMINAL_OUTPUT_EOF
@@ -131,6 +132,14 @@ def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_
     import bot.session_store as session_store
 
     assert session_store.STORE_FILE == temp_dir / ".session_store.json"
+
+
+def test_no_cli_message_points_to_web_settings_not_legacy_command():
+    text = msg("chat", "no_cli", cli_path="missing-cli")
+
+    assert "/set_cli_dir" not in text
+    assert "设置页" in text
+    assert "CLI 路径" in text
 
 
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):
@@ -3019,8 +3028,8 @@ async def test_run_cli_chat_retries_invalid_claude_session(web_manager: MultiBot
          patch("bot.web.api_service.build_cli_command", side_effect=[(["claude", "-r", "claude-stale"], False), (["claude"], False)]) as build_mock, \
          patch("bot.web.api_service.subprocess.Popen", side_effect=[first_process, second_process]), \
          patch("bot.web.api_service._communicate_process", new_callable=AsyncMock, side_effect=[
-             ("Error: Session ID not found", 1, False),
-             ("OK", 0, False),
+             ("Error: Session ID not found", 1),
+             ("OK", 0),
          ]) as communicate_mock:
         data = await run_cli_chat(web_manager, "main", 1001, "hello")
 
@@ -3108,7 +3117,7 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
          patch(
              "bot.web.api_service._communicate_codex_process",
              new_callable=AsyncMock,
-             return_value=("完成回复", "thread-1", 0, False),
+             return_value=("完成回复", "thread-1", 0),
          ):
         data = await run_cli_chat(web_manager, "main", 1001, "hello")
 
@@ -3130,12 +3139,41 @@ async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: M
          patch(
              "bot.web.api_service._communicate_codex_process",
              new_callable=AsyncMock,
-             return_value=("完成回复", "thread-1", 0, False),
+             return_value=("完成回复", "thread-1", 0),
          ):
         await run_cli_chat(web_manager, "main", 1001, "hello")
 
     hidden_mock.assert_called_once_with()
     assert popen_mock.call_args.kwargs["creationflags"] == 123
+
+
+@pytest.mark.asyncio
+async def test_communicate_process_waits_without_forced_timeout():
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = 0
+            self.timeout_arg = None
+            self.terminate = MagicMock()
+            self.kill = MagicMock()
+
+        def communicate(self, timeout=None):
+            self.timeout_arg = timeout
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(["codex"], timeout, output="partial")
+            return "完成回复", None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    fake_process = FakeProcess()
+
+    output, returncode = await api_service._communicate_process(fake_process)
+
+    assert output == "完成回复"
+    assert returncode == 0
+    assert fake_process.timeout_arg is None
+    fake_process.terminate.assert_not_called()
+    fake_process.kill.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -3175,7 +3213,7 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
          patch("bot.web.api_service.finalize_compaction", return_value="none") as finalize_mock, \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)) as build_mock, \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0, False)):
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0)):
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
     prompt_active_mock.assert_called_once_with(ANY)
@@ -3268,7 +3306,6 @@ async def test_execute_assistant_run_request_applies_dream_result_and_skips_capt
                  "摘要\n<DREAM_RESULT>{\"summary\":\"dream 完成\",\"working_memory\":{},\"knowledge_entries\":[],\"proposal\":null}</DREAM_RESULT>",
                  "thread-1",
                  0,
-                 False,
              ),
          ), \
          patch(
@@ -3328,7 +3365,7 @@ async def test_run_cli_chat_resyncs_managed_prompts_after_noop_compaction(
          patch("bot.web.api_service.finalize_compaction", return_value="noop") as finalize_mock, \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0, False)):
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0)):
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
     assert sync_mock.call_count == 3
@@ -3381,7 +3418,7 @@ async def test_run_cli_chat_marks_native_session_when_assistant_codex_thread_exi
          patch("bot.web.api_service.finalize_compaction", return_value="none"), \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-existing", 0, False)):
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-existing", 0)):
         await run_cli_chat(web_manager, "assistant1", 1001, "hello")
 
     compiler.assert_called_once_with(
@@ -3714,6 +3751,64 @@ async def test_stream_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager
 
     hidden_mock.assert_called_once_with()
     assert popen_mock.call_args.kwargs["creationflags"] == 456
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_does_not_force_terminate_on_elapsed_time(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(api_service, "CLI_EXEC_TIMEOUT", 0, raising=False)
+    web_manager.main_profile.cli_type = "codex"
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = ['{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n']
+
+        def readline(self):
+            time.sleep(0.02)
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+            self.kill = MagicMock(side_effect=self._kill)
+
+        def _terminate(self):
+            self.returncode = -15
+
+        def _kill(self):
+            self.returncode = -9
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["output"] == "完成回复"
+    fake_process.terminate.assert_not_called()
+    fake_process.kill.assert_not_called()
 
 
 def test_get_history_reads_from_local_store_not_overlay_or_legacy_history(
@@ -4125,7 +4220,7 @@ async def test_assistant_turn_persists_only_visible_user_text(
          patch("bot.web.api_service._prepare_assistant_prompt", return_value=(fake_home, {}, "HIDDEN PREAMBLE\n\n查看最近变更", False)), \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
-         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("查看完成", "thread-1", 0, False)):
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("查看完成", "thread-1", 0)):
         await run_cli_chat(web_manager, "assistant1", 1001, "查看最近变更")
 
     history = get_history(web_manager, "assistant1", 1001, limit=10)

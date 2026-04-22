@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
-import { Bot, Download, Eye, FilePlus, FolderPlus, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
-import { useRef, useState } from "react";
+import { FilePlus, FolderPlus, RefreshCw, Upload } from "lucide-react";
+import { type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { FileNameDialog } from "../components/FileNameDialog";
 import type { GitTreeDecorationKind } from "../services/types";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
@@ -21,9 +21,47 @@ type Props = {
   onToggleFocus: () => void;
 };
 
+type TreeContextMenuState = {
+  entry: FileTreeNode;
+  absolutePath: string;
+  x: number;
+  y: number;
+};
+
+const TREE_CONTEXT_MENU_WIDTH_PX = 152;
+const TREE_CONTEXT_MENU_PADDING_PX = 8;
+
 function branchLabel(path: string) {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
+}
+
+function clamp(value: number, min: number, max: number) {
+  if (min > max) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function joinAbsoluteTreePath(rootPath: string, path: string) {
+  if (!path) {
+    return rootPath;
+  }
+  const trimmedRoot = rootPath.replace(/[\\/]+$/, "");
+  if (!trimmedRoot) {
+    return path;
+  }
+  const separator = trimmedRoot.includes("\\") ? "\\" : "/";
+  const normalizedPath = path.replace(/[\\/]+/g, separator);
+  return `${trimmedRoot}${separator}${normalizedPath}`;
+}
+
+function resolveContextMenuPosition(x: number, y: number, isDir: boolean) {
+  const estimatedHeight = isDir ? 96 : 152;
+  return {
+    x: clamp(x, TREE_CONTEXT_MENU_PADDING_PX, window.innerWidth - TREE_CONTEXT_MENU_WIDTH_PX - TREE_CONTEXT_MENU_PADDING_PX),
+    y: clamp(y, TREE_CONTEXT_MENU_PADDING_PX, window.innerHeight - estimatedHeight - TREE_CONTEXT_MENU_PADDING_PX),
+  };
 }
 
 function resolveGitDecoration(
@@ -718,8 +756,50 @@ export function FileTreePane({
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
+  const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [dragDepth, setDragDepth] = useState(0);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+
+  function closeContextMenu() {
+    setContextMenu(null);
+  }
+
+  function openRenameDialog(path: string, name: string) {
+    setRenameTargetPath(path);
+    setRenameValue(name);
+    setRenameError("");
+    setShowRenameDialog(true);
+  }
+
+  function openContextMenu(entry: FileTreeNode, absolutePath: string, x: number, y: number) {
+    const position = resolveContextMenuPosition(x, y, entry.isDir);
+    setContextMenu({
+      entry,
+      absolutePath,
+      x: position.x,
+      y: position.y,
+    });
+  }
+
+  function handleEntryContextMenu(event: MouseEvent<HTMLButtonElement>, entry: FileTreeNode, absolutePath: string) {
+    if (structureOnly) {
+      return;
+    }
+    event.preventDefault();
+    openContextMenu(entry, absolutePath, event.clientX, event.clientY);
+  }
+
+  function handleEntryContextMenuKey(event: KeyboardEvent<HTMLButtonElement>, entry: FileTreeNode, absolutePath: string) {
+    if (structureOnly) {
+      return;
+    }
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
+      return;
+    }
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    openContextMenu(entry, absolutePath, rect.left + 12, rect.bottom + 4);
+  }
 
   async function handleCreateFile() {
     setCreateFileBusy(true);
@@ -742,6 +822,7 @@ export function FileTreePane({
     setRenameError("");
     try {
       const result = await tree.renameFile(renameTargetPath, renameValue.trim());
+      closeContextMenu();
       setShowRenameDialog(false);
       setRenameTargetPath("");
       setRenameValue("");
@@ -803,7 +884,7 @@ export function FileTreePane({
           const expanded = tree.isExpanded(entry.path);
           const branch = tree.branches[entry.path];
           const dirLabel = branchLabel(entry.path);
-          const absolutePath = `${tree.rootPath.replace(/[\\/]+$/, "")}/${entry.path}`;
+          const absolutePath = joinAbsoluteTreePath(tree.rootPath, entry.path);
           const iconKind = entry.isDir
             ? (expanded ? "folder-open" : "folder-closed")
             : getFileIconKind(entry.name);
@@ -814,7 +895,7 @@ export function FileTreePane({
           return (
             <li key={entry.path}>
               <div
-                className="group flex min-w-0 items-center gap-1.5 rounded-md text-[12px]"
+                className="group flex min-w-0 items-center rounded-md text-[12px]"
                 data-tree-path={entry.path}
                 data-git-state={gitDecoration || "clean"}
                 data-git-ignored={isIgnored ? "true" : "false"}
@@ -825,8 +906,10 @@ export function FileTreePane({
                   <button
                     type="button"
                     aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
+                    onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
+                    onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
                     onClick={() => void tree.toggleDirectory(entry.path)}
-                    className={clsx("min-w-0 flex-1 rounded px-2 py-1 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
+                    className={clsx("min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <TreeNodeIcon kind={iconKind} />
@@ -837,12 +920,14 @@ export function FileTreePane({
                   <button
                     type="button"
                     aria-label={`打开 ${entry.path}`}
+                    onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
+                    onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
                     onClick={() => {
                       if (!structureOnly) {
                         onOpenFile(entry.path);
                       }
                     }}
-                    className={clsx("min-w-0 flex-1 rounded px-2 py-1 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
+                    className={clsx("min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <TreeNodeIcon kind={iconKind} />
@@ -850,84 +935,17 @@ export function FileTreePane({
                     </span>
                   </button>
                 )}
-
-                {entry.isDir ? (
-                  <>
-                    {!structureOnly ? (
-                      <button
-                        type="button"
-                        aria-label={`设 ${entry.path} 为 Bot 工作目录`}
-                        title={`设 ${entry.path} 为 Bot 工作目录`}
-                        onClick={() => onRequestSetWorkdir(absolutePath)}
-                        className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                      >
-                        <Bot className="h-3.5 w-3.5" />
-                      </button>
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    {!structureOnly ? (
-                      <>
-                        <button
-                          type="button"
-                          aria-label={`预览 ${entry.path}`}
-                          title={`预览 ${entry.path}`}
-                          onClick={() => onRequestPreview(entry.path)}
-                          className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`重命名 ${entry.path}`}
-                          title={`重命名 ${entry.path}`}
-                          onClick={() => {
-                            setRenameTargetPath(entry.path);
-                            setRenameValue(entry.name);
-                            setRenameError("");
-                            setShowRenameDialog(true);
-                          }}
-                          className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`下载 ${entry.path}`}
-                          title={`下载 ${entry.path}`}
-                          onClick={() => void tree.downloadFile(entry.path)}
-                          className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    ) : null}
-                  </>
-                )}
-
-                {!structureOnly ? (
-                  <button
-                    type="button"
-                    aria-label={`删除 ${entry.path}`}
-                    title={`删除 ${entry.path}`}
-                    onClick={() => void handleDelete(entry)}
-                    className="shrink-0 rounded p-1 text-red-600 hover:bg-red-50"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                ) : null}
               </div>
 
               {entry.isDir && expanded ? (
-                <div className="space-y-1">
+                <div className="space-y-0.5">
                   {branch?.loading ? (
-                    <div className="px-2 py-1 text-[11px] text-[var(--muted)]" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
+                    <div className="px-2 py-0.5 text-[11px] text-[var(--muted)]" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
                       加载中...
                     </div>
                   ) : null}
                   {branch?.error ? (
-                    <div className="px-2 py-1 text-[11px] text-red-700" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
+                    <div className="px-2 py-0.5 text-[11px] text-red-700" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
                       {branch.error}
                     </div>
                   ) : null}
@@ -1054,6 +1072,84 @@ export function FileTreePane({
         ) : null}
         {!tree.loading && !tree.error ? renderBranch(tree.rootEntries, 0) : null}
       </div>
+
+      {contextMenu ? (
+        <>
+          <div
+            className="fixed inset-0 z-20"
+            onClick={closeContextMenu}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              closeContextMenu();
+            }}
+          />
+          <div
+            role="menu"
+            aria-label="文件树菜单"
+            className="fixed z-30 min-w-36 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+            }}
+          >
+            {contextMenu.entry.isDir ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onRequestSetWorkdir(contextMenu.absolutePath);
+                  closeContextMenu();
+                }}
+                className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+              >
+                设为工作目录
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRequestPreview(contextMenu.entry.path);
+                    closeContextMenu();
+                  }}
+                  className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  预览
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    openRenameDialog(contextMenu.entry.path, contextMenu.entry.name);
+                    closeContextMenu();
+                  }}
+                  className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  改名
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void tree.downloadFile(contextMenu.entry.path);
+                    closeContextMenu();
+                  }}
+                  className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  下载
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                closeContextMenu();
+                void handleDelete(contextMenu.entry);
+              }}
+              className="flex w-full rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+            >
+              删除
+            </button>
+          </div>
+        </>
+      ) : null}
 
       {!structureOnly && dragDepth > 0 ? (
         <div

@@ -433,6 +433,8 @@ test("super admin can open invite code management from bot switcher", async () =
   expect(screen.queryByRole("heading", { name: "Bot 管理" })).not.toBeInTheDocument();
   expect(screen.queryByText("界面与阅读")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "切换 Bot" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(document.title).toBe("邀请码管理 - Orbit Safe Claw");
 });
 

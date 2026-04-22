@@ -67,7 +67,6 @@ from bot.cli import (
     should_reset_claude_session,
     should_reset_codex_session,
 )
-from bot.config import CLI_EXEC_TIMEOUT
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
@@ -1507,7 +1506,6 @@ def _build_terminal_trace(
     *,
     live_trace: list[dict[str, Any]],
     stop_requested: bool,
-    timed_out: bool,
     returncode: int,
 ) -> list[dict[str, Any]]:
     trace = _merge_trace_events(live_trace)
@@ -1515,11 +1513,6 @@ def _build_terminal_trace(
         return _merge_trace_events(
             trace,
             [{"kind": "cancelled", "source": "runtime", "summary": "用户终止输出"}],
-        )
-    if timed_out:
-        return _merge_trace_events(
-            trace,
-            [{"kind": "error", "source": "runtime", "summary": "命令执行超时"}],
         )
     if isinstance(returncode, int) and returncode not in (0,):
         return _merge_trace_events(
@@ -1532,15 +1525,12 @@ def _build_terminal_trace(
 def _resolve_completion_state(
     session: UserSession,
     *,
-    timed_out: bool,
     returncode: int,
     response_text: str,
 ) -> str:
     with session._lock:
         stop_requested = bool(session.stop_requested)
     has_response = bool(str(response_text or "").strip())
-    if timed_out:
-        return "error"
     if stop_requested and (not isinstance(returncode, int) or returncode != 0):
         return "cancelled"
     if stop_requested and returncode == 0 and has_response:
@@ -1582,55 +1572,39 @@ def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0
         pass
 
 
-async def _communicate_process(process: subprocess.Popen) -> tuple[str, int, bool]:
-    def run_process() -> tuple[str, int, bool]:
-        try:
-            stdout, _ = process.communicate(timeout=CLI_EXEC_TIMEOUT)
-            return stdout or "", process.returncode or 0, False
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            stdout, _ = process.communicate()
-            return stdout or "", process.returncode or -1, True
+async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
+    def run_process() -> tuple[str, int]:
+        stdout, _ = process.communicate()
+        return stdout or "", process.returncode or 0
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, run_process)
 
 
-async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Optional[str], int, bool]:
-    raw_output, returncode, timed_out = await _communicate_process(process)
+async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Optional[str], int]:
+    raw_output, returncode = await _communicate_process(process)
     final_text, thread_id = parse_codex_json_output(raw_output)
-    if timed_out and not final_text:
-        final_text = msg("chat", "timeout_no_output")
-    elif not final_text:
+    if not final_text:
         final_text = msg("chat", "no_output")
-    return final_text, thread_id, returncode, timed_out
+    return final_text, thread_id, returncode
 
 
 async def _communicate_claude_process(
     process: subprocess.Popen,
     *,
     done_session=None,
-) -> tuple[str, Optional[str], int, bool]:
+) -> tuple[str, Optional[str], int]:
     if done_session is None or not getattr(done_session, "enabled", False):
-        raw_output, returncode, timed_out = await _communicate_process(process)
+        raw_output, returncode = await _communicate_process(process)
         final_text, session_id = parse_claude_stream_json_output(raw_output)
-        if timed_out and not final_text:
-            final_text = msg("chat", "timeout_no_output")
-        elif not final_text:
+        if not final_text:
             final_text = msg("chat", "no_output")
-        return final_text, session_id, returncode, timed_out
+        return final_text, session_id, returncode
 
     loop = asyncio.get_running_loop()
-    started_at = loop.time()
     output_queue: queue.Queue[Any] = queue.Queue()
     reader_done = threading.Event()
     collector = ClaudeDoneCollector(done_session)
-    timed_out = False
     done_terminate_started_at: Optional[float] = None
     done_force_killed = False
 
@@ -1660,10 +1634,6 @@ async def _communicate_claude_process(
 
     while not reader_done.is_set() or not output_queue.empty():
         now = loop.time()
-        if not timed_out and (now - started_at) >= CLI_EXEC_TIMEOUT and process.poll() is None:
-            timed_out = True
-            await loop.run_in_executor(None, _terminate_process_sync, process)
-
         drained = False
         while True:
             try:
@@ -1676,8 +1646,7 @@ async def _communicate_claude_process(
             collector.consume_chunk(str(item), now=now)
 
         if (
-            not timed_out
-            and collector.detector is not None
+            collector.detector is not None
             and done_terminate_started_at is None
             and collector.detector.poll(now=now)
             and process.poll() is None
@@ -1700,15 +1669,13 @@ async def _communicate_claude_process(
     returncode = process.poll() if process is not None else -1
     if returncode is None:
         returncode = -1
-    if done_terminate_started_at is not None and not timed_out:
+    if done_terminate_started_at is not None:
         returncode = 0
 
     final_text = collector.final_text
-    if timed_out and not final_text:
-        final_text = msg("chat", "timeout_no_output")
-    elif not final_text:
+    if not final_text:
         final_text = msg("chat", "no_output")
-    return final_text, collector.session_id, returncode, timed_out
+    return final_text, collector.session_id, returncode
 
 
 async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
@@ -1830,7 +1797,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             reader_done = threading.Event()
             raw_output_parts: list[str] = []
             thread_id: Optional[str] = None
-            timed_out = False
             last_status_signature: tuple[int, Optional[str]] | None = None
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
             done_terminate_started_at: Optional[float] = None
@@ -1864,10 +1830,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
             try:
                 while not reader_done.is_set() or not output_queue.empty():
-                    if not timed_out and (loop.time() - started_at) >= CLI_EXEC_TIMEOUT and process.poll() is None:
-                        timed_out = True
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
-
                     drained = False
                     while True:
                         try:
@@ -1901,15 +1863,13 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
                     if (
                         stop_requested
-                        and not timed_out
                         and done_terminate_started_at is None
                         and process.poll() is None
                     ):
                         done_terminate_started_at = loop.time()
                         process.terminate()
                     elif (
-                        not timed_out
-                        and claude_collector is not None
+                        claude_collector is not None
                         and claude_collector.detector is not None
                         and done_terminate_started_at is None
                         and claude_collector.detector.poll(now=loop.time())
@@ -1961,7 +1921,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 returncode = process.poll() if process is not None else -1
                 if returncode is None:
                     returncode = -1
-                if done_terminate_started_at is not None and not timed_out:
+                if done_terminate_started_at is not None:
                     returncode = 0
             finally:
                 with session._lock:
@@ -1980,14 +1940,10 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             else:
                 response = raw_output.strip()
 
-            if timed_out:
-                response = response or msg("chat", "timeout_no_output")
-            else:
-                response = response or msg("chat", "no_output")
+            response = response or msg("chat", "no_output")
 
             if (
                 cli_type == "claude"
-                and not timed_out
                 and attempt.resume_session
                 and should_reset_claude_session(response, returncode)
                 and attempt_index + 1 < max_attempts
@@ -2008,9 +1964,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                             session_id_changed = True
             elif cli_type == "claude":
                 with session._lock:
-                    if timed_out:
-                        pass
-                    elif should_mark_claude_session_initialized(response, returncode):
+                    if should_mark_claude_session_initialized(response, returncode):
                         if not session.claude_session_initialized:
                             session.claude_session_initialized = True
                             session_id_changed = True
@@ -2027,7 +1981,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
             completion_state = _resolve_completion_state(
                 session,
-                timed_out=timed_out,
                 returncode=returncode,
                 response_text=response,
             )
@@ -2036,7 +1989,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             final_trace = _build_terminal_trace(
                 live_trace=live_trace_events,
                 stop_requested=stop_requested,
-                timed_out=timed_out,
                 returncode=returncode,
             )
             for trace_event in final_trace[len(live_trace_events):]:
@@ -2070,7 +2022,6 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
-                "timed_out": timed_out,
                 "session": build_session_snapshot(profile, session),
             }
             return
@@ -2209,22 +2160,21 @@ async def run_cli_chat(
 
             try:
                 if cli_type == "codex":
-                    response, thread_id, returncode, timed_out = await _communicate_codex_process(process)
+                    response, thread_id, returncode = await _communicate_codex_process(process)
                 elif cli_type == "claude":
-                    response, _, returncode, timed_out = await _communicate_claude_process(
+                    response, _, returncode = await _communicate_claude_process(
                         process,
                         done_session=done_session,
                     )
                 else:
-                    response, returncode, timed_out = await _communicate_process(process)
-                    response = response.strip() or (msg("chat", "timeout_no_output") if timed_out else msg("chat", "no_output"))
+                    response, returncode = await _communicate_process(process)
+                    response = response.strip() or msg("chat", "no_output")
             finally:
                 with session._lock:
                     session.process = None
 
             if (
                 cli_type == "claude"
-                and not timed_out
                 and attempt.resume_session
                 and should_reset_claude_session(response, returncode)
                 and attempt_index + 1 < max_attempts
@@ -2245,9 +2195,7 @@ async def run_cli_chat(
                             session_id_changed = True
             elif cli_type == "claude":
                 with session._lock:
-                    if timed_out:
-                        pass
-                    elif should_mark_claude_session_initialized(response, returncode):
+                    if should_mark_claude_session_initialized(response, returncode):
                         if not session.claude_session_initialized:
                             session.claude_session_initialized = True
                             session_id_changed = True
@@ -2263,7 +2211,6 @@ async def run_cli_chat(
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
             completion_state = _resolve_completion_state(
                 session,
-                timed_out=timed_out,
                 returncode=returncode,
                 response_text=response,
             )
@@ -2272,7 +2219,6 @@ async def run_cli_chat(
             terminal_trace = _build_terminal_trace(
                 live_trace=[],
                 stop_requested=stop_requested,
-                timed_out=timed_out,
                 returncode=returncode,
             )
             for trace_event in terminal_trace:
@@ -2304,7 +2250,6 @@ async def run_cli_chat(
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
-                "timed_out": timed_out,
                 "session": build_session_snapshot(profile, session),
             }
             if dream_context_stats is not None:

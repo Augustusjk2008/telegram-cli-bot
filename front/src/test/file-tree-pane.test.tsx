@@ -1,8 +1,17 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  localStorage.clear();
+});
 
 function expectFileIcon(fileName: string, iconKind: string) {
   const button = screen.getByRole("button", { name: `打开 ${fileName}` });
@@ -198,9 +207,53 @@ test("tree can hand a directory off to embedded settings as the next workdir tar
 
   await screen.findByText("README.md");
   expect(screen.queryByRole("button", { name: "在终端中打开 docs" })).not.toBeInTheDocument();
-  expect(screen.queryByText("设为 Bot 工作目录")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "设 docs 为 Bot 工作目录" }));
+  expect(screen.queryByRole("button", { name: "设 docs 为 Bot 工作目录" })).not.toBeInTheDocument();
+  fireEvent.contextMenu(screen.getByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "设为工作目录" }));
 
+  expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
+});
+
+test("desktop tree exposes actions from a context menu and keeps rows compact", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "docs", isDir: true },
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const readmeButton = await screen.findByRole("button", { name: "打开 README.md" });
+  expect(readmeButton).toHaveClass("py-0.5");
+  expect(readmeButton.closest("[data-tree-path='README.md']")).toHaveClass("text-[12px]");
+  expect(screen.queryByRole("button", { name: "预览 README.md" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "下载 README.md" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "删除 README.md" })).not.toBeInTheDocument();
+
+  fireEvent.contextMenu(readmeButton);
+  expect(await screen.findByRole("menu", { name: "文件树菜单" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "预览" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "改名" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "下载" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+
+  fireEvent.contextMenu(screen.getByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "设为工作目录" }));
   expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
 });
 

@@ -47,6 +47,7 @@ type Props = {
   onToggleImmersive?: () => void;
   onUnreadResult?: (botAlias: string) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
+  onRequestDesktopPreview?: (path: string) => void;
 };
 
 type PendingChatAttachment = ChatAttachmentUploadResult & {
@@ -568,6 +569,7 @@ export function ChatScreen({
   onToggleImmersive,
   onUnreadResult,
   onWorkbenchStatusChange,
+  onRequestDesktopPreview,
 }: Props) {
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -1026,6 +1028,7 @@ export function ChatScreen({
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
+  const shouldUseInlinePreview = !(embedded && onRequestDesktopPreview);
 
   const handleFileLinkClick = useCallback((href: string) => {
     const nextPath = resolvePreviewFilePath(href, workingDirRef.current);
@@ -1033,8 +1036,12 @@ export function ChatScreen({
       setError("暂不支持预览该文件链接");
       return;
     }
+    if (embedded && onRequestDesktopPreview) {
+      onRequestDesktopPreview(nextPath);
+      return;
+    }
     void loadPreview(nextPath, "preview");
-  }, [loadPreview]);
+  }, [embedded, loadPreview, onRequestDesktopPreview]);
 
   const loadMessageTrace = useCallback(async (messageId: string) => {
     const currentMessage = itemsRef.current.find((item) => item.id === messageId);
@@ -1502,7 +1509,7 @@ export function ChatScreen({
         />
       ) : null}
 
-      {previewName ? (
+      {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog
           title={previewName}
           content={previewContent}

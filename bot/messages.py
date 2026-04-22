@@ -132,14 +132,10 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "busy": "⏳ 当前会话正在处理上一条消息，请稍后再试。",
         "processing": "⏳ 处理中...",
         "processing_with_time": "⏳ 处理中，已等待 {elapsed} 秒...",
-        "no_cli": "❌ 未找到CLI可执行文件: {cli_path}\n请用 /bot_set_cli 配置正确的命令名或完整路径",
+        "no_cli": "❌ 未找到 CLI 可执行文件: {cli_path}\n请在设置页修改 CLI 路径，或用 /bot_set_cli <alias> <cli_type> <cli_path> 配置。",
         "cli_failed": "❌ CLI 进程启动失败",
         "error": "❌ 错误: {error}",
-        "timeout": "⏱️ <b>任务已超时终止</b>\n执行时间超过 {timeout} 秒，进程已被强制结束。",
-        "timeout_collecting": "⏱️ 已超时（{elapsed}秒），正在收集剩余输出...",
-        "timeout_warning": "⚠️ 任务已超时，但已收集到部分输出。如需继续对话，可继续发送消息。",
-        "no_output": "(无输出)",
-        "timeout_no_output": "(进程已超时终止，无输出)"
+        "no_output": "(无输出)"
     },
     "admin": {
         "unauthorized": "⛔ 需要管理员权限",

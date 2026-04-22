@@ -51,7 +51,6 @@ for uid in _allowed_raw.split(","):
 CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
 CLI_PATH = _get_project_config("CLI_PATH", "codex")
 WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))
-CLI_EXEC_TIMEOUT = int(os.environ.get("CLI_EXEC_TIMEOUT", "4000"))  # CLI 执行超时（秒），超过此时间自动终止
 CLAUDE_DONE_DETECTOR_ENABLED = os.environ.get("CLAUDE_DONE_DETECTOR_ENABLED", "false").lower() == "true"
 CLAUDE_DONE_QUIET_SECONDS = float(os.environ.get("CLAUDE_DONE_QUIET_SECONDS", "2"))
 CLAUDE_DONE_SENTINEL_MODE = os.environ.get("CLAUDE_DONE_SENTINEL_MODE", "nonce").strip().lower()

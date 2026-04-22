@@ -14,6 +14,7 @@ type Props = {
   onToggleFocus?: () => void;
   onUnreadResult?: (botAlias: string) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
+  onRequestDesktopPreview?: (path: string) => void;
 };
 
 export function ChatPane({
@@ -28,6 +29,7 @@ export function ChatPane({
   onToggleFocus,
   onUnreadResult,
   onWorkbenchStatusChange,
+  onRequestDesktopPreview,
 }: Props) {
   return (
     <ChatScreen
@@ -43,6 +45,7 @@ export function ChatPane({
       onToggleFocus={onToggleFocus}
       onUnreadResult={onUnreadResult}
       onWorkbenchStatusChange={onWorkbenchStatusChange}
+      onRequestDesktopPreview={onRequestDesktopPreview}
     />
   );
 }
