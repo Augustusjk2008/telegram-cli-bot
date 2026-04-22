@@ -29,6 +29,8 @@ import type {
   FileRenameResult,
   FileWriteResult,
   PublicHostInfo,
+  RegisterCodeCreateResult,
+  RegisterCodeItem,
   SessionState,
   SystemScript,
   SystemScriptResult,
@@ -69,12 +71,19 @@ const MEMBER_CAPABILITIES: Capability[] = [
   "manage_cli_params",
   "admin_ops",
 ];
+const SUPER_ADMIN_CAPABILITIES: Capability[] = [...MEMBER_CAPABILITIES, "manage_register_codes"];
 const GUEST_CAPABILITIES: Capability[] = [
   "view_bots",
   "view_bot_status",
   "view_file_tree",
   "view_chat_history",
 ];
+
+function resolveMemberCapabilities(username: string) {
+  return username.trim() === "127.0.0.1"
+    ? [...SUPER_ADMIN_CAPABILITIES]
+    : [...MEMBER_CAPABILITIES];
+}
 
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
@@ -181,6 +190,20 @@ export class MockWebBotClient implements WebBotClient {
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
   private fileContents = new Map<string, string>();
   private fileVersions = new Map<string, number>();
+  private registerCodes: RegisterCodeItem[] = [
+    {
+      codeId: "invite-demo-1",
+      codePreview: "INV***001",
+      disabled: false,
+      maxUses: 3,
+      usedCount: 1,
+      remainingUses: 2,
+      createdAt: "2026-04-22T01:00:00Z",
+      createdBy: "127.0.0.1",
+      lastUsedAt: "2026-04-22T02:00:00Z",
+      usage: [{ usedAt: "2026-04-22T02:00:00Z", usedBy: "alice" }],
+    },
+  ];
   private session: SessionState = {
     currentBotAlias: "main",
     currentPath: "/",
@@ -284,14 +307,17 @@ export class MockWebBotClient implements WebBotClient {
       : !_input.password
         ? _input.username.trim()
         : "";
+    const username = typeof _input === "string"
+      ? _input.trim() || "alice"
+      : _input.username.trim() || "alice";
     this.session = {
       currentBotAlias: "main",
       currentPath: "/",
       isLoggedIn: true,
       token: legacyToken || "mock-session-member",
-      username: "alice",
+      username,
       role: "member",
-      capabilities: [...MEMBER_CAPABILITIES],
+      capabilities: resolveMemberCapabilities(username),
     };
     return { ...this.session };
   }
@@ -304,7 +330,7 @@ export class MockWebBotClient implements WebBotClient {
       token: "mock-session-member",
       username: input.username,
       role: "member",
-      capabilities: [...MEMBER_CAPABILITIES],
+      capabilities: resolveMemberCapabilities(input.username),
     };
     return { ...this.session };
   }
@@ -336,6 +362,52 @@ export class MockWebBotClient implements WebBotClient {
       role: "guest",
       capabilities: [],
     };
+  }
+
+  async listRegisterCodes(): Promise<RegisterCodeItem[]> {
+    return this.registerCodes.map((item) => ({ ...item, usage: [...item.usage] }));
+  }
+
+  async createRegisterCode(maxUses = 1): Promise<RegisterCodeCreateResult> {
+    const created: RegisterCodeCreateResult = {
+      codeId: `invite-${Date.now()}`,
+      code: `INV-${String(this.registerCodes.length + 1).padStart(3, "0")}`,
+      codePreview: `INV***${String(this.registerCodes.length + 1).padStart(3, "0")}`,
+      disabled: false,
+      maxUses,
+      usedCount: 0,
+      remainingUses: maxUses,
+      createdAt: new Date().toISOString(),
+      createdBy: "127.0.0.1",
+      lastUsedAt: "",
+      usage: [],
+    };
+    this.registerCodes = [created, ...this.registerCodes];
+    return { ...created, usage: [] };
+  }
+
+  async updateRegisterCode(codeId: string, input: { maxUsesDelta?: number; disabled?: boolean }): Promise<RegisterCodeItem> {
+    const index = this.registerCodes.findIndex((item) => item.codeId === codeId);
+    if (index < 0) {
+      throw new WebApiClientError("邀请码不存在", { status: 404, code: "register_code_not_found" });
+    }
+    const current = this.registerCodes[index];
+    const nextMaxUses = typeof input.maxUsesDelta === "number" ? current.maxUses + input.maxUsesDelta : current.maxUses;
+    if (nextMaxUses < current.usedCount || nextMaxUses <= 0) {
+      throw new WebApiClientError("使用次数无效", { status: 400, code: "invalid_register_code_max_uses" });
+    }
+    const updated: RegisterCodeItem = {
+      ...current,
+      maxUses: nextMaxUses,
+      remainingUses: nextMaxUses - current.usedCount,
+      disabled: typeof input.disabled === "boolean" ? input.disabled : current.disabled,
+    };
+    this.registerCodes[index] = updated;
+    return { ...updated, usage: [...updated.usage] };
+  }
+
+  async deleteRegisterCode(codeId: string): Promise<void> {
+    this.registerCodes = this.registerCodes.filter((item) => item.codeId !== codeId);
   }
 
   async listBots(): Promise<BotSummary[]> {

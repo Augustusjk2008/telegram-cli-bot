@@ -10,7 +10,7 @@ $script:RootDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $script:RootDir
 
 $script:StepIndex = 0
-$script:TotalSteps = if ($CheckOnly) { 6 } else { 10 }
+$script:TotalSteps = if ($CheckOnly) { 6 } else { 11 }
 $script:Warnings = New-Object System.Collections.Generic.List[string]
 $script:Summary = [ordered]@{}
 $script:WingetAvailable = $false
@@ -611,6 +611,67 @@ function Configure-EnvFile {
     Save-Summary -Key ".env" -Value ("已生成（CLI={0}，Tunnel={1}）" -f $selectedCli.Type, $TunnelConfig.Mode)
 }
 
+function Initialize-WebRegisterCode {
+    param([object]$PythonInfo)
+
+    $choice = Read-Choice -Prompt "是否初始化邀请码：1) 跳过  2) 初始化" -Choices @("1", "2") -DefaultChoice "1"
+    if ($choice -ne "2") {
+        Save-Summary -Key "邀请码" -Value "未初始化"
+        return
+    }
+
+    $maxUsesText = Read-TextWithDefault -Prompt "邀请码可用次数" -DefaultValue "1"
+    $parsedMaxUses = 0
+    if (-not [int]::TryParse($maxUsesText, [ref]$parsedMaxUses)) {
+        throw "邀请码可用次数必须是整数。"
+    }
+    $maxUses = [int]$parsedMaxUses
+    if ($maxUses -le 0) {
+        throw "邀请码可用次数至少为 1。"
+    }
+
+    $code = @"
+import json
+import os
+from bot.web.auth_store import WebAuthStore
+store = WebAuthStore(
+    users_path=os.environ["CLI_BRIDGE_USERS_PATH"],
+    register_codes_path=os.environ["CLI_BRIDGE_REGISTER_CODES_PATH"],
+    secret_path=os.environ["CLI_BRIDGE_AUTH_SECRET_PATH"],
+)
+payload = store.create_register_code(created_by="install-script", max_uses=int(os.environ["CLI_BRIDGE_REGISTER_CODE_MAX_USES"]))
+print(json.dumps(payload, ensure_ascii=False))
+"@
+
+    $previousUsersPath = $env:CLI_BRIDGE_USERS_PATH
+    $previousCodesPath = $env:CLI_BRIDGE_REGISTER_CODES_PATH
+    $previousSecretPath = $env:CLI_BRIDGE_AUTH_SECRET_PATH
+    $previousMaxUses = $env:CLI_BRIDGE_REGISTER_CODE_MAX_USES
+    $env:CLI_BRIDGE_USERS_PATH = Join-Path $script:RootDir ".web_users.json"
+    $env:CLI_BRIDGE_REGISTER_CODES_PATH = Join-Path $script:RootDir ".web_register_codes.json"
+    $env:CLI_BRIDGE_AUTH_SECRET_PATH = Join-Path $script:RootDir ".web_auth_secret.json"
+    $env:CLI_BRIDGE_REGISTER_CODE_MAX_USES = [string]$maxUses
+    try {
+        $output = & $PythonInfo.Command @($PythonInfo.PrefixArgs + @("-c", $code))
+        if ($LASTEXITCODE -ne 0) {
+            throw "初始化邀请码失败。"
+        }
+    } finally {
+        $env:CLI_BRIDGE_USERS_PATH = $previousUsersPath
+        $env:CLI_BRIDGE_REGISTER_CODES_PATH = $previousCodesPath
+        $env:CLI_BRIDGE_AUTH_SECRET_PATH = $previousSecretPath
+        $env:CLI_BRIDGE_REGISTER_CODE_MAX_USES = $previousMaxUses
+    }
+
+    $jsonLine = @($output | Where-Object { $_ })[-1]
+    if ([string]::IsNullOrWhiteSpace($jsonLine)) {
+        throw "初始化邀请码失败：未返回邀请码。"
+    }
+    $payload = $jsonLine | ConvertFrom-Json
+    Write-Info ("邀请码: {0}" -f $payload.code)
+    Save-Summary -Key "邀请码" -Value ("已初始化（可用 {0} 次）" -f $maxUses)
+}
+
 function Show-CliWarning {
     Write-Warn "未检测到 codex / claude。"
     Write-Host "请先安装 Codex CLI 或 Claude Code CLI，并完成登录。"
@@ -792,6 +853,9 @@ try {
 
     Write-Step "配置 .env"
     Configure-EnvFile -CliInfo $cliInfo -TunnelConfig $tunnelConfig
+
+    Write-Step "初始化邀请码"
+    Initialize-WebRegisterCode -PythonInfo $pythonInfo
 
     Show-SummaryReport
     exit 0

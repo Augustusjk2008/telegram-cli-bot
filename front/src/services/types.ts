@@ -16,7 +16,30 @@ export type Capability =
   | "git_ops"
   | "run_scripts"
   | "manage_cli_params"
+  | "manage_register_codes"
   | "admin_ops";
+
+export type RegisterCodeUsage = {
+  usedAt: string;
+  usedBy: string;
+};
+
+export type RegisterCodeItem = {
+  codeId: string;
+  codePreview: string;
+  disabled: boolean;
+  maxUses: number;
+  usedCount: number;
+  remainingUses: number;
+  createdAt: string;
+  createdBy: string;
+  lastUsedAt: string;
+  usage: RegisterCodeUsage[];
+};
+
+export type RegisterCodeCreateResult = RegisterCodeItem & {
+  code: string;
+};
 
 export type BotSummary = {
   alias: string;

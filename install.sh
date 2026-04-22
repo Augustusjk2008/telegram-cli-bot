@@ -110,6 +110,37 @@ ensure_env_file() {
   info ".env 已根据 .env.example 自动生成"
 }
 
+initialize_register_code() {
+  local python_bin="$1"
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    return 0
+  fi
+
+  local choice=""
+  read -r -p "是否初始化邀请码？[y/N] " choice
+  if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+    return 0
+  fi
+
+  local max_uses="1"
+  read -r -p "邀请码可用次数 [默认 1]: " max_uses_input
+  if [[ -n "${max_uses_input:-}" ]]; then
+    max_uses="$max_uses_input"
+  fi
+  if [[ ! "$max_uses" =~ ^[0-9]+$ ]] || [[ "$max_uses" -le 0 ]]; then
+    fail "邀请码可用次数至少为 1"
+    exit 1
+  fi
+
+  local invite_json
+  invite_json="$(CLI_BRIDGE_USERS_PATH="$SCRIPT_DIR/.web_users.json" \
+    CLI_BRIDGE_REGISTER_CODES_PATH="$SCRIPT_DIR/.web_register_codes.json" \
+    CLI_BRIDGE_AUTH_SECRET_PATH="$SCRIPT_DIR/.web_auth_secret.json" \
+    CLI_BRIDGE_REGISTER_CODE_MAX_USES="$max_uses" \
+    "$python_bin" -c 'import json, os; from bot.web.auth_store import WebAuthStore; store = WebAuthStore(os.environ["CLI_BRIDGE_USERS_PATH"], os.environ["CLI_BRIDGE_REGISTER_CODES_PATH"], os.environ["CLI_BRIDGE_AUTH_SECRET_PATH"]); print(json.dumps(store.create_register_code(created_by="install-script", max_uses=int(os.environ["CLI_BRIDGE_REGISTER_CODE_MAX_USES"])), ensure_ascii=False))')"
+  info "邀请码: $(printf '%s' "$invite_json" | "$python_bin" -c 'import json,sys; print(json.loads(sys.stdin.read())["code"])')"
+}
+
 step "检查 Python 3.10+"
 python_bin=""
 if python_bin="$(detect_python)"; then
@@ -182,6 +213,9 @@ step "构建前端"
 
 step "生成 .env"
 ensure_env_file
+
+step "可选初始化邀请码"
+initialize_register_code "$PYTHON_BIN"
 
 if [[ -z "${WEB_PUBLIC_URL:-}" && ( -z "${WEB_TUNNEL_MODE:-}" || "${WEB_TUNNEL_MODE:-disabled}" == "disabled" ) ]]; then
   info "如需外网访问，可在 .env 中设置 WEB_TUNNEL_MODE=cloudflare_quick，或配置反向代理后填写 WEB_PUBLIC_URL。"

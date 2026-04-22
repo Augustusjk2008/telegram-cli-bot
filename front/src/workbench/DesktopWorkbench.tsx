@@ -65,6 +65,7 @@ type Props = {
   chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
   onUserAvatarChange?: (avatarName: string) => void;
+  sessionCapabilities?: string[];
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
   chatPaneContent?: ReactNode;
@@ -97,6 +98,7 @@ export function DesktopWorkbench({
   chatBodyParagraphSpacing,
   onChatBodyParagraphSpacingChange,
   onUserAvatarChange,
+  sessionCapabilities = [],
   viewMode = "desktop",
   hasUnreadOtherBots = false,
   chatPaneContent,
@@ -571,6 +573,7 @@ export function DesktopWorkbench({
           onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
           userAvatarName={userAvatarName}
           onUserAvatarChange={onUserAvatarChange}
+          sessionCapabilities={sessionCapabilities}
         />
       );
     }

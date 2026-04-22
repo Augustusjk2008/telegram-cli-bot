@@ -62,6 +62,7 @@ type Props = {
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
   userAvatarName?: string;
   onUserAvatarChange?: (avatarName: string) => void;
+  sessionCapabilities?: string[];
 };
 
 type DraftValues = Record<string, string | boolean>;
@@ -181,6 +182,7 @@ export function SettingsScreen({
   onChatBodyParagraphSpacingChange,
   userAvatarName = readStoredUserAvatarName(),
   onUserAvatarChange,
+  sessionCapabilities = [],
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);

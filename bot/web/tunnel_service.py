@@ -24,6 +24,10 @@ from bot.platform.processes import build_subprocess_group_kwargs
 logger = logging.getLogger(__name__)
 
 _CLOUDFLARE_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+_BENIGN_TUNNEL_WARNINGS = (
+    "Failed to initialize DNS local resolver",
+    "cloudflared does not support loading the system root certificate pool on Windows",
+)
 
 
 class TunnelService:
@@ -158,6 +162,13 @@ class TunnelService:
     def _cloudflared_command(self) -> list[str]:
         executable = self._cloudflared_path or "cloudflared"
         return [executable, "tunnel", "--url", self._local_url]
+
+    @staticmethod
+    def _log_cloudflared_line(line: str) -> None:
+        if any(pattern in line for pattern in _BENIGN_TUNNEL_WARNINGS):
+            logger.warning("[cloudflared] %s", line)
+            return
+        logger.info("[cloudflared] %s", line)
 
     @staticmethod
     def _coerce_pid(value: Any) -> int:
@@ -346,7 +357,7 @@ class TunnelService:
                     break
                 line = raw_line.rstrip()
                 if line:
-                    logger.info("[cloudflared] %s", line)
+                    self._log_cloudflared_line(line)
                 public_url = self._extract_public_url(line)
                 if public_url:
                     self._set_snapshot(status="running", public_url=public_url, last_error="", pid=process.pid)

@@ -41,6 +41,8 @@ import type {
   FileRenameResult,
   FileWriteResult,
   PublicHostInfo,
+  RegisterCodeCreateResult,
+  RegisterCodeItem,
   RunningReply,
   SessionState,
   SystemScript,
@@ -216,6 +218,28 @@ type RawAuthSession = {
   token?: string;
   token_protected?: boolean;
   allowed_user_ids?: number[];
+};
+
+type RawRegisterCodeUsage = {
+  used_at: string;
+  used_by: string;
+};
+
+type RawRegisterCodeItem = {
+  code_id: string;
+  code_preview: string;
+  disabled: boolean;
+  max_uses: number;
+  used_count: number;
+  remaining_uses: number;
+  created_at: string;
+  created_by: string;
+  last_used_at: string;
+  usage: RawRegisterCodeUsage[];
+};
+
+type RawRegisterCodeCreateResult = RawRegisterCodeItem & {
+  code: string;
 };
 
 type RawCliParamsPayload = {
@@ -703,6 +727,35 @@ function mapSessionState(raw: RawAuthSession): SessionState {
   };
 }
 
+function mapRegisterCodeUsage(raw: RawRegisterCodeUsage) {
+  return {
+    usedAt: raw.used_at || "",
+    usedBy: raw.used_by || "",
+  };
+}
+
+function mapRegisterCodeItem(raw: RawRegisterCodeItem): RegisterCodeItem {
+  return {
+    codeId: raw.code_id || "",
+    codePreview: raw.code_preview || "",
+    disabled: Boolean(raw.disabled),
+    maxUses: Number(raw.max_uses || 0),
+    usedCount: Number(raw.used_count || 0),
+    remainingUses: Number(raw.remaining_uses || 0),
+    createdAt: raw.created_at || "",
+    createdBy: raw.created_by || "",
+    lastUsedAt: raw.last_used_at || "",
+    usage: Array.isArray(raw.usage) ? raw.usage.map((item) => mapRegisterCodeUsage(item)) : [],
+  };
+}
+
+function mapRegisterCodeCreateResult(raw: RawRegisterCodeCreateResult): RegisterCodeCreateResult {
+  return {
+    ...mapRegisterCodeItem(raw),
+    code: raw.code || "",
+  };
+}
+
 function mapGitChangedFile(raw: RawGitChangedFile) {
   return {
     path: raw.path,
@@ -1069,6 +1122,42 @@ export class RealWebBotClient implements WebBotClient {
     } finally {
       this.token = "";
     }
+  }
+
+  async listRegisterCodes(): Promise<RegisterCodeItem[]> {
+    const data = await this.requestJson<{ items: RawRegisterCodeItem[] }>("/api/admin/register-codes");
+    return Array.isArray(data.items) ? data.items.map((item) => mapRegisterCodeItem(item)) : [];
+  }
+
+  async createRegisterCode(maxUses = 1): Promise<RegisterCodeCreateResult> {
+    const data = await this.requestJson<RawRegisterCodeCreateResult>("/api/admin/register-codes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ max_uses: maxUses }),
+    });
+    return mapRegisterCodeCreateResult(data);
+  }
+
+  async updateRegisterCode(codeId: string, input: { maxUsesDelta?: number; disabled?: boolean }): Promise<RegisterCodeItem> {
+    const data = await this.requestJson<RawRegisterCodeItem>(`/api/admin/register-codes/${encodeURIComponent(codeId)}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...(typeof input.maxUsesDelta === "number" ? { max_uses_delta: input.maxUsesDelta } : {}),
+        ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
+      }),
+    });
+    return mapRegisterCodeItem(data);
+  }
+
+  async deleteRegisterCode(codeId: string): Promise<void> {
+    await this.requestJson(`/api/admin/register-codes/${encodeURIComponent(codeId)}`, {
+      method: "DELETE",
+    });
   }
 
   async listBots(): Promise<BotSummary[]> {

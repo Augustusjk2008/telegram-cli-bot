@@ -1530,11 +1530,61 @@ async def test_auth_route_auto_authenticates_loopback_as_admin(web_manager: Mult
             assert resp.status == 200
             payload = await resp.json()
 
-    assert payload["data"]["username"] == "admin"
+    assert payload["data"]["username"] == "127.0.0.1"
     assert payload["data"]["account_id"] == "local-admin"
     assert payload["data"]["user_id"] == 1001
     assert payload["data"]["token_protected"] is True
     assert "admin_ops" in payload["data"]["capabilities"]
+    assert "manage_register_codes" in payload["data"]["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_loopback_login_ignores_credentials_and_returns_local_admin(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/auth/login", json={"username": "x", "password": "bad"})
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["username"] == "127.0.0.1"
+    assert "manage_register_codes" in payload["data"]["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_local_admin_can_manage_register_codes(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            create_resp = await client.post("/api/admin/register-codes", json={"max_uses": 2})
+            assert create_resp.status == 200
+            created = (await create_resp.json())["data"]
+
+            list_resp = await client.get("/api/admin/register-codes")
+            assert list_resp.status == 200
+            listed = (await list_resp.json())["data"]["items"]
+
+            patch_resp = await client.patch(f"/api/admin/register-codes/{created['code_id']}", json={"max_uses_delta": 1, "disabled": True})
+            assert patch_resp.status == 200
+            patched = (await patch_resp.json())["data"]
+
+            delete_resp = await client.delete(f"/api/admin/register-codes/{created['code_id']}")
+            assert delete_resp.status == 200
+
+    assert created["code"].startswith("INV-")
+    assert listed[0]["code_preview"] == created["code_preview"]
+    assert patched["max_uses"] == 3
+    assert patched["disabled"] is True
 
 
 @pytest.mark.asyncio

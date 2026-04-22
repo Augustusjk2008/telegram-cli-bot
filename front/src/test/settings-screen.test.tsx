@@ -216,6 +216,24 @@ test("main settings merge update controls into the main bot operations card", as
   expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
 });
 
+test("settings no longer shows invite code management", async () => {
+  const client = new MockWebBotClient();
+
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={client}
+      onLogout={() => undefined}
+      sessionCapabilities={["manage_register_codes"]}
+    />,
+  );
+
+  expect(await screen.findByText("界面与阅读")).toBeInTheDocument();
+  expect(screen.queryByText("邀请码管理")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("邀请码可用次数")).not.toBeInTheDocument();
+  expect(screen.queryByText("最新邀请码")).not.toBeInTheDocument();
+});
+
 test("assistant settings hide the update controls", async () => {
   const client = new MockWebBotClient();
 

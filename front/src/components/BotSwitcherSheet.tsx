@@ -5,13 +5,25 @@ import { StatusPill } from "./StatusPill";
 
 type Props = {
   bots: BotSummary[];
-  currentAlias: string;
+  currentAlias: string | null;
   onSelect: (alias: string) => boolean | Promise<boolean>;
   onManage: () => void;
+  showInviteManager?: boolean;
+  inviteManagerActive?: boolean;
+  onOpenInviteManager?: () => void;
   onClose: () => void;
 };
 
-export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClose }: Props) {
+export function BotSwitcherSheet({
+  bots,
+  currentAlias,
+  onSelect,
+  onManage,
+  showInviteManager = false,
+  inviteManagerActive = false,
+  onOpenInviteManager,
+  onClose,
+}: Props) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -78,6 +90,24 @@ export function BotSwitcherSheet({ bots, currentAlias, onSelect, onManage, onClo
               </button>
             );
           })}
+          {showInviteManager ? (
+            <div className="pt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenInviteManager?.();
+                  onClose();
+                }}
+                className={`w-full rounded-xl border px-4 py-3 text-left font-medium ${
+                  inviteManagerActive
+                    ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                    : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
+                }`}
+              >
+                邀请码管理
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

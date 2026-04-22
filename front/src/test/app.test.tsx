@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "../app/App";
-import type { BotSummary, ChatMessage } from "../services/types";
+import type { BotSummary, ChatMessage, SessionState } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 
 const terminalSessionMock = vi.hoisted(() => ({
@@ -47,6 +47,33 @@ afterEach(() => {
   localStorage.clear();
   sessionStorage.clear();
 });
+
+const SUPER_ADMIN_SESSION: SessionState = {
+  currentBotAlias: "main",
+  currentPath: "/",
+  isLoggedIn: true,
+  token: "mock-session-super-admin",
+  username: "127.0.0.1",
+  role: "member",
+  capabilities: [
+    "view_bots",
+    "view_bot_status",
+    "view_file_tree",
+    "mutate_browse_state",
+    "view_chat_history",
+    "view_chat_trace",
+    "read_file_content",
+    "write_files",
+    "chat_send",
+    "terminal_exec",
+    "debug_exec",
+    "git_ops",
+    "run_scripts",
+    "manage_cli_params",
+    "manage_register_codes",
+    "admin_ops",
+  ],
+};
 
 test("renders standalone login screen without backend", async () => {
   render(<App />);
@@ -386,6 +413,26 @@ test("settings tab shows cli params and tunnel status", async () => {
   expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
   expect(screen.getByText("公网访问")).toBeInTheDocument();
   expect(screen.getByText("https://demo.trycloudflare.com")).toBeInTheDocument();
+});
+
+test("super admin can open invite code management from bot switcher", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({ ...SUPER_ADMIN_SESSION });
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "127.0.0.1");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "邀请码管理" }));
+
+  expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Bot 管理" })).not.toBeInTheDocument();
+  expect(screen.queryByText("界面与阅读")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+  expect(document.title).toBe("邀请码管理 - Orbit Safe Claw");
 });
 
 test("main settings can switch and persist appearance preferences", async () => {

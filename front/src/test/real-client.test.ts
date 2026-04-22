@@ -182,9 +182,9 @@ describe("RealWebBotClient", () => {
       json: async () => ({
         ok: true,
         data: {
-          username: "admin",
+          username: "127.0.0.1",
           role: "member",
-          capabilities: ["admin_ops", "chat_send"],
+          capabilities: ["admin_ops", "manage_register_codes", "chat_send"],
         },
       }),
     });
@@ -201,10 +201,95 @@ describe("RealWebBotClient", () => {
       }),
     );
     expect(session).toEqual(expect.objectContaining({
-      username: "admin",
+      username: "127.0.0.1",
       role: "member",
-      capabilities: ["admin_ops", "chat_send"],
+      capabilities: ["admin_ops", "manage_register_codes", "chat_send"],
     }));
+  });
+
+  test("register code admin endpoints map fields", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [
+              {
+                code_id: "invite-1",
+                code_preview: "INV***001",
+                disabled: false,
+                max_uses: 2,
+                used_count: 1,
+                remaining_uses: 1,
+                created_at: "2026-04-22T01:00:00Z",
+                created_by: "127.0.0.1",
+                last_used_at: "2026-04-22T02:00:00Z",
+                usage: [{ used_at: "2026-04-22T02:00:00Z", used_by: "alice" }],
+              },
+            ],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            code_id: "invite-2",
+            code: "INV-ABC",
+            code_preview: "INV***ABC",
+            disabled: false,
+            max_uses: 3,
+            used_count: 0,
+            remaining_uses: 3,
+            created_at: "2026-04-22T03:00:00Z",
+            created_by: "127.0.0.1",
+            last_used_at: "",
+            usage: [],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            code_id: "invite-1",
+            code_preview: "INV***001",
+            disabled: true,
+            max_uses: 4,
+            used_count: 1,
+            remaining_uses: 3,
+            created_at: "2026-04-22T01:00:00Z",
+            created_by: "127.0.0.1",
+            last_used_at: "2026-04-22T02:00:00Z",
+            usage: [{ used_at: "2026-04-22T02:00:00Z", used_by: "alice" }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { deleted: true } }),
+      });
+
+    const client = new RealWebBotClient();
+    const listed = await client.listRegisterCodes();
+    const created = await client.createRegisterCode(3);
+    const updated = await client.updateRegisterCode("invite-1", { maxUsesDelta: 2, disabled: true });
+    await client.deleteRegisterCode("invite-1");
+
+    expect(listed[0]).toEqual(expect.objectContaining({
+      codeId: "invite-1",
+      codePreview: "INV***001",
+      usage: [{ usedAt: "2026-04-22T02:00:00Z", usedBy: "alice" }],
+    }));
+    expect(created.code).toBe("INV-ABC");
+    expect(updated).toEqual(expect.objectContaining({ codeId: "invite-1", maxUses: 4, disabled: true }));
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/admin/register-codes", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/admin/register-codes", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/admin/register-codes/invite-1", expect.objectContaining({ method: "PATCH" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/admin/register-codes/invite-1", expect.objectContaining({ method: "DELETE" }));
   });
 
   test("resolveWorkspaceDefinition maps snake_case payload fields", async () => {

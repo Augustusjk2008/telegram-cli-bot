@@ -50,6 +50,7 @@ from .auth_store import (
     CAP_DEBUG_EXEC,
     CAP_GIT_OPS,
     CAP_MANAGE_CLI_PARAMS,
+    CAP_MANAGE_REGISTER_CODES,
     CAP_MUTATE_BROWSE_STATE,
     CAP_READ_FILE_CONTENT,
     CAP_RUN_SCRIPTS,
@@ -60,6 +61,7 @@ from .auth_store import (
     CAP_VIEW_CHAT_TRACE,
     CAP_VIEW_FILE_TREE,
     CAP_WRITE_FILES,
+    LOCAL_ADMIN_CAPABILITIES,
     MEMBER_CAPABILITIES,
     ROLE_GUEST,
     WebAuthSession,
@@ -256,6 +258,15 @@ def _serialize_auth_session(session: WebAuthSession) -> dict[str, Any]:
         capabilities=set(session.capabilities),
     )
     return _serialize_auth_context(auth, token=session.token)
+
+
+def _parse_optional_int(value: object, *, field_name: str) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise WebApiError(400, "invalid_request", f"{field_name} 必须是整数") from exc
 
 
 def _normalize_origin(origin: str) -> str:
@@ -561,9 +572,9 @@ class WebApiServer:
             user_id=WEB_DEFAULT_USER_ID,
             token_used=False,
             account_id="local-admin",
-            username="admin",
+            username="127.0.0.1",
             role="member",
-            capabilities=set(MEMBER_CAPABILITIES),
+            capabilities=set(LOCAL_ADMIN_CAPABILITIES),
         )
 
     async def _parse_json(self, request: web.Request) -> dict[str, Any]:
@@ -700,6 +711,8 @@ class WebApiServer:
         return _json({"ok": True, "data": _serialize_auth_context(auth, token=_extract_auth_token(request))})
 
     async def auth_login(self, request: web.Request) -> web.Response:
+        if _is_loopback_request(request):
+            return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
         try:
             session = _WEB_AUTH_STORE.login_member(
@@ -711,6 +724,8 @@ class WebApiServer:
         return _json({"ok": True, "data": _serialize_auth_session(session)})
 
     async def auth_register(self, request: web.Request) -> web.Response:
+        if _is_loopback_request(request):
+            return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
         try:
             session = _WEB_AUTH_STORE.register_member(
@@ -732,6 +747,43 @@ class WebApiServer:
         if raw_token and _WEB_AUTH_STORE.get_session(raw_token) is not None:
             _WEB_AUTH_STORE.delete_session(raw_token)
         return _json({"ok": True, "data": {"username": auth.username}})
+
+    async def admin_register_codes(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        return _json({"ok": True, "data": _WEB_AUTH_STORE.list_register_codes()})
+
+    async def admin_register_code_create(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        body = await self._parse_json(request)
+        try:
+            data = _WEB_AUTH_STORE.create_register_code(
+                created_by=auth.username,
+                max_uses=int(body.get("max_uses", 1)),
+            )
+        except AuthStoreError as exc:
+            raise _auth_error(exc) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_register_code_patch(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        body = await self._parse_json(request)
+        try:
+            data = _WEB_AUTH_STORE.update_register_code(
+                request.match_info["code_id"],
+                max_uses_delta=_parse_optional_int(body.get("max_uses_delta"), field_name="max_uses_delta"),
+                disabled=body.get("disabled") if "disabled" in body else None,
+            )
+        except AuthStoreError as exc:
+            raise _auth_error(exc) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_register_code_delete(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        try:
+            _WEB_AUTH_STORE.delete_register_code(request.match_info["code_id"])
+        except AuthStoreError as exc:
+            raise _auth_error(exc) from exc
+        return _json({"ok": True, "data": {"deleted": True}})
 
     async def get_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOTS)
@@ -1660,6 +1712,10 @@ class WebApiServer:
         app.router.add_post("/api/auth/register", self.auth_register)
         app.router.add_post("/api/auth/guest", self.auth_guest)
         app.router.add_post("/api/auth/logout", self.auth_logout)
+        app.router.add_get("/api/admin/register-codes", self.admin_register_codes)
+        app.router.add_post("/api/admin/register-codes", self.admin_register_code_create)
+        app.router.add_patch("/api/admin/register-codes/{code_id}", self.admin_register_code_patch)
+        app.router.add_delete("/api/admin/register-codes/{code_id}", self.admin_register_code_delete)
         app.router.add_get("/api/bots", self.get_bots)
         app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)

@@ -5,6 +5,7 @@ __pycache__/
 .web_admin_settings.json
 .web_users.json
 .web_register_codes.json
+.web_auth_secret.json
 managed_bots.json
 .env
 *.log

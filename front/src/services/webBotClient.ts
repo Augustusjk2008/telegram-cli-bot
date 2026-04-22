@@ -29,6 +29,8 @@ import type {
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   PublicHostInfo,
+  RegisterCodeCreateResult,
+  RegisterCodeItem,
   SessionState,
   SystemScript,
   SystemScriptResult,
@@ -47,6 +49,10 @@ export interface WebBotClient {
   loginGuest(): Promise<SessionState>;
   restoreSession(token?: string): Promise<SessionState>;
   logout(): Promise<void>;
+  listRegisterCodes(): Promise<RegisterCodeItem[]>;
+  createRegisterCode(maxUses?: number): Promise<RegisterCodeCreateResult>;
+  updateRegisterCode(codeId: string, input: { maxUsesDelta?: number; disabled?: boolean }): Promise<RegisterCodeItem>;
+  deleteRegisterCode(codeId: string): Promise<void>;
   listBots(): Promise<BotSummary[]>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;

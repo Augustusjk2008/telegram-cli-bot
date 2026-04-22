@@ -22,6 +22,7 @@ import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
 import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
+import { InviteCodeManagementScreen } from "../screens/InviteCodeManagementScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { MobileDebugScreen } from "../screens/MobileDebugScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
@@ -224,6 +225,7 @@ export function App() {
   const [currentTab, setCurrentTab] = useState<AppTab>("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
   const [showBotManager, setShowBotManager] = useState(false);
+  const [showInviteCodeManager, setShowInviteCodeManager] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [desktopHasDirtyTabs, setDesktopHasDirtyTabs] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
@@ -246,6 +248,7 @@ export function App() {
   const canUseGit = hasCapability(session, "git_ops");
   const canUseSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "admin_ops");
+  const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
   const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots), [bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
   const hasUnreadOtherBots = useMemo(() => {
@@ -266,6 +269,7 @@ export function App() {
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
     setShowBotManager(false);
+    setShowInviteCodeManager(false);
     storeBotAlias(alias);
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
@@ -296,6 +300,14 @@ export function App() {
     } finally {
       setShowSwitcher(true);
     }
+  }
+
+  function openInviteCodeManager() {
+    setShowInviteCodeManager(true);
+    setShowBotManager(false);
+    setShowSwitcher(false);
+    setIsChatImmersive(false);
+    setIsTerminalImmersive(false);
   }
 
   useEffect(() => {
@@ -389,6 +401,10 @@ export function App() {
       document.title = APP_NAME;
       return;
     }
+    if (showInviteCodeManager) {
+      document.title = `邀请码管理 - ${APP_NAME}`;
+      return;
+    }
     if (showBotManager || !currentBot) {
       document.title = `Bot 管理 - ${APP_NAME}`;
       return;
@@ -402,7 +418,14 @@ export function App() {
       return;
     }
     document.title = APP_NAME;
-  }, [currentBot, currentTab, isLoggedIn, showBotManager]);
+  }, [currentBot, currentTab, isLoggedIn, showBotManager, showInviteCodeManager]);
+
+  useEffect(() => {
+    if (canManageRegisterCodes || !showInviteCodeManager) {
+      return;
+    }
+    setShowInviteCodeManager(false);
+  }, [canManageRegisterCodes, showInviteCodeManager]);
 
   useEffect(() => {
     storeUnreadBots(unreadBots);
@@ -413,7 +436,7 @@ export function App() {
       return;
     }
 
-    if (showBotManager) {
+    if (showBotManager || showInviteCodeManager) {
       return;
     }
 
@@ -428,7 +451,7 @@ export function App() {
     }
 
     setCurrentBot(null);
-  }, [bots, currentBot, isLoggedIn, showBotManager]);
+  }, [bots, currentBot, isLoggedIn, showBotManager, showInviteCodeManager]);
 
   useEffect(() => {
     const storedToken = readStoredToken();
@@ -444,6 +467,7 @@ export function App() {
         setSession(nextSession);
         setCurrentBot(restoredAlias || null);
         setShowBotManager(false);
+        setShowInviteCodeManager(false);
         setMountedChatBots(restoredAlias ? [restoredAlias] : []);
         setDesktopChatStatusByBot({});
         setLoginError("");
@@ -472,6 +496,7 @@ export function App() {
       setSession(nextSession);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
+      setShowInviteCodeManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
@@ -494,6 +519,7 @@ export function App() {
       setSession(nextSession);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
+      setShowInviteCodeManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
@@ -516,6 +542,7 @@ export function App() {
       setSession(nextSession);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
+      setShowInviteCodeManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
@@ -534,6 +561,7 @@ export function App() {
     setSession(null);
     setCurrentBot(null);
     setShowBotManager(false);
+    setShowInviteCodeManager(false);
     setCurrentTab("chat");
     setBots([]);
     setUnreadBots([]);
@@ -597,6 +625,18 @@ export function App() {
         isLoading={loginLoading}
         error={loginError}
         hostInfo={publicHostInfo}
+      />
+    );
+  }
+
+  if (showInviteCodeManager && canManageRegisterCodes) {
+    return (
+      <InviteCodeManagementScreen
+        client={client}
+        onClose={() => setShowInviteCodeManager(false)}
+        onOpenBotSwitcher={() => {
+          void openBotSwitcher();
+        }}
       />
     );
   }
@@ -698,6 +738,7 @@ export function App() {
           onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
           userAvatarName={userAvatarName}
           onUserAvatarChange={handleUserAvatarChange}
+          sessionCapabilities={session?.capabilities}
         />
       </div>
     );
@@ -712,9 +753,15 @@ export function App() {
       }}
       onManage={() => {
         setShowBotManager(true);
+        setShowInviteCodeManager(false);
         setShowSwitcher(false);
         setIsChatImmersive(false);
         setIsTerminalImmersive(false);
+      }}
+      showInviteManager={canManageRegisterCodes}
+      inviteManagerActive={showInviteCodeManager}
+      onOpenInviteManager={() => {
+        openInviteCodeManager();
       }}
       onClose={() => setShowSwitcher(false)}
     />
@@ -744,6 +791,7 @@ export function App() {
           chatBodyParagraphSpacing={chatBodyParagraphSpacing}
           onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
           onUserAvatarChange={handleUserAvatarChange}
+          sessionCapabilities={session?.capabilities}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
