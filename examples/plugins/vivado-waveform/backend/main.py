@@ -11,6 +11,7 @@ from vcd_parser import build_waveform_summary, parse_vcd, query_waveform_window
 INITIAL_PIXEL_WIDTH = 1200
 INITIAL_WINDOW_SPAN = 120
 SESSION_STORE = WaveformSessionStore()
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _coerce_time(value: object) -> int | float:
@@ -24,9 +25,22 @@ def _coerce_time(value: object) -> int | float:
     return int(text)
 
 
+def _plugin_config() -> dict[str, object]:
+    try:
+        payload = json.loads((PLUGIN_ROOT / "plugin.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    config = payload.get("config")
+    return dict(config) if isinstance(config, dict) else {}
+
+
+def _lod_enabled() -> bool:
+    return bool(_plugin_config().get("lodEnabled", True))
+
+
 def render_view(input_payload: dict[str, object]) -> dict[str, object]:
     path = Path(str(input_payload["path"])).resolve()
-    parsed = parse_vcd(path)
+    parsed = parse_vcd(path, lod_enabled=_lod_enabled())
     return {
         "renderer": "waveform",
         "title": path.name,
@@ -48,6 +62,7 @@ def open_view(input_payload: dict[str, object]) -> dict[str, object]:
         end_time=_coerce_time(initial_end),
         signal_ids=list(summary["defaultSignalIds"]),
         pixel_width=INITIAL_PIXEL_WIDTH,
+        lod_enabled=_lod_enabled(),
     )
     return {
         "renderer": "waveform",
@@ -71,6 +86,7 @@ def get_view_window(params: dict[str, object]) -> dict[str, object]:
         end_time=_coerce_time(params.get("endTime")),
         signal_ids=signal_ids,
         pixel_width=int(params.get("pixelWidth") or INITIAL_PIXEL_WIDTH),
+        lod_enabled=_lod_enabled(),
     )
 
 

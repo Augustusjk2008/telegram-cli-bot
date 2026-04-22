@@ -30,10 +30,41 @@ class PluginService:
 
     def _get_view_spec(self, plugin_id: str, view_id: str):
         manifest = self.registry.get_manifest(plugin_id)
+        if not manifest.enabled:
+            raise KeyError(f"插件已禁用: {plugin_id}")
         for view in manifest.views:
             if view.id == view_id:
                 return manifest, view
         raise KeyError(f"未知插件视图: {plugin_id}/{view_id}")
+
+    def _manifest_payload(self, manifest) -> dict[str, Any]:
+        return {
+            "id": manifest.plugin_id,
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "enabled": manifest.enabled,
+            "config": dict(manifest.config),
+            "views": [
+                {
+                    "id": view.id,
+                    "title": view.title,
+                    "renderer": view.renderer,
+                    "viewMode": view.view_mode,
+                    "dataProfile": view.data_profile,
+                }
+                for view in manifest.views
+            ],
+            "fileHandlers": [
+                {
+                    "id": handler.id,
+                    "label": handler.label,
+                    "extensions": list(handler.extensions),
+                    "viewId": handler.view_id,
+                }
+                for handler in manifest.file_handlers
+            ],
+        }
 
     def _record_audit(
         self,
@@ -64,34 +95,32 @@ class PluginService:
 
     def list_plugins(self, refresh: bool = False) -> list[dict[str, Any]]:
         manifests = list(self.registry.discover().values()) if refresh else self.registry.list_manifests()
-        return [
-            {
-                "id": manifest.plugin_id,
-                "name": manifest.name,
-                "version": manifest.version,
-                "description": manifest.description,
-                "views": [
-                    {
-                        "id": view.id,
-                        "title": view.title,
-                        "renderer": view.renderer,
-                        "viewMode": view.view_mode,
-                        "dataProfile": view.data_profile,
-                    }
-                    for view in manifest.views
-                ],
-                "fileHandlers": [
-                    {
-                        "id": handler.id,
-                        "label": handler.label,
-                        "extensions": list(handler.extensions),
-                        "viewId": handler.view_id,
-                    }
-                    for handler in manifest.file_handlers
-                ],
-            }
-            for manifest in manifests
-        ]
+        return [self._manifest_payload(manifest) for manifest in manifests]
+
+    async def reload_plugins(self) -> list[dict[str, Any]]:
+        self.sessions = PluginViewSessionStore()
+        await self.runtime.shutdown()
+        return self.list_plugins(refresh=True)
+
+    async def update_plugin(
+        self,
+        plugin_id: str,
+        *,
+        enabled: bool | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.registry.discover()
+        manifest = self.registry.get_manifest(plugin_id)
+        manifest_path = manifest.root / "plugin.json"
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if enabled is not None:
+            raw["enabled"] = bool(enabled)
+        if config is not None:
+            current_config = raw.get("config") if isinstance(raw.get("config"), dict) else {}
+            raw["config"] = {**current_config, **dict(config)}
+        manifest_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        await self.reload_plugins()
+        return self._manifest_payload(self.registry.get_manifest(plugin_id))
 
     def resolve_file_target(self, path: str) -> dict[str, Any]:
         resolution = self.registry.resolve_file_handler(path)
@@ -217,6 +246,8 @@ class PluginService:
         if record.plugin_id != plugin_id:
             raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
         manifest = self.registry.get_manifest(plugin_id)
+        if not manifest.enabled:
+            raise KeyError(f"插件已禁用: {plugin_id}")
         payload = await self.runtime.get_view_window(manifest, session_id, request_payload)
         self._record_audit(
             event="query_window",

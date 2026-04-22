@@ -45,6 +45,7 @@ import type {
   PluginViewWindowRequest,
   PluginRenderResult,
   PluginSummary,
+  PluginUpdateInput,
   PublicHostInfo,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -1190,6 +1191,16 @@ export class RealWebBotClient implements WebBotClient {
   async listPlugins(refresh = false): Promise<PluginSummary[]> {
     const data = await this.requestJson<PluginSummary[]>(refresh ? "/api/plugins?refresh=1" : "/api/plugins");
     return Array.isArray(data) ? data : [];
+  }
+
+  async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {
+    return this.requestJson<PluginSummary>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
   }
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {

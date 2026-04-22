@@ -163,6 +163,12 @@ class PluginRuntime:
             wrapped.stderr_task.cancel()
             await asyncio.gather(wrapped.stderr_task, return_exceptions=True)
 
+    async def stop_plugin(self, plugin_id: str) -> None:
+        wrapped = self._processes.pop(plugin_id, None)
+        self._manifests.pop(plugin_id, None)
+        if wrapped is not None:
+            await self._stop_process(plugin_id, wrapped)
+
     async def shutdown(self) -> None:
         processes = list(self._processes.items())
         self._processes = {}

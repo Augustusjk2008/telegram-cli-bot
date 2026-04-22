@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+Segment = dict[str, Any]
+
 
 UNIT_SECONDS = {
     "fs": 1e-15,
@@ -19,7 +21,7 @@ UNIT_ORDER = ("fs", "ps", "ns", "us", "ms", "s")
 MAX_DISPLAY_TIME = 10_000
 MAX_CONTENT_WIDTH = 24_000
 DEFAULT_PIXELS_PER_TIME = 18
-DEFAULT_ZOOM_LEVELS = [1, 2, 4, 8, 16, 32, 64]
+DEFAULT_ZOOM_LEVELS = [0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64]
 TIME_DECIMALS = 12
 EXCLUDED_SCOPE_KINDS = {"task", "function"}
 TARGET_MIN_PULSE_PIXELS = 1.0
@@ -97,9 +99,9 @@ def _append_change(changes: dict[str, list[tuple[int, str]]], id_code: str, curr
     bucket.append((current_time, value))
 
 
-def _build_zoom_levels(default_zoom: int) -> list[int]:
+def _build_zoom_levels(default_zoom: int | float) -> list[int | float]:
     zoom_levels = sorted(set([*DEFAULT_ZOOM_LEVELS, default_zoom]))
-    return [level for level in zoom_levels if level >= 1]
+    return [level for level in zoom_levels if level >= 0.1]
 
 
 def _choose_default_zoom(pixels_per_time: float, min_interval: int | float | None) -> int:
@@ -107,10 +109,10 @@ def _choose_default_zoom(pixels_per_time: float, min_interval: int | float | Non
         return 1
     required_zoom = TARGET_MIN_PULSE_PIXELS / max(pixels_per_time * float(min_interval), 1e-12)
     zoom = 1
-    for level in DEFAULT_ZOOM_LEVELS:
-        zoom = level
+    for level in [item for item in DEFAULT_ZOOM_LEVELS if item >= 1]:
+        zoom = int(level)
         if level >= required_zoom:
-            return level
+            return int(level)
     return zoom
 
 
@@ -137,7 +139,7 @@ def _window_segments(
     window_start: int | float,
     window_end: int | float,
     overall_end: int | float,
-) -> list[dict[str, int | float | str]]:
+) -> list[Segment]:
     if not series.times:
         return []
     times = series.times
@@ -147,7 +149,7 @@ def _window_segments(
     if end < start:
         start, end = end, start
     index = max(0, bisect_right(times, start) - 1)
-    segments: list[dict[str, int | float | str]] = []
+    segments: list[Segment] = []
     while index < len(times):
         segment_start = max(start, float(times[index]))
         next_time = float(times[index + 1]) if index + 1 < len(times) else float(overall_end)
@@ -167,13 +169,16 @@ def _window_segments(
 
 
 def _compress_segments(
-    segments: list[dict[str, int | float | str]],
+    segments: list[Segment],
     *,
     start_time: int | float,
     end_time: int | float,
     max_segments: int,
     signal_kind: str,
-) -> list[dict[str, int | float | str]]:
+    lod_enabled: bool = True,
+) -> list[Segment]:
+    if not lod_enabled:
+        return segments
     if len(segments) <= max_segments:
         return segments
     start = float(start_time)
@@ -184,7 +189,7 @@ def _compress_segments(
     if bucket_width <= 0:
         return segments[:max_segments]
 
-    compressed: list[dict[str, int | float | str]] = []
+    compressed: list[Segment] = []
     segment_index = 0
     for bucket in range(max_segments):
         bucket_start = start + bucket * bucket_width
@@ -200,21 +205,25 @@ def _compress_segments(
             continue
         unique_values = set(values)
         if len(unique_values) == 1:
-            value = values[0]
-        elif signal_kind == "scalar":
-            value = "x"
+            segment: Segment = {
+                "start": _round_time(bucket_start),
+                "end": _round_time(bucket_end),
+                "value": values[0],
+            }
         else:
-            value = values[-1]
-        if compressed and compressed[-1]["value"] == value:
-            compressed[-1]["end"] = _round_time(bucket_end)
+            segment = {
+                "start": _round_time(bucket_start),
+                "end": _round_time(bucket_end),
+                "value": "mixed",
+                "kind": "dense",
+                "transitionCount": max(1, len(values) - 1),
+            }
+        if compressed and compressed[-1].get("kind") == segment.get("kind") and compressed[-1]["value"] == segment["value"]:
+            compressed[-1]["end"] = segment["end"]
+            if segment.get("kind") == "dense":
+                compressed[-1]["transitionCount"] = int(compressed[-1].get("transitionCount", 0)) + int(segment.get("transitionCount", 0))
         else:
-            compressed.append(
-                {
-                    "start": _round_time(bucket_start),
-                    "end": _round_time(bucket_end),
-                    "value": value,
-                }
-            )
+            compressed.append(segment)
     return [segment for segment in compressed if float(segment["end"]) > float(segment["start"])]
 
 
@@ -355,6 +364,7 @@ def query_waveform_window(
     signal_ids: list[str],
     pixel_width: int,
     max_segments_per_track: int = MAX_WINDOW_SEGMENTS_PER_TRACK,
+    lod_enabled: bool = True,
 ) -> dict[str, Any]:
     start = start_time
     end = end_time if float(end_time) >= float(start_time) else start_time
@@ -372,6 +382,7 @@ def query_waveform_window(
             end_time=end,
             max_segments=max_segments,
             signal_kind=series.signal.kind,
+            lod_enabled=lod_enabled,
         )
         tracks.append(
             {
@@ -388,7 +399,7 @@ def query_waveform_window(
     }
 
 
-def parse_vcd(path: Path) -> dict[str, Any]:
+def parse_vcd(path: Path, *, lod_enabled: bool = True) -> dict[str, Any]:
     index = build_vcd_index(path)
     summary = build_waveform_summary(index, path=path)
     full_window = query_waveform_window(
@@ -398,6 +409,7 @@ def parse_vcd(path: Path) -> dict[str, Any]:
         signal_ids=[signal["signalId"] for signal in summary["signals"]],
         pixel_width=MAX_PARSE_SEGMENTS_PER_TRACK,
         max_segments_per_track=MAX_PARSE_SEGMENTS_PER_TRACK,
+        lod_enabled=lod_enabled,
     )
     return {
         "timescale": summary["timescale"],

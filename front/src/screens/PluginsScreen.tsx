@@ -17,6 +17,7 @@ export function PluginsScreen({
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [updatingPluginId, setUpdatingPluginId] = useState("");
   const requestIdRef = useRef(0);
 
   function loadPlugins(refresh = false) {
@@ -49,6 +50,21 @@ export function PluginsScreen({
     };
   }, [client]);
 
+  function updatePlugin(pluginId: string, input: Parameters<WebBotClient["updatePlugin"]>[1]) {
+    setUpdatingPluginId(pluginId);
+    setError("");
+    client.updatePlugin(pluginId, input)
+      .then((updated) => {
+        setPlugins((current) => current.map((plugin) => (plugin.id === updated.id ? updated : plugin)));
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error && err.message ? err.message : "插件配置保存失败");
+      })
+      .finally(() => {
+        setUpdatingPluginId("");
+      });
+  }
+
   return (
     <div className={embedded ? "space-y-4 p-4" : "h-full overflow-y-auto p-4 sm:p-6"}>
       <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
@@ -71,7 +87,13 @@ export function PluginsScreen({
         </div>
       </section>
 
-      <PluginCatalog plugins={plugins} loading={loading} error={error} />
+      <PluginCatalog
+        plugins={plugins}
+        loading={loading}
+        error={error}
+        updatingPluginId={updatingPluginId}
+        onUpdatePlugin={updatePlugin}
+      />
     </div>
   );
 }

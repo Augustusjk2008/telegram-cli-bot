@@ -32,6 +32,7 @@ import type {
   PluginViewWindowRequest,
   PluginRenderResult,
   PluginSummary,
+  PluginUpdateInput,
   FileWriteResult,
   PublicHostInfo,
   RegisterCodeCreateResult,
@@ -293,13 +294,15 @@ export class MockWebBotClient implements WebBotClient {
     { name: "avatar_03.png", url: "/assets/avatars/avatar_03.png" },
     { name: "avatar_04.png", url: "/assets/avatars/avatar_04.png" },
   ];
-  private readonly plugins: PluginSummary[] = [
+  private plugins: PluginSummary[] = [
     {
       id: "vivado-waveform",
       name: "Vivado Waveform",
       version: "0.1.0",
       description: "Vivado/HDL 波形预览，V1 支持 VCD。",
-      views: [{ id: "waveform", title: "波形预览", renderer: "waveform" }],
+      enabled: true,
+      config: { lodEnabled: true },
+      views: [{ id: "waveform", title: "波形预览", renderer: "waveform", viewMode: "session", dataProfile: "heavy" }],
       fileHandlers: [{ id: "wave-vcd", label: "VCD 波形预览", extensions: [".vcd"], viewId: "waveform" }],
     },
   ];
@@ -534,9 +537,32 @@ export class MockWebBotClient implements WebBotClient {
   async listPlugins(_refresh = false): Promise<PluginSummary[]> {
     return this.plugins.map((plugin) => ({
       ...plugin,
+      config: { ...(plugin.config || {}) },
       views: plugin.views.map((view) => ({ ...view })),
       fileHandlers: plugin.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
     }));
+  }
+
+  async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {
+    const index = this.plugins.findIndex((plugin) => plugin.id === pluginId);
+    if (index < 0) {
+      throw new WebApiClientError("插件不存在", 404, "plugin_not_found");
+    }
+    const current = this.plugins[index];
+    const updated: PluginSummary = {
+      ...current,
+      enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
+      config: input.config ? { ...(current.config || {}), ...input.config } : { ...(current.config || {}) },
+      views: current.views.map((view) => ({ ...view })),
+      fileHandlers: current.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
+    };
+    this.plugins[index] = updated;
+    return {
+      ...updated,
+      config: { ...(updated.config || {}) },
+      views: updated.views.map((view) => ({ ...view })),
+      fileHandlers: updated.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
+    };
   }
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {

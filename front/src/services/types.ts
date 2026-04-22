@@ -201,6 +201,8 @@ export type PluginSummary = {
   name: string;
   version: string;
   description: string;
+  enabled?: boolean;
+  config?: Record<string, unknown>;
   views: Array<{
     id: string;
     title: string;
@@ -209,6 +211,11 @@ export type PluginSummary = {
     dataProfile?: PluginViewDataProfile;
   }>;
   fileHandlers: Array<{ id: string; label: string; extensions: string[]; viewId: string }>;
+};
+
+export type PluginUpdateInput = {
+  enabled?: boolean;
+  config?: Record<string, unknown>;
 };
 
 export type FileOpenTarget =
@@ -225,6 +232,8 @@ export type WaveformTrackSegment = {
   start: number;
   end: number;
   value: string;
+  kind?: "dense";
+  transitionCount?: number;
 };
 
 export type WaveformTrack = {

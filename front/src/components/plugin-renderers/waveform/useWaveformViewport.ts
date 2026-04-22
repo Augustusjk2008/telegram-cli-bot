@@ -7,6 +7,7 @@ import type {
 } from "../../../services/types";
 
 type DisplayShape = {
+  labelWidth: number;
   minWaveWidth: number;
   trackHeight: number;
 };
@@ -35,11 +36,14 @@ export function useWaveformViewport({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [windowData, setWindowData] = useState(initialWindow);
   const [scrollTop, setScrollTop] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(display.trackHeight * 8);
+  const [viewportWidth, setViewportWidth] = useState(display.minWaveWidth);
 
   useEffect(() => {
     setWindowData(initialWindow);
     setScrollTop(0);
+    setScrollLeft(0);
   }, [initialWindow]);
 
   useEffect(() => {
@@ -49,6 +53,7 @@ export function useWaveformViewport({
     }
     const update = () => {
       setViewportHeight(Math.max(display.trackHeight * 6, node.clientHeight || display.trackHeight * 8));
+      setViewportWidth(Math.max(1, node.clientWidth || display.minWaveWidth));
     };
     update();
     if (typeof ResizeObserver === "undefined") {
@@ -57,7 +62,7 @@ export function useWaveformViewport({
     const observer = new ResizeObserver(() => update());
     observer.observe(node);
     return () => observer.disconnect();
-  }, [display.trackHeight]);
+  }, [display.minWaveWidth, display.trackHeight]);
 
   const rowHeight = display.trackHeight + 1;
   const visibleTrackCount = Math.max(1, Math.ceil(viewportHeight / rowHeight) + 4);
@@ -71,6 +76,13 @@ export function useWaveformViewport({
     [visibleSignals],
   );
   const visibleSignalsKey = visibleSignalIds.join("|");
+  const visibleWaveWidth = Math.max(1, viewportWidth - display.labelWidth);
+  const timelineStart = Number(summary.startTime);
+  const timelineEnd = Number(summary.endTime);
+  const timelineRange = Math.max(1, timelineEnd - timelineStart);
+  const waveScrollLeft = Math.max(0, Math.min(pixelWidth, scrollLeft));
+  const windowStart = timelineStart + (Math.min(pixelWidth, waveScrollLeft) / Math.max(1, pixelWidth)) * timelineRange;
+  const windowEnd = timelineStart + (Math.min(pixelWidth, waveScrollLeft + visibleWaveWidth) / Math.max(1, pixelWidth)) * timelineRange;
 
   useEffect(() => {
     if (!sessionId) {
@@ -82,10 +94,10 @@ export function useWaveformViewport({
       pluginId,
       sessionId,
       {
-        startTime: initialWindow.startTime,
-        endTime: initialWindow.endTime,
+        startTime: windowStart,
+        endTime: Math.max(windowStart, windowEnd),
         signalIds: visibleSignalIds,
-        pixelWidth: Math.max(800, Math.ceil(pixelWidth)),
+        pixelWidth: Math.max(64, Math.ceil(visibleWaveWidth)),
       },
       controller.signal,
     ).then((nextWindow) => {
@@ -97,7 +109,7 @@ export function useWaveformViewport({
       throw error;
     });
     return () => controller.abort();
-  }, [botAlias, client, initialWindow.endTime, initialWindow.startTime, pixelWidth, pluginId, sessionId, visibleSignalsKey, visibleSignalIds]);
+  }, [botAlias, client, pluginId, sessionId, visibleSignalsKey, visibleSignalIds, visibleWaveWidth, windowEnd, windowStart]);
 
   const visibleTracks = useMemo<WaveformTrack[]>(
     () =>
@@ -120,6 +132,7 @@ export function useWaveformViewport({
     firstTrackIndex,
     rowHeight,
     totalTrackCount: summary.signals.length,
+    setScrollLeft,
     setScrollTop,
   };
 }

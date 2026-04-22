@@ -89,6 +89,8 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
         name=str(raw.get("name") or "").strip(),
         version=str(raw.get("version") or "").strip(),
         description=str(raw.get("description") or "").strip(),
+        enabled=bool(raw.get("enabled", True)),
+        config=dict(_expect_mapping(raw.get("config") or {}, "config")),
         runtime=PluginRuntimeSpec(
             runtime_type=str(runtime_raw.get("type") or "").strip(),
             entry=str(runtime_raw.get("entry") or "").strip(),

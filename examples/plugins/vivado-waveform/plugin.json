@@ -4,6 +4,10 @@
   "name": "Vivado Waveform",
   "version": "0.1.0",
   "description": "Vivado/HDL 波形预览，V1 支持 VCD。",
+  "enabled": true,
+  "config": {
+    "lodEnabled": true
+  },
   "runtime": {
     "type": "python",
     "entry": "backend/main.py",

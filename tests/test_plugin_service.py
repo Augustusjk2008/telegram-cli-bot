@@ -146,6 +146,35 @@ async def test_plugin_service_resolves_vcd_and_writes_audit(tmp_path: Path) -> N
     await service.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_plugin_service_updates_plugin_enabled_state_and_config(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "home" / ".tcb" / "plugins"
+    plugins_root.mkdir(parents=True)
+    _write_wave_plugin(plugins_root)
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    updated = await service.update_plugin("vivado-waveform", enabled=False, config={"lodEnabled": False})
+
+    manifest_path = plugins_root / "vivado-waveform" / "plugin.json"
+    saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert updated["enabled"] is False
+    assert updated["config"]["lodEnabled"] is False
+    assert saved["enabled"] is False
+    assert saved["config"]["lodEnabled"] is False
+    assert service.resolve_file_target("waves/demo.vcd") == {"kind": "file"}
+    with pytest.raises(KeyError, match="禁用"):
+        await service.render_view(
+            plugin_id="vivado-waveform",
+            view_id="waveform",
+            input_payload={"path": "waves/demo.vcd"},
+            audit_context={"account_id": "member_1", "bot_alias": "main"},
+        )
+    await service.shutdown()
+
+
 def test_plugin_service_defaults_to_tcb_plugins_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

@@ -43,6 +43,8 @@ class PluginRegistry:
         if not candidate:
             return None
         for manifest in self.list_manifests():
+            if not manifest.enabled:
+                continue
             for handler in manifest.file_handlers:
                 if any(candidate.endswith(extension) for extension in handler.extensions):
                     return PluginFileResolution(

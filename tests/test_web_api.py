@@ -1798,6 +1798,25 @@ for line in sys.stdin:
             dispose_payload = await dispose_response.json()
             assert dispose_payload["data"]["disposed"] is True
 
+            patch_response = await client.patch(
+                "/api/plugins/vivado-waveform",
+                json={"enabled": False, "config": {"lodEnabled": False}},
+            )
+            patch_payload = await patch_response.json()
+            assert patch_payload["ok"] is True
+            assert patch_payload["data"]["enabled"] is False
+            assert patch_payload["data"]["config"]["lodEnabled"] is False
+            saved_manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
+            assert saved_manifest["enabled"] is False
+            assert saved_manifest["config"]["lodEnabled"] is False
+
+            disabled_resolve_response = await client.post(
+                "/api/bots/main/plugins/resolve-file-target",
+                json={"path": "waves/demo.vcd"},
+            )
+            disabled_resolve_payload = await disabled_resolve_response.json()
+            assert disabled_resolve_payload["data"] == {"kind": "file"}
+
     await web_manager.plugin_service.shutdown()
 
 @pytest.mark.asyncio

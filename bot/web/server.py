@@ -127,6 +127,7 @@ from .api_service import (
     update_assistant_cron_job,
     update_bot_avatar,
     update_bot_cli,
+    update_plugin,
     rename_managed_bot,
     update_bot_workdir,
     write_file_content,
@@ -805,7 +806,13 @@ class WebApiServer:
     async def get_plugins(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
         refresh = str(request.query.get("refresh", "")).lower() in {"1", "true", "yes"}
-        return _json({"ok": True, "data": list_plugins(self.manager, auth, refresh=refresh)})
+        return _json({"ok": True, "data": await list_plugins(self.manager, auth, refresh=refresh)})
+
+    async def patch_plugin(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await update_plugin(self.manager, auth, plugin_id, dict(body or {}))})
 
     async def get_bot_overview(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
@@ -1799,6 +1806,7 @@ class WebApiServer:
         app.router.add_delete("/api/admin/register-codes/{code_id}", self.admin_register_code_delete)
         app.router.add_get("/api/bots", self.get_bots)
         app.router.add_get("/api/plugins", self.get_plugins)
+        app.router.add_patch("/api/plugins/{plugin_id}", self.patch_plugin)
         app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)

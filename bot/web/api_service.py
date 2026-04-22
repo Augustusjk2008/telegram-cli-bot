@@ -594,9 +594,30 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
     }
 
 
-def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: bool = False) -> list[dict[str, Any]]:
+async def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: bool = False) -> list[dict[str, Any]]:
     _require_capability(auth, CAP_VIEW_PLUGINS)
-    return manager.plugin_service.list_plugins(refresh=refresh)
+    if refresh:
+        return await manager.plugin_service.reload_plugins()
+    return manager.plugin_service.list_plugins()
+
+
+async def update_plugin(
+    manager: MultiBotManager,
+    auth: AuthContext,
+    plugin_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    try:
+        return await manager.plugin_service.update_plugin(
+            plugin_id,
+            enabled=body.get("enabled") if "enabled" in body else None,
+            config=dict(body.get("config") or {}) if "config" in body else None,
+        )
+    except KeyError as exc:
+        _raise(404, "plugin_not_found", str(exc))
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_request", str(exc))
 
 
 def resolve_plugin_file_target(

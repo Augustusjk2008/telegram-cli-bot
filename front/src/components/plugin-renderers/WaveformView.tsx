@@ -106,6 +106,10 @@ function clipSegment(segment: WaveformTrackSegment, startTime: number, endTime: 
   return end > start ? { start, end } : null;
 }
 
+function isDenseSegment(segment: Pick<WaveformTrackSegment, "kind" | "transitionCount" | "value">) {
+  return segment.kind === "dense" || segment.value === "mixed" || (segment.transitionCount ?? 0) > 0;
+}
+
 function niceStep(rawStep: number) {
   const exponent = Math.floor(Math.log10(Math.max(rawStep, 1)));
   const base = 10 ** exponent;
@@ -202,6 +206,22 @@ function DigitalTrackSvg({
   display: ResolvedWaveformDisplay;
 }) {
   const path = buildDigitalPath(track, startTime, endTime, width, display);
+  const denseSegments = track.segments
+    .map((segment, index) => {
+      const clipped = clipSegment(segment, startTime, endTime);
+      if (!clipped || !isDenseSegment(segment)) {
+        return null;
+      }
+      return {
+        index,
+        transitionCount: segment.transitionCount,
+        startX: timeToX(startTime, endTime, width, clipped.start),
+        endX: timeToX(startTime, endTime, width, clipped.end),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const denseTop = display.trackHeight * 0.25;
+  const denseBottom = display.trackHeight * 0.75;
   return (
     <svg
       width={width}
@@ -210,6 +230,25 @@ function DigitalTrackSvg({
       className="block bg-[var(--surface-strong)] text-[var(--text)]"
     >
       {path ? <path d={path} fill="none" stroke="currentColor" strokeLinecap="square" strokeWidth="2" /> : null}
+      {denseSegments.map((segment) => (
+        <g key={`dense-${track.signalId}-${segment.index}`} data-testid="waveform-dense-segment">
+          <rect
+            x={segment.startX}
+            y={denseTop}
+            width={Math.max(1, segment.endX - segment.startX)}
+            height={denseBottom - denseTop}
+            fill="currentColor"
+            opacity="0.12"
+          />
+          <line x1={segment.startX} y1={denseTop} x2={segment.endX} y2={denseBottom} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
+          <line x1={segment.startX} y1={denseBottom} x2={segment.endX} y2={denseTop} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
+          {(segment.transitionCount ?? 0) > 0 && segment.endX - segment.startX >= 48 ? (
+            <text x={segment.startX + 8} y={display.trackHeight / 2 + 4} fontSize="11" className="fill-current">
+              {segment.transitionCount} changes
+            </text>
+          ) : null}
+        </g>
+      ))}
     </svg>
   );
 }
@@ -237,6 +276,8 @@ function BusTrackSvg({
       return {
         index,
         value: segment.value,
+        dense: isDenseSegment(segment),
+        transitionCount: segment.transitionCount,
         startX: timeToX(startTime, endTime, width, clipped.start),
         endX: timeToX(startTime, endTime, width, clipped.end),
       };
@@ -252,6 +293,27 @@ function BusTrackSvg({
     >
       {visibleSegments.map((segment) => {
         const segmentWidth = Math.max(1, segment.endX - segment.startX);
+        if (segment.dense) {
+          return (
+            <g key={`${track.signalId}-${segment.index}`} data-testid="waveform-dense-segment">
+              <rect
+                x={segment.startX}
+                y={levels.top}
+                width={segmentWidth}
+                height={levels.bottom - levels.top}
+                fill="currentColor"
+                opacity="0.12"
+              />
+              <line x1={segment.startX} y1={levels.top} x2={segment.endX} y2={levels.bottom} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
+              <line x1={segment.startX} y1={levels.bottom} x2={segment.endX} y2={levels.top} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
+              {segmentWidth >= 48 ? (
+                <text x={segment.startX + segmentWidth / 2} y={levels.middle + 4} textAnchor="middle" fontSize="11" className="fill-current">
+                  {segment.transitionCount ? `${segment.transitionCount} changes` : "变化"}
+                </text>
+              ) : null}
+            </g>
+          );
+        }
         const skew = Math.min(10, Math.max(4, segmentWidth / 5));
         const lineStart = segment.startX + (segment.index === 0 ? 0 : skew);
         const lineEnd = Math.max(lineStart, segment.endX - skew);
@@ -377,6 +439,7 @@ export function WaveformView({
     firstTrackIndex,
     rowHeight,
     totalTrackCount,
+    setScrollLeft,
     setScrollTop,
   } = useWaveformViewport({
     botAlias,
@@ -431,28 +494,29 @@ export function WaveformView({
           </div>
         </div>
       </header>
-      {display.showTimeAxis ? (
-        <div
-          className="grid min-w-max border-b border-[var(--border)]"
-          style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }}
-        >
-          <div className="sticky left-0 z-20 bg-[var(--surface)] px-4 py-3 text-xs font-medium text-[var(--muted)]">时间轴</div>
-          <TimeAxis
-            startTime={windowData.startTime}
-            endTime={windowData.endTime}
-            width={width}
-            display={display}
-          />
-        </div>
-      ) : null}
       <div
         ref={viewportRef}
         className="min-h-0 flex-1 overflow-auto"
         data-testid="waveform-scroll"
         onScroll={(event) => {
-          setScrollTop(event.currentTarget.scrollTop);
+          setScrollLeft(event.currentTarget.scrollLeft);
+          setScrollTop(Math.max(0, event.currentTarget.scrollTop - (display.showTimeAxis ? display.axisHeight : 0)));
         }}
       >
+        {display.showTimeAxis ? (
+          <div
+            className="sticky top-0 z-30 grid min-w-max border-b border-[var(--border)]"
+            style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }}
+          >
+            <div className="sticky left-0 z-20 bg-[var(--surface)] px-4 py-3 text-xs font-medium text-[var(--muted)]">时间轴</div>
+            <TimeAxis
+              startTime={summary.startTime}
+              endTime={summary.endTime}
+              width={width}
+              display={display}
+            />
+          </div>
+        ) : null}
         {summary.signals.length > 0 ? (
           <>
             <div style={{ height: beforeSpacerHeight }} />
@@ -465,8 +529,8 @@ export function WaveformView({
                 <WaveformTrackRow
                   key={track.signalId}
                   track={track}
-                  startTime={windowData.startTime}
-                  endTime={windowData.endTime}
+                  startTime={summary.startTime}
+                  endTime={summary.endTime}
                   width={width}
                   display={display}
                 />

@@ -41,6 +41,23 @@ export function WaveformCanvas({ track, width, height, startTime, endTime }: Pro
     for (const segment of track.segments) {
       const startX = ((segment.start - startTime) / range) * width;
       const endX = ((segment.end - startTime) / range) * width;
+      if (segment.kind === "dense" || segment.value === "mixed" || (segment.transitionCount ?? 0) > 0) {
+        const segmentWidth = Math.max(1, endX - startX);
+        context.globalAlpha = 0.12;
+        context.fillRect(startX, top, segmentWidth, bottom - top);
+        context.globalAlpha = 0.75;
+        context.beginPath();
+        context.moveTo(startX, top);
+        context.lineTo(endX, bottom);
+        context.moveTo(startX, bottom);
+        context.lineTo(endX, top);
+        context.stroke();
+        context.globalAlpha = 1;
+        if (segmentWidth >= 56 && segment.transitionCount) {
+          context.fillText(`${segment.transitionCount} changes`, startX + 8, middle + 4);
+        }
+        continue;
+      }
       context.beginPath();
       context.moveTo(startX, top);
       context.lineTo(endX, top);

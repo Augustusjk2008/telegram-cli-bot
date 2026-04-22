@@ -86,6 +86,84 @@ def test_vivado_waveform_initial_window_stays_within_budget(tmp_path: Path) -> N
     assert segment_count < 10_000
 
 
+def test_vivado_waveform_summary_allows_zooming_out_to_ten_percent(tmp_path: Path) -> None:
+    wave_file = tmp_path / "simple_counter.vcd"
+    wave_file.write_text(Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8"), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    index = parser.build_vcd_index(wave_file)
+    summary = parser.build_waveform_summary(index, path=wave_file)
+
+    assert summary["display"]["defaultZoom"] >= 1
+    assert summary["display"]["zoomLevels"][0] == pytest.approx(0.1)
+    assert 1 in summary["display"]["zoomLevels"]
+
+
+def test_vivado_waveform_lod_marks_dense_changes_instead_of_hiding_them(tmp_path: Path) -> None:
+    lines = [
+        "$timescale 1ns $end",
+        "$scope module tb $end",
+        "$var wire 1 ! clk $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+        "#0",
+        "0!",
+    ]
+    for time in range(1, 201):
+        lines.extend([f"#{time}", f"{time % 2}!"])
+    wave_file = tmp_path / "dense.vcd"
+    wave_file.write_text("\n".join(lines), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    index = parser.build_vcd_index(wave_file)
+    window = parser.query_waveform_window(
+        index,
+        start_time=0,
+        end_time=200,
+        signal_ids=["tb.clk"],
+        pixel_width=4,
+        max_segments_per_track=4,
+    )
+
+    clk_track = window["tracks"][0]
+    dense_segments = [segment for segment in clk_track["segments"] if segment.get("kind") == "dense"]
+    assert dense_segments
+    assert sum(int(segment.get("transitionCount", 0)) for segment in dense_segments) > 0
+    assert all(segment["value"] == "mixed" for segment in dense_segments)
+
+
+def test_vivado_waveform_can_disable_lod_compression(tmp_path: Path) -> None:
+    lines = [
+        "$timescale 1ns $end",
+        "$scope module tb $end",
+        "$var wire 1 ! clk $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+        "#0",
+        "0!",
+    ]
+    for time in range(1, 21):
+        lines.extend([f"#{time}", f"{time % 2}!"])
+    wave_file = tmp_path / "dense-no-lod.vcd"
+    wave_file.write_text("\n".join(lines), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    index = parser.build_vcd_index(wave_file)
+    window = parser.query_waveform_window(
+        index,
+        start_time=0,
+        end_time=20,
+        signal_ids=["tb.clk"],
+        pixel_width=4,
+        max_segments_per_track=4,
+        lod_enabled=False,
+    )
+
+    segments = window["tracks"][0]["segments"]
+    assert len(segments) > 4
+    assert all(segment.get("kind") != "dense" for segment in segments)
+
+
 @pytest.mark.asyncio
 async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"

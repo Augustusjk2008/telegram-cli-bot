@@ -34,6 +34,7 @@ import type {
   PluginViewWindowRequest,
   PluginRenderResult,
   PluginSummary,
+  PluginUpdateInput,
   RegisterCodeCreateResult,
   RegisterCodeItem,
   SessionState,
@@ -61,6 +62,7 @@ export interface WebBotClient {
   deleteRegisterCode(codeId: string): Promise<void>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
+  updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
   getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails>;

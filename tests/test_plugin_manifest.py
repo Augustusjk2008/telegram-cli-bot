@@ -98,3 +98,20 @@ def test_load_plugin_manifest_accepts_session_heavy_view(tmp_path: Path) -> None
 
     assert manifest.views[0].view_mode == "session"
     assert manifest.views[0].data_profile == "heavy"
+
+
+def test_manifest_tracks_enabled_state_and_config_and_registry_skips_disabled_handlers(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(plugins_root, "vivado-waveform")
+    manifest_path = plugins_root / "vivado-waveform" / "plugin.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["enabled"] = False
+    payload["config"] = {"lodEnabled": False}
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    registry = PluginRegistry(plugins_root)
+    manifest = registry.discover()["vivado-waveform"]
+
+    assert manifest.enabled is False
+    assert manifest.config["lodEnabled"] is False
+    assert registry.resolve_file_handler("trace/run.vcd") is None
