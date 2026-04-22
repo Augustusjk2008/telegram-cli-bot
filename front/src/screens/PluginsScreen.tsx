@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Puzzle } from "lucide-react";
 import { PluginCatalog } from "../components/PluginCatalog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { PluginSummary } from "../services/types";
@@ -52,7 +53,13 @@ export function PluginsScreen({
     <div className={embedded ? "space-y-4 p-4" : "h-full overflow-y-auto p-4 sm:p-6"}>
       <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3">
-          <h1 className="text-base font-semibold text-[var(--text)]">插件</h1>
+          <div>
+            <h1 className="flex items-center gap-2 text-base font-semibold text-[var(--text)]">
+              <Puzzle className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
+              插件
+            </h1>
+            <p className="mt-1 text-sm text-[var(--muted)]">管理本机插件，刷新后重新扫描 ~/.tcb/plugins。</p>
+          </div>
           <button
             type="button"
             onClick={() => loadPlugins(true)}

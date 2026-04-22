@@ -430,6 +430,7 @@ test("plugins tab lists detected plugins and refresh action", async () => {
 
   expect(await screen.findByRole("heading", { name: "插件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+  expect(screen.getByText("管理本机插件，刷新后重新扫描 ~/.tcb/plugins。")).toBeInTheDocument();
   expect(screen.queryByText("打开匹配文件会自动进入对应插件视图。")).not.toBeInTheDocument();
   expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
   expect(screen.getByText("视图 波形预览")).toBeInTheDocument();

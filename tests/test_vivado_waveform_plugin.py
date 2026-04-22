@@ -11,6 +11,8 @@ def test_fixture_vcd_contains_expected_signals() -> None:
     text = Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8")
     assert "$var wire 1 ! clk $end" in text
     assert "$var wire 1 \" rst_n $end" in text
+    assert "$var wire 4 # counter $end" in text
+    assert "b1011 #" in text
 
 
 @pytest.mark.asyncio
@@ -53,4 +55,6 @@ async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -
     labels = [item["label"] for item in view["payload"]["tracks"]]
     assert "tb.clk" in labels
     assert "tb.rst_n" in labels
+    assert "tb.counter" in labels
+    assert view["payload"]["endTime"] >= 120
     await service.shutdown()
