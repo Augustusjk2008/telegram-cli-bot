@@ -55,7 +55,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
         avatarName: pickAvailableAvatarName(prev.avatarName, resolvedAssets, "bot"),
       }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 Bot 失败");
+      setError(err instanceof Error ? err.message : "加载智能体失败");
     } finally {
       setLoading(false);
     }
@@ -85,10 +85,10 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
         avatarName: pickAvailableAvatarName(createDraft.avatarName, avatarAssets, "bot"),
       });
       setCreateDraft(EMPTY_CREATE_DRAFT);
-      setNotice("Bot 已创建");
+      setNotice("智能体已创建");
       await loadBots();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建 Bot 失败");
+      setError(err instanceof Error ? err.message : "创建智能体失败");
     } finally {
       setSavingAction("");
     }
@@ -112,7 +112,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
       }
       await loadBots();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新 Bot 状态失败");
+      setError(err instanceof Error ? err.message : "更新智能体状态失败");
     } finally {
       setSavingAction("");
     }
@@ -139,7 +139,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
       });
       await loadBots();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Bot 改名失败");
+      setError(err instanceof Error ? err.message : "智能体改名失败");
     } finally {
       setSavingAction("");
     }
@@ -149,7 +149,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
     if (bot.alias === "main") {
       return;
     }
-    if (!window.confirm(`确定删除 Bot ${bot.alias} 吗？`)) {
+    if (!window.confirm(`确定删除智能体 ${bot.alias} 吗？`)) {
       return;
     }
 
@@ -161,7 +161,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
       setNotice(`已删除 ${bot.alias}`);
       await loadBots();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除 Bot 失败");
+      setError(err instanceof Error ? err.message : "删除智能体失败");
     } finally {
       setSavingAction("");
     }
@@ -196,7 +196,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
   return (
     <main className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
       <header className="mb-6">
-        <h1 className="text-2xl font-bold">Bot 管理</h1>
+        <h1 className="text-2xl font-bold">智能体管理</h1>
       </header>
 
       {error ? (
@@ -213,18 +213,18 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
       {canManage ? (
         <section className="mb-6 space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">新增 Bot</h2>
+          <h2 className="text-lg font-semibold">新增智能体</h2>
           <AvatarPicker
             assets={avatarAssets}
             selectedName={createDraft.avatarName}
-            previewAlt="新 Bot 头像预览"
-            selectLabel="新 Bot 头像"
+            previewAlt="新智能体头像预览"
+            selectLabel="新智能体头像"
             onSelect={(avatarName) => setCreateDraft((prev) => ({ ...prev, avatarName }))}
           />
         </div>
         <div className="space-y-3">
           <input
-            aria-label="新 Bot 别名"
+            aria-label="新智能体别名"
             type="text"
             value={createDraft.alias}
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, alias: event.target.value }))}
@@ -233,9 +233,9 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           />
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-sm">
-              <span className="text-[var(--muted)]">新 Bot 模式</span>
+              <span className="text-[var(--muted)]">新智能体模式</span>
               <select
-                aria-label="新 Bot 模式"
+                aria-label="新智能体模式"
                 value={createDraft.botMode}
                 onChange={(event) => setCreateDraft((prev) => ({ ...prev, botMode: event.target.value as CreateBotInput["botMode"] }))}
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
@@ -245,9 +245,9 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
               </select>
             </label>
             <label className="space-y-1 text-sm">
-              <span className="text-[var(--muted)]">新 Bot CLI 类型</span>
+              <span className="text-[var(--muted)]">新智能体 CLI 类型</span>
               <select
-                aria-label="新 Bot CLI 类型"
+                aria-label="新智能体 CLI 类型"
                 value={createDraft.cliType}
                 onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliType: event.target.value as CliType }))}
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
@@ -258,7 +258,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
             </label>
           </div>
           <input
-            aria-label="新 Bot CLI 路径"
+            aria-label="新智能体 CLI 路径"
             type="text"
             value={createDraft.cliPath}
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
@@ -267,7 +267,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           />
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
-              aria-label="新 Bot 工作目录"
+              aria-label="新智能体工作目录"
               type="text"
               value={createDraft.workingDir}
               onChange={(event) => setCreateDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
@@ -276,7 +276,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
             />
             <button
               type="button"
-              aria-label="浏览新 Bot 工作目录"
+              aria-label="浏览新智能体工作目录"
               onClick={() => setShowWorkdirPicker(true)}
               disabled={savingAction !== ""}
               className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
@@ -291,7 +291,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           disabled={savingAction !== ""}
           className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
         >
-          {savingAction === "create" ? "创建中..." : "创建 Bot"}
+          {savingAction === "create" ? "创建中..." : "创建智能体"}
         </button>
         </section>
       ) : null}
@@ -299,7 +299,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
       {loading ? (
         <div className="text-center text-[var(--muted)]">加载中...</div>
       ) : bots.length === 0 ? (
-        <div className="text-center text-[var(--muted)]">暂无 Bot</div>
+        <div className="text-center text-[var(--muted)]">暂无智能体</div>
       ) : (
         <div className="space-y-4">
           {bots.map((bot) => {
@@ -330,7 +330,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="text-lg font-semibold">{bot.alias}</h3>
                       {isMain ? (
-                        <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 Bot</span>
+                        <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主智能体</span>
                       ) : null}
                       <StatusPill status={bot.status} />
                     </div>

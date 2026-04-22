@@ -30,11 +30,11 @@ export function BotSwitcherSheet({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="切换 Bot"
+        aria-label="智能体切换"
         className="relative bg-[var(--surface)] rounded-t-2xl shadow-lg max-h-[80vh] flex flex-col animate-in slide-in-from-bottom-full duration-200"
       >
         <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
-          <h2 className="text-lg font-bold">切换 Bot</h2>
+          <h2 className="text-lg font-bold">智能体切换</h2>
           <button onClick={onClose} className="p-2 -mr-2 rounded-full hover:bg-[var(--border)]">
             <X className="w-5 h-5" />
           </button>
@@ -47,7 +47,7 @@ export function BotSwitcherSheet({
             }}
             className="w-full rounded-xl border border-[var(--border)] px-4 py-3 text-left font-medium hover:bg-[var(--surface-strong)]"
           >
-            Bot 管理
+            智能体管理
           </button>
         </div>
         <div className="overflow-y-auto p-4 space-y-2">

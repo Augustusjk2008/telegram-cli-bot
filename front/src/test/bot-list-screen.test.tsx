@@ -59,11 +59,11 @@ test("bot manager can browse and pick a workdir for a new bot", async () => {
 
   render(<BotListScreen client={client} onSelect={vi.fn()} />);
 
-  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
 
-  await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
-  await user.click(screen.getByRole("button", { name: "浏览新 Bot 工作目录" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "team3");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
 
   const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
   expect(within(dialog).getByText("/workspace")).toBeInTheDocument();
@@ -79,10 +79,10 @@ test("bot manager can browse and pick a workdir for a new bot", async () => {
     expect(screen.queryByRole("dialog", { name: "选择工作目录" })).not.toBeInTheDocument();
   });
 
-  expect(screen.getByLabelText("新 Bot 工作目录")).toHaveValue("/workspace/repos/team-a");
+  expect(screen.getByLabelText("新智能体工作目录")).toHaveValue("/workspace/repos/team-a");
   expect(client.browserPath).toBe("/workspace");
 
-  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   await waitFor(() => {
     expect(client.addBotCalls).toHaveLength(1);

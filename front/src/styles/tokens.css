@@ -36,6 +36,9 @@
   --code-bg: #121b2c;
   --code-text: #edf5ff;
   --code-font-family: "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
+  --editor-font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --editor-font-size: 12px;
+  --editor-line-height: 1.65;
   --editor-bg: #0c1526;
   --editor-text: #eaf4ff;
   --editor-gutter-bg: #101a2c;
@@ -84,6 +87,9 @@
   --hero-glow: rgba(217, 139, 43, 0.18);
   --code-bg: #243042;
   --code-text: #f4f6fb;
+  --editor-font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --editor-font-size: 12px;
+  --editor-line-height: 1.65;
   --editor-bg: #fffaf3;
   --editor-text: #1d1b18;
   --editor-gutter-bg: #f2eadf;

@@ -36,7 +36,7 @@ export function PluginCatalog({
       ) : null}
 
       {plugins.map((plugin) => (
-        <article key={plugin.id} className="rounded-xl border border-[var(--border)] px-4 py-3">
+        <article key={plugin.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="font-medium text-[var(--text)]">{plugin.name}</div>
             <div className="text-xs text-[var(--muted)]">v{plugin.version}</div>

@@ -58,7 +58,7 @@ export function PluginsScreen({
               <Puzzle className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
               插件
             </h1>
-            <p className="mt-1 text-sm text-[var(--muted)]">管理本机插件，刷新后重新扫描 ~/.tcb/plugins。</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">点击刷新后重新扫描</p>
           </div>
           <button
             type="button"
@@ -71,9 +71,7 @@ export function PluginsScreen({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
-        <PluginCatalog plugins={plugins} loading={loading} error={error} />
-      </section>
+      <PluginCatalog plugins={plugins} loading={loading} error={error} />
     </div>
   );
 }

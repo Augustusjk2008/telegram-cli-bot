@@ -214,9 +214,9 @@ test("desktop bot switching requires confirmation when there are dirty editor ta
   await user.click(screen.getByRole("button", { name: "main" }));
   await user.click(await screen.findByRole("button", { name: /team2/i }));
 
-  expect(confirmSpy).toHaveBeenCalledWith("当前桌面工作台有未保存文件，切换 Bot 会丢失这些修改。确定继续吗？");
+  expect(confirmSpy).toHaveBeenCalledWith("当前桌面工作台有未保存文件，切换智能体会丢失这些修改。确定继续吗？");
   expect(screen.getByRole("button", { name: "main" })).toBeInTheDocument();
-  expect(await screen.findByText("切换 Bot")).toBeInTheDocument();
+  expect(await screen.findByText("智能体切换")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /team2/i }));
   expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
@@ -430,7 +430,7 @@ test("plugins tab lists detected plugins and refresh action", async () => {
 
   expect(await screen.findByRole("heading", { name: "插件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
-  expect(screen.getByText("管理本机插件，刷新后重新扫描 ~/.tcb/plugins。")).toBeInTheDocument();
+  expect(screen.getByText("点击刷新后重新扫描")).toBeInTheDocument();
   expect(screen.queryByText("打开匹配文件会自动进入对应插件视图。")).not.toBeInTheDocument();
   expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
   expect(screen.getByText("视图 波形预览")).toBeInTheDocument();
@@ -451,10 +451,10 @@ test("super admin can open invite code management from bot switcher", async () =
   await user.click(await screen.findByRole("button", { name: "邀请码管理" }));
 
   expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "Bot 管理" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "智能体管理" })).not.toBeInTheDocument();
   expect(screen.queryByText("界面与阅读")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "切换 Bot" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "智能体切换" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(document.title).toBe("邀请码管理 - Orbit Safe Claw");
 });
@@ -878,20 +878,20 @@ test("bot manager can add rename and delete managed bots", async () => {
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
-  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
-  expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("Bot 管理 - Orbit Safe Claw");
+  expect(document.title).toBe("智能体管理 - Orbit Safe Claw");
 
-  await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
-  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team3");
-  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "team3");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   expect(await screen.findByText("team3")).toBeInTheDocument();
 
@@ -918,19 +918,19 @@ test("newly created bot can be entered immediately from bot manager", async () =
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
-  await user.type(screen.getByLabelText("新 Bot 别名"), "team3");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
-  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team3");
-  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "team3");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   expect(await screen.findByText("team3")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "进入 team3" }));
 
   expect(await screen.findByRole("button", { name: "team3" })).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "Bot 管理" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "智能体管理" })).not.toBeInTheDocument();
   expect(document.title).toBe("team3 - Orbit Safe Claw");
 });
 
@@ -944,14 +944,14 @@ test("create bot form no longer asks for telegram token", async () => {
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
-  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
   expect(screen.queryByLabelText("Bot Token")).not.toBeInTheDocument();
-  await user.type(screen.getByLabelText("新 Bot 别名"), "web-only");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
-  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\web-only");
-  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "web-only");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\web-only");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   expect(await screen.findByText("web-only")).toBeInTheDocument();
 });
@@ -967,12 +967,12 @@ test("bot manager preserves Linux-style create paths", async () => {
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
-  await user.type(screen.getByLabelText("新 Bot 别名"), "team-path");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
-  await user.type(screen.getByLabelText("新 Bot 工作目录"), "/srv/telegram-cli-bridge/team3");
-  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "team-path");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新智能体工作目录"), "/srv/telegram-cli-bridge/team3");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   expect(addBotSpy).toHaveBeenCalledWith(expect.objectContaining({
     alias: "team-path",
@@ -993,26 +993,26 @@ test("bot manager uses compact avatar dropdowns and saves avatar choices immedia
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
-  expect(await screen.findByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
-  const createSection = screen.getByRole("heading", { name: "新增 Bot" }).closest("section");
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
+  const createSection = screen.getByRole("heading", { name: "新增智能体" }).closest("section");
   expect(createSection).not.toBeNull();
   const createScope = within(createSection as HTMLElement);
   expect(createScope.queryByText("规格固定为 64x64，建议使用 PNG/JPG/WebP。")).not.toBeInTheDocument();
-  expect(createScope.getByRole("button", { name: "新 Bot 头像" })).toBeInTheDocument();
+  expect(createScope.getByRole("button", { name: "新智能体头像" })).toBeInTheDocument();
   expect(createScope.queryByRole("button", { name: "选择头像 avatar_02.png" })).not.toBeInTheDocument();
-  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_01.png");
+  expect(createScope.getByRole("img", { name: "新智能体头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_01.png");
 
-  await user.click(createScope.getByRole("button", { name: "新 Bot 头像" }));
+  await user.click(createScope.getByRole("button", { name: "新智能体头像" }));
   await user.click(createScope.getByRole("button", { name: "选择头像 avatar_02.png" }));
 
-  expect(createScope.getByRole("img", { name: "新 Bot 头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_02.png");
+  expect(createScope.getByRole("img", { name: "新智能体头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_02.png");
 
-  await user.type(screen.getByLabelText("新 Bot 别名"), "team-avatar");
-  await user.type(screen.getByLabelText("新 Bot CLI 路径"), "codex");
-  await user.type(screen.getByLabelText("新 Bot 工作目录"), "C:\\workspace\\team-avatar");
-  await user.click(screen.getByRole("button", { name: "创建 Bot" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "team-avatar");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team-avatar");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   expect(addBotSpy).toHaveBeenCalledWith(expect.objectContaining({
     alias: "team-avatar",
@@ -1097,15 +1097,15 @@ test("bot manager stays open even when a stored bot alias exists", async () => {
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
 
-  expect(screen.getByRole("heading", { name: "Bot 管理" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
-  expect(document.title).toBe("Bot 管理 - Orbit Safe Claw");
+  expect(document.title).toBe("智能体管理 - Orbit Safe Claw");
 });
 
 test("bot manager highlights offline bots and blocks entering them", async () => {
@@ -1134,7 +1134,7 @@ test("bot manager highlights offline bots and blocks entering them", async () =>
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "Bot 管理" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
 
   expect(await screen.findByText("离线")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "team2 当前离线，不可进入" })).toBeDisabled();
@@ -1234,7 +1234,7 @@ test("bot switcher sorts bots by main first, then status, then alias", async () 
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await screen.findByText("切换 Bot");
+  await screen.findByText("智能体切换");
 
   const optionButtons = screen.getAllByRole("button").filter((button) => (
     button.textContent?.includes("C:\\workspace\\")

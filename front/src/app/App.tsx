@@ -283,7 +283,7 @@ export function App() {
 
   function requestBotSelection(alias: string | null) {
     if (effectiveLayoutMode === "desktop" && desktopHasDirtyTabs) {
-      const confirmed = window.confirm("当前桌面工作台有未保存文件，切换 Bot 会丢失这些修改。确定继续吗？");
+      const confirmed = window.confirm("当前桌面工作台有未保存文件，切换智能体会丢失这些修改。确定继续吗？");
       if (!confirmed) {
         return false;
       }
@@ -411,7 +411,7 @@ export function App() {
       return;
     }
     if (showBotManager || !currentBot) {
-      document.title = `Bot 管理 - ${APP_NAME}`;
+      document.title = `智能体管理 - ${APP_NAME}`;
       return;
     }
     if (currentTab === "terminal") {

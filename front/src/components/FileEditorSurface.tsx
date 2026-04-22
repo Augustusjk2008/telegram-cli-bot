@@ -44,20 +44,28 @@ function createEditorTheme(
     "&": {
       backgroundColor: "var(--editor-bg)",
       color: "var(--editor-text)",
-      fontFamily: "var(--code-font-family)",
+      fontFamily: "var(--editor-font-family)",
+      fontSize: "var(--editor-font-size)",
+      lineHeight: "var(--editor-line-height)",
     },
     ".cm-scroller": {
-      fontFamily: "var(--code-font-family)",
+      fontFamily: "var(--editor-font-family)",
+      fontSize: "var(--editor-font-size)",
+      lineHeight: "var(--editor-line-height)",
     },
     ".cm-content": {
       caretColor: "var(--editor-text)",
-      fontFamily: "var(--code-font-family)",
+      fontFamily: "var(--editor-font-family)",
+      fontSize: "var(--editor-font-size)",
+      lineHeight: "var(--editor-line-height)",
     },
     ".cm-gutters": {
       backgroundColor: "var(--editor-gutter-bg)",
       color: "var(--editor-gutter-text)",
       borderRight: "1px solid var(--border)",
-      fontFamily: "var(--code-font-family)",
+      fontFamily: "var(--editor-font-family)",
+      fontSize: "var(--editor-font-size)",
+      lineHeight: "var(--editor-line-height)",
     },
     ".cm-activeLine, .cm-activeLineGutter": {
       backgroundColor: "var(--accent-soft)",
@@ -399,13 +407,15 @@ export function FileEditorSurface({
             }}
             spellCheck={false}
             style={{
-              fontFamily: "var(--code-font-family)",
+              fontFamily: "var(--editor-font-family)",
+              fontSize: "var(--editor-font-size)",
+              lineHeight: "var(--editor-line-height)",
               touchAction: "pan-x pan-y",
               overscrollBehavior: "contain",
               scrollbarGutter: "stable both-edges",
               WebkitOverflowScrolling: "touch",
             }}
-            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--editor-bg)] p-4 font-mono text-sm text-[var(--editor-text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--editor-bg)] p-4 text-[var(--editor-text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           />
         )}
       </div>
