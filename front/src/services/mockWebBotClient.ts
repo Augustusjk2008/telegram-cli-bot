@@ -668,6 +668,17 @@ export class MockWebBotClient implements WebBotClient {
         timescale: "1ns",
         startTime: 0,
         endTime: 120,
+        display: {
+          defaultZoom: 1,
+          zoomLevels: [0.5, 0.75, 1, 1.5, 2, 3, 4],
+          showTimeAxis: true,
+          busStyle: "cross",
+          labelWidth: 220,
+          minWaveWidth: 840,
+          pixelsPerTime: 18,
+          axisHeight: 42,
+          trackHeight: 64,
+        },
         tracks: [
           {
             signalId: "clk",

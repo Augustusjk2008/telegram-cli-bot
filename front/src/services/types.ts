@@ -226,12 +226,27 @@ export type WaveformTrack = {
   segments: WaveformTrackSegment[];
 };
 
+export type WaveformBusStyle = "cross" | "box";
+
+export type WaveformDisplayOptions = {
+  defaultZoom?: number;
+  zoomLevels?: number[];
+  showTimeAxis?: boolean;
+  busStyle?: WaveformBusStyle;
+  labelWidth?: number;
+  minWaveWidth?: number;
+  pixelsPerTime?: number;
+  axisHeight?: number;
+  trackHeight?: number;
+};
+
 export type WaveformViewPayload = {
   path: string;
   timescale: string;
   startTime: number;
   endTime: number;
   tracks: WaveformTrack[];
+  display?: WaveformDisplayOptions;
 };
 
 export type PluginRenderResult = {

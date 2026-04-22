@@ -17,6 +17,17 @@ test("plugin view surface renders aligned zoomable waveform with time axis and b
           timescale: "1ns",
           startTime: 0,
           endTime: 120,
+          display: {
+            defaultZoom: 0.5,
+            zoomLevels: [0.5, 1, 2],
+            showTimeAxis: true,
+            busStyle: "cross",
+            labelWidth: 180,
+            minWaveWidth: 600,
+            pixelsPerTime: 10,
+            axisHeight: 40,
+            trackHeight: 60,
+          },
           tracks: [
             {
               signalId: "clk",
@@ -49,6 +60,7 @@ test("plugin view surface renders aligned zoomable waveform with time axis and b
   expect(screen.getByText("tb.clk")).toBeInTheDocument();
   expect(screen.getByText("tb.counter")).toBeInTheDocument();
   expect(screen.getByTestId("waveform-time-axis")).toBeInTheDocument();
+  expect(screen.getByTestId("waveform-grid")).toHaveStyle({ gridTemplateColumns: "180px 600px" });
   expect(screen.getAllByTestId("waveform-bus-transition").length).toBeGreaterThan(0);
   expect(document.querySelector("[stroke-dasharray]")).toBeNull();
 

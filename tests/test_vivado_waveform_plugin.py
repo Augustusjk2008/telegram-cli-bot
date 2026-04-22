@@ -57,4 +57,6 @@ async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -
     assert "tb.rst_n" in labels
     assert "tb.counter" in labels
     assert view["payload"]["endTime"] >= 120
+    assert view["payload"]["display"]["busStyle"] == "cross"
+    assert view["payload"]["display"]["showTimeAxis"] is True
     await service.shutdown()
