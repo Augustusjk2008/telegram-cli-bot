@@ -146,6 +146,9 @@ export type EditorTab = {
   basename: string;
   content: string;
   savedContent: string;
+  kind?: "file" | "git-diff";
+  sourcePath?: string;
+  readOnly?: boolean;
   dirty: boolean;
   loading: boolean;
   saving: boolean;

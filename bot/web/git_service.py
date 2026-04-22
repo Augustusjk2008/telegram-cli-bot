@@ -158,6 +158,56 @@ def _parse_changed_files(lines: list[str]) -> list[dict[str, Any]]:
     return items
 
 
+def _parse_tree_status_kind(status: str) -> Optional[str]:
+    if status == "!!":
+        return "ignored"
+    if status == "??" or status.startswith("A"):
+        return "added"
+    if "D" in status:
+        return None
+    return "modified" if status.strip() else None
+
+
+def _relative_to_working_dir(repo_relative_path: str, working_dir: str, repo_root: str) -> Optional[str]:
+    normalized_path = repo_relative_path.replace("\\", "/").rstrip("/")
+    if not normalized_path:
+        return None
+
+    working_prefix = os.path.relpath(working_dir, repo_root).replace("\\", "/")
+    if working_prefix == ".":
+        return normalized_path
+
+    prefix = f"{working_prefix.rstrip('/')}/"
+    if normalized_path == working_prefix.rstrip("/"):
+        return normalized_path.split("/")[-1]
+    if not normalized_path.startswith(prefix):
+        return None
+    return normalized_path[len(prefix) :]
+
+
+def _parse_tree_status_items(lines: list[str], *, working_dir: str, repo_root: str) -> dict[str, str]:
+    items: dict[str, str] = {}
+    for raw_line in lines:
+        if not raw_line or raw_line.startswith("## "):
+            continue
+
+        status = raw_line[:2]
+        path_text = raw_line[3:].strip()
+        if " -> " in path_text:
+            path_text = path_text.split(" -> ", 1)[1].strip()
+
+        kind = _parse_tree_status_kind(status)
+        if not kind:
+            continue
+
+        relative_path = _relative_to_working_dir(path_text, working_dir, repo_root)
+        if not relative_path:
+            continue
+
+        items[relative_path] = kind
+    return items
+
+
 def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]:
     result = _run_git(
         repo_root,
@@ -230,6 +280,42 @@ def get_git_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict
     working_dir = _get_git_working_dir(manager, alias)
     repo_root = _resolve_repo_root(working_dir)
     return _build_git_overview(working_dir, repo_root)
+
+
+def get_git_tree_status(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    working_dir = _get_git_working_dir(manager, alias)
+    repo_root = _resolve_repo_root(working_dir)
+    if not repo_root:
+        return {
+            "repo_found": False,
+            "working_dir": working_dir,
+            "repo_path": "",
+            "items": {},
+        }
+
+    try:
+        result = _run_git(
+            repo_root,
+            [
+                "status",
+                "--porcelain=1",
+                "--ignored=matching",
+                "--untracked-files=all",
+            ],
+        )
+    except GitCommandError as exc:
+        _raise(400, "git_tree_status_failed", str(exc))
+
+    return {
+        "repo_found": True,
+        "working_dir": working_dir,
+        "repo_path": repo_root,
+        "items": _parse_tree_status_items(
+            (result.stdout or "").splitlines(),
+            working_dir=working_dir,
+            repo_root=repo_root,
+        ),
+    }
 
 
 def init_git_repository(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

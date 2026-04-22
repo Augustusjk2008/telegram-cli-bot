@@ -24,6 +24,74 @@ type Props = {
   onToggleFocus: () => void;
 };
 
+type DiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
+
+function parseDiffLineKind(line: string): DiffLineKind {
+  if (
+    line.startsWith("diff --git")
+    || line.startsWith("index ")
+    || line.startsWith("--- ")
+    || line.startsWith("+++ ")
+    || line.startsWith("rename ")
+    || line.startsWith("new file ")
+    || line.startsWith("deleted file ")
+  ) {
+    return "meta";
+  }
+  if (line.startsWith("@@")) {
+    return "hunk";
+  }
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    return "add";
+  }
+  if (line.startsWith("-") && !line.startsWith("---")) {
+    return "delete";
+  }
+  return "context";
+}
+
+function diffLineClass(kind: DiffLineKind) {
+  if (kind === "add") {
+    return "bg-emerald-50 text-emerald-700";
+  }
+  if (kind === "delete") {
+    return "bg-red-50 text-red-700";
+  }
+  if (kind === "hunk") {
+    return "bg-sky-50 text-sky-700";
+  }
+  if (kind === "meta") {
+    return "bg-slate-100 text-slate-600";
+  }
+  return "text-[var(--text)]";
+}
+
+function GitDiffViewer({ content }: { content: string }) {
+  const lines = (content || "").split(/\r?\n/);
+  return (
+    <div
+      data-testid="desktop-git-diff-viewer"
+      className="h-full min-h-0 overflow-auto bg-[var(--editor-bg)] p-3 font-mono text-xs leading-6"
+      role="document"
+      aria-label="Git Diff 内容"
+    >
+      {lines.map((line, index) => {
+        const kind = parseDiffLineKind(line);
+        return (
+          <div
+            key={`${index}-${line}`}
+            data-diff-kind={kind}
+            className={clsx("flex gap-3 rounded px-3 py-0.5", diffLineClass(kind))}
+          >
+            <span className="w-8 shrink-0 select-none text-right text-slate-400">{index + 1}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-all">{line || " "}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function EditorPane({
   tabs,
   activeTab,
@@ -195,26 +263,30 @@ export function EditorPane({
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        <FileEditorSurface
-          path={activeTab.path}
-          value={activeTab.content}
-          loading={activeTab.loading}
-          saving={activeTab.saving}
-          dirty={activeTab.dirty}
-          canSave={activeTab.dirty && !activeTab.missing}
-          breakpointLines={breakpointLines}
-          currentLine={currentLine}
-          statusText=""
-          error=""
-          hideHeader
-          onToggleBreakpoint={onToggleBreakpoint}
-          onResolveDefinition={allowCodeJump ? onResolveDefinition : undefined}
-          onChange={onChangeActiveContent}
-          onSave={onSaveActiveTab}
-          onClose={() => {
-            onCloseTab(activeTab.path);
-          }}
-        />
+        {activeTab.kind === "git-diff" ? (
+          <GitDiffViewer content={activeTab.content} />
+        ) : (
+          <FileEditorSurface
+            path={activeTab.path}
+            value={activeTab.content}
+            loading={activeTab.loading}
+            saving={activeTab.saving}
+            dirty={activeTab.dirty}
+            canSave={activeTab.dirty && !activeTab.missing}
+            breakpointLines={breakpointLines}
+            currentLine={currentLine}
+            statusText=""
+            error=""
+            hideHeader
+            onToggleBreakpoint={onToggleBreakpoint}
+            onResolveDefinition={allowCodeJump ? onResolveDefinition : undefined}
+            onChange={onChangeActiveContent}
+            onSave={onSaveActiveTab}
+            onClose={() => {
+              onCloseTab(activeTab.path);
+            }}
+          />
+        )}
       </div>
     </div>
   );

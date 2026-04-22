@@ -70,6 +70,7 @@ from bot.web.git_service import (
     commit_git_changes,
     get_git_diff,
     get_git_overview,
+    get_git_tree_status,
     init_git_repository,
     stage_git_paths,
 )
@@ -1356,6 +1357,63 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
     assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
 
 
+def test_get_git_tree_status_filters_to_working_dir_and_marks_added_modified_and_ignored(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    workspace = repo_dir / "app"
+    workspace.mkdir(parents=True)
+    _init_git_repo(repo_dir)
+
+    (repo_dir / ".gitignore").write_text("*.log\nbuild/\n", encoding="utf-8")
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    (workspace / "keep.txt").write_text("clean\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", ".")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+
+    tracked.write_text("after\n", encoding="utf-8")
+    (workspace / "new.txt").write_text("new\n", encoding="utf-8")
+    (workspace / "ignored.log").write_text("ignored\n", encoding="utf-8")
+    (repo_dir / "outside.txt").write_text("outside subtree\n", encoding="utf-8")
+
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    status = get_git_tree_status(web_manager, "main", 1001)
+
+    assert status == {
+        "repo_found": True,
+        "working_dir": str(workspace),
+        "repo_path": str(repo_dir),
+        "items": {
+            "tracked.txt": "modified",
+            "new.txt": "added",
+            "ignored.log": "ignored",
+        },
+    }
+
+
+def test_get_git_tree_status_returns_empty_payload_outside_repo(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    workspace = temp_dir / "plain-workspace"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    status = get_git_tree_status(web_manager, "main", 1001)
+
+    assert status == {
+        "repo_found": False,
+        "working_dir": str(workspace),
+        "repo_path": "",
+        "items": {},
+    }
+
+
 def test_git_overview_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -1601,6 +1659,45 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
             payload = await resp.json()
             assert payload["data"]["bot"]["alias"] == "main"
             assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
+
+
+@pytest.mark.asyncio
+async def test_git_tree_status_route_returns_decoration_payload(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", ".")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+
+    tracked.write_text("after\n", encoding="utf-8")
+    (repo_dir / "scratch.tmp").write_text("ignore me\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/git/tree-status")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["repo_found"] is True
+    assert payload["data"]["repo_path"] == str(repo_dir)
+    assert payload["data"]["items"] == {
+        "tracked.txt": "modified",
+        "scratch.tmp": "ignored",
+    }
 
 
 @pytest.mark.asyncio

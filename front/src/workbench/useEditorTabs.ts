@@ -37,6 +37,7 @@ function createTab(
     lastModifiedNs,
     cold: false,
     missing: false,
+    kind: "file",
     contentPersistence: "none",
     ...overrides,
   };
@@ -97,6 +98,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
   function pushClosedTab(path: string) {
     const target = tabsRef.current.find((item) => item.path === path);
     if (!target) {
+      return;
+    }
+    if (target.kind === "git-diff" || target.readOnly) {
       return;
     }
 
@@ -207,6 +211,34 @@ export function useEditorTabs({ botAlias, client }: Props) {
     await hydrateTabContent(path);
   }
 
+  function openReadOnlyTab(input: {
+    path: string;
+    basename: string;
+    content: string;
+    statusText?: string;
+    sourcePath?: string;
+    kind?: EditorTab["kind"];
+  }) {
+    const nextTab = createTab(input.path, input.content, undefined, {
+      basename: input.basename,
+      kind: input.kind || "git-diff",
+      sourcePath: input.sourcePath,
+      readOnly: true,
+      statusText: input.statusText || "只读",
+      contentPersistence: "none",
+    });
+    setTabs((current) => {
+      const existingIndex = current.findIndex((item) => item.path === input.path);
+      if (existingIndex >= 0) {
+        const next = current.slice();
+        next[existingIndex] = nextTab;
+        return next;
+      }
+      return [...current, nextTab];
+    });
+    setActiveTabPath(input.path);
+  }
+
   async function activateTab(path: string) {
     setActiveTabPath(path);
     const target = tabsRef.current.find((item) => item.path === path);
@@ -218,6 +250,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
   function updateActiveContent(content: string) {
     setTabs((current) => current.map((item) => {
       if (item.path !== activeTabPathRef.current) {
+        return item;
+      }
+      if (item.readOnly) {
         return item;
       }
       return {
@@ -235,6 +270,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
     const currentActivePath = activeTabPathRef.current;
     const target = tabsRef.current.find((item) => item.path === currentActivePath);
     if (!target) {
+      return;
+    }
+    if (target.readOnly) {
       return;
     }
 
@@ -377,12 +415,13 @@ export function useEditorTabs({ botAlias, client }: Props) {
   function buildPersistenceSnapshot() {
     return selectTabsForPersistence(
       tabsRef.current.map((tab) => ({
+        kind: tab.kind,
         path: tab.path,
         dirty: tab.dirty,
         savedContent: tab.savedContent,
         draftContent: tab.content,
         lastModifiedNs: tab.lastModifiedNs,
-      })),
+      })).filter((tab) => tab.kind !== "git-diff"),
     );
   }
 
@@ -393,6 +432,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
     hasDirtyTabs,
     closedTabs,
     openFile,
+    openReadOnlyTab,
     openCreatedFile,
     restoreFromSnapshot,
     buildPersistenceSnapshot,

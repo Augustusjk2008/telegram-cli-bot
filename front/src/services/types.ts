@@ -406,6 +406,15 @@ export type GitCommitSummary = {
   subject: string;
 };
 
+export type GitTreeDecorationKind = "added" | "modified" | "ignored";
+
+export type GitTreeStatus = {
+  repoFound: boolean;
+  workingDir: string;
+  repoPath: string;
+  items: Record<string, GitTreeDecorationKind>;
+};
+
 export type GitOverview = {
   repoFound: boolean;
   canInit: boolean;

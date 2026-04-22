@@ -26,6 +26,7 @@ import type {
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  GitTreeStatus,
   FileRenameResult,
   FileWriteResult,
   PublicHostInfo,
@@ -78,6 +79,9 @@ const GUEST_CAPABILITIES: Capability[] = [
   "view_file_tree",
   "view_chat_history",
 ];
+const MOCK_GIT_IGNORED_ITEMS: Record<string, string[]> = {
+  main: ["dist"],
+};
 
 function resolveMemberCapabilities(username: string) {
   return username.trim() === "127.0.0.1"
@@ -937,6 +941,28 @@ export class MockWebBotClient implements WebBotClient {
       ...overview,
       workingDir,
       repoPath: overview.repoPath || workingDir,
+    };
+  }
+
+  async getGitTreeStatus(botAlias: string): Promise<GitTreeStatus> {
+    const overview = await this.getGitOverview(botAlias);
+    const items: GitTreeStatus["items"] = {};
+
+    for (const item of overview.changedFiles) {
+      items[item.path] = item.untracked || item.status.startsWith("A")
+        ? "added"
+        : "modified";
+    }
+
+    for (const path of MOCK_GIT_IGNORED_ITEMS[botAlias] || []) {
+      items[path] = "ignored";
+    }
+
+    return {
+      repoFound: overview.repoFound,
+      workingDir: overview.workingDir,
+      repoPath: overview.repoPath,
+      items,
     };
   }
 

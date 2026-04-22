@@ -412,6 +412,7 @@ test("settings tab shows cli params and tunnel status", async () => {
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
   expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
   expect(screen.getByText("公网访问")).toBeInTheDocument();
+  expect(screen.getByText("HTTPS 访问:")).toBeInTheDocument();
   expect(screen.getByText("https://demo.trycloudflare.com")).toBeInTheDocument();
 });
 

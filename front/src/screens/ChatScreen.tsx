@@ -115,6 +115,23 @@ function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRu
   return nextItems;
 }
 
+function normalizeInactiveStreamingRows(items: ChatMessage[], runtimeActive: boolean) {
+  if (runtimeActive) {
+    return items;
+  }
+  return items
+    .filter((item) => !(item.role === "assistant" && item.state === "streaming" && !item.text.trim()))
+    .map((item) => {
+      if (item.role !== "assistant" || item.state !== "streaming") {
+        return item;
+      }
+      return {
+        ...item,
+        state: "done" as const,
+      };
+    });
+}
+
 function countPersistedHistoryItems(items: ChatMessage[]) {
   return items.filter((item) => !item.id.startsWith("assistant-cron-")).length;
 }
@@ -639,8 +656,10 @@ export function ChatScreen({
     overview: BotOverview,
     pendingRuns: AssistantCronRunEnqueuedDetail[],
   ) => {
-    const nextItems = mergePendingCronRuns(messages, pendingRuns);
-    const hasStreamingRow = nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
+    const runtimeActive = Boolean(overview.isProcessing || pendingRuns.length > 0);
+    const nextItems = normalizeInactiveStreamingRows(mergePendingCronRuns(messages, pendingRuns), runtimeActive);
+    const hasStreamingRow = runtimeActive
+      && nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
     const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow || pendingRuns.length > 0);
 
     setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));

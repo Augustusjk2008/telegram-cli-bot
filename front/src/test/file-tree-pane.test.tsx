@@ -203,3 +203,65 @@ test("tree can hand a directory off to embedded settings as the next workdir tar
 
   expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
 });
+
+test("desktop tree colors git states, bolds non-ignored text, and inherits child state on folders", async () => {
+  localStorage.clear();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "README.md", isDir: false, size: 12 },
+      { name: "new.ts", isDir: false, size: 12 },
+      { name: "package.json", isDir: false, size: 12 },
+      { name: "src", isDir: true },
+      { name: "docs", isDir: true },
+      { name: "dist", isDir: true },
+    ],
+  });
+  vi.spyOn(client, "getGitTreeStatus").mockResolvedValue({
+    repoFound: true,
+    workingDir: "/workspace",
+    repoPath: "/workspace",
+    items: {
+      "README.md": "modified",
+      "new.ts": "added",
+      "src/app.ts": "modified",
+      "src/nested/fresh.ts": "added",
+      "docs/guide.md": "modified",
+      dist: "ignored",
+    },
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const modifiedButton = await screen.findByRole("button", { name: "打开 README.md" });
+  const addedButton = screen.getByRole("button", { name: "打开 new.ts" });
+  const cleanButton = screen.getByRole("button", { name: "打开 package.json" });
+  const inheritedAddedButton = screen.getByRole("button", { name: "展开 src" });
+  const inheritedModifiedButton = screen.getByRole("button", { name: "展开 docs" });
+  const ignoredButton = screen.getByRole("button", { name: "展开 dist" });
+  const ignoredRow = ignoredButton.closest("[data-tree-path='dist']");
+
+  await waitFor(() => {
+    expect(modifiedButton).toHaveClass("text-yellow-400", "font-semibold");
+    expect(addedButton).toHaveClass("text-emerald-500", "font-semibold");
+    expect(cleanButton).toHaveClass("text-[var(--text)]", "font-semibold");
+    expect(inheritedAddedButton).toHaveClass("text-emerald-500", "font-semibold");
+    expect(inheritedModifiedButton).toHaveClass("text-yellow-400", "font-semibold");
+  });
+  expect(document.querySelector("[data-git-decoration]")).toBeNull();
+  expect(ignoredRow).toHaveAttribute("data-git-ignored", "true");
+  expect(ignoredButton).toHaveClass("text-[var(--muted)]");
+  expect(ignoredButton).not.toHaveClass("font-semibold");
+});

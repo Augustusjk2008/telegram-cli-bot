@@ -13,6 +13,7 @@ import type {
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  GitTreeStatus,
   BotOverview,
   BotStatus,
   BotSummary,
@@ -295,6 +296,13 @@ type RawGitOverview = {
   behind_count: number;
   changed_files: RawGitChangedFile[];
   recent_commits: RawGitCommitSummary[];
+};
+
+type RawGitTreeStatus = {
+  repo_found: boolean;
+  working_dir: string;
+  repo_path: string;
+  items: Record<string, "added" | "modified" | "ignored">;
 };
 
 type RawGitDiffPayload = {
@@ -789,6 +797,15 @@ function mapGitOverview(raw: RawGitOverview): GitOverview {
     behindCount: Number(raw.behind_count || 0),
     changedFiles: (raw.changed_files || []).map(mapGitChangedFile),
     recentCommits: (raw.recent_commits || []).map(mapGitCommitSummary),
+  };
+}
+
+function mapGitTreeStatus(raw: RawGitTreeStatus): GitTreeStatus {
+  return {
+    repoFound: Boolean(raw.repo_found),
+    workingDir: raw.working_dir || "",
+    repoPath: raw.repo_path || "",
+    items: raw.items || {},
   };
 }
 
@@ -1775,6 +1792,11 @@ export class RealWebBotClient implements WebBotClient {
   async getGitOverview(botAlias: string): Promise<GitOverview> {
     const data = await this.requestJson<RawGitOverview>(`/api/bots/${encodeURIComponent(botAlias)}/git`);
     return mapGitOverview(data);
+  }
+
+  async getGitTreeStatus(botAlias: string): Promise<GitTreeStatus> {
+    const data = await this.requestJson<RawGitTreeStatus>(`/api/bots/${encodeURIComponent(botAlias)}/git/tree-status`);
+    return mapGitTreeStatus(data);
   }
 
   async initGitRepository(botAlias: string): Promise<GitOverview> {

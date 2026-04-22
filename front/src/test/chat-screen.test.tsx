@@ -445,6 +445,75 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
+test("treats inactive history streaming rows as completed", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      historyCount: 2,
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "继续",
+        createdAt: "2026-04-22T10:00:00",
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "最终回答",
+        createdAt: "2026-04-22T10:00:01",
+        state: "streaming",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("最终回答")).toBeInTheDocument();
+  expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
+  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
+});
+
+test("keeps history streaming rows active while overview is processing", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "busy",
+      workingDir: "C:\\workspace",
+      isProcessing: true,
+      historyCount: 2,
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "继续",
+        createdAt: "2026-04-22T10:00:00",
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "处理中预览",
+        createdAt: "2026-04-22T10:00:01",
+        state: "streaming",
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("处理中预览")).toBeInTheDocument();
+  expect(screen.getByText("正在输出")).toBeInTheDocument();
+});
+
 test("keeps process details collapsed by default and tool details collapsed until expanded", async () => {
   const user = userEvent.setup();
   const client = createClient({

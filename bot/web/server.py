@@ -128,6 +128,7 @@ from .git_service import (
     fetch_git_remote,
     get_git_diff,
     get_git_overview,
+    get_git_tree_status,
     init_git_repository,
     pop_git_stash,
     pull_git_remote,
@@ -1210,6 +1211,11 @@ class WebApiServer:
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_git_overview(self.manager, alias, auth.user_id)})
 
+    async def get_git_tree_status_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_git_tree_status(self.manager, alias, auth.user_id)})
+
     async def post_git_init(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
@@ -1748,6 +1754,7 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)
         app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
+        app.router.add_get("/api/bots/{alias}/git/tree-status", self.get_git_tree_status_view)
         app.router.add_post("/api/bots/{alias}/git/init", self.post_git_init)
         app.router.add_get("/api/bots/{alias}/git/diff", self.get_git_diff_view)
         app.router.add_post("/api/bots/{alias}/git/stage", self.post_git_stage)

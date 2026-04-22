@@ -1,9 +1,9 @@
 import { clsx } from "clsx";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult, WorkspaceDefinitionItem } from "../services/types";
+import type { FileReadResult, GitTreeStatus, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { GitScreen } from "../screens/GitScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
@@ -145,11 +145,13 @@ export function DesktopWorkbench({
     currentCwd: "",
   });
   const [gitBranchName, setGitBranchName] = useState("");
+  const [gitDecorations, setGitDecorations] = useState<GitTreeStatus["items"]>({});
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
   const [definitionCandidates, setDefinitionCandidates] = useState<WorkspaceDefinitionItem[]>([]);
   const [definitionMessage, setDefinitionMessage] = useState("");
   const [definitionSource, setDefinitionSource] = useState("");
+  const gitDecorationRequestRef = useRef(0);
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -216,6 +218,23 @@ export function DesktopWorkbench({
     : tabs.activeTab
       ? debug.currentLineForPath(tabs.activeTab.path)
       : null;
+
+  const refreshGitDecorations = useCallback(async () => {
+    const requestId = gitDecorationRequestRef.current + 1;
+    gitDecorationRequestRef.current = requestId;
+    try {
+      const next = await client.getGitTreeStatus(botAlias);
+      if (gitDecorationRequestRef.current !== requestId) {
+        return;
+      }
+      setGitDecorations(next.repoFound ? next.items : {});
+    } catch {
+      if (gitDecorationRequestRef.current !== requestId) {
+        return;
+      }
+      setGitDecorations({});
+    }
+  }, [botAlias, client]);
 
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);
@@ -303,6 +322,7 @@ export function DesktopWorkbench({
   useEffect(() => {
     if (!fileTree.rootPath) {
       setGitBranchName("");
+      setGitDecorations({});
       return;
     }
 
@@ -324,6 +344,13 @@ export function DesktopWorkbench({
       cancelled = true;
     };
   }, [botAlias, client, fileTree.rootPath]);
+
+  useEffect(() => {
+    if (!fileTree.rootPath) {
+      return;
+    }
+    void refreshGitDecorations();
+  }, [fileTree.rootPath, refreshGitDecorations]);
 
   useEffect(() => {
     if (!terminalStatus.currentCwd && fileTree.rootPath) {
@@ -398,6 +425,20 @@ export function DesktopWorkbench({
     setEditorReveal(null);
   }
 
+  async function openGitDiffInEditor(path: string, staged: boolean) {
+    const diff = await client.getGitDiff(botAlias, path, staged);
+    const basename = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    const tabPath = `git-diff:${staged ? "staged" : "worktree"}:${path}`;
+    tabs.openReadOnlyTab({
+      path: tabPath,
+      basename: `${basename}.diff`,
+      content: diff.diff || "当前没有可显示的差异",
+      sourcePath: path,
+      kind: "git-diff",
+      statusText: `${path} · ${staged ? "已暂存" : "工作区"} Diff · 只读`,
+    });
+  }
+
   function clearDefinitionOverlay() {
     setDefinitionCandidates([]);
     setDefinitionMessage("");
@@ -437,6 +478,7 @@ export function DesktopWorkbench({
       fileTree.highlightPath(file.name);
     }
     await fileTree.refreshRoot({ preserveExpandedPaths: true });
+    await refreshGitDecorations();
   }
 
   function renderSidebarContent() {
@@ -462,6 +504,8 @@ export function DesktopWorkbench({
             void loadPreview(path, "preview");
           }}
           onRequestUpload={handleUpload}
+          gitDecorations={gitDecorations}
+          onRefreshGitDecorations={refreshGitDecorations}
           onRequestSetWorkdir={(path) => {
             setPendingSidebarWorkdir(path);
             setSidebarView("settings");
@@ -541,8 +585,10 @@ export function DesktopWorkbench({
           botAvatarName={botAvatarName}
           client={client}
           embedded
+          onOpenDiff={openGitDiffInEditor}
           onOverviewChange={(overview) => {
             setGitBranchName(overview?.repoFound ? overview.currentBranch : "");
+            void refreshGitDecorations();
           }}
         />
       );
@@ -560,6 +606,7 @@ export function DesktopWorkbench({
           onWorkdirUpdated={(nextWorkdir) => {
             setPendingSidebarWorkdir(nextWorkdir);
             void fileTree.refreshRoot({ preserveExpandedPaths: true });
+            void refreshGitDecorations();
           }}
           themeName={themeName}
           onThemeChange={onThemeChange}

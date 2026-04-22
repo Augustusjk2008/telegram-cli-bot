@@ -2222,6 +2222,58 @@ describe("RealWebBotClient", () => {
     expect(overview.changedFiles[0].path).toBe("tracked.txt");
   });
 
+  test("getGitTreeStatus maps git tree payload", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            repo_found: true,
+            working_dir: "C:\\workspace\\repo",
+            repo_path: "C:\\workspace\\repo",
+            items: {
+              "src/app.ts": "modified",
+              "new.ts": "added",
+              "dist": "ignored",
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const status = await client.getGitTreeStatus("main");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/git/tree-status",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    expect(status).toEqual({
+      repoFound: true,
+      workingDir: "C:\\workspace\\repo",
+      repoPath: "C:\\workspace\\repo",
+      items: {
+        "src/app.ts": "modified",
+        "new.ts": "added",
+        "dist": "ignored",
+      },
+    });
+  });
+
   test("initGitRepository posts to the init endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

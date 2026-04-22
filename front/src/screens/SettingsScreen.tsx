@@ -1684,8 +1684,8 @@ export function SettingsScreen({
             </div>
 
             <div className="space-y-2 text-sm text-[var(--muted)]">
-              <p className="break-all"><span className="font-medium text-[var(--text)]">公网:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
-              <p className="break-all"><span className="font-medium text-[var(--text)]">本地:</span> {tunnel.localUrl}</p>
+              <p className="break-all"><span className="font-medium text-[var(--text)]">HTTPS 访问:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
+              <p className="break-all"><span className="font-medium text-[var(--text)]">本地转发目标:</span> {tunnel.localUrl}</p>
               {tunnel.lastError ? (
                 <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
               ) : null}

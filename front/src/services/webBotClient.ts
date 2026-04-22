@@ -26,6 +26,7 @@ import type {
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  GitTreeStatus,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   PublicHostInfo,
@@ -98,6 +99,7 @@ export interface WebBotClient {
   downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus>;
   downloadUpdate(): Promise<AppUpdateStatus>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
+  getGitTreeStatus(botAlias: string): Promise<GitTreeStatus>;
   initGitRepository(botAlias: string): Promise<GitOverview>;
   getGitDiff(botAlias: string, path: string, staged?: boolean): Promise<GitDiffPayload>;
   stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;

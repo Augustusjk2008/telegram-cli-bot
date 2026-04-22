@@ -15,6 +15,17 @@ def test_tunnel_service_build_local_url_brackets_ipv6_loopback():
     assert TunnelService._build_local_url("::1", 8765) == "http://[::1]:8765"
 
 
+def test_tunnel_service_extract_public_url_normalizes_trycloudflare_http_to_https():
+    assert (
+        TunnelService._extract_public_url("INF quick tunnel: http://fresh.trycloudflare.com")
+        == "https://fresh.trycloudflare.com"
+    )
+
+
+def test_tunnel_service_extract_public_url_ignores_non_https_non_cloudflare_url():
+    assert TunnelService._extract_public_url("public url http://example.com") is None
+
+
 @pytest.mark.parametrize("host", ["::", "[::]"])
 def test_tunnel_service_build_local_url_uses_ipv6_loopback_for_any(host: str):
     assert TunnelService._build_local_url(host, 8765) == "http://[::1]:8765"

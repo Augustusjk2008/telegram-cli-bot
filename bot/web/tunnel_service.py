@@ -23,11 +23,21 @@ from bot.platform.processes import build_subprocess_group_kwargs
 
 logger = logging.getLogger(__name__)
 
-_CLOUDFLARE_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+_CLOUDFLARE_URL_RE = re.compile(r"https?://[a-z0-9-]+\.trycloudflare\.com")
 _BENIGN_TUNNEL_WARNINGS = (
     "Failed to initialize DNS local resolver",
     "cloudflared does not support loading the system root certificate pool on Windows",
 )
+
+
+def _normalize_quick_public_url(value: str) -> str:
+    parsed = urlsplit((value or "").strip())
+    host = parsed.hostname or ""
+    if host.endswith(".trycloudflare.com"):
+        return f"https://{host}"
+    if parsed.scheme == "https" and host:
+        return value.strip()
+    return ""
 
 
 class TunnelService:
@@ -156,7 +166,8 @@ class TunnelService:
     def _extract_public_url(line: str) -> Optional[str]:
         match = _CLOUDFLARE_URL_RE.search(line)
         if match:
-            return match.group(0)
+            normalized = _normalize_quick_public_url(match.group(0))
+            return normalized or None
         return None
 
     def _cloudflared_command(self) -> list[str]:
@@ -217,7 +228,7 @@ class TunnelService:
             snapshot = copy.deepcopy(self._snapshot)
 
         pid = self._coerce_pid(snapshot.get("pid"))
-        public_url = str(snapshot.get("public_url") or "").strip()
+        public_url = _normalize_quick_public_url(str(snapshot.get("public_url") or ""))
         if snapshot.get("status") != "running" or snapshot.get("source") != "quick_tunnel" or not public_url or pid <= 0:
             self._clear_state_file()
             return
@@ -319,7 +330,7 @@ class TunnelService:
             return False
 
         pid = self._coerce_pid(data.get("pid"))
-        public_url = str(data.get("public_url") or "").strip()
+        public_url = _normalize_quick_public_url(str(data.get("public_url") or ""))
         if (
             pid <= 0
             or not public_url

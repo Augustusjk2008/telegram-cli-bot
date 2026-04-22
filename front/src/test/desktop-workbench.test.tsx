@@ -131,6 +131,40 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
 });
 
+test("embedded git opens changed file diffs as read-only editor tabs", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const getGitDiff = vi.spyOn(client, "getGitDiff").mockResolvedValue({
+    path: "bot/web/server.py",
+    staged: true,
+    diff: "diff --git a/bot/web/server.py b/bot/web/server.py\n@@ -1 +1 @@\n-old\n+new",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "Git" }));
+  await user.click(await screen.findByLabelText("在编辑器打开 bot/web/server.py"));
+
+  expect(getGitDiff).toHaveBeenCalledWith("main", "bot/web/server.py", true);
+  expect(await screen.findByRole("tab", { name: "server.py.diff" })).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-git-diff-viewer")).toHaveTextContent("+new");
+  expect(screen.getByText("+new").closest('[data-diff-kind="add"]')).toHaveClass("text-emerald-700");
+  expect(screen.getByText("-old").closest('[data-diff-kind="delete"]')).toHaveClass("text-red-700");
+  expect(screen.queryByLabelText("文件内容")).not.toBeInTheDocument();
+});
+
 test("desktop debug pane uses generic unsupported C++ message", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -782,4 +816,56 @@ test("desktop file tree loads file content on the first click", async () => {
     expect(screen.getByText("FIRST_CLICK_CONTENT")).toBeInTheDocument();
   });
   expect(client.readFileFull).toHaveBeenCalledTimes(1);
+});
+
+test("desktop workbench refreshes file tree git decorations after an embedded git commit", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }],
+  });
+  const getGitTreeStatus = vi.spyOn(client, "getGitTreeStatus").mockImplementation(async (botAlias) => {
+    const overview = await MockWebBotClient.prototype.getGitOverview.call(client, botAlias);
+    return {
+      repoFound: overview.repoFound,
+      workingDir: overview.workingDir,
+      repoPath: overview.repoPath,
+      items: overview.isClean ? {} : { "README.md": "modified" },
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const readmeButton = await screen.findByRole("button", { name: "打开 README.md" });
+  await waitFor(() => {
+    expect(readmeButton).toHaveClass("text-yellow-400", "font-semibold");
+  });
+
+  await user.click(screen.getByRole("button", { name: "Git" }));
+  await user.click(await screen.findByRole("button", { name: "提交更改" }));
+  await user.click(await screen.findByRole("button", { name: "文件" }));
+
+  await waitFor(() => {
+    const nextButton = screen.getByRole("button", { name: "打开 README.md" });
+    expect(nextButton).toHaveClass("text-[var(--text)]", "font-semibold");
+    expect(nextButton).not.toHaveClass("text-yellow-400");
+  });
+  expect(document.querySelector("[data-git-decoration]")).toBeNull();
+  expect(getGitTreeStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
 });

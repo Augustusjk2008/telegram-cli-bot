@@ -1,6 +1,8 @@
+import { clsx } from "clsx";
 import { Bot, Download, Eye, FilePlus, FolderPlus, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { FileNameDialog } from "../components/FileNameDialog";
+import type { GitTreeDecorationKind } from "../services/types";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
 type Props = {
@@ -11,6 +13,8 @@ type Props = {
   onDeletedFile: (path: string) => void;
   onRequestPreview: (path: string) => void;
   onRequestUpload: (files: File[]) => Promise<void>;
+  gitDecorations: Record<string, GitTreeDecorationKind>;
+  onRefreshGitDecorations: () => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
   structureOnly?: boolean;
   focused: boolean;
@@ -20,6 +24,45 @@ type Props = {
 function branchLabel(path: string) {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
+}
+
+function resolveGitDecoration(
+  path: string,
+  isDir: boolean,
+  gitDecorations: Record<string, GitTreeDecorationKind>,
+) {
+  const direct = gitDecorations[path];
+  if (direct === "ignored" || direct === "added" || !isDir) {
+    return direct;
+  }
+
+  let inherited: GitTreeDecorationKind | undefined = direct === "modified" ? "modified" : undefined;
+  const prefix = `${path}/`;
+  for (const [candidate, decoration] of Object.entries(gitDecorations)) {
+    if (!candidate.startsWith(prefix)) {
+      continue;
+    }
+    if (decoration === "added") {
+      return "added";
+    }
+    if (decoration === "modified") {
+      inherited = "modified";
+    }
+  }
+  return inherited;
+}
+
+function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
+  if (gitDecoration === "ignored") {
+    return "text-[var(--muted)]";
+  }
+  if (gitDecoration === "added") {
+    return "text-emerald-500 font-semibold";
+  }
+  if (gitDecoration === "modified") {
+    return "text-yellow-400 font-semibold";
+  }
+  return "text-[var(--text)] font-semibold";
 }
 
 type TreeIconKind =
@@ -659,6 +702,8 @@ export function FileTreePane({
   onDeletedFile,
   onRequestPreview,
   onRequestUpload,
+  gitDecorations,
+  onRefreshGitDecorations,
   onRequestSetWorkdir,
   structureOnly = false,
   focused,
@@ -684,6 +729,7 @@ export function FileTreePane({
       setShowCreateFileDialog(false);
       setPendingFileName("");
       onCreatedFile(result.path, "", result.lastModifiedNs);
+      await onRefreshGitDecorations();
     } catch (error) {
       setCreateFileError(error instanceof Error ? error.message : "新建文件失败");
     } finally {
@@ -700,6 +746,7 @@ export function FileTreePane({
       setRenameTargetPath("");
       setRenameValue("");
       onRenamedFile(result.oldPath, result.path);
+      await onRefreshGitDecorations();
     } catch (error) {
       setRenameError(error instanceof Error ? error.message : "重命名失败");
     } finally {
@@ -714,6 +761,7 @@ export function FileTreePane({
     }
     try {
       await tree.createDirectory(name);
+      await onRefreshGitDecorations();
     } catch {
       // tree.error is surfaced by the hook state
     }
@@ -731,6 +779,7 @@ export function FileTreePane({
     if (!entry.isDir) {
       onDeletedFile(entry.path);
     }
+    await onRefreshGitDecorations();
   }
 
   async function handleUpload(files: File[]) {
@@ -739,6 +788,12 @@ export function FileTreePane({
     }
     await onRequestUpload(files);
     await tree.refreshRoot({ preserveExpandedPaths: true });
+    await onRefreshGitDecorations();
+  }
+
+  async function handleRefresh() {
+    await tree.refreshRoot({ preserveExpandedPaths: true });
+    await onRefreshGitDecorations();
   }
 
   function renderBranch(entries: FileTreeNode[], depth: number) {
@@ -752,11 +807,17 @@ export function FileTreePane({
           const iconKind = entry.isDir
             ? (expanded ? "folder-open" : "folder-closed")
             : getFileIconKind(entry.name);
+          const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations);
+          const isIgnored = gitDecoration === "ignored";
+          const itemToneClass = treeItemToneClass(gitDecoration);
 
           return (
             <li key={entry.path}>
               <div
                 className="group flex min-w-0 items-center gap-1.5 rounded-md text-[12px]"
+                data-tree-path={entry.path}
+                data-git-state={gitDecoration || "clean"}
+                data-git-ignored={isIgnored ? "true" : "false"}
                 data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
                 style={{ paddingLeft: `${depth * 12}px` }}
               >
@@ -765,7 +826,7 @@ export function FileTreePane({
                     type="button"
                     aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
                     onClick={() => void tree.toggleDirectory(entry.path)}
-                    className="min-w-0 flex-1 rounded px-2 py-1 text-left text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                    className={clsx("min-w-0 flex-1 rounded px-2 py-1 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <TreeNodeIcon kind={iconKind} />
@@ -781,7 +842,7 @@ export function FileTreePane({
                         onOpenFile(entry.path);
                       }
                     }}
-                    className="min-w-0 flex-1 rounded px-2 py-1 text-left text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                    className={clsx("min-w-0 flex-1 rounded px-2 py-1 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <TreeNodeIcon kind={iconKind} />
@@ -950,7 +1011,7 @@ export function FileTreePane({
             type="button"
             aria-label="刷新文件树"
             title="刷新文件树"
-            onClick={() => void tree.refreshRoot({ preserveExpandedPaths: true })}
+            onClick={() => void handleRefresh()}
             className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
           >
             <RefreshCw className="h-3.5 w-3.5" />
