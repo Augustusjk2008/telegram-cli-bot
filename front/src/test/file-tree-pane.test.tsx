@@ -19,6 +19,13 @@ function expectFileIcon(fileName: string, iconKind: string) {
   expect(iconKinds).toContain(iconKind);
 }
 
+function expectFileIconNode(fileName: string, iconKind: string) {
+  const button = screen.getByRole("button", { name: `打开 ${fileName}` });
+  const icon = button.querySelector(`[data-icon="${iconKind}"]`);
+  expect(icon).not.toBeNull();
+  return icon as HTMLElement;
+}
+
 test("directory click expands the tree without changing the working directory", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -104,11 +111,14 @@ test("desktop tree shows folder and file icons instead of arrow and dot markers"
 
   const folderButton = await screen.findByRole("button", { name: "展开 docs" });
   const fileButton = screen.getByRole("button", { name: "打开 README.md" });
+  const markdownIcon = fileButton.querySelector('[data-icon="file-markdown"]') as HTMLElement | null;
 
   expect(folderButton).not.toHaveTextContent("▸");
   expect(folderButton.querySelector('[data-icon="folder-closed"]')).not.toBeNull();
   expect(fileButton).not.toHaveTextContent("·");
-  expect(fileButton.querySelector('[data-icon="file-markdown"]')).not.toBeNull();
+  expect(markdownIcon).not.toBeNull();
+  expect(markdownIcon).toHaveTextContent("MD");
+  expect(markdownIcon?.querySelector("svg")).toBeNull();
 
   await user.click(folderButton);
 
@@ -128,6 +138,11 @@ test("desktop tree maps common code and document families to dedicated icons", a
       { name: "index.ts", isDir: false, size: 12 },
       { name: "build.sh", isDir: false, size: 12 },
       { name: ".bashrc", isDir: false, size: 12 },
+      { name: ".env.local", isDir: false, size: 12 },
+      { name: ".gitignore", isDir: false, size: 12 },
+      { name: "package.json", isDir: false, size: 12 },
+      { name: "config.ini", isDir: false, size: 12 },
+      { name: "index.html", isDir: false, size: 12 },
       { name: "Program.cs", isDir: false, size: 12 },
       { name: "Main.java", isDir: false, size: 12 },
       { name: "Dockerfile", isDir: false, size: 12 },
@@ -164,6 +179,13 @@ test("desktop tree maps common code and document families to dedicated icons", a
   expectFileIcon("index.ts", "file-js-ts");
   expectFileIcon("build.sh", "file-shell");
   expectFileIcon(".bashrc", "file-shell");
+  expect(expectFileIconNode(".env.local", "file-env")).toHaveTextContent(".env");
+  expect(expectFileIconNode(".gitignore", "file-git").querySelector("svg")).not.toBeNull();
+  expect(expectFileIconNode("package.json", "file-json")).toHaveTextContent("{…}");
+  expect(expectFileIconNode("config.ini", "file-ini").querySelector("svg")).not.toBeNull();
+  expect(expectFileIconNode("index.html", "file-html")).toHaveTextContent("</>");
+  expect(expectFileIconNode("app.py", "file-python").querySelector("svg")).not.toBeNull();
+  expect(expectFileIconNode("build.sh", "file-shell").querySelector("svg")).not.toBeNull();
   expectFileIcon("Program.cs", "file-csharp");
   expectFileIcon("Main.java", "file-code");
   expectFileIcon("Dockerfile", "file-config");

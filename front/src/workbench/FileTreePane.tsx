@@ -106,6 +106,11 @@ function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
 type TreeIconKind =
   | "folder-closed"
   | "folder-open"
+  | "file-env"
+  | "file-git"
+  | "file-json"
+  | "file-ini"
+  | "file-html"
   | "file-js-ts"
   | "file-python"
   | "file-c-cpp"
@@ -380,6 +385,17 @@ const MARKDOWN_FILE_EXTENSIONS = new Set([
   "rst",
 ]);
 
+const JSON_FILE_EXTENSIONS = new Set([
+  "json",
+  "jsonc",
+  "json5",
+]);
+
+const HTML_FILE_EXTENSIONS = new Set([
+  "html",
+  "htm",
+]);
+
 const TEXT_FILE_EXTENSIONS = new Set([
   "txt",
   "log",
@@ -518,6 +534,12 @@ function getFileIconKind(name: string): TreeIconKind {
   const normalized = normalizedFileName(name);
   const extension = getFileExtension(name);
 
+  if (normalized.startsWith(".env")) {
+    return "file-env";
+  }
+  if (normalized.startsWith(".git")) {
+    return "file-git";
+  }
   if (IMAGE_FILE_EXTENSIONS.has(extension)) {
     return "file-image";
   }
@@ -547,6 +569,15 @@ function getFileIconKind(name: string): TreeIconKind {
   }
   if (DATABASE_FILE_EXTENSIONS.has(extension)) {
     return "file-database";
+  }
+  if (JSON_FILE_EXTENSIONS.has(extension)) {
+    return "file-json";
+  }
+  if (extension === "ini") {
+    return "file-ini";
+  }
+  if (HTML_FILE_EXTENSIONS.has(extension)) {
+    return "file-html";
   }
   if (SHELL_FILE_NAMES.has(normalized)) {
     return "file-shell";
@@ -590,10 +621,20 @@ function treeIconToneClass(kind: TreeIconKind) {
     case "folder-closed":
     case "folder-open":
       return "text-amber-600";
+    case "file-env":
+      return "text-lime-700";
+    case "file-git":
+      return "text-orange-600";
+    case "file-json":
+      return "text-amber-700";
+    case "file-ini":
+      return "text-slate-600";
+    case "file-html":
+      return "text-orange-600";
     case "file-js-ts":
       return "text-sky-600";
     case "file-python":
-      return "text-emerald-600";
+      return "text-[var(--muted)]";
     case "file-c-cpp":
       return "text-cyan-700";
     case "file-shell":
@@ -633,28 +674,76 @@ function treeIconToneClass(kind: TreeIconKind) {
   }
 }
 
-function FileBadgeIcon({ kind, label }: { kind: Exclude<TreeIconKind, "folder-closed" | "folder-open" | "file-generic">; label: string }) {
-  const className = `inline-flex h-4 w-4 shrink-0 items-center justify-center ${treeIconToneClass(kind)}`;
-  const fontSize = label.length >= 3 ? 3.1 : 4.05;
+function FileBadgeIcon({ kind, label, className }: { kind: Exclude<TreeIconKind, "folder-closed" | "folder-open">; label: string; className?: string }) {
+  const typographyClass = label.length >= 4
+    ? "text-[5.75px] tracking-[-0.1em]"
+    : label.length >= 3
+      ? "text-[7.25px] tracking-[-0.08em]"
+    : label.length === 2
+      ? "text-[8.75px] tracking-[-0.04em]"
+      : "text-[10px]";
 
   return (
-    <span aria-hidden="true" data-icon={kind} className={className}>
+    <span
+      aria-hidden="true"
+      data-icon={kind}
+      className={clsx(
+        "inline-flex h-4 w-4 shrink-0 select-none items-center justify-center font-black leading-none",
+        treeIconToneClass(kind),
+        typographyClass,
+        className,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function ShellIcon({ kind }: { kind: "file-shell" }) {
+  return (
+    <span aria-hidden="true" data-icon={kind} className={clsx("inline-flex h-4 w-4 shrink-0 items-center justify-center", treeIconToneClass(kind))}>
       <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M6 2.75h5.5l3 3V16A1.25 1.25 0 0 1 13.25 17.25h-7.5A1.25 1.25 0 0 1 4.5 16V4A1.25 1.25 0 0 1 6 2.75Z" />
-        <path d="M11.5 2.9v3h2.9" />
-        <text
-          x="9.9"
-          y="12.25"
-          fill="currentColor"
-          stroke="none"
-          textAnchor="middle"
-          fontSize={fontSize}
-          fontWeight="700"
-          fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          letterSpacing={label.length >= 3 ? "-0.15px" : "0"}
-        >
-          {label}
-        </text>
+        <rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2.25" />
+        <path d="M6.1 8.15 8.65 10 6.1 11.85" />
+        <path d="M10 12.1h3.6" />
+      </svg>
+    </span>
+  );
+}
+
+function GitBranchIcon({ kind }: { kind: "file-git" }) {
+  return (
+    <span aria-hidden="true" data-icon={kind} className={clsx("inline-flex h-4 w-4 shrink-0 items-center justify-center", treeIconToneClass(kind))}>
+      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="6" cy="4.5" r="1.9" />
+        <circle cx="14" cy="6.25" r="1.9" />
+        <circle cx="6" cy="15.5" r="1.9" />
+        <path d="M6 6.4v7.2" />
+        <path d="M8 6.1c1 .7 2.15 1.05 3.35 1.05H12.1" />
+      </svg>
+    </span>
+  );
+}
+
+function IniGearIcon({ kind }: { kind: "file-ini" }) {
+  return (
+    <span aria-hidden="true" data-icon={kind} className={clsx("inline-flex h-4 w-4 shrink-0 items-center justify-center", treeIconToneClass(kind))}>
+      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10 3.15 11 4.55l1.68-.2.82 1.48 1.63.62-.28 1.66 1.35 1.02-1.02 1.35.28 1.66-1.63.62-.82 1.48-1.68-.2-1 1.4-1-1.4-1.68.2-.82-1.48-1.63-.62.28-1.66-1.02-1.35 1.35-1.02-.28-1.66 1.63-.62.82-1.48 1.68.2z" />
+        <circle cx="10" cy="10" r="2.15" />
+      </svg>
+    </span>
+  );
+}
+
+function PythonIcon({ kind }: { kind: "file-python" }) {
+  return (
+    <span aria-hidden="true" data-icon={kind} className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+      <svg viewBox="0 0 20 20" className="h-4 w-4">
+        <path fill="#3776AB" d="M10 2.2H7.45A3.25 3.25 0 0 0 4.2 5.45v2.1h5.15c1 0 1.8.8 1.8 1.8v1.55h1.4a3.25 3.25 0 0 0 3.25-3.25V5.45A3.25 3.25 0 0 0 12.65 2.2z" />
+        <circle cx="8.1" cy="4.75" r=".8" fill="#fff" />
+        <path fill="#FFD43B" d="M10 17.8h2.55a3.25 3.25 0 0 0 3.25-3.25V12.4h-5.15a1.8 1.8 0 0 0-1.8 1.8v1.55H7.45A3.25 3.25 0 0 1 4.2 12.5v2.05a3.25 3.25 0 0 0 3.25 3.25z" />
+        <circle cx="11.9" cy="15.25" r=".8" fill="#fff" />
       </svg>
     </span>
   );
@@ -681,14 +770,24 @@ function TreeNodeIcon({ kind }: { kind: TreeIconKind }) {
           </svg>
         </span>
       );
+    case "file-env":
+      return <FileBadgeIcon kind={kind} label=".env" />;
+    case "file-git":
+      return <GitBranchIcon kind={kind} />;
+    case "file-json":
+      return <FileBadgeIcon kind={kind} label="{…}" />;
+    case "file-ini":
+      return <IniGearIcon kind={kind} />;
+    case "file-html":
+      return <FileBadgeIcon kind={kind} label="</>" />;
     case "file-js-ts":
       return <FileBadgeIcon kind={kind} label="JS" />;
     case "file-python":
-      return <FileBadgeIcon kind={kind} label="PY" />;
+      return <PythonIcon kind={kind} />;
     case "file-c-cpp":
       return <FileBadgeIcon kind={kind} label="C++" />;
     case "file-shell":
-      return <FileBadgeIcon kind={kind} label="SH" />;
+      return <ShellIcon kind={kind} />;
     case "file-csharp":
       return <FileBadgeIcon kind={kind} label="C#" />;
     case "file-code":
@@ -720,15 +819,7 @@ function TreeNodeIcon({ kind }: { kind: TreeIconKind }) {
     case "file-archive":
       return <FileBadgeIcon kind={kind} label="ZIP" />;
     default:
-      return (
-        <span aria-hidden="true" data-icon={kind} className={className}>
-          <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 2.75h5.5l3 3V16A1.25 1.25 0 0 1 13.25 17.25h-7.5A1.25 1.25 0 0 1 4.5 16V4A1.25 1.25 0 0 1 6 2.75Z" />
-            <path d="M8.1 10.5h3.8" />
-            <path d="M8.1 13h3.8" />
-          </svg>
-        </span>
-      );
+      return <FileBadgeIcon kind={kind} label="FI" />;
   }
 }
 
