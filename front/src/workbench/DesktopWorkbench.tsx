@@ -767,6 +767,8 @@ export function DesktopWorkbench({
                 className="desktop-workbench-pane min-h-0 overflow-hidden"
               >
                 <EditorPane
+                  botAlias={botAlias}
+                  client={client}
                   tabs={tabs.tabs}
                   activeTab={tabs.activeTab}
                   activeTabPath={tabs.activeTabPath}

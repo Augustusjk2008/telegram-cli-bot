@@ -73,3 +73,28 @@ def test_registry_rejects_duplicate_plugin_ids(tmp_path: Path) -> None:
     registry = PluginRegistry(plugins_root)
     with pytest.raises(ValueError, match="duplicated"):
         registry.discover()
+
+
+def test_load_plugin_manifest_defaults_view_mode_to_snapshot(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(plugins_root, "vivado-waveform")
+
+    manifest = PluginRegistry(plugins_root).discover()["vivado-waveform"]
+
+    assert manifest.views[0].view_mode == "snapshot"
+    assert manifest.views[0].data_profile == "light"
+
+
+def test_load_plugin_manifest_accepts_session_heavy_view(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(plugins_root, "vivado-waveform")
+    manifest_path = plugins_root / "vivado-waveform" / "plugin.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["views"][0]["viewMode"] = "session"
+    payload["views"][0]["dataProfile"] = "heavy"
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    manifest = PluginRegistry(plugins_root).discover()["vivado-waveform"]
+
+    assert manifest.views[0].view_mode == "session"
+    assert manifest.views[0].data_profile == "heavy"

@@ -191,6 +191,86 @@ test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
   expect(screen.getByText("tb.clk")).toBeInTheDocument();
 });
 
+test("desktop workbench creates a loading plugin tab before the waveform session resolves", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let resolveOpen: ((value: Awaited<ReturnType<typeof client.openPluginView>>) => void) | null = null;
+  vi.spyOn(client, "openPluginView").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveOpen = resolve;
+      }),
+  );
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 waves" }));
+  await user.click(await screen.findByRole("button", { name: "打开 waves/simple_counter.vcd" }));
+
+  expect(await screen.findByRole("tab", { name: "simple_counter.vcd" })).toBeInTheDocument();
+  expect(screen.getByText("正在加载插件视图")).toBeInTheDocument();
+
+  resolveOpen?.({
+    pluginId: "vivado-waveform",
+    viewId: "waveform",
+    title: "simple_counter.vcd",
+    renderer: "waveform",
+    mode: "session",
+    sessionId: "session-1",
+    summary: {
+      path: "waves/simple_counter.vcd",
+      timescale: "1ns",
+      startTime: 0,
+      endTime: 120,
+      display: {
+        defaultZoom: 1,
+        zoomLevels: [1, 2],
+        showTimeAxis: true,
+        busStyle: "cross",
+        labelWidth: 220,
+        minWaveWidth: 840,
+        pixelsPerTime: 18,
+        axisHeight: 42,
+        trackHeight: 64,
+      },
+      signals: [
+        { signalId: "tb.clk", label: "tb.clk", width: 1, kind: "scalar" },
+      ],
+      defaultSignalIds: ["tb.clk"],
+    },
+    initialWindow: {
+      startTime: 0,
+      endTime: 120,
+      tracks: [
+        {
+          signalId: "tb.clk",
+          label: "tb.clk",
+          width: 1,
+          segments: [
+            { start: 0, end: 60, value: "0" },
+            { start: 60, end: 120, value: "1" },
+          ],
+        },
+      ],
+    },
+  });
+
+  expect(await screen.findByTestId("desktop-plugin-view")).toBeInTheDocument();
+  expect(screen.getByText("tb.clk")).toBeInTheDocument();
+});
+
 test("desktop debug pane uses generic unsupported C++ message", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

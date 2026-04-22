@@ -1,15 +1,24 @@
 import { useState } from "react";
+import type { WebBotClient } from "../../services/webBotClient";
 import type {
   WaveformBusStyle,
   WaveformDisplayOptions,
   WaveformTrack,
   WaveformTrackSegment,
-  WaveformViewPayload,
+  WaveformViewSummary,
+  WaveformWindowPayload,
 } from "../../services/types";
+import { WaveformCanvas } from "./waveform/WaveformCanvas";
+import { useWaveformViewport } from "./waveform/useWaveformViewport";
 
 type Props = {
   title: string;
-  payload: WaveformViewPayload;
+  botAlias: string;
+  client: WebBotClient;
+  pluginId: string;
+  sessionId?: string;
+  summary: WaveformViewSummary;
+  initialWindow: WaveformWindowPayload;
 };
 
 type ResolvedWaveformDisplay = {
@@ -78,8 +87,57 @@ function initialZoomIndex(display: ResolvedWaveformDisplay) {
   return closestIndex;
 }
 
-function isBusTrack(track: WaveformTrack) {
-  return track.width > 1 || track.segments.some((segment) => segment.value.length > 1);
+function getRange(startTime: number, endTime: number) {
+  return Math.max(1, endTime - startTime);
+}
+
+function getContentWidth(summary: WaveformViewSummary, zoom: number, display: ResolvedWaveformDisplay) {
+  return Math.max(display.minWaveWidth, getRange(summary.startTime, summary.endTime) * display.pixelsPerTime * zoom);
+}
+
+function timeToX(startTime: number, endTime: number, width: number, time: number) {
+  const clamped = Math.min(endTime, Math.max(startTime, time));
+  return ((clamped - startTime) / getRange(startTime, endTime)) * width;
+}
+
+function clipSegment(segment: WaveformTrackSegment, startTime: number, endTime: number) {
+  const start = Math.max(startTime, segment.start);
+  const end = Math.min(endTime, Math.max(start, segment.end));
+  return end > start ? { start, end } : null;
+}
+
+function niceStep(rawStep: number) {
+  const exponent = Math.floor(Math.log10(Math.max(rawStep, 1)));
+  const base = 10 ** exponent;
+  const fraction = rawStep / base;
+  if (fraction <= 1) {
+    return base;
+  }
+  if (fraction <= 2) {
+    return 2 * base;
+  }
+  if (fraction <= 5) {
+    return 5 * base;
+  }
+  return 10 * base;
+}
+
+function buildTicks(startTime: number, endTime: number, width: number) {
+  const range = getRange(startTime, endTime);
+  const targetCount = Math.max(2, Math.floor(width / 96));
+  const step = niceStep(range / targetCount);
+  const first = Math.ceil(startTime / step) * step;
+  const ticks: number[] = [];
+  for (let time = first; time <= endTime; time += step) {
+    ticks.push(time);
+  }
+  if (!ticks.includes(startTime)) {
+    ticks.unshift(startTime);
+  }
+  if (!ticks.includes(endTime)) {
+    ticks.push(endTime);
+  }
+  return ticks;
 }
 
 function digitalLevel(value: string, display: ResolvedWaveformDisplay) {
@@ -100,75 +158,22 @@ function busLevels(display: ResolvedWaveformDisplay) {
   };
 }
 
-function getRange(payload: WaveformViewPayload) {
-  return Math.max(1, payload.endTime - payload.startTime);
-}
-
-function getContentWidth(payload: WaveformViewPayload, zoom: number, display: ResolvedWaveformDisplay) {
-  return Math.max(display.minWaveWidth, getRange(payload) * display.pixelsPerTime * zoom);
-}
-
-function timeToX(payload: WaveformViewPayload, width: number, time: number) {
-  const clamped = Math.min(payload.endTime, Math.max(payload.startTime, time));
-  return ((clamped - payload.startTime) / getRange(payload)) * width;
-}
-
-function clipSegment(segment: WaveformTrackSegment, payload: WaveformViewPayload) {
-  const start = Math.max(payload.startTime, segment.start);
-  const end = Math.min(payload.endTime, Math.max(start, segment.end));
-  return end > start ? { start, end } : null;
-}
-
-function niceStep(rawStep: number) {
-  const exponent = Math.floor(Math.log10(Math.max(rawStep, 1)));
-  const base = 10 ** exponent;
-  const fraction = rawStep / base;
-  if (fraction <= 1) {
-    return base;
-  }
-  if (fraction <= 2) {
-    return 2 * base;
-  }
-  if (fraction <= 5) {
-    return 5 * base;
-  }
-  return 10 * base;
-}
-
-function buildTicks(payload: WaveformViewPayload, width: number) {
-  const range = getRange(payload);
-  const targetCount = Math.max(2, Math.floor(width / 96));
-  const step = niceStep(range / targetCount);
-  const first = Math.ceil(payload.startTime / step) * step;
-  const ticks: number[] = [];
-  for (let time = first; time <= payload.endTime; time += step) {
-    ticks.push(time);
-  }
-  if (!ticks.includes(payload.startTime)) {
-    ticks.unshift(payload.startTime);
-  }
-  if (!ticks.includes(payload.endTime)) {
-    ticks.push(payload.endTime);
-  }
-  return ticks;
-}
-
 function buildDigitalPath(
   track: WaveformTrack,
-  payload: WaveformViewPayload,
+  startTime: number,
+  endTime: number,
   width: number,
   display: ResolvedWaveformDisplay,
 ) {
   let path = "";
   let previousY: number | null = null;
-
   track.segments.forEach((segment) => {
-    const clipped = clipSegment(segment, payload);
+    const clipped = clipSegment(segment, startTime, endTime);
     if (!clipped) {
       return;
     }
-    const startX = timeToX(payload, width, clipped.start);
-    const endX = timeToX(payload, width, clipped.end);
+    const startX = timeToX(startTime, endTime, width, clipped.start);
+    const endX = timeToX(startTime, endTime, width, clipped.end);
     const y = digitalLevel(segment.value, display);
     if (!path) {
       path = `M ${startX} ${y}`;
@@ -180,22 +185,23 @@ function buildDigitalPath(
     path += ` L ${endX} ${y}`;
     previousY = y;
   });
-
   return path;
 }
 
 function DigitalTrackSvg({
-  payload,
   track,
+  startTime,
+  endTime,
   width,
   display,
 }: {
-  payload: WaveformViewPayload;
   track: WaveformTrack;
+  startTime: number;
+  endTime: number;
   width: number;
   display: ResolvedWaveformDisplay;
 }) {
-  const path = buildDigitalPath(track, payload, width, display);
+  const path = buildDigitalPath(track, startTime, endTime, width, display);
   return (
     <svg
       width={width}
@@ -203,36 +209,36 @@ function DigitalTrackSvg({
       viewBox={`0 0 ${width} ${display.trackHeight}`}
       className="block bg-[var(--surface-strong)] text-[var(--text)]"
     >
-      {path ? (
-        <path d={path} fill="none" stroke="currentColor" strokeLinecap="square" strokeWidth="2" />
-      ) : null}
+      {path ? <path d={path} fill="none" stroke="currentColor" strokeLinecap="square" strokeWidth="2" /> : null}
     </svg>
   );
 }
 
 function BusTrackSvg({
-  payload,
   track,
+  startTime,
+  endTime,
   width,
   display,
 }: {
-  payload: WaveformViewPayload;
   track: WaveformTrack;
+  startTime: number;
+  endTime: number;
   width: number;
   display: ResolvedWaveformDisplay;
 }) {
   const levels = busLevels(display);
   const visibleSegments = track.segments
     .map((segment, index) => {
-      const clipped = clipSegment(segment, payload);
+      const clipped = clipSegment(segment, startTime, endTime);
       if (!clipped) {
         return null;
       }
       return {
         index,
         value: segment.value,
-        startX: timeToX(payload, width, clipped.start),
-        endX: timeToX(payload, width, clipped.end),
+        startX: timeToX(startTime, endTime, width, clipped.start),
+        endX: timeToX(startTime, endTime, width, clipped.end),
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -249,44 +255,43 @@ function BusTrackSvg({
         const skew = Math.min(10, Math.max(4, segmentWidth / 5));
         const lineStart = segment.startX + (segment.index === 0 ? 0 : skew);
         const lineEnd = Math.max(lineStart, segment.endX - skew);
-        const textX = segment.startX + segmentWidth / 2;
         return (
           <g key={`${track.signalId}-${segment.index}`}>
             <line x1={lineStart} y1={levels.top} x2={lineEnd} y2={levels.top} stroke="currentColor" strokeWidth="2" />
             <line x1={lineStart} y1={levels.bottom} x2={lineEnd} y2={levels.bottom} stroke="currentColor" strokeWidth="2" />
-            {segment.index === 0 ? (
-              <line x1={segment.startX} y1={levels.top} x2={segment.startX} y2={levels.bottom} stroke="currentColor" strokeOpacity="0.45" />
-            ) : null}
-            <text x={textX} y={levels.middle + 4} textAnchor="middle" fontSize="11" className="fill-current">
+            <text x={segment.startX + segmentWidth / 2} y={levels.middle + 4} textAnchor="middle" fontSize="11" className="fill-current">
               {segment.value}
             </text>
           </g>
         );
       })}
-      {display.busStyle === "cross" ? visibleSegments.slice(1).map((segment) => {
-        const x = segment.startX;
-        const skew = 10;
-        return (
-          <g key={`${track.signalId}-cross-${segment.index}`} data-testid="waveform-bus-transition">
-            <line x1={x - skew} y1={levels.top} x2={x + skew} y2={levels.bottom} stroke="currentColor" strokeWidth="2" />
-            <line x1={x - skew} y1={levels.bottom} x2={x + skew} y2={levels.top} stroke="currentColor" strokeWidth="2" />
-          </g>
-        );
-      }) : null}
+      {display.busStyle === "cross"
+        ? visibleSegments.slice(1).map((segment) => {
+            const x = segment.startX;
+            return (
+              <g key={`${track.signalId}-cross-${segment.index}`} data-testid="waveform-bus-transition">
+                <line x1={x - 10} y1={levels.top} x2={x + 10} y2={levels.bottom} stroke="currentColor" strokeWidth="2" />
+                <line x1={x - 10} y1={levels.bottom} x2={x + 10} y2={levels.top} stroke="currentColor" strokeWidth="2" />
+              </g>
+            );
+          })
+        : null}
     </svg>
   );
 }
 
 function TimeAxis({
-  payload,
+  startTime,
+  endTime,
   width,
   display,
 }: {
-  payload: WaveformViewPayload;
+  startTime: number;
+  endTime: number;
   width: number;
   display: ResolvedWaveformDisplay;
 }) {
-  const ticks = buildTicks(payload, width);
+  const ticks = buildTicks(startTime, endTime, width);
   const axisY = display.axisHeight * 0.58;
   return (
     <svg
@@ -298,11 +303,11 @@ function TimeAxis({
     >
       <line x1="0" y1={axisY} x2={width} y2={axisY} stroke="currentColor" strokeOpacity="0.6" />
       {ticks.map((time) => {
-        const x = timeToX(payload, width, time);
+        const x = timeToX(startTime, endTime, width, time);
         return (
           <g key={time}>
             <line x1={x} y1={axisY - 6} x2={x} y2={axisY + 6} stroke="currentColor" strokeOpacity="0.55" />
-            <text x={x} y={Math.max(12, axisY - 12)} textAnchor={time === payload.startTime ? "start" : time === payload.endTime ? "end" : "middle"} fontSize="11" className="fill-current">
+            <text x={x} y={Math.max(12, axisY - 12)} textAnchor={time === startTime ? "start" : time === endTime ? "end" : "middle"} fontSize="11" className="fill-current">
               {time}
             </text>
           </g>
@@ -313,16 +318,19 @@ function TimeAxis({
 }
 
 function WaveformTrackRow({
-  payload,
   track,
+  startTime,
+  endTime,
   width,
   display,
 }: {
-  payload: WaveformViewPayload;
   track: WaveformTrack;
+  startTime: number;
+  endTime: number;
   width: number;
   display: ResolvedWaveformDisplay;
 }) {
+  const useCanvas = track.width > 1 && track.segments.length > 400;
   return (
     <>
       <div className="sticky left-0 z-10 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
@@ -330,22 +338,59 @@ function WaveformTrackRow({
         <div className="mt-1 text-xs text-[var(--muted)]">{track.width} bit</div>
       </div>
       <div className="border-b border-[var(--border)]">
-        {isBusTrack(track) ? (
-          <BusTrackSvg payload={payload} track={track} width={width} display={display} />
+        {useCanvas ? (
+          <WaveformCanvas
+            track={track}
+            width={width}
+            height={display.trackHeight}
+            startTime={startTime}
+            endTime={endTime}
+          />
+        ) : track.width > 1 ? (
+          <BusTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} display={display} />
         ) : (
-          <DigitalTrackSvg payload={payload} track={track} width={width} display={display} />
+          <DigitalTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} display={display} />
         )}
       </div>
     </>
   );
 }
 
-export function WaveformView({ title, payload }: Props) {
-  const display = resolveDisplay(payload.display);
+export function WaveformView({
+  title,
+  botAlias,
+  client,
+  pluginId,
+  sessionId,
+  summary,
+  initialWindow,
+}: Props) {
+  const display = resolveDisplay(summary.display);
   const [zoomIndex, setZoomIndex] = useState(() => initialZoomIndex(display));
   const safeZoomIndex = Math.min(display.zoomLevels.length - 1, Math.max(0, zoomIndex));
   const zoom = display.zoomLevels[safeZoomIndex] || display.defaultZoom;
-  const width = getContentWidth(payload, zoom, display);
+  const width = getContentWidth(summary, zoom, display);
+  const {
+    viewportRef,
+    windowData,
+    visibleTracks,
+    firstTrackIndex,
+    rowHeight,
+    totalTrackCount,
+    setScrollTop,
+  } = useWaveformViewport({
+    botAlias,
+    client,
+    pluginId,
+    sessionId,
+    summary,
+    initialWindow,
+    display,
+    pixelWidth: width,
+  });
+
+  const beforeSpacerHeight = firstTrackIndex * rowHeight;
+  const afterSpacerHeight = Math.max(0, totalTrackCount - firstTrackIndex - visibleTracks.length) * rowHeight;
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
@@ -354,13 +399,13 @@ export function WaveformView({ title, payload }: Props) {
           <div>
             <h2 className="text-base font-semibold text-[var(--text)]">{title}</h2>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              <span>{payload.path}</span>
+              <span>{summary.path}</span>
               <span> · </span>
-              <span>{payload.timescale}</span>
+              <span>{summary.timescale}</span>
               <span> · </span>
-              <span>{payload.startTime}</span>
+              <span>{summary.startTime}</span>
               <span> - </span>
-              <span>{payload.endTime}</span>
+              <span>{summary.endTime}</span>
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs text-[var(--muted)]" aria-label="横轴缩放">
@@ -386,27 +431,49 @@ export function WaveformView({ title, payload }: Props) {
           </div>
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto" data-testid="waveform-scroll">
-        {payload.tracks.length > 0 ? (
-          <div
-            className="grid min-w-max"
-            style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }}
-            data-testid="waveform-grid"
-          >
-            {display.showTimeAxis ? (
-              <>
-                <div className="sticky left-0 z-20 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-xs font-medium text-[var(--muted)]">
-                  时间轴
-                </div>
-                <div className="border-b border-[var(--border)]">
-                  <TimeAxis payload={payload} width={width} display={display} />
-                </div>
-              </>
-            ) : null}
-            {payload.tracks.map((track) => (
-              <WaveformTrackRow key={track.signalId} payload={payload} track={track} width={width} display={display} />
-            ))}
-          </div>
+      {display.showTimeAxis ? (
+        <div
+          className="grid min-w-max border-b border-[var(--border)]"
+          style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }}
+        >
+          <div className="sticky left-0 z-20 bg-[var(--surface)] px-4 py-3 text-xs font-medium text-[var(--muted)]">时间轴</div>
+          <TimeAxis
+            startTime={windowData.startTime}
+            endTime={windowData.endTime}
+            width={width}
+            display={display}
+          />
+        </div>
+      ) : null}
+      <div
+        ref={viewportRef}
+        className="min-h-0 flex-1 overflow-auto"
+        data-testid="waveform-scroll"
+        onScroll={(event) => {
+          setScrollTop(event.currentTarget.scrollTop);
+        }}
+      >
+        {summary.signals.length > 0 ? (
+          <>
+            <div style={{ height: beforeSpacerHeight }} />
+            <div
+              className="grid min-w-max"
+              style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }}
+              data-testid="waveform-grid"
+            >
+              {visibleTracks.map((track) => (
+                <WaveformTrackRow
+                  key={track.signalId}
+                  track={track}
+                  startTime={windowData.startTime}
+                  endTime={windowData.endTime}
+                  width={width}
+                  display={display}
+                />
+              ))}
+            </div>
+            <div style={{ height: afterSpacerHeight }} />
+          </>
         ) : (
           <div className="p-4 text-sm text-[var(--muted)]">无波形数据</div>
         )}

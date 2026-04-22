@@ -25,6 +25,13 @@ def _normalize_extension(value: Any) -> str:
     return text if text.startswith(".") else f".{text}"
 
 
+def _normalize_choice(value: Any, label: str, allowed: set[str], default: str) -> str:
+    text = str(value or "").strip() or default
+    if text not in allowed:
+        raise ValueError(f"{label} 仅支持: {', '.join(sorted(allowed))}")
+    return text
+
+
 def load_plugin_manifest(path: Path) -> PluginManifest:
     raw = _expect_mapping(json.loads(path.read_text(encoding="utf-8")), str(path))
     if int(raw.get("schemaVersion") or 0) != 1:
@@ -53,6 +60,8 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
                 id=view_id,
                 title=str(current.get("title") or "").strip(),
                 renderer=str(current.get("renderer") or "").strip(),
+                view_mode=_normalize_choice(current.get("viewMode"), "view.viewMode", {"snapshot", "session"}, "snapshot"),
+                data_profile=_normalize_choice(current.get("dataProfile"), "view.dataProfile", {"light", "heavy"}, "light"),
             )
         )
 

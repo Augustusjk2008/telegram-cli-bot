@@ -114,6 +114,35 @@ class PluginRuntime:
             },
         )
 
+    async def open_view(self, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._call(
+            manifest,
+            "plugin.open_view",
+            {
+                "viewId": view_id,
+                "input": input_payload,
+            },
+        )
+
+    async def get_view_window(self, manifest: PluginManifest, session_id: str, request_payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._call(
+            manifest,
+            "plugin.get_view_window",
+            {
+                "sessionId": session_id,
+                **request_payload,
+            },
+        )
+
+    async def dispose_view(self, manifest: PluginManifest, session_id: str) -> dict[str, Any]:
+        return await self._call(
+            manifest,
+            "plugin.dispose_view",
+            {
+                "sessionId": session_id,
+            },
+        )
+
     async def _stop_process(self, plugin_id: str, wrapped: _PluginProcess) -> None:
         process = wrapped.process
         if process.returncode is None:

@@ -86,6 +86,18 @@ export function useEditorTabs({ botAlias, client }: Props) {
     closedTabsRef.current = closedTabs;
   }, [closedTabs]);
 
+  function disposePluginSession(tab?: EditorTab | null) {
+    const pluginView = tab?.pluginView;
+    if (!pluginView || pluginView.mode !== "session") {
+      return;
+    }
+    void client.disposePluginViewSession(botAlias, pluginView.pluginId, pluginView.sessionId).catch(() => {});
+  }
+
+  useEffect(() => () => {
+    tabsRef.current.forEach((tab) => disposePluginSession(tab));
+  }, [botAlias, client]);
+
   useEffect(() => {
     setTabs([]);
     setActiveTabPath("");
@@ -219,26 +231,59 @@ export function useEditorTabs({ botAlias, client }: Props) {
   }) {
     const sourcePath = typeof target.input.path === "string" ? target.input.path : undefined;
     const tabPath = `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
-    const view = await client.renderPluginView(botAlias, target.pluginId, target.viewId, target.input);
-    const nextTab = createTab(tabPath, "", undefined, {
-      basename: target.title,
-      kind: "plugin-view",
-      pluginView: view,
-      sourcePath,
-      readOnly: true,
-      statusText: "插件视图",
-      contentPersistence: "none",
-    });
-    setTabs((current) => {
-      const existingIndex = current.findIndex((item) => item.path === tabPath);
-      if (existingIndex >= 0) {
-        const next = current.slice();
-        next[existingIndex] = nextTab;
-        return next;
-      }
-      return [...current, nextTab];
-    });
+    const existing = tabsRef.current.find((item) => item.path === tabPath);
+    if (!existing) {
+      setTabs((current) => [
+        ...current,
+        createTab(tabPath, "", undefined, {
+          basename: target.title,
+          kind: "plugin-view",
+          sourcePath,
+          readOnly: true,
+          statusText: "插件视图",
+          loading: true,
+          contentPersistence: "none",
+        }),
+      ]);
+    }
     setActiveTabPath(tabPath);
+
+    try {
+      const view = await client.openPluginView(botAlias, target.pluginId, target.viewId, target.input);
+      const nextTab = createTab(tabPath, "", undefined, {
+        basename: target.title,
+        kind: "plugin-view",
+        pluginView: view,
+        sourcePath,
+        readOnly: true,
+        statusText: "插件视图",
+        loading: false,
+        contentPersistence: "none",
+      });
+      setTabs((current) => {
+        const existingIndex = current.findIndex((item) => item.path === tabPath);
+        if (existingIndex >= 0) {
+          const next = current.slice();
+          next[existingIndex] = nextTab;
+          return next;
+        }
+        return [...current, nextTab];
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "打开插件视图失败";
+      setTabs((current) => current.map((item) => item.path === tabPath
+        ? {
+            ...item,
+            basename: target.title,
+            kind: "plugin-view",
+            sourcePath,
+            readOnly: true,
+            loading: false,
+            error: message,
+            statusText: "插件视图",
+          }
+        : item));
+    }
   }
 
   function openReadOnlyTab(input: {
@@ -335,6 +380,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
   }
 
   function closePath(path: string) {
+    disposePluginSession(tabsRef.current.find((item) => item.path === path));
     setTabs((current) => {
       const index = current.findIndex((item) => item.path === path);
       if (index < 0) {
@@ -366,6 +412,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
   function closeOtherTabs(path: string) {
     const nextClosed = tabsRef.current.filter((item) => item.path !== path);
     nextClosed.forEach((item) => pushClosedTab(item.path));
+    nextClosed.forEach((item) => disposePluginSession(item));
     setTabs((current) => current.filter((item) => item.path === path));
     setActiveTabPath(path);
   }
@@ -375,7 +422,10 @@ export function useEditorTabs({ botAlias, client }: Props) {
     if (index < 0) {
       return;
     }
-    tabsRef.current.slice(index + 1).forEach((item) => pushClosedTab(item.path));
+    tabsRef.current.slice(index + 1).forEach((item) => {
+      pushClosedTab(item.path);
+      disposePluginSession(item);
+    });
     setTabs((current) => current.slice(0, index + 1));
   }
 

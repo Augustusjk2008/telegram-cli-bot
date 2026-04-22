@@ -193,13 +193,21 @@ export type FileWriteResult = {
 };
 
 export type PluginViewRenderer = "waveform";
+export type PluginViewMode = "snapshot" | "session";
+export type PluginViewDataProfile = "light" | "heavy";
 
 export type PluginSummary = {
   id: string;
   name: string;
   version: string;
   description: string;
-  views: Array<{ id: string; title: string; renderer: PluginViewRenderer }>;
+  views: Array<{
+    id: string;
+    title: string;
+    renderer: PluginViewRenderer;
+    viewMode?: PluginViewMode;
+    dataProfile?: PluginViewDataProfile;
+  }>;
   fileHandlers: Array<{ id: string; label: string; extensions: string[]; viewId: string }>;
 };
 
@@ -226,6 +234,15 @@ export type WaveformTrack = {
   segments: WaveformTrackSegment[];
 };
 
+export type WaveformSignalKind = "scalar" | "bus";
+
+export type WaveformSignalSummary = {
+  signalId: string;
+  label: string;
+  width: number;
+  kind: WaveformSignalKind;
+};
+
 export type WaveformBusStyle = "cross" | "box";
 
 export type WaveformDisplayOptions = {
@@ -249,12 +266,49 @@ export type WaveformViewPayload = {
   display?: WaveformDisplayOptions;
 };
 
-export type PluginRenderResult = {
+export type WaveformViewSummary = {
+  path: string;
+  timescale: string;
+  startTime: number;
+  endTime: number;
+  display?: WaveformDisplayOptions;
+  signals: WaveformSignalSummary[];
+  defaultSignalIds: string[];
+};
+
+export type WaveformWindowPayload = {
+  startTime: number;
+  endTime: number;
+  tracks: WaveformTrack[];
+};
+
+export type PluginSnapshotRenderResult = {
   pluginId: string;
   viewId: string;
   title: string;
   renderer: PluginViewRenderer;
+  mode: "snapshot";
   payload: WaveformViewPayload;
+};
+
+export type PluginSessionRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: PluginViewRenderer;
+  mode: "session";
+  sessionId: string;
+  summary: WaveformViewSummary;
+  initialWindow: WaveformWindowPayload;
+};
+
+export type PluginRenderResult = PluginSnapshotRenderResult | PluginSessionRenderResult;
+
+export type PluginViewWindowRequest = {
+  startTime: number;
+  endTime: number;
+  signalIds: string[];
+  pixelWidth: number;
 };
 
 export type FileCreateResult = {

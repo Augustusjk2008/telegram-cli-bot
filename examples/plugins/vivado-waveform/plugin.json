@@ -13,7 +13,9 @@
     {
       "id": "waveform",
       "title": "波形预览",
-      "renderer": "waveform"
+      "renderer": "waveform",
+      "viewMode": "session",
+      "dataProfile": "heavy"
     }
   ],
   "fileHandlers": [

@@ -29,6 +29,7 @@ import type {
   GitOverview,
   GitTreeStatus,
   FileRenameResult,
+  PluginViewWindowRequest,
   PluginRenderResult,
   PluginSummary,
   FileWriteResult,
@@ -45,6 +46,9 @@ import type {
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  WaveformTrack,
+  WaveformViewSummary,
+  WaveformWindowPayload,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
@@ -94,6 +98,98 @@ function resolveMemberCapabilities(username: string) {
     : [...MEMBER_CAPABILITIES];
 }
 
+function buildMockWaveformTracks(): WaveformTrack[] {
+  return [
+    {
+      signalId: "tb.clk",
+      label: "tb.clk",
+      width: 1,
+      segments: [
+        { start: 0, end: 5, value: "0" },
+        { start: 5, end: 10, value: "1" },
+        { start: 10, end: 15, value: "0" },
+        { start: 15, end: 20, value: "1" },
+        { start: 20, end: 25, value: "0" },
+        { start: 25, end: 30, value: "1" },
+        { start: 30, end: 35, value: "0" },
+        { start: 35, end: 40, value: "1" },
+        { start: 40, end: 45, value: "0" },
+        { start: 45, end: 50, value: "1" },
+        { start: 50, end: 55, value: "0" },
+        { start: 55, end: 60, value: "1" },
+        { start: 60, end: 65, value: "0" },
+        { start: 65, end: 70, value: "1" },
+        { start: 70, end: 75, value: "0" },
+        { start: 75, end: 80, value: "1" },
+        { start: 80, end: 85, value: "0" },
+        { start: 85, end: 90, value: "1" },
+        { start: 90, end: 95, value: "0" },
+        { start: 95, end: 100, value: "1" },
+        { start: 100, end: 105, value: "0" },
+        { start: 105, end: 110, value: "1" },
+        { start: 110, end: 115, value: "0" },
+        { start: 115, end: 120, value: "1" },
+      ],
+    },
+    {
+      signalId: "tb.rst_n",
+      label: "tb.rst_n",
+      width: 1,
+      segments: [
+        { start: 0, end: 10, value: "0" },
+        { start: 10, end: 120, value: "1" },
+      ],
+    },
+    {
+      signalId: "tb.counter",
+      label: "tb.counter",
+      width: 4,
+      segments: [
+        { start: 0, end: 15, value: "0000" },
+        { start: 15, end: 25, value: "0001" },
+        { start: 25, end: 35, value: "0010" },
+        { start: 35, end: 45, value: "0011" },
+        { start: 45, end: 55, value: "0100" },
+        { start: 55, end: 65, value: "0101" },
+        { start: 65, end: 75, value: "0110" },
+        { start: 75, end: 85, value: "0111" },
+        { start: 85, end: 95, value: "1000" },
+        { start: 95, end: 105, value: "1001" },
+        { start: 105, end: 115, value: "1010" },
+        { start: 115, end: 120, value: "1011" },
+      ],
+    },
+  ];
+}
+
+function buildMockWaveformSummary(sourcePath: string): WaveformViewSummary {
+  const tracks = buildMockWaveformTracks();
+  return {
+    path: sourcePath,
+    timescale: "1ns",
+    startTime: 0,
+    endTime: 120,
+    display: {
+      defaultZoom: 1,
+      zoomLevels: [0.5, 0.75, 1, 1.5, 2, 3, 4],
+      showTimeAxis: true,
+      busStyle: "cross",
+      labelWidth: 220,
+      minWaveWidth: 840,
+      pixelsPerTime: 18,
+      axisHeight: 42,
+      trackHeight: 64,
+    },
+    signals: tracks.map((track) => ({
+      signalId: track.signalId,
+      label: track.label,
+      width: track.width,
+      kind: track.width > 1 ? "bus" : "scalar",
+    })),
+    defaultSignalIds: tracks.map((track) => track.signalId),
+  };
+}
+
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -108,6 +204,8 @@ export class MockWebBotClient implements WebBotClient {
     ]),
   );
   private currentPaths = new Map<string, string>();
+  private pluginSessions = new Map<string, { pluginId: string; summary: WaveformViewSummary; tracks: WaveformTrack[] }>();
+  private pluginSessionCounter = 0;
   private workdirOverrides = new Map<string, string>();
   private gitOverviews = new Map<string, GitOverview>([
     [
@@ -650,7 +748,7 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async renderPluginView(
+  async openPluginView(
     _botAlias: string,
     pluginId: string,
     viewId: string,
@@ -658,90 +756,66 @@ export class MockWebBotClient implements WebBotClient {
   ): Promise<PluginRenderResult> {
     const sourcePath = typeof input.path === "string" ? input.path : "waves/simple_counter.vcd";
     const title = sourcePath.split(/[\\/]/).pop() || "simple_counter.vcd";
+    const summary = buildMockWaveformSummary(sourcePath);
+    const tracks = buildMockWaveformTracks();
+    this.pluginSessionCounter += 1;
+    const sessionId = `session-${this.pluginSessionCounter}`;
+    this.pluginSessions.set(sessionId, { pluginId, summary, tracks });
     return {
       pluginId,
       viewId,
       title,
       renderer: "waveform",
-      payload: {
-        path: sourcePath,
-        timescale: "1ns",
-        startTime: 0,
-        endTime: 120,
-        display: {
-          defaultZoom: 1,
-          zoomLevels: [0.5, 0.75, 1, 1.5, 2, 3, 4],
-          showTimeAxis: true,
-          busStyle: "cross",
-          labelWidth: 220,
-          minWaveWidth: 840,
-          pixelsPerTime: 18,
-          axisHeight: 42,
-          trackHeight: 64,
-        },
-        tracks: [
-          {
-            signalId: "clk",
-            label: "tb.clk",
-            width: 1,
-            segments: [
-              { start: 0, end: 5, value: "0" },
-              { start: 5, end: 10, value: "1" },
-              { start: 10, end: 15, value: "0" },
-              { start: 15, end: 20, value: "1" },
-              { start: 20, end: 25, value: "0" },
-              { start: 25, end: 30, value: "1" },
-              { start: 30, end: 35, value: "0" },
-              { start: 35, end: 40, value: "1" },
-              { start: 40, end: 45, value: "0" },
-              { start: 45, end: 50, value: "1" },
-              { start: 50, end: 55, value: "0" },
-              { start: 55, end: 60, value: "1" },
-              { start: 60, end: 65, value: "0" },
-              { start: 65, end: 70, value: "1" },
-              { start: 70, end: 75, value: "0" },
-              { start: 75, end: 80, value: "1" },
-              { start: 80, end: 85, value: "0" },
-              { start: 85, end: 90, value: "1" },
-              { start: 90, end: 95, value: "0" },
-              { start: 95, end: 100, value: "1" },
-              { start: 100, end: 105, value: "0" },
-              { start: 105, end: 110, value: "1" },
-              { start: 110, end: 115, value: "0" },
-              { start: 115, end: 120, value: "1" },
-            ],
-          },
-          {
-            signalId: "rst_n",
-            label: "tb.rst_n",
-            width: 1,
-            segments: [
-              { start: 0, end: 10, value: "0" },
-              { start: 10, end: 120, value: "1" },
-            ],
-          },
-          {
-            signalId: "counter",
-            label: "tb.counter",
-            width: 4,
-            segments: [
-              { start: 0, end: 15, value: "0000" },
-              { start: 15, end: 25, value: "0001" },
-              { start: 25, end: 35, value: "0010" },
-              { start: 35, end: 45, value: "0011" },
-              { start: 45, end: 55, value: "0100" },
-              { start: 55, end: 65, value: "0101" },
-              { start: 65, end: 75, value: "0110" },
-              { start: 75, end: 85, value: "0111" },
-              { start: 85, end: 95, value: "1000" },
-              { start: 95, end: 105, value: "1001" },
-              { start: 105, end: 115, value: "1010" },
-              { start: 115, end: 120, value: "1011" },
-            ],
-          },
-        ],
+      mode: "session",
+      sessionId,
+      summary,
+      initialWindow: {
+        startTime: summary.startTime,
+        endTime: summary.endTime,
+        tracks,
       },
     };
+  }
+
+  private ensurePluginSession(sessionId: string, pluginId: string) {
+    const existing = this.pluginSessions.get(sessionId);
+    if (existing) {
+      return existing.pluginId === pluginId ? existing : null;
+    }
+    if (!/^session-\d+$/.test(sessionId)) {
+      return null;
+    }
+    const summary = buildMockWaveformSummary("waves/simple_counter.vcd");
+    const session = { pluginId, summary, tracks: buildMockWaveformTracks() };
+    this.pluginSessions.set(sessionId, session);
+    return session;
+  }
+
+  async queryPluginViewWindow(
+    _botAlias: string,
+    pluginId: string,
+    sessionId: string,
+    request: PluginViewWindowRequest,
+    signal?: AbortSignal,
+  ): Promise<WaveformWindowPayload> {
+    signal?.throwIfAborted?.();
+    const session = this.ensurePluginSession(sessionId, pluginId);
+    if (!session) {
+      throw new Error("插件会话不存在");
+    }
+    return {
+      startTime: request.startTime,
+      endTime: request.endTime,
+      tracks: session.tracks.filter((track) => request.signalIds.includes(track.signalId)),
+    };
+  }
+
+  async disposePluginViewSession(_botAlias: string, pluginId: string, sessionId: string): Promise<void> {
+    const session = this.ensurePluginSession(sessionId, pluginId);
+    if (!session) {
+      return;
+    }
+    this.pluginSessions.delete(sessionId);
   }
 
   async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {

@@ -31,6 +31,7 @@ import type {
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   PublicHostInfo,
+  PluginViewWindowRequest,
   PluginRenderResult,
   PluginSummary,
   RegisterCodeCreateResult,
@@ -44,6 +45,7 @@ import type {
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  WaveformWindowPayload,
 } from "./types";
 
 export interface WebBotClient {
@@ -79,12 +81,20 @@ export interface WebBotClient {
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
-  renderPluginView(
+  openPluginView(
     botAlias: string,
     pluginId: string,
     viewId: string,
     input: Record<string, unknown>,
   ): Promise<PluginRenderResult>;
+  queryPluginViewWindow(
+    botAlias: string,
+    pluginId: string,
+    sessionId: string,
+    request: PluginViewWindowRequest,
+    signal?: AbortSignal,
+  ): Promise<WaveformWindowPayload>;
+  disposePluginViewSession(botAlias: string, pluginId: string, sessionId: string): Promise<void>;
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;

@@ -3,8 +3,25 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
-from vcd_parser import parse_vcd
+from session_store import WaveformSessionStore
+from vcd_parser import build_waveform_summary, parse_vcd, query_waveform_window
+
+INITIAL_PIXEL_WIDTH = 1200
+INITIAL_WINDOW_SPAN = 120
+SESSION_STORE = WaveformSessionStore()
+
+
+def _coerce_time(value: object) -> int | float:
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    if "." in text:
+        return float(text)
+    return int(text)
 
 
 def render_view(input_payload: dict[str, object]) -> dict[str, object]:
@@ -18,6 +35,50 @@ def render_view(input_payload: dict[str, object]) -> dict[str, object]:
             **parsed,
         },
     }
+
+
+def open_view(input_payload: dict[str, object]) -> dict[str, object]:
+    path = Path(str(input_payload["path"])).resolve()
+    session_id, index = SESSION_STORE.open(path)
+    summary = build_waveform_summary(index, path=path)
+    initial_end = min(float(summary["endTime"]), float(summary["startTime"]) + INITIAL_WINDOW_SPAN)
+    initial_window = query_waveform_window(
+        index,
+        start_time=summary["startTime"],
+        end_time=_coerce_time(initial_end),
+        signal_ids=list(summary["defaultSignalIds"]),
+        pixel_width=INITIAL_PIXEL_WIDTH,
+    )
+    return {
+        "renderer": "waveform",
+        "title": path.name,
+        "mode": "session",
+        "sessionId": session_id,
+        "summary": summary,
+        "initialWindow": initial_window,
+    }
+
+
+def get_view_window(params: dict[str, object]) -> dict[str, object]:
+    session_id = str(params.get("sessionId") or "")
+    if not session_id:
+        raise ValueError("sessionId 不能为空")
+    index = SESSION_STORE.get_index(session_id)
+    signal_ids = [str(item) for item in list(params.get("signalIds") or [])]
+    return query_waveform_window(
+        index,
+        start_time=_coerce_time(params.get("startTime")),
+        end_time=_coerce_time(params.get("endTime")),
+        signal_ids=signal_ids,
+        pixel_width=int(params.get("pixelWidth") or INITIAL_PIXEL_WIDTH),
+    )
+
+
+def dispose_view(params: dict[str, object]) -> dict[str, object]:
+    session_id = str(params.get("sessionId") or "")
+    if not session_id:
+        raise ValueError("sessionId 不能为空")
+    return {"disposed": SESSION_STORE.dispose(session_id)}
 
 
 def write_response(request_id: object, *, result: dict[str, object] | None = None, error: str | None = None) -> None:
@@ -42,6 +103,13 @@ for raw_line in sys.stdin:
         elif method == "plugin.render_view":
             view_input = dict(params.get("input") or {})
             write_response(request_id, result=render_view(view_input))
+        elif method == "plugin.open_view":
+            view_input = dict(params.get("input") or {})
+            write_response(request_id, result=open_view(view_input))
+        elif method == "plugin.get_view_window":
+            write_response(request_id, result=get_view_window(dict(params)))
+        elif method == "plugin.dispose_view":
+            write_response(request_id, result=dispose_view(dict(params)))
         elif method == "plugin.shutdown":
             write_response(request_id, result={"ok": True})
         else:

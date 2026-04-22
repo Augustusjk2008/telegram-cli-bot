@@ -82,7 +82,9 @@ from .api_service import (
     create_directory,
     create_text_file,
     delete_path,
+    dispose_plugin_view,
     execute_shell_command,
+    get_plugin_view_window,
     get_directory_listing,
     get_file_metadata,
     get_history,
@@ -98,6 +100,7 @@ from .api_service import (
     list_assistant_cron_jobs,
     list_assistant_cron_runs,
     list_plugins,
+    open_plugin_view,
     list_system_scripts,
     read_file_content,
     rename_path,
@@ -168,7 +171,9 @@ _WEB_AUTH_STORE = WebAuthStore(
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
-    return web.json_response(data, status=status, dumps=lambda obj: json.dumps(obj, ensure_ascii=False))
+    response = web.json_response(data, status=status, dumps=lambda obj: json.dumps(obj, ensure_ascii=False))
+    response.enable_compression()
+    return response
 
 
 def _serialize_file_version_fields(data: dict[str, Any]) -> dict[str, Any]:
@@ -1426,6 +1431,34 @@ class WebApiServer:
         data = await render_plugin_view(self.manager, alias, auth, plugin_id, view_id, input_payload)
         return _json({"ok": True, "data": data})
 
+    async def post_open_plugin_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        view_id = request.match_info.get("view_id", "").strip()
+        body = await self._parse_json(request)
+        input_payload = dict(body.get("input") or {})
+        data = await open_plugin_view(self.manager, alias, auth, plugin_id, view_id, input_payload)
+        return _json({"ok": True, "data": data})
+
+    async def post_plugin_view_window(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        session_id = request.match_info.get("session_id", "").strip()
+        body = await self._parse_json(request)
+        request_payload = dict(body or {})
+        data = await get_plugin_view_window(self.manager, alias, auth, plugin_id, session_id, request_payload)
+        return _json({"ok": True, "data": data})
+
+    async def delete_plugin_view_session(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        session_id = request.match_info.get("session_id", "").strip()
+        data = await dispose_plugin_view(self.manager, alias, auth, plugin_id, session_id)
+        return _json({"ok": True, "data": data})
+
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
@@ -1822,6 +1855,9 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
         app.router.add_post("/api/bots/{alias}/plugins/resolve-file-target", self.resolve_file_plugin_target)
         app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/render", self.post_render_plugin_view)
+        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/open", self.post_open_plugin_view)
+        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}/window", self.post_plugin_view_window)
+        app.router.add_delete("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}", self.delete_plugin_view_session)
         app.router.add_get("/api/bots/{alias}/scripts", self.bot_scripts)
         app.router.add_post("/api/bots/{alias}/scripts/run/stream", self.bot_run_script_stream)
         app.router.add_post("/api/bots/{alias}/scripts/run", self.bot_run_script)

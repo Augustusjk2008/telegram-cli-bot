@@ -42,6 +42,7 @@ import type {
   FileReadResult,
   FileRenameResult,
   FileWriteResult,
+  PluginViewWindowRequest,
   PluginRenderResult,
   PluginSummary,
   PublicHostInfo,
@@ -58,6 +59,7 @@ import type {
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  WaveformWindowPayload,
   WorkdirChangeConflict,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
@@ -1481,20 +1483,49 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async renderPluginView(
+  async openPluginView(
     botAlias: string,
     pluginId: string,
     viewId: string,
     input: Record<string, unknown>,
   ): Promise<PluginRenderResult> {
     return this.requestJson<PluginRenderResult>(
-      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/views/${encodeURIComponent(viewId)}/render`,
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/views/${encodeURIComponent(viewId)}/open`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ input }),
+      },
+    );
+  }
+
+  async queryPluginViewWindow(
+    botAlias: string,
+    pluginId: string,
+    sessionId: string,
+    request: PluginViewWindowRequest,
+    signal?: AbortSignal,
+  ): Promise<WaveformWindowPayload> {
+    return this.requestJson<WaveformWindowPayload>(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/sessions/${encodeURIComponent(sessionId)}/window`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+        signal,
+      },
+    );
+  }
+
+  async disposePluginViewSession(botAlias: string, pluginId: string, sessionId: string): Promise<void> {
+    await this.requestJson<{ disposed: boolean }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "DELETE",
       },
     );
   }

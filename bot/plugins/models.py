@@ -16,6 +16,8 @@ class PluginViewSpec:
     id: str
     title: str
     renderer: str
+    view_mode: str = "snapshot"
+    data_profile: str = "light"
 
 
 @dataclass(frozen=True)

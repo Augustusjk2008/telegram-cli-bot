@@ -1652,18 +1652,47 @@ async def test_web_api_lists_plugins_and_resolves_vcd_handler(
         """
 import json
 import sys
+from pathlib import Path
 
 for line in sys.stdin:
     request = json.loads(line)
     method = request["method"]
+    params = request.get("params") or {}
     if method == "plugin.initialize":
         result = {"ok": True}
-    elif method == "plugin.render_view":
+    elif method == "plugin.open_view":
+        path = Path(params["input"]["path"]).resolve()
         result = {
             "renderer": "waveform",
-            "title": "demo.vcd",
+            "title": path.name,
+            "mode": "session",
+            "sessionId": "session-1",
+            "summary": {
+                "path": str(path),
+                "timescale": "1ns",
+                "startTime": 0,
+                "endTime": 120,
+                "signals": [{"signalId": "tb.clk", "label": "tb.clk", "width": 1, "kind": "scalar"}],
+                "defaultSignalIds": ["tb.clk"],
+                "padding": "x" * 40000,
+            },
+            "initialWindow": {"startTime": 0, "endTime": 40, "tracks": []},
+        }
+    elif method == "plugin.get_view_window":
+        result = {
+            "startTime": params["startTime"],
+            "endTime": params["endTime"],
+            "tracks": [{"signalId": "tb.clk", "label": "tb.clk", "width": 1, "segments": [{"start": 0, "end": 20, "value": "0"}]}],
+        }
+    elif method == "plugin.dispose_view":
+        result = {"disposed": True}
+    elif method == "plugin.render_view":
+        path = Path(params["input"]["path"]).resolve()
+        result = {
+            "renderer": "waveform",
+            "title": path.name,
             "payload": {
-                "path": request["params"]["input"]["path"],
+                "path": str(path),
                 "timescale": "1ns",
                 "startTime": 0,
                 "endTime": 10,
@@ -1687,7 +1716,7 @@ for line in sys.stdin:
                 "version": "0.1.0",
                 "description": "wave plugin",
                 "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
-                "views": [{"id": "waveform", "title": "波形预览", "renderer": "waveform"}],
+                "views": [{"id": "waveform", "title": "波形预览", "renderer": "waveform", "viewMode": "session", "dataProfile": "heavy"}],
                 "fileHandlers": [{"id": "wave-vcd", "label": "VCD 波形预览", "extensions": [".vcd"], "viewId": "waveform"}],
             },
             ensure_ascii=False,
@@ -1747,13 +1776,27 @@ for line in sys.stdin:
             resolve_payload = await resolve_response.json()
             assert resolve_payload["data"]["kind"] == "plugin_view"
 
-            render_response = await client.post(
-                "/api/bots/main/plugins/vivado-waveform/views/waveform/render",
+            open_response = await client.post(
+                "/api/bots/main/plugins/vivado-waveform/views/waveform/open",
                 json={"input": {"path": str(wave_file)}},
+                headers={"Accept-Encoding": "gzip"},
             )
-            render_payload = await render_response.json()
-            assert render_payload["data"]["renderer"] == "waveform"
-            assert render_payload["data"]["payload"]["path"] == str(wave_file.resolve())
+            open_payload = await open_response.json()
+            assert open_payload["data"]["renderer"] == "waveform"
+            assert open_payload["data"]["mode"] == "session"
+            assert open_payload["data"]["summary"]["path"] == str(wave_file.resolve())
+            assert open_response.headers.get("Content-Encoding") == "gzip"
+
+            window_response = await client.post(
+                "/api/bots/main/plugins/vivado-waveform/sessions/session-1/window",
+                json={"startTime": 0, "endTime": 20, "signalIds": ["tb.clk"], "pixelWidth": 800},
+            )
+            window_payload = await window_response.json()
+            assert window_payload["data"]["tracks"][0]["signalId"] == "tb.clk"
+
+            dispose_response = await client.delete("/api/bots/main/plugins/vivado-waveform/sessions/session-1")
+            dispose_payload = await dispose_response.json()
+            assert dispose_payload["data"]["disposed"] is True
 
     await web_manager.plugin_service.shutdown()
 

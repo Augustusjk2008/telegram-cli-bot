@@ -2,9 +2,12 @@ import { clsx } from "clsx";
 import { useState } from "react";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { FileEditorSurface } from "../components/FileEditorSurface";
+import type { WebBotClient } from "../services/webBotClient";
 import type { EditorTab } from "./workbenchTypes";
 
 type Props = {
+  botAlias: string;
+  client: WebBotClient;
   tabs: EditorTab[];
   activeTab: EditorTab | null;
   activeTabPath: string;
@@ -94,6 +97,8 @@ function GitDiffViewer({ content }: { content: string }) {
 }
 
 export function EditorPane({
+  botAlias,
+  client,
   tabs,
   activeTab,
   activeTabPath,
@@ -266,9 +271,15 @@ export function EditorPane({
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab.kind === "git-diff" ? (
           <GitDiffViewer content={activeTab.content} />
-        ) : activeTab.kind === "plugin-view" && activeTab.pluginView ? (
+        ) : activeTab.kind === "plugin-view" ? (
           <div data-testid="desktop-plugin-view" className="h-full min-h-0">
-            <PluginViewSurface view={activeTab.pluginView} />
+            {activeTab.pluginView ? (
+              <PluginViewSurface botAlias={botAlias} client={client} view={activeTab.pluginView} />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
+                正在加载插件视图
+              </div>
+            )}
           </div>
         ) : (
           <FileEditorSurface

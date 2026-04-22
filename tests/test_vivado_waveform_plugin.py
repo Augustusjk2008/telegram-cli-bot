@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -63,6 +64,28 @@ def test_vcd_parser_scales_large_ps_traces_and_skips_zero_width_parameters(tmp_p
     assert len(clk_track["segments"]) <= 4001
 
 
+def test_vivado_waveform_initial_window_stays_within_budget(tmp_path: Path) -> None:
+    wave_file = tmp_path / "simple_counter.vcd"
+    wave_file.write_text(Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8"), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    index = parser.build_vcd_index(wave_file)
+    summary = parser.build_waveform_summary(index, path=wave_file)
+    window = parser.query_waveform_window(
+        index,
+        start_time=summary["startTime"],
+        end_time=min(summary["endTime"], summary["startTime"] + 120),
+        signal_ids=list(summary["defaultSignalIds"]),
+        pixel_width=1200,
+    )
+
+    payload_bytes = len(json.dumps(window, ensure_ascii=False).encode("utf-8"))
+    segment_count = sum(len(track["segments"]) for track in window["tracks"])
+
+    assert payload_bytes < 250_000
+    assert segment_count < 10_000
+
+
 @pytest.mark.asyncio
 async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
@@ -77,7 +100,7 @@ async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -
         source_plugin_dir.joinpath("plugin.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    for name in ("main.py", "vcd_parser.py"):
+    for name in ("main.py", "session_store.py", "vcd_parser.py"):
         (target_plugin_dir / "backend" / name).write_text(
             source_plugin_dir.joinpath("backend", name).read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -91,20 +114,33 @@ async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -
     )
 
     service = PluginService(repo_root, plugins_root=plugins_dir)
-    view = await service.render_view(
+    view = await service.open_view(
         plugin_id="vivado-waveform",
         view_id="waveform",
         input_payload={"path": str(wave_dir / "simple_counter.vcd")},
         audit_context={"account_id": "member_1", "bot_alias": "main"},
     )
+    window = await service.get_view_window(
+        plugin_id="vivado-waveform",
+        session_id=view["sessionId"],
+        request_payload={
+            "startTime": view["summary"]["startTime"],
+            "endTime": view["summary"]["endTime"],
+            "signalIds": list(view["summary"]["defaultSignalIds"]),
+            "pixelWidth": 1200,
+        },
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
 
     assert view["renderer"] == "waveform"
-    assert view["payload"]["timescale"] == "1ns"
-    labels = [item["label"] for item in view["payload"]["tracks"]]
+    assert view["mode"] == "session"
+    assert view["summary"]["timescale"] == "1ns"
+    labels = [item["label"] for item in view["summary"]["signals"]]
     assert "tb.clk" in labels
     assert "tb.rst_n" in labels
     assert "tb.counter" in labels
-    assert view["payload"]["endTime"] >= 120
-    assert view["payload"]["display"]["busStyle"] == "cross"
-    assert view["payload"]["display"]["showTimeAxis"] is True
+    assert view["summary"]["endTime"] >= 120
+    assert view["summary"]["display"]["busStyle"] == "cross"
+    assert view["summary"]["display"]["showTimeAxis"] is True
+    assert {track["label"] for track in window["tracks"]} >= {"tb.clk", "tb.rst_n", "tb.counter"}
     await service.shutdown()

@@ -652,6 +652,78 @@ async def render_plugin_view(
         _raise(500, "plugin_render_failed", str(exc))
 
 
+async def open_plugin_view(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    plugin_id: str,
+    view_id: str,
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    get_profile_or_raise(manager, alias)
+    resolved_input = _resolve_plugin_render_input(manager, alias, auth.user_id, input_payload)
+    try:
+        return await manager.plugin_service.open_view(
+            plugin_id=plugin_id,
+            view_id=view_id,
+            input_payload=resolved_input,
+            audit_context={"account_id": auth.account_id, "bot_alias": alias},
+        )
+    except KeyError as exc:
+        _raise(404, "plugin_not_found", str(exc))
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_request", str(exc))
+    except RuntimeError as exc:
+        _raise(500, "plugin_open_failed", str(exc))
+
+
+async def get_plugin_view_window(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    plugin_id: str,
+    session_id: str,
+    request_payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    get_profile_or_raise(manager, alias)
+    try:
+        return await manager.plugin_service.get_view_window(
+            plugin_id=plugin_id,
+            session_id=session_id,
+            request_payload=request_payload,
+            audit_context={"account_id": auth.account_id, "bot_alias": alias},
+        )
+    except KeyError as exc:
+        _raise(404, "plugin_session_not_found", str(exc))
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_request", str(exc))
+    except RuntimeError as exc:
+        _raise(500, "plugin_window_failed", str(exc))
+
+
+async def dispose_plugin_view(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    plugin_id: str,
+    session_id: str,
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    get_profile_or_raise(manager, alias)
+    try:
+        return await manager.plugin_service.dispose_view(
+            plugin_id=plugin_id,
+            session_id=session_id,
+            audit_context={"account_id": auth.account_id, "bot_alias": alias},
+        )
+    except KeyError as exc:
+        _raise(404, "plugin_session_not_found", str(exc))
+    except RuntimeError as exc:
+        _raise(500, "plugin_dispose_failed", str(exc))
+
+
 def list_assistant_proposals(
     manager: MultiBotManager,
     alias: str,
