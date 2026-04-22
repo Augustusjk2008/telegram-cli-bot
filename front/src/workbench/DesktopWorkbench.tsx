@@ -6,6 +6,7 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult, GitTreeStatus, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { GitScreen } from "../screens/GitScreen";
+import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import "../styles/workbench.css";
 import type {
@@ -157,6 +158,10 @@ export function DesktopWorkbench({
     containerWidthPx: layoutBounds.columnsWidthPx,
     containerHeightPx: layoutBounds.centerHeightPx,
   });
+  const canViewPlugins = sessionCapabilities.includes("view_plugins");
+  const activeSidebarView = !canViewPlugins && layoutState.sidebarView === "plugins"
+    ? "files"
+    : layoutState.sidebarView;
   const debug = useDebugSession({
     authToken,
     botAlias,
@@ -212,7 +217,9 @@ export function DesktopWorkbench({
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const availableSidebarPanels = structureOnly
     ? ["files"] as const
-    : ["files", "search", "outline", "debug", "git", "settings"] as const;
+    : canViewPlugins
+      ? ["files", "search", "outline", "debug", "git", "plugins", "settings"] as const
+      : ["files", "search", "outline", "debug", "git", "settings"] as const;
   const activeEditorLine = tabs.activeTab && editorReveal?.path === tabs.activeTab.path
     ? editorReveal.line
     : tabs.activeTab
@@ -428,6 +435,16 @@ export function DesktopWorkbench({
     : chatPaneContent;
 
   async function openWorkspaceFile(path: string, line?: number) {
+    const target = await client.resolveFileOpenTarget(botAlias, path);
+    if (target.kind === "plugin_view") {
+      await Promise.allSettled([
+        tabs.openPluginView(target),
+        fileTree.revealPath(path),
+      ]);
+      setEditorReveal(typeof line === "number" && line > 0 ? { path, line } : null);
+      return;
+    }
+
     await Promise.allSettled([
       tabs.openFile(path),
       fileTree.revealPath(path),
@@ -496,12 +513,12 @@ export function DesktopWorkbench({
   }
 
   function renderSidebarContent() {
-    if (structureOnly || layoutState.sidebarView === "files") {
+    if (structureOnly || activeSidebarView === "files") {
       return (
         <FileTreePane
           tree={fileTree}
           onOpenFile={(path) => {
-            void tabs.openFile(path);
+            void openWorkspaceFile(path);
           }}
           onCreatedFile={(path, content, lastModifiedNs) => {
             tabs.openCreatedFile(path, content, lastModifiedNs);
@@ -531,7 +548,7 @@ export function DesktopWorkbench({
       );
     }
 
-    if (layoutState.sidebarView === "search") {
+    if (activeSidebarView === "search") {
       return (
         <SearchPane
           botAlias={botAlias}
@@ -541,7 +558,7 @@ export function DesktopWorkbench({
       );
     }
 
-    if (layoutState.sidebarView === "outline") {
+    if (activeSidebarView === "outline") {
       return (
         <OutlinePane
           botAlias={botAlias}
@@ -552,7 +569,7 @@ export function DesktopWorkbench({
       );
     }
 
-    if (layoutState.sidebarView === "debug") {
+    if (activeSidebarView === "debug") {
       return (
         <DebugPane
           profile={debug.profile}
@@ -592,7 +609,7 @@ export function DesktopWorkbench({
       );
     }
 
-    if (layoutState.sidebarView === "git") {
+    if (activeSidebarView === "git") {
       return (
         <GitScreen
           botAlias={botAlias}
@@ -608,7 +625,16 @@ export function DesktopWorkbench({
       );
     }
 
-    if (layoutState.sidebarView === "settings") {
+    if (activeSidebarView === "plugins") {
+      return (
+        <PluginsScreen
+          client={client}
+          embedded
+        />
+      );
+    }
+
+    if (activeSidebarView === "settings") {
       return (
         <SettingsScreen
           botAlias={botAlias}
@@ -695,7 +721,7 @@ export function DesktopWorkbench({
               )}
             >
               <WorkbenchActivityRail
-                activePanel={layoutState.sidebarView}
+                activePanel={activeSidebarView}
                 sidebarCollapsed={layoutState.sidebarCollapsed}
                 availablePanels={[...availableSidebarPanels]}
                 onToggleSidebar={toggleSidebar}

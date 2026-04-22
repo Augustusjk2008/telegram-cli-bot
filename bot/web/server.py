@@ -53,6 +53,7 @@ from .auth_store import (
     CAP_MANAGE_REGISTER_CODES,
     CAP_MUTATE_BROWSE_STATE,
     CAP_READ_FILE_CONTENT,
+    CAP_RUN_PLUGINS,
     CAP_RUN_SCRIPTS,
     CAP_TERMINAL_EXEC,
     CAP_VIEW_BOTS,
@@ -60,6 +61,7 @@ from .auth_store import (
     CAP_VIEW_CHAT_HISTORY,
     CAP_VIEW_CHAT_TRACE,
     CAP_VIEW_FILE_TREE,
+    CAP_VIEW_PLUGINS,
     CAP_WRITE_FILES,
     LOCAL_ADMIN_CAPABILITIES,
     MEMBER_CAPABILITIES,
@@ -95,6 +97,7 @@ from .api_service import (
     list_bots,
     list_assistant_cron_jobs,
     list_assistant_cron_runs,
+    list_plugins,
     list_system_scripts,
     read_file_content,
     rename_path,
@@ -104,7 +107,9 @@ from .api_service import (
     reset_cli_params,
     run_chat,
     run_assistant_cron_job_now,
+    render_plugin_view,
     run_system_script,
+    resolve_plugin_file_target,
     save_chat_attachment,
     save_uploaded_file,
     start_managed_bot,
@@ -790,6 +795,11 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_BOTS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
 
+    async def get_plugins(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
+        refresh = str(request.query.get("refresh", "")).lower() in {"1", "true", "yes"}
+        return _json({"ok": True, "data": list_plugins(self.manager, auth, refresh=refresh)})
+
     async def get_bot_overview(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
@@ -1384,6 +1394,23 @@ class WebApiServer:
         data = read_file_content(self.manager, alias, auth.user_id, filename, mode=mode, lines=lines)
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
+    async def resolve_file_plugin_target(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = resolve_plugin_file_target(self.manager, alias, auth, str(body.get("path", "")))
+        return _json({"ok": True, "data": data})
+
+    async def post_render_plugin_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        view_id = request.match_info.get("view_id", "").strip()
+        body = await self._parse_json(request)
+        input_payload = dict(body.get("input") or {})
+        data = await render_plugin_view(self.manager, alias, auth, plugin_id, view_id, input_payload)
+        return _json({"ok": True, "data": data})
+
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
@@ -1723,6 +1750,7 @@ class WebApiServer:
         app.router.add_patch("/api/admin/register-codes/{code_id}", self.admin_register_code_patch)
         app.router.add_delete("/api/admin/register-codes/{code_id}", self.admin_register_code_delete)
         app.router.add_get("/api/bots", self.get_bots)
+        app.router.add_get("/api/plugins", self.get_plugins)
         app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
@@ -1775,6 +1803,8 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/files/delete", self.delete_path_view)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
+        app.router.add_post("/api/bots/{alias}/plugins/resolve-file-target", self.resolve_file_plugin_target)
+        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/render", self.post_render_plugin_view)
         app.router.add_get("/api/bots/{alias}/scripts", self.bot_scripts)
         app.router.add_post("/api/bots/{alias}/scripts/run/stream", self.bot_run_script_stream)
         app.router.add_post("/api/bots/{alias}/scripts/run", self.bot_run_script)
@@ -1921,6 +1951,9 @@ class WebApiServer:
             except Exception:
                 pass
         await self._debug_service.shutdown()
+        plugin_service = getattr(self.manager, "plugin_service", None)
+        if plugin_service is not None:
+            await plugin_service.shutdown()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:

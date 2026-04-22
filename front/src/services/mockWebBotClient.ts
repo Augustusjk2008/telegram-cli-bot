@@ -21,6 +21,7 @@ import type {
   DebugState,
   DirectoryListing,
   AvatarAsset,
+  FileOpenTarget,
   FileCreateResult,
   GitActionResult,
   GitDiffPayload,
@@ -28,6 +29,8 @@ import type {
   GitOverview,
   GitTreeStatus,
   FileRenameResult,
+  PluginRenderResult,
+  PluginSummary,
   FileWriteResult,
   PublicHostInfo,
   RegisterCodeCreateResult,
@@ -70,6 +73,8 @@ const MEMBER_CAPABILITIES: Capability[] = [
   "git_ops",
   "run_scripts",
   "manage_cli_params",
+  "view_plugins",
+  "run_plugins",
   "admin_ops",
 ];
 const SUPER_ADMIN_CAPABILITIES: Capability[] = [...MEMBER_CAPABILITIES, "manage_register_codes"];
@@ -189,6 +194,16 @@ export class MockWebBotClient implements WebBotClient {
     { name: "avatar_02.png", url: "/assets/avatars/avatar_02.png" },
     { name: "avatar_03.png", url: "/assets/avatars/avatar_03.png" },
     { name: "avatar_04.png", url: "/assets/avatars/avatar_04.png" },
+  ];
+  private readonly plugins: PluginSummary[] = [
+    {
+      id: "vivado-waveform",
+      name: "Vivado Waveform",
+      version: "0.1.0",
+      description: "Vivado/HDL 波形预览，V1 支持 VCD。",
+      views: [{ id: "waveform", title: "波形预览", renderer: "waveform" }],
+      fileHandlers: [{ id: "wave-vcd", label: "VCD 波形预览", extensions: [".vcd"], viewId: "waveform" }],
+    },
   ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
@@ -418,6 +433,14 @@ export class MockWebBotClient implements WebBotClient {
     return Array.from(this.bots.values()).map((item) => this.getBotSummary(item.alias));
   }
 
+  async listPlugins(_refresh = false): Promise<PluginSummary[]> {
+    return this.plugins.map((plugin) => ({
+      ...plugin,
+      views: plugin.views.map((view) => ({ ...view })),
+      fileHandlers: plugin.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
+    }));
+  }
+
   async getBotOverview(botAlias: string): Promise<BotOverview> {
     const bot = this.getBotSummary(botAlias);
     return {
@@ -506,6 +529,19 @@ export class MockWebBotClient implements WebBotClient {
 
   async getCurrentPath(botAlias: string): Promise<string> {
     return this.getBotSummary(botAlias).workingDir;
+  }
+
+  async resolveFileOpenTarget(_botAlias: string, path: string): Promise<FileOpenTarget> {
+    if (path.toLowerCase().endsWith(".vcd")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "vivado-waveform",
+        viewId: "waveform",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
+    return { kind: "file" };
   }
 
   async listFiles(botAlias: string, path?: string): Promise<DirectoryListing> {
@@ -611,6 +647,64 @@ export class MockWebBotClient implements WebBotClient {
       fileSizeBytes: new TextEncoder().encode(content).length,
       isFullContent: true,
       lastModifiedNs: String(this.getFileVersion(botAlias, browserPath, filename)),
+    };
+  }
+
+  async renderPluginView(
+    _botAlias: string,
+    pluginId: string,
+    viewId: string,
+    input: Record<string, unknown>,
+  ): Promise<PluginRenderResult> {
+    const sourcePath = typeof input.path === "string" ? input.path : "waves/simple_counter.vcd";
+    const title = sourcePath.split(/[\\/]/).pop() || "simple_counter.vcd";
+    return {
+      pluginId,
+      viewId,
+      title,
+      renderer: "waveform",
+      payload: {
+        path: sourcePath,
+        timescale: "1ns",
+        startTime: 0,
+        endTime: 40,
+        tracks: [
+          {
+            signalId: "clk",
+            label: "tb.clk",
+            width: 1,
+            segments: [
+              { start: 0, end: 5, value: "0" },
+              { start: 5, end: 10, value: "1" },
+              { start: 10, end: 15, value: "0" },
+              { start: 15, end: 20, value: "1" },
+              { start: 20, end: 25, value: "0" },
+              { start: 25, end: 30, value: "1" },
+              { start: 30, end: 35, value: "0" },
+              { start: 35, end: 40, value: "1" },
+            ],
+          },
+          {
+            signalId: "rst_n",
+            label: "tb.rst_n",
+            width: 1,
+            segments: [
+              { start: 0, end: 10, value: "0" },
+              { start: 10, end: 40, value: "1" },
+            ],
+          },
+          {
+            signalId: "counter",
+            label: "tb.counter",
+            width: 4,
+            segments: [
+              { start: 0, end: 15, value: "0000" },
+              { start: 15, end: 25, value: "0001" },
+              { start: 25, end: 40, value: "0010" },
+            ],
+          },
+        ],
+      },
     };
   }
 

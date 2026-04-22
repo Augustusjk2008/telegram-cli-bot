@@ -35,12 +35,15 @@ import type {
   DebugVariable,
   DirectoryListing,
   AvatarAsset,
+  FileOpenTarget,
   FileCreateResult,
   FileEntry,
   FileReadMode,
   FileReadResult,
   FileRenameResult,
   FileWriteResult,
+  PluginRenderResult,
+  PluginSummary,
   PublicHostInfo,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -1182,6 +1185,11 @@ export class RealWebBotClient implements WebBotClient {
     return data.map((item) => mapBotSummary(item, Boolean(item.is_processing)));
   }
 
+  async listPlugins(refresh = false): Promise<PluginSummary[]> {
+    const data = await this.requestJson<PluginSummary[]>(refresh ? "/api/plugins?refresh=1" : "/api/plugins");
+    return Array.isArray(data) ? data : [];
+  }
+
   async getBotOverview(botAlias: string): Promise<BotOverview> {
     const data = await this.requestJson<{
       bot: RawBotSummary;
@@ -1425,6 +1433,16 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
+  async resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget> {
+    return this.requestJson<FileOpenTarget>(`/api/bots/${encodeURIComponent(botAlias)}/plugins/resolve-file-target`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+  }
+
   async readFile(botAlias: string, filename: string): Promise<FileReadResult> {
     const params = new URLSearchParams({
       filename,
@@ -1457,6 +1475,24 @@ export class RealWebBotClient implements WebBotClient {
       isFullContent: data.is_full_content ?? true,
       lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
     };
+  }
+
+  async renderPluginView(
+    botAlias: string,
+    pluginId: string,
+    viewId: string,
+    input: Record<string, unknown>,
+  ): Promise<PluginRenderResult> {
+    return this.requestJson<PluginRenderResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/views/${encodeURIComponent(viewId)}/render`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ input }),
+      },
+    );
   }
 
   async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {

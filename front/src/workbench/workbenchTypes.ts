@@ -1,4 +1,6 @@
-export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "settings";
+import type { PluginRenderResult } from "../services/types";
+
+export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
 
 export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_snapshot";
 
@@ -103,6 +105,7 @@ export function isDesktopSidebarView(value: unknown): value is DesktopSidebarVie
     || value === "outline"
     || value === "debug"
     || value === "git"
+    || value === "plugins"
     || value === "settings";
 }
 
@@ -146,7 +149,8 @@ export type EditorTab = {
   basename: string;
   content: string;
   savedContent: string;
-  kind?: "file" | "git-diff";
+  kind?: "file" | "git-diff" | "plugin-view";
+  pluginView?: PluginRenderResult;
   sourcePath?: string;
   readOnly?: boolean;
   dirty: boolean;

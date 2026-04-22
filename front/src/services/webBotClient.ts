@@ -15,6 +15,7 @@ import type {
   DebugProfile,
   DebugState,
   DirectoryListing,
+  FileOpenTarget,
   FileCreateResult,
   FileReadResult,
   FileRenameResult,
@@ -30,6 +31,8 @@ import type {
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   PublicHostInfo,
+  PluginRenderResult,
+  PluginSummary,
   RegisterCodeCreateResult,
   RegisterCodeItem,
   SessionState,
@@ -55,6 +58,7 @@ export interface WebBotClient {
   updateRegisterCode(codeId: string, input: { maxUsesDelta?: number; disabled?: boolean }): Promise<RegisterCodeItem>;
   deleteRegisterCode(codeId: string): Promise<void>;
   listBots(): Promise<BotSummary[]>;
+  listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
   getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails>;
@@ -72,8 +76,15 @@ export interface WebBotClient {
   changeDirectory(botAlias: string, path: string): Promise<string>;
   createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void>;
   deletePath(botAlias: string, path: string): Promise<void>;
+  resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
+  renderPluginView(
+    botAlias: string,
+    pluginId: string,
+    viewId: string,
+    input: Record<string, unknown>,
+  ): Promise<PluginRenderResult>;
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;

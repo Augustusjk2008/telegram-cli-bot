@@ -211,6 +211,36 @@ export function useEditorTabs({ botAlias, client }: Props) {
     await hydrateTabContent(path);
   }
 
+  async function openPluginView(target: {
+    pluginId: string;
+    viewId: string;
+    title: string;
+    input: Record<string, unknown>;
+  }) {
+    const sourcePath = typeof target.input.path === "string" ? target.input.path : undefined;
+    const tabPath = `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
+    const view = await client.renderPluginView(botAlias, target.pluginId, target.viewId, target.input);
+    const nextTab = createTab(tabPath, "", undefined, {
+      basename: target.title,
+      kind: "plugin-view",
+      pluginView: view,
+      sourcePath,
+      readOnly: true,
+      statusText: "插件视图",
+      contentPersistence: "none",
+    });
+    setTabs((current) => {
+      const existingIndex = current.findIndex((item) => item.path === tabPath);
+      if (existingIndex >= 0) {
+        const next = current.slice();
+        next[existingIndex] = nextTab;
+        return next;
+      }
+      return [...current, nextTab];
+    });
+    setActiveTabPath(tabPath);
+  }
+
   function openReadOnlyTab(input: {
     path: string;
     basename: string;
@@ -421,7 +451,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
         savedContent: tab.savedContent,
         draftContent: tab.content,
         lastModifiedNs: tab.lastModifiedNs,
-      })).filter((tab) => tab.kind !== "git-diff"),
+      })).filter((tab) => tab.kind !== "git-diff" && tab.kind !== "plugin-view"),
     );
   }
 
@@ -432,6 +462,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
     hasDirtyTabs,
     closedTabs,
     openFile,
+    openPluginView,
     openReadOnlyTab,
     openCreatedFile,
     restoreFromSnapshot,

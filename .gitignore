@@ -13,6 +13,7 @@ docs/superpowers/
 .worktrees/
 .release-local/
 .tcb/
+.plugins/
 .env.copy
 .env copy
 .venv/

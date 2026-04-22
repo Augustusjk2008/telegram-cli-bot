@@ -7,6 +7,7 @@ import os
 import socket
 import sys
 import time
+import webbrowser
 
 # Windows 电源管理常量
 ES_SYSTEM_REQUIRED = 0x00000001
@@ -124,6 +125,26 @@ def _print_web_access_lines(bind: RuntimeWebBind):
         safe_print(line)
 
 
+def _get_local_browser_url(bind: RuntimeWebBind) -> str:
+    return f"http://127.0.0.1:{bind.actual_port}"
+
+
+def _open_default_browser(url: str) -> bool:
+    return bool(webbrowser.open(url, new=2))
+
+
+async def _open_local_browser(bind: RuntimeWebBind):
+    url = _get_local_browser_url(bind)
+    try:
+        opened = await asyncio.to_thread(_open_default_browser, url)
+        if opened:
+            logger.info("已用默认浏览器打开: %s", url)
+        else:
+            logger.warning("默认浏览器打开失败: %s", url)
+    except Exception as exc:
+        logger.warning("默认浏览器打开失败: %s: %s", url, exc)
+
+
 def disable_console_quick_edit():
     """禁用 Windows 控制台快速编辑模式，避免点击控制台导致程序暂停"""
     if sys.platform == "win32":
@@ -208,6 +229,7 @@ async def run_all_bots():
     )
     logger.info("Web API 已附加到主进程")
     _print_web_access_lines(runtime_bind)
+    await _open_local_browser(runtime_bind)
 
     try:
         await config.RESTART_EVENT.wait()

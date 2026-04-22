@@ -198,6 +198,16 @@ test("CLI type selector only shows codex and claude", async () => {
   expect(options).toEqual(["codex", "claude"]);
 });
 
+test("settings lists detected plugins and supported file extensions", async () => {
+  const client = new MockWebBotClient();
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByRole("heading", { name: "插件" })).toBeInTheDocument();
+  expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
+  expect(screen.getByText("支持 .vcd")).toBeInTheDocument();
+});
+
 test("main settings merge update controls into the main bot operations card", async () => {
   const client = new MockWebBotClient();
 

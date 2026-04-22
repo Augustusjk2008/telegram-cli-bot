@@ -97,6 +97,7 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
       botAvatarName="avatar_01.png"
       userAvatarName="avatar_01.png"
       client={new MockWebBotClient()}
+      sessionCapabilities={["view_plugins"]}
       themeName="deep-space"
       viewMode="desktop"
       onViewModeChange={() => {}}
@@ -126,6 +127,10 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
 
   await user.click(screen.getByRole("button", { name: "设置" }));
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "插件" }));
+  expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();
+  expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
@@ -163,6 +168,31 @@ test("embedded git opens changed file diffs as read-only editor tabs", async () 
   expect(screen.getByText("+new").closest('[data-diff-kind="add"]')).toHaveClass("text-emerald-700");
   expect(screen.getByText("-old").closest('[data-diff-kind="delete"]')).toHaveClass("text-red-700");
   expect(screen.queryByLabelText("文件内容")).not.toBeInTheDocument();
+});
+
+test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 waves" }));
+  await user.click(await screen.findByRole("button", { name: "打开 waves/simple_counter.vcd" }));
+
+  expect(await screen.findByRole("tab", { name: "simple_counter.vcd" })).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-plugin-view")).toBeInTheDocument();
+  expect(screen.getByText("tb.clk")).toBeInTheDocument();
 });
 
 test("desktop debug pane uses generic unsupported C++ message", async () => {

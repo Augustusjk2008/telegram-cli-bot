@@ -87,7 +87,7 @@ from bot.utils import is_dangerous_command
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
-from bot.web.auth_store import MEMBER_CAPABILITIES
+from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_VIEW_PLUGINS, MEMBER_CAPABILITIES
 
 logger = logging.getLogger(__name__)
 EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
@@ -592,6 +592,64 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str
         "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
     }
+
+
+def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: bool = False) -> list[dict[str, Any]]:
+    _require_capability(auth, CAP_VIEW_PLUGINS)
+    return manager.plugin_service.list_plugins(refresh=refresh)
+
+
+def resolve_plugin_file_target(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    path: str,
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_VIEW_PLUGINS)
+    get_profile_or_raise(manager, alias)
+    return manager.plugin_service.resolve_file_target(path)
+
+
+def _resolve_plugin_render_input(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    resolved = dict(input_payload or {})
+    path_value = resolved.get("path")
+    if path_value is None:
+        return resolved
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
+    resolved["path"] = _resolve_safe_path(browser_dir, str(path_value))
+    return resolved
+
+
+async def render_plugin_view(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    plugin_id: str,
+    view_id: str,
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    get_profile_or_raise(manager, alias)
+    resolved_input = _resolve_plugin_render_input(manager, alias, auth.user_id, input_payload)
+    try:
+        return await manager.plugin_service.render_view(
+            plugin_id=plugin_id,
+            view_id=view_id,
+            input_payload=resolved_input,
+            audit_context={"account_id": auth.account_id, "bot_alias": alias},
+        )
+    except KeyError as exc:
+        _raise(404, "plugin_not_found", str(exc))
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_request", str(exc))
+    except RuntimeError as exc:
+        _raise(500, "plugin_render_failed", str(exc))
 
 
 def list_assistant_proposals(

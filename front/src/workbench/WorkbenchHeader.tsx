@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 
+type LayoutControlId = "sidebar" | "terminal" | "chat";
+
 type Props = {
   currentBot: string;
   workspaceName: string;
@@ -18,7 +20,7 @@ type Props = {
   sidebarVisible: boolean;
   terminalVisible: boolean;
   chatVisible: boolean;
-  availableLayoutControls?: Array<"sidebar" | "terminal" | "chat">;
+  availableLayoutControls?: LayoutControlId[];
   onToggleSidebar: () => void;
   onToggleTerminal: () => void;
   onToggleChat: () => void;
@@ -42,23 +44,29 @@ export function WorkbenchHeader({
   onViewModeChange,
   onOpenBotSwitcher,
 }: Props) {
-  const layoutControls = [
+  const layoutControls: Array<{
+    id: LayoutControlId;
+    visible: boolean;
+    Icon: typeof PanelLeft;
+    label: string;
+    onToggle: () => void;
+  }> = [
     {
-      id: "sidebar",
+      id: "sidebar" as const,
       visible: sidebarVisible,
       Icon: sidebarVisible ? PanelLeft : PanelLeftDashed,
       label: sidebarVisible ? "隐藏左侧栏" : "显示左侧栏",
       onToggle: onToggleSidebar,
     },
     {
-      id: "terminal",
+      id: "terminal" as const,
       visible: terminalVisible,
       Icon: terminalVisible ? PanelBottom : PanelBottomDashed,
       label: terminalVisible ? "隐藏底部终端" : "显示底部终端",
       onToggle: onToggleTerminal,
     },
     {
-      id: "chat",
+      id: "chat" as const,
       visible: chatVisible,
       Icon: chatVisible ? PanelRight : PanelRightDashed,
       label: chatVisible ? "隐藏右侧聊天" : "显示右侧聊天",

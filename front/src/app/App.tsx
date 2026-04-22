@@ -25,6 +25,7 @@ import { GitScreen } from "../screens/GitScreen";
 import { InviteCodeManagementScreen } from "../screens/InviteCodeManagementScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { MobileDebugScreen } from "../screens/MobileDebugScreen";
+import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
@@ -246,6 +247,7 @@ export function App() {
   const canUseTerminal = hasCapability(session, "terminal_exec");
   const canUseDebug = hasCapability(session, "debug_exec");
   const canUseGit = hasCapability(session, "git_ops");
+  const canViewPlugins = hasCapability(session, "view_plugins");
   const canUseSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "admin_ops");
   const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
@@ -331,6 +333,9 @@ export function App() {
     if (canUseGit) {
       allowedTabs.push("git");
     }
+    if (canViewPlugins) {
+      allowedTabs.push("plugins");
+    }
     if (canUseSettings) {
       allowedTabs.push("settings");
     }
@@ -339,7 +344,7 @@ export function App() {
       setIsChatImmersive(false);
       setIsTerminalImmersive(false);
     }
-  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, currentTab, isLoggedIn]);
+  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, canViewPlugins, currentTab, isLoggedIn]);
 
   useEffect(() => {
     storeViewMode(viewMode);
@@ -712,6 +717,15 @@ export function App() {
     activeScreen = (
       <div className="absolute inset-0">
         <GitScreen key={`git-${currentBot}`} botAlias={currentBot} botAvatarName={currentBotSummary?.avatarName} client={client} />
+      </div>
+    );
+  } else if (currentTab === "plugins" && canViewPlugins) {
+    activeScreen = (
+      <div className="absolute inset-0">
+        <PluginsScreen
+          key={`plugins-${currentBot}`}
+          client={client}
+        />
       </div>
     );
   } else if (currentTab === "settings" && canUseSettings) {

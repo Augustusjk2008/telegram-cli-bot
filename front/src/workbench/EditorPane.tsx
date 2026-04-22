@@ -1,5 +1,6 @@
 import { clsx } from "clsx";
 import { useState } from "react";
+import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import type { EditorTab } from "./workbenchTypes";
 
@@ -228,7 +229,7 @@ export function EditorPane({
                     <button
                       type="button"
                       onClick={() => {
-                        void onRevealInTree(tab.path);
+                        void onRevealInTree(tab.sourcePath || tab.path);
                         setMenuPath("");
                       }}
                       className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
@@ -265,6 +266,10 @@ export function EditorPane({
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab.kind === "git-diff" ? (
           <GitDiffViewer content={activeTab.content} />
+        ) : activeTab.kind === "plugin-view" && activeTab.pluginView ? (
+          <div data-testid="desktop-plugin-view" className="h-full min-h-0">
+            <PluginViewSurface view={activeTab.pluginView} />
+          </div>
         ) : (
           <FileEditorSurface
             path={activeTab.path}

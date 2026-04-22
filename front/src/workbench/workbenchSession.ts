@@ -108,7 +108,10 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
 
   const botAlias = typeof candidate.botAlias === "string" ? candidate.botAlias.trim() : "";
   const workspaceRoot = typeof candidate.workspaceRoot === "string" ? candidate.workspaceRoot.trim() : "";
-  const sidebarView = candidate.sidebarView === "debug" || candidate.sidebarView === "git" || candidate.sidebarView === "settings"
+  const sidebarView = candidate.sidebarView === "debug"
+    || candidate.sidebarView === "git"
+    || candidate.sidebarView === "plugins"
+    || candidate.sidebarView === "settings"
     ? candidate.sidebarView
     : "files";
   if (!botAlias || !workspaceRoot) {

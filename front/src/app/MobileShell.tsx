@@ -5,6 +5,7 @@ import {
   GitBranch,
   Menu,
   MessageSquare,
+  Puzzle,
   Settings,
   SquareTerminal,
   type LucideIcon,
@@ -14,7 +15,7 @@ import type { ViewMode } from "./layoutMode";
 import type { SessionState } from "../services/types";
 import { isGuest } from "../utils/capabilities";
 
-export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "settings";
+export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "plugins" | "settings";
 
 type Props = {
   session: SessionState | null;
@@ -47,11 +48,12 @@ export function MobileShell({
     { tab: "debug", label: "调试", Icon: Bug },
     { tab: "terminal", label: "终端", Icon: SquareTerminal },
     { tab: "git", label: "Git", Icon: GitBranch },
+    { tab: "plugins", label: "插件", Icon: Puzzle },
     { tab: "settings", label: "设置", Icon: Settings },
   ];
   const navItems = isGuest(session)
     ? fullNavItems.filter((item) => item.tab === "chat" || item.tab === "files")
-    : fullNavItems;
+    : fullNavItems.filter((item) => item.tab !== "plugins" || session?.capabilities.includes("view_plugins"));
 
   return (
     <div className="flex min-w-0 flex-col h-[100dvh] w-full bg-[var(--bg)] shadow-xl overflow-hidden relative">

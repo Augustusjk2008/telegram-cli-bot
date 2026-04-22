@@ -16,6 +16,8 @@ export type Capability =
   | "git_ops"
   | "run_scripts"
   | "manage_cli_params"
+  | "view_plugins"
+  | "run_plugins"
   | "manage_register_codes"
   | "admin_ops";
 
@@ -188,6 +190,56 @@ export type FileWriteResult = {
   path: string;
   fileSizeBytes: number;
   lastModifiedNs: string;
+};
+
+export type PluginViewRenderer = "waveform";
+
+export type PluginSummary = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  views: Array<{ id: string; title: string; renderer: PluginViewRenderer }>;
+  fileHandlers: Array<{ id: string; label: string; extensions: string[]; viewId: string }>;
+};
+
+export type FileOpenTarget =
+  | { kind: "file" }
+  | {
+      kind: "plugin_view";
+      pluginId: string;
+      viewId: string;
+      title: string;
+      input: Record<string, unknown>;
+    };
+
+export type WaveformTrackSegment = {
+  start: number;
+  end: number;
+  value: string;
+};
+
+export type WaveformTrack = {
+  signalId: string;
+  label: string;
+  width: number;
+  segments: WaveformTrackSegment[];
+};
+
+export type WaveformViewPayload = {
+  path: string;
+  timescale: string;
+  startTime: number;
+  endTime: number;
+  tracks: WaveformTrack[];
+};
+
+export type PluginRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: PluginViewRenderer;
+  payload: WaveformViewPayload;
 };
 
 export type FileCreateResult = {

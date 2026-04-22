@@ -136,6 +136,7 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终端" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "插件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
   expect(sessionStorage.getItem("web-api-token")).toBe("123");
   expect(localStorage.getItem("web-api-token")).toBeNull();
@@ -152,6 +153,7 @@ test("guest login trims member-only navigation", async () => {
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Git" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "插件" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
 });
 
@@ -414,6 +416,24 @@ test("settings tab shows cli params and tunnel status", async () => {
   expect(screen.getByText("公网访问")).toBeInTheDocument();
   expect(screen.getByText("HTTPS 访问:")).toBeInTheDocument();
   expect(screen.getByText("https://demo.trycloudflare.com")).toBeInTheDocument();
+});
+
+test("plugins tab lists detected plugins and refresh action", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "插件" }));
+
+  expect(await screen.findByRole("heading", { name: "插件" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+  expect(screen.queryByText("打开匹配文件会自动进入对应插件视图。")).not.toBeInTheDocument();
+  expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
+  expect(screen.getByText("视图 波形预览")).toBeInTheDocument();
+  expect(screen.getByText("支持 .vcd")).toBeInTheDocument();
 });
 
 test("super admin can open invite code management from bot switcher", async () => {

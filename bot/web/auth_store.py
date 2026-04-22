@@ -31,6 +31,8 @@ CAP_DEBUG_EXEC = "debug_exec"
 CAP_GIT_OPS = "git_ops"
 CAP_RUN_SCRIPTS = "run_scripts"
 CAP_MANAGE_CLI_PARAMS = "manage_cli_params"
+CAP_VIEW_PLUGINS = "view_plugins"
+CAP_RUN_PLUGINS = "run_plugins"
 CAP_ADMIN_OPS = "admin_ops"
 CAP_MANAGE_REGISTER_CODES = "manage_register_codes"
 
@@ -56,6 +58,8 @@ MEMBER_CAPABILITIES = frozenset(
         CAP_GIT_OPS,
         CAP_RUN_SCRIPTS,
         CAP_MANAGE_CLI_PARAMS,
+        CAP_VIEW_PLUGINS,
+        CAP_RUN_PLUGINS,
         CAP_ADMIN_OPS,
     }
 )
@@ -626,6 +630,7 @@ __all__ = [
     "CAP_MANAGE_REGISTER_CODES",
     "CAP_MUTATE_BROWSE_STATE",
     "CAP_READ_FILE_CONTENT",
+    "CAP_RUN_PLUGINS",
     "CAP_RUN_SCRIPTS",
     "CAP_TERMINAL_EXEC",
     "CAP_VIEW_BOTS",
@@ -633,6 +638,7 @@ __all__ = [
     "CAP_VIEW_CHAT_HISTORY",
     "CAP_VIEW_CHAT_TRACE",
     "CAP_VIEW_FILE_TREE",
+    "CAP_VIEW_PLUGINS",
     "CAP_WRITE_FILES",
     "GUEST_CAPABILITIES",
     "LOCAL_ADMIN_CAPABILITIES",

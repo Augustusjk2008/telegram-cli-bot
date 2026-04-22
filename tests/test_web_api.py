@@ -31,6 +31,7 @@ from bot.assistant_state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
+from bot.plugins.service import PluginService
 from bot.session_store import save_session
 from bot.web.server import WebApiServer, _TERMINAL_OUTPUT_EOF
 from bot.web.api_service import (
@@ -1666,8 +1667,134 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
             resp = await client.get("/api/bots/main")
             assert resp.status == 200
             payload = await resp.json()
-            assert payload["data"]["bot"]["alias"] == "main"
-            assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
+    assert payload["data"]["bot"]["alias"] == "main"
+    assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
+
+
+@pytest.mark.asyncio
+async def test_web_api_lists_plugins_and_resolves_vcd_handler(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_root = temp_dir / "repo"
+    repo_root.mkdir()
+    plugins_root = temp_dir / "home" / ".tcb" / "plugins"
+    plugin_dir = plugins_root / "vivado-waveform"
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "plugin.initialize":
+        result = {"ok": True}
+    elif method == "plugin.render_view":
+        result = {
+            "renderer": "waveform",
+            "title": "demo.vcd",
+            "payload": {
+                "path": request["params"]["input"]["path"],
+                "timescale": "1ns",
+                "startTime": 0,
+                "endTime": 10,
+                "tracks": [],
+            },
+        }
+    else:
+        result = {"ok": True}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\\n")
+    sys.stdout.flush()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "id": "vivado-waveform",
+                "name": "Vivado Waveform",
+                "version": "0.1.0",
+                "description": "wave plugin",
+                "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                "views": [{"id": "waveform", "title": "波形预览", "renderer": "waveform"}],
+                "fileHandlers": [{"id": "wave-vcd", "label": "VCD 波形预览", "extensions": [".vcd"], "viewId": "waveform"}],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    wave_dir = temp_dir / "waves"
+    wave_dir.mkdir()
+    wave_file = wave_dir / "demo.vcd"
+    wave_file.write_text("$timescale 1ns $end\n", encoding="utf-8")
+
+    web_manager.plugin_service = PluginService(repo_root, plugins_root=plugins_root)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            plugins_response = await client.get("/api/plugins")
+            plugins_payload = await plugins_response.json()
+            assert plugins_payload["ok"] is True
+            assert plugins_payload["data"][0]["id"] == "vivado-waveform"
+
+            fresh_plugin_dir = plugins_root / "fresh-plugin"
+            fresh_plugin_dir.mkdir()
+            (fresh_plugin_dir / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "id": "fresh-plugin",
+                        "name": "Fresh Plugin",
+                        "version": "0.1.0",
+                        "description": "fresh plugin",
+                        "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                        "views": [],
+                        "fileHandlers": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            cached_plugins_response = await client.get("/api/plugins")
+            cached_plugins_payload = await cached_plugins_response.json()
+            assert {item["id"] for item in cached_plugins_payload["data"]} == {"vivado-waveform"}
+
+            refreshed_plugins_response = await client.get("/api/plugins?refresh=1")
+            refreshed_plugins_payload = await refreshed_plugins_response.json()
+            assert {item["id"] for item in refreshed_plugins_payload["data"]} == {
+                "fresh-plugin",
+                "vivado-waveform",
+            }
+
+            resolve_response = await client.post(
+                "/api/bots/main/plugins/resolve-file-target",
+                json={"path": "waves/demo.vcd"},
+            )
+            resolve_payload = await resolve_response.json()
+            assert resolve_payload["data"]["kind"] == "plugin_view"
+
+            render_response = await client.post(
+                "/api/bots/main/plugins/vivado-waveform/views/waveform/render",
+                json={"input": {"path": str(wave_file)}},
+            )
+            render_payload = await render_response.json()
+            assert render_payload["data"]["renderer"] == "waveform"
+            assert render_payload["data"]["payload"]["path"] == str(wave_file.resolve())
+
+    await web_manager.plugin_service.shutdown()
 
 
 @pytest.mark.asyncio

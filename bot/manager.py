@@ -19,6 +19,7 @@ from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import coerce_param_value
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
 from bot.models import BotProfile
+from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_alias, update_bot_working_dir
 
@@ -30,6 +31,8 @@ class MultiBotManager:
     def __init__(self, main_profile: BotProfile, storage_file: str):
         self.main_profile = main_profile
         self.storage_file = Path(storage_file)
+        self.repo_root = self.storage_file.resolve().parent
+        self.plugin_service = PluginService(self.repo_root)
         self.managed_profiles: Dict[str, BotProfile] = {}
         # Web-only 运行时保留该字段做兼容，不再持有 Telegram Application。
         self.applications: Dict[str, object] = {}

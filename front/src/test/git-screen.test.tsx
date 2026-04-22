@@ -66,8 +66,9 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       currentBotAlias: "main",
       currentPath: "C:\\workspace\\repo",
       isLoggedIn: true,
-      canExec: true,
-      canAdmin: true,
+      username: "demo",
+      role: "member",
+      capabilities: ["terminal_exec", "admin_ops"],
     }),
     listBots: async (): Promise<BotSummary[]> => [],
     getBotOverview: async (): Promise<BotOverview> => ({
