@@ -18,6 +18,7 @@ type Props = {
   sidebarVisible: boolean;
   terminalVisible: boolean;
   chatVisible: boolean;
+  availableLayoutControls?: Array<"sidebar" | "terminal" | "chat">;
   onToggleSidebar: () => void;
   onToggleTerminal: () => void;
   onToggleChat: () => void;
@@ -34,6 +35,7 @@ export function WorkbenchHeader({
   sidebarVisible,
   terminalVisible,
   chatVisible,
+  availableLayoutControls,
   onToggleSidebar,
   onToggleTerminal,
   onToggleChat,
@@ -62,7 +64,7 @@ export function WorkbenchHeader({
       label: chatVisible ? "隐藏右侧聊天" : "显示右侧聊天",
       onToggle: onToggleChat,
     },
-  ];
+  ].filter((item) => !availableLayoutControls || availableLayoutControls.includes(item.id));
 
   return (
     <header
@@ -95,30 +97,32 @@ export function WorkbenchHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <div
-          aria-label="布局开关"
-          className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5"
-          role="group"
-        >
-          {layoutControls.map(({ id, visible, Icon, label, onToggle }) => (
-            <button
-              key={id}
-              type="button"
-              aria-label={label}
-              aria-pressed={visible}
-              title={label}
-              onClick={onToggle}
-              className={clsx(
-                "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
-                visible
-                  ? "bg-[var(--surface-strong)] text-[var(--text)]"
-                  : "text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
-              )}
-            >
-              <Icon className="h-4 w-4" />
-            </button>
-          ))}
-        </div>
+        {layoutControls.length > 0 ? (
+          <div
+            aria-label="布局开关"
+            className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5"
+            role="group"
+          >
+            {layoutControls.map(({ id, visible, Icon, label, onToggle }) => (
+              <button
+                key={id}
+                type="button"
+                aria-label={label}
+                aria-pressed={visible}
+                title={label}
+                onClick={onToggle}
+                className={clsx(
+                  "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                  visible
+                    ? "bg-[var(--surface-strong)] text-[var(--text)]"
+                    : "text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
           {([
             ["auto", "自动"],

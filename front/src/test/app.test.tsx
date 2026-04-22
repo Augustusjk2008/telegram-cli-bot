@@ -114,6 +114,20 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(localStorage.getItem("web-api-token")).toBeNull();
 });
 
+test("guest login trims member-only navigation", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "以 guest 进入" }));
+
+  expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Git" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+});
+
 test("forced desktop mode mounts the desktop shell instead of the mobile bottom navigation", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();

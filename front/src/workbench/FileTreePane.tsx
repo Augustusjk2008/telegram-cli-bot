@@ -12,6 +12,7 @@ type Props = {
   onRequestPreview: (path: string) => void;
   onRequestUpload: (files: File[]) => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
+  structureOnly?: boolean;
   focused: boolean;
   onToggleFocus: () => void;
 };
@@ -659,6 +660,7 @@ export function FileTreePane({
   onRequestPreview,
   onRequestUpload,
   onRequestSetWorkdir,
+  structureOnly = false,
   focused,
   onToggleFocus,
 }: Props) {
@@ -774,7 +776,11 @@ export function FileTreePane({
                   <button
                     type="button"
                     aria-label={`打开 ${entry.path}`}
-                    onClick={() => onOpenFile(entry.path)}
+                    onClick={() => {
+                      if (!structureOnly) {
+                        onOpenFile(entry.path);
+                      }
+                    }}
                     className="min-w-0 flex-1 rounded px-2 py-1 text-left text-[var(--text)] hover:bg-[var(--surface-strong)]"
                   >
                     <span className="flex min-w-0 items-center gap-2">
@@ -786,62 +792,70 @@ export function FileTreePane({
 
                 {entry.isDir ? (
                   <>
-                    <button
-                      type="button"
-                      aria-label={`设 ${entry.path} 为 Bot 工作目录`}
-                      title={`设 ${entry.path} 为 Bot 工作目录`}
-                      onClick={() => onRequestSetWorkdir(absolutePath)}
-                      className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                    >
-                      <Bot className="h-3.5 w-3.5" />
-                    </button>
+                    {!structureOnly ? (
+                      <button
+                        type="button"
+                        aria-label={`设 ${entry.path} 为 Bot 工作目录`}
+                        title={`设 ${entry.path} 为 Bot 工作目录`}
+                        onClick={() => onRequestSetWorkdir(absolutePath)}
+                        className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+                      >
+                        <Bot className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
                   </>
                 ) : (
                   <>
-                    <button
-                      type="button"
-                      aria-label={`预览 ${entry.path}`}
-                      title={`预览 ${entry.path}`}
-                      onClick={() => onRequestPreview(entry.path)}
-                      className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`重命名 ${entry.path}`}
-                      title={`重命名 ${entry.path}`}
-                      onClick={() => {
-                        setRenameTargetPath(entry.path);
-                        setRenameValue(entry.name);
-                        setRenameError("");
-                        setShowRenameDialog(true);
-                      }}
-                      className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`下载 ${entry.path}`}
-                      title={`下载 ${entry.path}`}
-                      onClick={() => void tree.downloadFile(entry.path)}
-                      className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                    </button>
+                    {!structureOnly ? (
+                      <>
+                        <button
+                          type="button"
+                          aria-label={`预览 ${entry.path}`}
+                          title={`预览 ${entry.path}`}
+                          onClick={() => onRequestPreview(entry.path)}
+                          className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`重命名 ${entry.path}`}
+                          title={`重命名 ${entry.path}`}
+                          onClick={() => {
+                            setRenameTargetPath(entry.path);
+                            setRenameValue(entry.name);
+                            setRenameError("");
+                            setShowRenameDialog(true);
+                          }}
+                          className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`下载 ${entry.path}`}
+                          title={`下载 ${entry.path}`}
+                          onClick={() => void tree.downloadFile(entry.path)}
+                          className="shrink-0 rounded p-1 text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    ) : null}
                   </>
                 )}
 
-                <button
-                  type="button"
-                  aria-label={`删除 ${entry.path}`}
-                  title={`删除 ${entry.path}`}
-                  onClick={() => void handleDelete(entry)}
-                  className="shrink-0 rounded p-1 text-red-600 hover:bg-red-50"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {!structureOnly ? (
+                  <button
+                    type="button"
+                    aria-label={`删除 ${entry.path}`}
+                    title={`删除 ${entry.path}`}
+                    onClick={() => void handleDelete(entry)}
+                    className="shrink-0 rounded p-1 text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
               </div>
 
               {entry.isDir && expanded ? (
@@ -882,6 +896,9 @@ export function FileTreePane({
       }}
       onDrop={(event) => {
         event.preventDefault();
+        if (structureOnly) {
+          return;
+        }
         setDragDepth(0);
         const files = Array.from(event.dataTransfer?.files || []);
         if (files.length > 0) {
@@ -903,28 +920,32 @@ export function FileTreePane({
           </button>
         </div>
         <div className="mt-2 flex items-center gap-2">
-          <input
-            ref={uploadInputRef}
-            aria-label="上传文件"
-            type="file"
-            className="hidden"
-            onChange={(event) => {
-              const files = Array.from(event.target.files || []);
-              if (files.length > 0) {
-                void handleUpload(files);
-              }
-              event.currentTarget.value = "";
-            }}
-          />
-          <button
-            type="button"
-            aria-label="上传文件"
-            title="上传文件"
-            onClick={() => uploadInputRef.current?.click()}
-            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-          >
-            <Upload className="h-3.5 w-3.5" />
-          </button>
+          {!structureOnly ? (
+            <>
+              <input
+                ref={uploadInputRef}
+                aria-label="上传文件"
+                type="file"
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files || []);
+                  if (files.length > 0) {
+                    void handleUpload(files);
+                  }
+                  event.currentTarget.value = "";
+                }}
+              />
+              <button
+                type="button"
+                aria-label="上传文件"
+                title="上传文件"
+                onClick={() => uploadInputRef.current?.click()}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+              >
+                <Upload className="h-3.5 w-3.5" />
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             aria-label="刷新文件树"
@@ -934,28 +955,32 @@ export function FileTreePane({
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          <button
-            type="button"
-            aria-label="新建文件"
-            title="新建文件"
-            onClick={() => {
-              setPendingFileName("");
-              setCreateFileError("");
-              setShowCreateFileDialog(true);
-            }}
-            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-          >
-            <FilePlus className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label="新建文件夹"
-            title="新建文件夹"
-            onClick={() => void handleCreateDirectory()}
-            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-          >
-            <FolderPlus className="h-3.5 w-3.5" />
-          </button>
+          {!structureOnly ? (
+            <>
+              <button
+                type="button"
+                aria-label="新建文件"
+                title="新建文件"
+                onClick={() => {
+                  setPendingFileName("");
+                  setCreateFileError("");
+                  setShowCreateFileDialog(true);
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+              >
+                <FilePlus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="新建文件夹"
+                title="新建文件夹"
+                onClick={() => void handleCreateDirectory()}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -969,7 +994,7 @@ export function FileTreePane({
         {!tree.loading && !tree.error ? renderBranch(tree.rootEntries, 0) : null}
       </div>
 
-      {dragDepth > 0 ? (
+      {!structureOnly && dragDepth > 0 ? (
         <div
           data-testid="desktop-file-drop-overlay"
           className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-2xl border border-dashed border-[var(--accent)] bg-[var(--accent-soft)] text-sm font-medium text-[var(--text)]"
@@ -978,7 +1003,7 @@ export function FileTreePane({
         </div>
       ) : null}
 
-      {showCreateFileDialog ? (
+      {!structureOnly && showCreateFileDialog ? (
         <FileNameDialog
           title="新建文件"
           label="文件名"
@@ -999,7 +1024,7 @@ export function FileTreePane({
         />
       ) : null}
 
-      {showRenameDialog ? (
+      {!structureOnly && showRenameDialog ? (
         <FileNameDialog
           title="重命名文件"
           label="文件名"

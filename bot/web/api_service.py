@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 from xml.etree import ElementTree
@@ -88,6 +88,7 @@ from bot.utils import is_dangerous_command
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
+from bot.web.auth_store import MEMBER_CAPABILITIES
 
 logger = logging.getLogger(__name__)
 EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
@@ -119,6 +120,10 @@ class AuthContext:
 
     user_id: int
     token_used: bool
+    account_id: str = "legacy-default"
+    username: str = "legacy"
+    role: str = "member"
+    capabilities: set[str] = field(default_factory=lambda: set(MEMBER_CAPABILITIES))
 
 
 @dataclass
@@ -132,6 +137,12 @@ class CliAttemptState:
 
 def _raise(status: int, code: str, message: str, data: dict[str, Any] | None = None):
     raise WebApiError(status=status, code=code, message=message, data=data)
+
+
+def _require_capability(auth: AuthContext, capability: str) -> None:
+    if capability in auth.capabilities:
+        return
+    _raise(403, "forbidden", "当前账号无权限执行此操作")
 
 
 def _avatar_asset_dirs() -> list[Path]:
@@ -943,18 +954,31 @@ def _list_directory_entries(working_dir: str) -> dict[str, Any]:
     return _build_directory_listing_response(working_dir, entries)
 
 
+def _ensure_path_within_base_dir(base_dir: str, target_dir: str) -> None:
+    try:
+        base_path = Path(base_dir).resolve()
+        target_path = Path(target_dir).resolve()
+        target_path.relative_to(base_path)
+    except ValueError:
+        _raise(403, "forbidden_path", "当前账号无权访问该目录")
+
+
 def get_directory_listing(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
     path: str | None = None,
+    *,
+    base_dir: str | None = None,
+    restrict_to_base_dir: bool = False,
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _get_browser_directory(session)
+    browser_dir = str(base_dir or _get_browser_directory(session))
     target_dir = browser_dir
     if path is not None and str(path).strip():
         target_dir = _resolve_browser_target_path(browser_dir, str(path))
+    if restrict_to_base_dir and base_dir:
+        _ensure_path_within_base_dir(base_dir, target_dir)
     if _is_windows_drives_virtual_root(target_dir):
         return _list_windows_drive_entries()
     try:

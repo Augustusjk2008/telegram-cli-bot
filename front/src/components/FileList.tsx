@@ -7,8 +7,8 @@ type Props = {
   onFileClick: (name: string) => void;
   onEdit?: (file: FileEntry) => void;
   onRename?: (file: FileEntry) => void;
-  onDownload: (file: FileEntry) => void;
-  onDelete: (file: FileEntry) => void;
+  onDownload?: (file: FileEntry) => void;
+  onDelete?: (file: FileEntry) => void;
   allowDelete?: boolean;
 };
 
@@ -68,7 +68,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
               <Pencil className="w-4 h-4" />
             </button>
           ) : null}
-          {!file.isDir ? (
+          {!file.isDir && onDownload ? (
             <button
               type="button"
               aria-label={`下载 ${file.name}`}
@@ -79,7 +79,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
               <Download className="w-4 h-4" />
             </button>
           ) : null}
-          {allowDelete ? (
+          {allowDelete && onDelete ? (
             <button
               type="button"
               aria-label={`删除 ${file.name}`}

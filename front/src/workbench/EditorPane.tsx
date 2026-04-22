@@ -9,7 +9,9 @@ type Props = {
   activeTabPath: string;
   breakpointLines?: number[];
   currentLine?: number | null;
+  allowCodeJump?: boolean;
   onToggleBreakpoint?: (line: number) => void;
+  onResolveDefinition?: (input: { path: string; line: number; column: number; symbol?: string }) => void;
   onActivateTab: (path: string) => void | Promise<void>;
   onCloseTab: (path: string) => boolean;
   onChangeActiveContent: (content: string) => void;
@@ -28,7 +30,9 @@ export function EditorPane({
   activeTabPath,
   breakpointLines = [],
   currentLine = null,
+  allowCodeJump = true,
   onToggleBreakpoint,
+  onResolveDefinition,
   onActivateTab,
   onCloseTab,
   onChangeActiveContent,
@@ -204,6 +208,7 @@ export function EditorPane({
           error=""
           hideHeader
           onToggleBreakpoint={onToggleBreakpoint}
+          onResolveDefinition={allowCodeJump ? onResolveDefinition : undefined}
           onChange={onChangeActiveContent}
           onSave={onSaveActiveTab}
           onClose={() => {

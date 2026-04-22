@@ -11,10 +11,13 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { ViewMode } from "./layoutMode";
+import type { SessionState } from "../services/types";
+import { isGuest } from "../utils/capabilities";
 
 export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "settings";
 
 type Props = {
+  session: SessionState | null;
   currentBot: string;
   currentTab: AppTab;
   hideOuterChrome: boolean;
@@ -27,6 +30,7 @@ type Props = {
 };
 
 export function MobileShell({
+  session,
   currentBot,
   currentTab,
   hideOuterChrome,
@@ -37,7 +41,7 @@ export function MobileShell({
   onViewModeChange,
   onTabChange,
 }: Props) {
-  const navItems: Array<{ tab: AppTab; label: string; Icon: LucideIcon }> = [
+  const fullNavItems: Array<{ tab: AppTab; label: string; Icon: LucideIcon }> = [
     { tab: "chat", label: "聊天", Icon: MessageSquare },
     { tab: "files", label: "文件", Icon: Folder },
     { tab: "debug", label: "调试", Icon: Bug },
@@ -45,6 +49,9 @@ export function MobileShell({
     { tab: "git", label: "Git", Icon: GitBranch },
     { tab: "settings", label: "设置", Icon: Settings },
   ];
+  const navItems = isGuest(session)
+    ? fullNavItems.filter((item) => item.tab === "chat" || item.tab === "files")
+    : fullNavItems;
 
   return (
     <div className="flex min-w-0 flex-col h-[100dvh] w-full bg-[var(--bg)] shadow-xl overflow-hidden relative">

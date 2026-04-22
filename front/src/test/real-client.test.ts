@@ -40,6 +40,243 @@ describe("RealWebBotClient", () => {
     expect(session.currentBotAlias).toBe("");
   });
 
+  test("login posts username/password and maps account session fields", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          token: "web_sess_123",
+          username: "alice",
+          role: "member",
+          capabilities: ["chat_send", "view_file_tree"],
+          current_bot_alias: "main",
+          current_path: "C:\\workspace",
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const session = await client.login({ username: "alice", password: "pw-123" });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/auth/login",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          username: "alice",
+          password: "pw-123",
+        }),
+      }),
+    );
+    expect(session).toEqual(expect.objectContaining({
+      isLoggedIn: true,
+      token: "web_sess_123",
+      username: "alice",
+      role: "member",
+      capabilities: ["chat_send", "view_file_tree"],
+      currentBotAlias: "main",
+      currentPath: "C:\\workspace",
+    }));
+  });
+
+  test("register posts register_code and returns a logged-in session", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          token: "web_sess_reg",
+          username: "alice",
+          role: "member",
+          capabilities: ["chat_send"],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const session = await client.register({
+      username: "alice",
+      password: "pw-123",
+      registerCode: "INVITE-001",
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/auth/register",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          username: "alice",
+          password: "pw-123",
+          register_code: "INVITE-001",
+        }),
+      }),
+    );
+    expect(session).toEqual(expect.objectContaining({
+      token: "web_sess_reg",
+      username: "alice",
+      role: "member",
+      capabilities: ["chat_send"],
+    }));
+  });
+
+  test("guest login and logout use auth guest/logout endpoints", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            token: "web_sess_guest",
+            username: "guest",
+            role: "guest",
+            capabilities: ["view_file_tree"],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    const session = await client.loginGuest();
+    await client.logout();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/auth/guest",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/auth/logout",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer web_sess_guest",
+        }),
+      }),
+    );
+    expect(session).toEqual(expect.objectContaining({
+      token: "web_sess_guest",
+      username: "guest",
+      role: "guest",
+      capabilities: ["view_file_tree"],
+    }));
+  });
+
+  test("restoreSession can use loopback auto auth without bearer token", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          username: "admin",
+          role: "member",
+          capabilities: ["admin_ops", "chat_send"],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const session = await client.restoreSession("");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/auth/me",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          Authorization: expect.any(String),
+        }),
+      }),
+    );
+    expect(session).toEqual(expect.objectContaining({
+      username: "admin",
+      role: "member",
+      capabilities: ["admin_ops", "chat_send"],
+    }));
+  });
+
+  test("resolveWorkspaceDefinition maps snake_case payload fields", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            token: "secret-token",
+            username: "alice",
+            role: "member",
+            capabilities: ["chat_send"],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [
+              {
+                path: "src/service.py",
+                line: 12,
+                column: 3,
+                match_kind: "workspace_search",
+                confidence: 0.78,
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const result = await client.resolveWorkspaceDefinition("main", {
+      path: "src/app.py",
+      line: 2,
+      column: 2,
+      symbol: "run",
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/workspace/resolve-definition",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          path: "src/app.py",
+          line: 2,
+          column: 2,
+          symbol: "run",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      items: [
+        {
+          path: "src/service.py",
+          line: 12,
+          column: 3,
+          matchKind: "workspace_search",
+          confidence: 0.78,
+        },
+      ],
+    });
+  });
+
   test("listBots maps backend fields to frontend shape", async () => {
     fetchMock
       .mockResolvedValueOnce({

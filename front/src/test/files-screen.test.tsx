@@ -111,6 +111,22 @@ test("editor remounts codemirror when switching files inside the same surface", 
   expect(secondWrapper).toHaveAttribute("data-instance-id", "instance-2");
 });
 
+test("structureOnly hides editing and preview-only actions", async () => {
+  const user = userEvent.setup();
+
+  render(<FilesScreen botAlias="main" client={createClient()} structureOnly />);
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建文件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建文件夹" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "编辑 README.md" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "下载 README.md" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "打开 README.md" }));
+
+  expect(screen.queryByText("Markdown Title")).not.toBeInTheDocument();
+});
+
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   const client = new MockWebBotClient();
   return Object.assign(client, {

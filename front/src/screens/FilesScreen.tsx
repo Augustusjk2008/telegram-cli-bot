@@ -18,10 +18,40 @@ type Props = {
   botAlias: string;
   botAvatarName?: string;
   client?: WebBotClient;
+  structureOnly?: boolean;
 };
 
-export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotClient() }: Props) {
-  const [currentPath, setCurrentPath] = useState("/");
+function joinBrowserPath(basePath: string, name: string) {
+  if (!basePath || basePath === "/") {
+    return `/${name}`;
+  }
+  if (/^[A-Za-z]:[\\/]?$/.test(basePath)) {
+    return `${basePath.replace(/[\\/]+$/, "\\")}${name}`;
+  }
+  const separator = basePath.includes("\\") ? "\\" : "/";
+  return `${basePath.replace(/[\\/]+$/, "")}${separator}${name}`;
+}
+
+function getParentBrowserPath(path: string) {
+  const normalized = path.replace(/[\\/]+$/, "");
+  if (!normalized || normalized === "/") {
+    return normalized || "/";
+  }
+  const parts = normalized.split(/[\\/]+/);
+  if (parts.length <= 1) {
+    return normalized;
+  }
+  if (/^[A-Za-z]:$/.test(parts[0])) {
+    return parts.length <= 2 ? `${parts[0]}\\` : `${parts[0]}\\${parts.slice(1, -1).join("\\")}`;
+  }
+  if (normalized.startsWith("/")) {
+    return `/${parts.slice(1, -1).join("/")}` || "/";
+  }
+  return parts.slice(0, -1).join("/");
+}
+
+export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotClient(), structureOnly = false }: Props) {
+  const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -49,11 +79,13 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
 
-  async function loadListing() {
+  async function loadListing(targetPath?: string) {
     setLoading(true);
     setError("");
     try {
-      const listing = await client.listFiles(botAlias);
+      const listing = structureOnly
+        ? await client.listFiles(botAlias, targetPath || currentPath || await client.getCurrentPath(botAlias))
+        : await client.listFiles(botAlias);
       setCurrentPath(listing.workingDir);
       setFiles(listing.entries);
       setIsVirtualRoot(Boolean(listing.isVirtualRoot));
@@ -66,13 +98,17 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
 
   useEffect(() => {
     void loadListing();
-  }, [botAlias, client]);
+  }, [botAlias, client, structureOnly]);
 
   const isEditorOpen = Boolean(editorPath);
   const isDirty = isEditorOpen && editorContent !== savedContent;
 
   const handleDirClick = async (name: string) => {
     try {
+      if (structureOnly) {
+        await loadListing(joinBrowserPath(currentPath, name));
+        return;
+      }
       await client.changeDirectory(botAlias, name);
       await loadListing();
     } catch (err) {
@@ -82,6 +118,10 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
 
   const handleBack = async () => {
     try {
+      if (structureOnly) {
+        await loadListing(getParentBrowserPath(currentPath));
+        return;
+      }
       await client.changeDirectory(botAlias, "..");
       await loadListing();
     } catch (err) {
@@ -93,6 +133,10 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     try {
       setError("");
       const workingDir = await client.getCurrentPath(botAlias);
+      if (structureOnly) {
+        await loadListing(workingDir);
+        return;
+      }
       await client.changeDirectory(botAlias, workingDir);
       await loadListing();
     } catch (err) {
@@ -167,6 +211,9 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
 
   const handleFileClick = async (name: string) => {
+    if (structureOnly) {
+      return;
+    }
     await loadPreview(name, "preview");
   };
 
@@ -350,7 +397,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
             ) : (
               <h1 className="text-lg font-semibold truncate">{botAlias}</h1>
             )}
-            <p className="truncate text-xs text-[var(--muted)]">{currentPath}</p>
+            <p className="truncate text-xs text-[var(--muted)]">{currentPath || "加载中..."}</p>
           </div>
         </div>
         {!isEditorOpen ? (
@@ -364,7 +411,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
             >
               <House className="w-5 h-5" />
             </button>
-            {!isVirtualRoot ? (
+            {!structureOnly && !isVirtualRoot ? (
               <button
                 type="button"
                 aria-label="新建文件"
@@ -375,7 +422,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
                 <FilePlus className="w-5 h-5" />
               </button>
             ) : null}
-            {!isVirtualRoot ? (
+            {!structureOnly && !isVirtualRoot ? (
               <button
                 type="button"
                 aria-label="新建文件夹"
@@ -386,7 +433,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
                 <FolderPlus className="w-5 h-5" />
               </button>
             ) : null}
-            {!isVirtualRoot ? (
+            {!structureOnly && !isVirtualRoot ? (
               <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
                 <Upload className="w-5 h-5" />
                 <input
@@ -434,17 +481,17 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
               files={files}
               onDirClick={(name) => void handleDirClick(name)}
               onFileClick={(name) => void handleFileClick(name)}
-              onEdit={(file) => void handleOpenEditor(file.name)}
-              onRename={(file) => void handleOpenRenameDialog(file.name)}
-              onDownload={(file) => void handleDownloadEntry(file)}
-              onDelete={(file) => void handleDeleteEntry(file)}
-              allowDelete={!isVirtualRoot}
+              onEdit={structureOnly ? undefined : (file) => void handleOpenEditor(file.name)}
+              onRename={structureOnly ? undefined : (file) => void handleOpenRenameDialog(file.name)}
+              onDownload={structureOnly ? undefined : (file) => void handleDownloadEntry(file)}
+              onDelete={structureOnly ? undefined : (file) => void handleDeleteEntry(file)}
+              allowDelete={!structureOnly && !isVirtualRoot}
             />
           )}
         </section>
       )}
 
-      {previewName ? (
+      {!structureOnly && previewName ? (
         <FilePreviewDialog
           title={previewName}
           content={previewContent}
@@ -461,7 +508,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
       ) : null}
-      {showCreateFileDialog ? (
+      {!structureOnly && showCreateFileDialog ? (
         <FileNameDialog
           title="新建文件"
           label="文件名"
@@ -474,7 +521,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           onClose={handleCloseCreateFileDialog}
         />
       ) : null}
-      {showRenameDialog ? (
+      {!structureOnly && showRenameDialog ? (
         <FileNameDialog
           title="重命名文件"
           label="文件名"

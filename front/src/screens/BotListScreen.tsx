@@ -12,6 +12,7 @@ type Props = {
   client?: WebBotClient;
   onSelect: (alias: string) => void;
   onBotsChange?: (bots: BotSummary[]) => void;
+  canManage?: boolean;
 };
 
 type CreateDraft = CreateBotInput;
@@ -25,7 +26,7 @@ const EMPTY_CREATE_DRAFT: CreateDraft = {
   avatarName: "",
 };
 
-export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange }: Props) {
+export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange, canManage = true }: Props) {
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [loading, setLoading] = useState(true);
@@ -209,7 +210,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
         </div>
       ) : null}
 
-      <section className="mb-6 space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+      {canManage ? (
+        <section className="mb-6 space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">新增 Bot</h2>
           <AvatarPicker
@@ -291,7 +293,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
         >
           {savingAction === "create" ? "创建中..." : "创建 Bot"}
         </button>
-      </section>
+        </section>
+      ) : null}
 
       {loading ? (
         <div className="text-center text-[var(--muted)]">加载中...</div>
@@ -356,7 +359,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                   >
                     {isOffline ? "不可进入" : "进入"}
                   </button>
-                  {!isMain ? (
+                  {canManage && !isMain ? (
                     <>
                       <button
                         type="button"

@@ -37,6 +37,8 @@ type Props = {
   client?: WebBotClient;
   botAvatarName?: string;
   userAvatarName?: string;
+  readOnly?: boolean;
+  allowTrace?: boolean;
   isVisible?: boolean;
   isImmersive?: boolean;
   embedded?: boolean;
@@ -384,6 +386,7 @@ type ChatMessageRowProps = {
   assistantName: string;
   assistantAvatarName?: string;
   userAvatarName?: string;
+  allowTrace: boolean;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
   tracePanelExpanded: boolean;
@@ -399,6 +402,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   assistantName,
   assistantAvatarName,
   userAvatarName,
+  allowTrace,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
   tracePanelExpanded,
@@ -425,7 +429,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const userAttachments = parsedUserMessage?.attachments || [];
   const trace = item.meta?.trace;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
-  const hasTracePanel = item.role === "assistant" && traceCount > 0;
+  const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0;
   const inlineAvatar = (
     <ChatAvatar
       alt={`${messageName} 头像`}
@@ -537,6 +541,8 @@ export function ChatScreen({
   client = new MockWebBotClient(),
   botAvatarName,
   userAvatarName,
+  readOnly = false,
+  allowTrace = true,
   isVisible = true,
   isImmersive = false,
   embedded = false,
@@ -1331,7 +1337,7 @@ export function ChatScreen({
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const showTopChrome = !embedded && !isImmersive;
-  const showActionBar = !isImmersive;
+  const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
 
   return (
@@ -1423,6 +1429,7 @@ export function ChatScreen({
             assistantName={assistantName}
             assistantAvatarName={assistantAvatarName}
             userAvatarName={userAvatarName}
+            allowTrace={allowTrace}
             deletedAttachmentKeys={deletedAttachmentKeys}
             deletingAttachmentKeys={deletingAttachmentKeys}
             tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
@@ -1464,15 +1471,17 @@ export function ChatScreen({
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
-      <ChatComposer
-        onSend={handleSend}
-        onAttachFiles={handleAttachFiles}
-        onRemoveAttachment={handleRemoveAttachment}
-        attachments={pendingAttachments}
-        disabled={isStreaming || loading}
-        compact={isImmersive || embedded}
-        uploadingAttachments={uploadingAttachments}
-      />
+      {!readOnly ? (
+        <ChatComposer
+          onSend={handleSend}
+          onAttachFiles={handleAttachFiles}
+          onRemoveAttachment={handleRemoveAttachment}
+          attachments={pendingAttachments}
+          disabled={isStreaming || loading}
+          compact={isImmersive || embedded}
+          uploadingAttachments={uploadingAttachments}
+        />
+      ) : null}
 
       {previewName ? (
         <FilePreviewDialog

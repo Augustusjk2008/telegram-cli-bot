@@ -34,6 +34,7 @@ import type {
   SystemScriptResult,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
+  WorkspaceDefinitionResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -41,7 +42,11 @@ import type {
 
 export interface WebBotClient {
   getPublicHostInfo(): Promise<PublicHostInfo>;
-  login(token: string): Promise<SessionState>;
+  login(input: { username: string; password: string } | string): Promise<SessionState>;
+  register(input: { username: string; password: string; registerCode: string }): Promise<SessionState>;
+  loginGuest(): Promise<SessionState>;
+  restoreSession(token?: string): Promise<SessionState>;
+  logout(): Promise<void>;
   listBots(): Promise<BotSummary[]>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
@@ -68,6 +73,10 @@ export interface WebBotClient {
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
+  resolveWorkspaceDefinition(
+    botAlias: string,
+    input: { path: string; line: number; column: number; symbol?: string },
+  ): Promise<WorkspaceDefinitionResult>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

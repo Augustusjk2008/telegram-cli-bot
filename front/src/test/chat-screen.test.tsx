@@ -211,6 +211,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+test("readOnly chat hides composer, trace entry and session actions", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "历史结果",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          traceCount: 1,
+          trace: [
+            {
+              kind: "commentary",
+              summary: "trace",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} readOnly allowTrace={false} />);
+
+  expect(await screen.findByText("历史结果")).toBeInTheDocument();
+  expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "系统功能" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重置会话" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "终止任务" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
+});
+
 test("shows a user message after sending text", async () => {
   const client = createClient({
     sendMessage: async (_botAlias: string, _text: string, onChunk: (chunk: string) => void) => {

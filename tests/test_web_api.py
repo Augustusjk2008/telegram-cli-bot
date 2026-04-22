@@ -1333,18 +1333,6 @@ def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir:
     assert overview["recent_commits"][0]["subject"] == "init"
 
 
-def test_init_git_repository_creates_repo_when_missing(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "new-repo"
-    repo_dir.mkdir()
-
-    web_manager.main_profile.working_dir = str(repo_dir)
-    result = init_git_repository(web_manager, "main", 1001)
-
-    assert result["repo_found"] is True
-    assert result["repo_path"] == str(repo_dir)
-    assert (repo_dir / ".git").exists()
-
-
 def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -1514,6 +1502,7 @@ async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypat
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
@@ -1525,6 +1514,27 @@ async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypat
             assert resp.status == 200
             payload = await resp.json()
             assert payload["data"]["user_id"] == 1001
+
+
+@pytest.mark.asyncio
+async def test_auth_route_auto_authenticates_loopback_as_admin(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["username"] == "admin"
+    assert payload["data"]["account_id"] == "local-admin"
+    assert payload["data"]["user_id"] == 1001
+    assert payload["data"]["token_protected"] is True
+    assert "admin_ops" in payload["data"]["capabilities"]
 
 
 @pytest.mark.asyncio
@@ -1806,6 +1816,7 @@ async def test_terminal_websocket_requires_token(web_manager: MultiBotManager, m
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:

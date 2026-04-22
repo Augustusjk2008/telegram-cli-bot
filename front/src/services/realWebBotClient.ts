@@ -1,10 +1,12 @@
 import { WebApiClientError } from "./types";
 import type {
+  AccountRole,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
+  Capability,
   CreateAssistantCronJobInput,
   GitActionResult,
   GitCommitSummary,
@@ -46,6 +48,7 @@ import type {
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
+  WorkspaceDefinitionResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -199,6 +202,20 @@ type RawRunningReply = {
   preview_text?: string;
   started_at: string;
   updated_at?: string;
+};
+
+type RawAuthSession = {
+  user_id?: number;
+  account_id?: string;
+  username?: string;
+  role?: AccountRole;
+  capabilities?: Capability[];
+  current_bot_alias?: string;
+  current_path?: string;
+  is_logged_in?: boolean;
+  token?: string;
+  token_protected?: boolean;
+  allowed_user_ids?: number[];
 };
 
 type RawCliParamsPayload = {
@@ -670,6 +687,22 @@ function mapPublicHostInfo(raw?: RawPublicHostInfo | null): PublicHostInfo {
   };
 }
 
+function mapSessionState(raw: RawAuthSession): SessionState {
+  return {
+    currentBotAlias: raw.current_bot_alias || "",
+    currentPath: raw.current_path || "",
+    isLoggedIn: raw.is_logged_in !== false,
+    ...(raw.token ? { token: raw.token } : {}),
+    ...(typeof raw.user_id === "number" ? { userId: raw.user_id } : {}),
+    ...(raw.account_id ? { accountId: raw.account_id } : {}),
+    username: raw.username || "",
+    role: raw.role || "member",
+    capabilities: Array.isArray(raw.capabilities) ? raw.capabilities : [],
+    ...(typeof raw.token_protected === "boolean" ? { tokenProtected: raw.token_protected } : {}),
+    ...(Array.isArray(raw.allowed_user_ids) ? { allowedUserIds: raw.allowed_user_ids } : {}),
+  };
+}
+
 function mapGitChangedFile(raw: RawGitChangedFile) {
   return {
     path: raw.path,
@@ -983,16 +1016,59 @@ export class RealWebBotClient implements WebBotClient {
     return mapPublicHostInfo(payload.host_info);
   }
 
-  async login(token: string): Promise<SessionState> {
+  async login(input: { username: string; password: string } | string): Promise<SessionState> {
+    if (typeof input === "string") {
+      return this.restoreSession(input);
+    }
+    const data = await this.requestJson<RawAuthSession>("/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
+    this.token = String(data.token || "").trim();
+    return mapSessionState(data);
+  }
+
+  async register(input: { username: string; password: string; registerCode: string }): Promise<SessionState> {
+    const data = await this.requestJson<RawAuthSession>("/api/auth/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username: input.username,
+        password: input.password,
+        register_code: input.registerCode,
+      }),
+    });
+    this.token = String(data.token || "").trim();
+    return mapSessionState(data);
+  }
+
+  async loginGuest(): Promise<SessionState> {
+    const data = await this.requestJson<RawAuthSession>("/api/auth/guest", {
+      method: "POST",
+    });
+    this.token = String(data.token || "").trim();
+    return mapSessionState(data);
+  }
+
+  async restoreSession(token = ""): Promise<SessionState> {
     this.token = token.trim();
-    const data = await this.requestJson<{ user_id: number }>("/api/auth/me");
-    return {
-      currentBotAlias: "",
-      currentPath: "",
-      isLoggedIn: Boolean(data.user_id),
-      canExec: true,
-      canAdmin: true,
-    };
+    const data = await this.requestJson<RawAuthSession>("/api/auth/me");
+    return mapSessionState(data);
+  }
+
+  async logout(): Promise<void> {
+    try {
+      await this.requestJson("/api/auth/logout", {
+        method: "POST",
+      });
+    } finally {
+      this.token = "";
+    }
   }
 
   async listBots(): Promise<BotSummary[]> {
@@ -1354,6 +1430,36 @@ export class RealWebBotClient implements WebBotClient {
     return this.requestJson<WorkspaceOutlineResult>(
       `/api/bots/${encodeURIComponent(botAlias)}/workspace/outline?${params.toString()}`,
     );
+  }
+
+  async resolveWorkspaceDefinition(
+    botAlias: string,
+    input: { path: string; line: number; column: number; symbol?: string },
+  ): Promise<WorkspaceDefinitionResult> {
+    const data = await this.requestJson<{
+      items?: Array<{
+        path: string;
+        line: number;
+        column?: number;
+        match_kind?: "import" | "same_file" | "workspace_search";
+        confidence?: number;
+      }>;
+    }>(`/api/bots/${encodeURIComponent(botAlias)}/workspace/resolve-definition`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
+    return {
+      items: (data.items || []).map((item) => ({
+        path: item.path,
+        line: item.line,
+        ...(typeof item.column === "number" ? { column: item.column } : {}),
+        matchKind: item.match_kind || "workspace_search",
+        confidence: typeof item.confidence === "number" ? item.confidence : 0,
+      })),
+    };
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

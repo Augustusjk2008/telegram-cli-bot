@@ -14,6 +14,7 @@ type Props = {
   error?: string;
   hideHeader?: boolean;
   onToggleBreakpoint?: (line: number) => void;
+  onResolveDefinition?: (input: { path: string; line: number; column: number; symbol?: string }) => void;
   onChange: (value: string) => void;
   onSave: () => void;
   onClose: () => void;
@@ -143,6 +144,71 @@ function createDebugExtensions(
   return extensions;
 }
 
+function isSymbolChar(char: string) {
+  return /[A-Za-z0-9_$]/.test(char);
+}
+
+function extractSymbolAt(text: string, index: number) {
+  if (!text) {
+    return "";
+  }
+  const boundedIndex = Math.min(Math.max(index, 0), text.length - 1);
+  if (!isSymbolChar(text[boundedIndex] || "")) {
+    return "";
+  }
+  let start = boundedIndex;
+  let end = boundedIndex;
+  while (start > 0 && isSymbolChar(text[start - 1] || "")) {
+    start -= 1;
+  }
+  while (end + 1 < text.length && isSymbolChar(text[end + 1] || "")) {
+    end += 1;
+  }
+  return text.slice(start, end + 1);
+}
+
+function resolveTextareaDefinitionTarget(
+  path: string,
+  value: string,
+  offset: number,
+) {
+  const boundedOffset = Math.min(Math.max(offset, 0), value.length);
+  const before = value.slice(0, boundedOffset);
+  const line = before.split(/\r?\n/).length;
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const column = boundedOffset - lineStart + 1;
+  const lineEnd = value.indexOf("\n", boundedOffset);
+  const currentLineText = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
+  const symbol = extractSymbolAt(currentLineText, Math.max(0, column - 1));
+  return {
+    path,
+    line,
+    column,
+    ...(symbol ? { symbol } : {}),
+  };
+}
+
+function resolveEditorDefinitionTarget(
+  view: CodeMirrorEditorView,
+  path: string,
+  clientX: number,
+  clientY: number,
+) {
+  const position = view.posAtCoords({ x: clientX, y: clientY });
+  if (position === null) {
+    return null;
+  }
+  const lineInfo = view.state.doc.lineAt(position);
+  const column = position - lineInfo.from + 1;
+  const symbol = extractSymbolAt(lineInfo.text, Math.max(0, column - 1));
+  return {
+    path,
+    line: lineInfo.number,
+    column,
+    ...(symbol ? { symbol } : {}),
+  };
+}
+
 export function FileEditorSurface({
   path,
   value,
@@ -156,6 +222,7 @@ export function FileEditorSurface({
   error = "",
   hideHeader = false,
   onToggleBreakpoint,
+  onResolveDefinition,
   onChange,
   onSave,
   onClose,
@@ -280,6 +347,21 @@ export function FileEditorSurface({
             key={path}
             data-testid="file-editor-host"
             className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--editor-bg)] text-[var(--editor-text)]"
+            onMouseDown={(event) => {
+              if (!onResolveDefinition || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+                return;
+              }
+              const target = event.target;
+              if (target instanceof HTMLElement && target.closest(".cm-gutters")) {
+                return;
+              }
+              const definitionTarget = resolveEditorDefinitionTarget(editorView, path, event.clientX, event.clientY);
+              if (!definitionTarget) {
+                return;
+              }
+              event.preventDefault();
+              onResolveDefinition(definitionTarget);
+            }}
           >
             <CodeMirrorEditor
               key={path}
@@ -308,6 +390,13 @@ export function FileEditorSurface({
             aria-label="文件内容"
             value={value}
             onChange={(event) => onChange(event.target.value)}
+            onClick={(event) => {
+              if (!onResolveDefinition || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+                return;
+              }
+              const selectionStart = event.currentTarget.selectionStart ?? 0;
+              onResolveDefinition(resolveTextareaDefinitionTarget(path, value, selectionStart));
+            }}
             spellCheck={false}
             style={{
               fontFamily: "var(--code-font-family)",

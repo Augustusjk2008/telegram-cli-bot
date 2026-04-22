@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import ipaddress
 import json
 import logging
 import os
@@ -42,11 +43,34 @@ from bot.updater import (
     get_update_status,
     set_update_enabled,
 )
+from .auth_store import (
+    AuthStoreError,
+    CAP_ADMIN_OPS,
+    CAP_CHAT_SEND,
+    CAP_DEBUG_EXEC,
+    CAP_GIT_OPS,
+    CAP_MANAGE_CLI_PARAMS,
+    CAP_MUTATE_BROWSE_STATE,
+    CAP_READ_FILE_CONTENT,
+    CAP_RUN_SCRIPTS,
+    CAP_TERMINAL_EXEC,
+    CAP_VIEW_BOTS,
+    CAP_VIEW_BOT_STATUS,
+    CAP_VIEW_CHAT_HISTORY,
+    CAP_VIEW_CHAT_TRACE,
+    CAP_VIEW_FILE_TREE,
+    CAP_WRITE_FILES,
+    MEMBER_CAPABILITIES,
+    ROLE_GUEST,
+    WebAuthSession,
+    WebAuthStore,
+)
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
     apply_assistant_upgrade,
     AuthContext,
+    _require_capability,
     WebApiError,
     add_managed_bot,
     build_bot_summary,
@@ -115,6 +139,7 @@ from .workspace_search_service import (
     quick_open_files,
     search_workspace_text,
 )
+from .workspace_definition_service import resolve_workspace_definition
 
 logger = logging.getLogger(__name__)
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
@@ -124,6 +149,11 @@ _CLIENT_DISCONNECT_ERRORS = (
     ClientConnectionResetError,
     ConnectionResetError,
     BrokenPipeError,
+)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WEB_AUTH_STORE = WebAuthStore(
+    users_path=_REPO_ROOT / ".web_users.json",
+    register_codes_path=_REPO_ROOT / ".web_register_codes.json",
 )
 
 
@@ -152,6 +182,80 @@ def _error_response(exc: WebApiError) -> web.Response:
         },
         status=exc.status,
     )
+
+
+def _auth_error(exc: AuthStoreError) -> WebApiError:
+    return WebApiError(exc.status, exc.code, exc.message, exc.data)
+
+
+def _extract_auth_token(request: web.Request) -> str:
+    auth_header = request.headers.get("Authorization", "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return (
+        request.headers.get("X-API-Token", "").strip()
+        or request.query.get("token", "").strip()
+    )
+
+
+def _is_loopback_value(value: object) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    if text.startswith("[") and "]" in text:
+        text = text[1:text.index("]")]
+    if ":" in text and text.count(":") == 1:
+        host, _, port = text.partition(":")
+        if port.isdigit():
+            text = host
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return text.lower() == "localhost"
+
+
+def _is_loopback_request(request: web.Request) -> bool:
+    if _is_loopback_value(request.remote):
+        return True
+    transport = request.transport
+    if transport is None:
+        return False
+    peername = transport.get_extra_info("peername")
+    if isinstance(peername, tuple) and peername:
+        return _is_loopback_value(peername[0])
+    return _is_loopback_value(peername)
+
+
+def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, Any]:
+    payload = {
+        "user_id": auth.user_id,
+        "account_id": auth.account_id,
+        "username": auth.username,
+        "role": auth.role,
+        "capabilities": sorted(auth.capabilities),
+        "current_bot_alias": "",
+        "current_path": "",
+        "is_logged_in": True,
+        "token_protected": bool(WEB_API_TOKEN),
+        "allowed_user_ids": ALLOWED_USER_IDS,
+    }
+    if token:
+        payload["token"] = token
+    return payload
+
+
+def _serialize_auth_session(session: WebAuthSession) -> dict[str, Any]:
+    auth = AuthContext(
+        user_id=WEB_DEFAULT_USER_ID,
+        token_used=True,
+        account_id=session.account.account_id,
+        username=session.account.username,
+        role=session.account.role,
+        capabilities=set(session.capabilities),
+    )
+    return _serialize_auth_context(auth, token=session.token)
 
 
 def _normalize_origin(origin: str) -> str:
@@ -390,30 +494,77 @@ class WebApiServer:
         )
 
     def _auth_context(self, request: web.Request) -> AuthContext:
-        raw_token = ""
-        auth_header = request.headers.get("Authorization", "").strip()
-        if auth_header.lower().startswith("bearer "):
-            raw_token = auth_header[7:].strip()
-        if not raw_token:
-            raw_token = request.headers.get("X-API-Token", "").strip()
-        if not raw_token:
-            raw_token = request.query.get("token", "").strip()
-        if WEB_API_TOKEN and raw_token != WEB_API_TOKEN:
+        raw_token = _extract_auth_token(request)
+        if raw_token:
+            session = _WEB_AUTH_STORE.get_session(raw_token)
+            if session is not None:
+                return self._session_auth_context(session)
+            if _is_loopback_request(request):
+                return self._local_admin_auth_context()
+            if WEB_API_TOKEN and raw_token == WEB_API_TOKEN:
+                return self._legacy_auth_context(request, token_used=True)
             raise WebApiError(401, "unauthorized", "访问令牌无效")
 
-        raw_user_id = request.headers.get("X-User-Id", "").strip() or request.query.get("user_id", "").strip()
-        if raw_user_id:
-            try:
-                user_id = int(raw_user_id)
-            except ValueError as exc:
-                raise WebApiError(400, "invalid_user_id", "X-User-Id 必须是整数") from exc
-        else:
-            user_id = WEB_DEFAULT_USER_ID
+        if _is_loopback_request(request):
+            return self._local_admin_auth_context()
+        if WEB_API_TOKEN:
+            raise WebApiError(401, "unauthorized", "访问令牌无效")
+        if _WEB_AUTH_STORE.can_bootstrap_without_auth():
+            return self._legacy_auth_context(request, token_used=False, username="bootstrap")
+        raise WebApiError(401, "unauthorized", "请先登录")
 
+    def _legacy_user_id(self, request: web.Request) -> int:
+        raw_user_id = request.headers.get("X-User-Id", "").strip() or request.query.get("user_id", "").strip()
+        if not raw_user_id:
+            return WEB_DEFAULT_USER_ID
+        try:
+            return int(raw_user_id)
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_user_id", "X-User-Id 必须是整数") from exc
+
+    def _ensure_allowed_user_id(self, user_id: int) -> None:
         if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
             raise WebApiError(403, "forbidden", f"用户 {user_id} 未授权")
 
-        return AuthContext(user_id=user_id, token_used=bool(raw_token))
+    def _legacy_auth_context(
+        self,
+        request: web.Request,
+        *,
+        token_used: bool,
+        username: str = "legacy",
+    ) -> AuthContext:
+        user_id = self._legacy_user_id(request)
+        self._ensure_allowed_user_id(user_id)
+        return AuthContext(
+            user_id=user_id,
+            token_used=token_used,
+            account_id="legacy-default",
+            username=username,
+            role="member",
+            capabilities=set(MEMBER_CAPABILITIES),
+        )
+
+    def _session_auth_context(self, session: WebAuthSession) -> AuthContext:
+        self._ensure_allowed_user_id(WEB_DEFAULT_USER_ID)
+        return AuthContext(
+            user_id=WEB_DEFAULT_USER_ID,
+            token_used=True,
+            account_id=session.account.account_id,
+            username=session.account.username,
+            role=session.account.role,
+            capabilities=set(session.capabilities),
+        )
+
+    def _local_admin_auth_context(self) -> AuthContext:
+        self._ensure_allowed_user_id(WEB_DEFAULT_USER_ID)
+        return AuthContext(
+            user_id=WEB_DEFAULT_USER_ID,
+            token_used=False,
+            account_id="local-admin",
+            username="admin",
+            role="member",
+            capabilities=set(MEMBER_CAPABILITIES),
+        )
 
     async def _parse_json(self, request: web.Request) -> dict[str, Any]:
         try:
@@ -427,6 +578,11 @@ class WebApiServer:
     async def _with_auth(self, request: web.Request) -> AuthContext:
         auth = self._auth_context(request)
         request["auth"] = auth
+        return auth
+
+    async def _with_capability(self, request: web.Request, capability: str) -> AuthContext:
+        auth = await self._with_auth(request)
+        _require_capability(auth, capability)
         return auth
 
     def _schedule_restart_request(self) -> None:
@@ -541,35 +697,60 @@ class WebApiServer:
 
     async def auth_me(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
-        return _json(
-            {
-                "ok": True,
-                "data": {
-                    "user_id": auth.user_id,
-                    "token_protected": bool(WEB_API_TOKEN),
-                    "allowed_user_ids": ALLOWED_USER_IDS,
-                },
-            }
-        )
+        return _json({"ok": True, "data": _serialize_auth_context(auth, token=_extract_auth_token(request))})
+
+    async def auth_login(self, request: web.Request) -> web.Response:
+        body = await self._parse_json(request)
+        try:
+            session = _WEB_AUTH_STORE.login_member(
+                str(body.get("username", "")),
+                str(body.get("password", "")),
+            )
+        except AuthStoreError as exc:
+            raise _auth_error(exc) from exc
+        return _json({"ok": True, "data": _serialize_auth_session(session)})
+
+    async def auth_register(self, request: web.Request) -> web.Response:
+        body = await self._parse_json(request)
+        try:
+            session = _WEB_AUTH_STORE.register_member(
+                str(body.get("username", "")),
+                str(body.get("password", "")),
+                str(body.get("register_code", "")),
+            )
+        except AuthStoreError as exc:
+            raise _auth_error(exc) from exc
+        return _json({"ok": True, "data": _serialize_auth_session(session)})
+
+    async def auth_guest(self, request: web.Request) -> web.Response:
+        session = _WEB_AUTH_STORE.create_guest_session()
+        return _json({"ok": True, "data": _serialize_auth_session(session)})
+
+    async def auth_logout(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        raw_token = _extract_auth_token(request)
+        if raw_token and _WEB_AUTH_STORE.get_session(raw_token) is not None:
+            _WEB_AUTH_STORE.delete_session(raw_token)
+        return _json({"ok": True, "data": {"username": auth.username}})
 
     async def get_bots(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_VIEW_BOTS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
 
     async def get_bot_overview(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_overview(self.manager, alias, auth.user_id)})
 
     async def post_chat(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""))
         return _json({"ok": True, "data": data})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
 
@@ -609,14 +790,14 @@ class WebApiServer:
         return response
 
     async def post_exec(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await execute_shell_command(self.manager, alias, auth.user_id, body.get("command", ""))
         return _json({"ok": True, "data": data})
 
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_TERMINAL_EXEC)
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
         self._terminal_sockets.add(ws)
@@ -745,18 +926,29 @@ class WebApiServer:
         return ws
 
     async def get_pwd(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_working_directory(self.manager, alias, auth.user_id)})
 
     async def get_ls(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
         target_path = request.query.get("path") or None
+        if auth.role == ROLE_GUEST:
+            base_dir = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+            data = get_directory_listing(
+                self.manager,
+                alias,
+                auth.user_id,
+                path=target_path,
+                base_dir=base_dir,
+                restrict_to_base_dir=True,
+            )
+            return _json({"ok": True, "data": data})
         return _json({"ok": True, "data": get_directory_listing(self.manager, alias, auth.user_id, path=target_path)})
 
     async def get_workspace_quick_open(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
         query = request.query.get("q", "")
@@ -764,7 +956,7 @@ class WebApiServer:
         return _json({"ok": True, "data": quick_open_files(workspace, query, limit=limit)})
 
     async def get_workspace_search(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
         query = request.query.get("q", "")
@@ -772,37 +964,51 @@ class WebApiServer:
         return _json({"ok": True, "data": search_workspace_text(workspace, query, limit=limit)})
 
     async def get_workspace_outline(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
         path = request.query.get("path", "")
         return _json({"ok": True, "data": build_file_outline(workspace, path)})
 
+    async def post_workspace_resolve_definition(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        data = resolve_workspace_definition(
+            workspace,
+            str(body.get("path", "")),
+            line=int(body.get("line") or 1),
+            column=int(body.get("column") or 1),
+            symbol=str(body.get("symbol", "")),
+        )
+        return _json({"ok": True, "data": data})
+
     async def post_cd(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_MUTATE_BROWSE_STATE)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = change_working_directory(self.manager, alias, auth.user_id, body.get("path", ""))
         return _json({"ok": True, "data": data})
 
     async def post_reset(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": reset_user_session(self.manager, alias, auth.user_id)})
 
     async def post_kill(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": kill_user_process(self.manager, alias, auth.user_id)})
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
         return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
 
     async def patch_cli_params(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_cli_params(
@@ -815,47 +1021,47 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def post_cli_params_reset(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         data = await reset_cli_params(self.manager, alias, body.get("cli_type"))
         return _json({"ok": True, "data": data})
 
     async def get_history_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit)})
 
     async def get_debug_profile(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await self._debug_service.get_profile(alias, auth.user_id)})
 
     async def get_debug_state(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await self._debug_service.get_state(alias, auth.user_id)})
 
     async def patch_debug_profile_overrides(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         return _json({"ok": True, "data": await self._debug_service.patch_profile_overrides(alias, auth.user_id, body)})
 
     async def post_debug_launch(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         return _json({"ok": True, "data": await self._debug_service.launch(alias, auth.user_id, body)})
 
     async def post_debug_stop(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await self._debug_service.stop(alias, auth.user_id)})
 
     async def post_debug_command(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         action = str(body.get("action") or body.get("command") or body.get("type") or "").strip()
@@ -868,19 +1074,19 @@ class WebApiServer:
         return _json({"ok": True, "data": await self._debug_service.command(alias, auth.user_id, action, payload_dict)})
 
     async def post_debug_breakpoints(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         return _json({"ok": True, "data": await self._debug_service.set_breakpoints(alias, auth.user_id, body)})
 
     async def post_debug_evaluate(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         return _json({"ok": True, "data": await self._debug_service.evaluate(alias, auth.user_id, body)})
 
     async def debug_ws(self, request: web.Request) -> web.WebSocketResponse:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = str(request.query.get("alias") or "").strip().lower()
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
@@ -942,81 +1148,81 @@ class WebApiServer:
         return ws
 
     async def get_history_trace_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_TRACE)
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
         return _json({"ok": True, "data": get_history_trace(self.manager, alias, auth.user_id, message_id)})
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_git_overview(self.manager, alias, auth.user_id)})
 
     async def post_git_init(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": init_git_repository(self.manager, alias, auth.user_id)})
 
     async def get_git_diff_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         path = request.query.get("path", "")
         staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
         return _json({"ok": True, "data": get_git_diff(self.manager, alias, auth.user_id, path, staged=staged)})
 
     async def post_git_stage(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         overview = stage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已暂存所选文件", "overview": overview}})
 
     async def post_git_unstage(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         overview = unstage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已取消暂存所选文件", "overview": overview}})
 
     async def post_git_commit(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         overview = commit_git_changes(self.manager, alias, auth.user_id, body.get("message", ""))
         return _json({"ok": True, "data": {"message": "已创建提交", "overview": overview}})
 
     async def post_git_fetch(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         overview = fetch_git_remote(self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已抓取远端更新", "overview": overview}})
 
     async def post_git_pull(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         overview = pull_git_remote(self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
 
     async def post_git_push(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         overview = push_git_remote(self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已推送本地提交", "overview": overview}})
 
     async def post_git_stash(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         overview = stash_git_changes(self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已暂存当前工作区", "overview": overview}})
 
     async def post_git_stash_pop(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         overview = pop_git_stash(self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已恢复最近一次暂存", "overview": overview}})
 
     async def upload_file(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         reader = await request.multipart()
         field = await reader.next()
@@ -1028,7 +1234,7 @@ class WebApiServer:
         return _json({"ok": True, "data": result})
 
     async def upload_chat_attachment(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         reader = await request.multipart()
         field = await reader.next()
@@ -1040,14 +1246,14 @@ class WebApiServer:
         return _json({"ok": True, "data": result})
 
     async def delete_chat_attachment_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         result = delete_chat_attachment(self.manager, alias, auth.user_id, body.get("saved_path", ""))
         return _json({"ok": True, "data": result})
 
     async def create_directory_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = create_directory(
@@ -1060,7 +1266,7 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def write_file_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = write_file_content(
@@ -1074,7 +1280,7 @@ class WebApiServer:
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def create_text_file_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = create_text_file(
@@ -1088,21 +1294,21 @@ class WebApiServer:
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def rename_path_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = rename_path(self.manager, alias, auth.user_id, body.get("path", ""), body.get("new_name", ""))
         return _json({"ok": True, "data": data})
 
     async def delete_path_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = delete_path(self.manager, alias, auth.user_id, body.get("path", ""))
         return _json({"ok": True, "data": data})
 
     async def download_file(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         filename = request.query.get("filename", "")
         metadata = get_file_metadata(self.manager, alias, auth.user_id, filename)
@@ -1112,7 +1318,7 @@ class WebApiServer:
         )
 
     async def read_file(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         filename = request.query.get("filename", "")
         mode = request.query.get("mode", "cat")
@@ -1121,23 +1327,23 @@ class WebApiServer:
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def admin_bots(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
     
     async def bot_scripts(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_RUN_SCRIPTS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": list_system_scripts(self.manager, alias, auth.user_id)})
 
     async def bot_run_script(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_RUN_SCRIPTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await run_system_script(self.manager, alias, auth.user_id, body.get("script_name", ""))
         return _json({"ok": True, "data": data})
 
     async def bot_run_script_stream(self, request: web.Request) -> web.StreamResponse:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_RUN_SCRIPTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         script_name = str(body.get("script_name", ""))
@@ -1170,12 +1376,12 @@ class WebApiServer:
         return response
 
     async def admin_processing(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_processing_sessions(alias)})
 
     async def admin_add_bot(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
         data = await add_managed_bot(
             self.manager,
@@ -1189,26 +1395,26 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_list_avatar_assets(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": list_avatar_assets()})
 
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await remove_managed_bot(self.manager, alias)})
 
     async def admin_start_bot(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await start_managed_bot(self.manager, alias)})
 
     async def admin_stop_bot(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": await stop_managed_bot(self.manager, alias)})
 
     async def admin_update_cli(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_cli(
@@ -1220,14 +1426,14 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_rename_bot(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await rename_managed_bot(self.manager, alias, str(body.get("new_alias", "")))
         return _json({"ok": True, "data": data})
 
     async def admin_update_workdir(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_workdir(
@@ -1240,18 +1446,18 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_update_avatar(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_avatar(self.manager, alias, body.get("avatar_name"), auth.user_id)
         return _json({"ok": True, "data": data})
 
     async def admin_get_git_proxy(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": get_git_proxy_settings()})
 
     async def admin_patch_git_proxy(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
         try:
             data = update_git_proxy_port(body.get("port", ""))
@@ -1260,27 +1466,27 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_get_update(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": get_update_status()})
 
     async def admin_patch_update(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": set_update_enabled(bool(body.get("update_enabled", True)))})
 
     async def admin_update_check(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         data = await asyncio.to_thread(check_for_updates)
         return _json({"ok": True, "data": data})
 
     async def admin_update_download(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         repo_root = Path(__file__).resolve().parents[2]
         data = await asyncio.to_thread(download_latest_update, repo_root)
         return _json({"ok": True, "data": data})
 
     async def admin_update_download_stream(self, request: web.Request) -> web.StreamResponse:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         await self._parse_json(request)
 
         response = web.StreamResponse(
@@ -1311,43 +1517,43 @@ class WebApiServer:
         return response
 
     async def admin_restart(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         self._schedule_restart_request()
         return _json({"ok": True, "data": {"restart_requested": True}})
 
     async def admin_tunnel(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": self._tunnel_service.snapshot()})
 
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         snapshot = await self._tunnel_service.start()
         await self._notify_tunnel_public_url(snapshot, reason="manual_tunnel_start")
         return _json({"ok": True, "data": snapshot})
 
     async def admin_tunnel_stop(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": await self._tunnel_service.stop()})
 
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         snapshot = await self._tunnel_service.restart()
         await self._notify_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
         return _json({"ok": True, "data": snapshot})
 
     async def admin_single_bot(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": {"bot": build_bot_summary(self.manager, alias)}})
 
     async def admin_assistant_proposals(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         status = request.query.get("status") or None
         return _json({"ok": True, "data": list_assistant_proposals(self.manager, alias, status=status)})
 
     async def admin_assistant_proposal_approve(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         proposal_id = request.match_info["proposal_id"]
         data = await approve_assistant_proposal(
@@ -1359,7 +1565,7 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_proposal_reject(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         proposal_id = request.match_info["proposal_id"]
         data = await reject_assistant_proposal(
@@ -1371,26 +1577,26 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_upgrade_apply(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         proposal_id = request.match_info["proposal_id"]
         data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_cron_jobs(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": list_assistant_cron_jobs(self.manager, alias)})
 
     async def admin_assistant_cron_job_create(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await create_assistant_cron_job(self.manager, alias, body)
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_cron_job_update(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         job_id = request.match_info["job_id"]
         body = await self._parse_json(request)
@@ -1398,21 +1604,21 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_cron_job_delete(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         job_id = request.match_info["job_id"]
         data = await delete_assistant_cron_job(self.manager, alias, job_id)
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_cron_job_run(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         job_id = request.match_info["job_id"]
         data = await run_assistant_cron_job_now(self.manager, alias, job_id)
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_cron_job_runs(self, request: web.Request) -> web.Response:
-        await self._with_auth(request)
+        await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         job_id = request.match_info["job_id"]
         limit = request.query.get("limit", "").strip()
@@ -1450,6 +1656,10 @@ class WebApiServer:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/auth/me", self.auth_me)
+        app.router.add_post("/api/auth/login", self.auth_login)
+        app.router.add_post("/api/auth/register", self.auth_register)
+        app.router.add_post("/api/auth/guest", self.auth_guest)
+        app.router.add_post("/api/auth/logout", self.auth_logout)
         app.router.add_get("/api/bots", self.get_bots)
         app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
@@ -1472,6 +1682,7 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/workspace/quick-open", self.get_workspace_quick_open)
         app.router.add_get("/api/bots/{alias}/workspace/search", self.get_workspace_search)
         app.router.add_get("/api/bots/{alias}/workspace/outline", self.get_workspace_outline)
+        app.router.add_post("/api/bots/{alias}/workspace/resolve-definition", self.post_workspace_resolve_definition)
         app.router.add_post("/api/bots/{alias}/cd", self.post_cd)
         app.router.add_post("/api/bots/{alias}/reset", self.post_reset)
         app.router.add_post("/api/bots/{alias}/kill", self.post_kill)

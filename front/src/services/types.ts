@@ -1,5 +1,22 @@
 export type CliType = "claude" | "codex";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
+export type AccountRole = "member" | "guest";
+export type Capability =
+  | "view_bots"
+  | "view_bot_status"
+  | "view_file_tree"
+  | "mutate_browse_state"
+  | "view_chat_history"
+  | "view_chat_trace"
+  | "read_file_content"
+  | "write_files"
+  | "chat_send"
+  | "terminal_exec"
+  | "debug_exec"
+  | "git_ops"
+  | "run_scripts"
+  | "manage_cli_params"
+  | "admin_ops";
 
 export type BotSummary = {
   alias: string;
@@ -191,6 +208,18 @@ export type WorkspaceOutlineResult = {
   items: WorkspaceOutlineItem[];
 };
 
+export type WorkspaceDefinitionItem = {
+  path: string;
+  line: number;
+  column?: number;
+  matchKind: "import" | "same_file" | "workspace_search";
+  confidence: number;
+};
+
+export type WorkspaceDefinitionResult = {
+  items: WorkspaceDefinitionItem[];
+};
+
 export type ChatAttachmentUploadResult = {
   filename: string;
   savedPath: string;
@@ -215,8 +244,14 @@ export type SessionState = {
   currentBotAlias: string;
   currentPath: string;
   isLoggedIn: boolean;
-  canExec: boolean;
-  canAdmin: boolean;
+  token?: string;
+  userId?: number;
+  accountId?: string;
+  username: string;
+  role: AccountRole;
+  capabilities: Capability[];
+  tokenProtected?: boolean;
+  allowedUserIds?: number[];
 };
 
 export type DebugProfile = {

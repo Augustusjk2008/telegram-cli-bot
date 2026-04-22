@@ -5,6 +5,7 @@ import type { DesktopSidebarView } from "./workbenchTypes";
 type Props = {
   activePanel: DesktopSidebarView;
   sidebarCollapsed: boolean;
+  availablePanels?: DesktopSidebarView[];
   onToggleSidebar: () => void;
   onSelectPanel: (panel: DesktopSidebarView) => void;
 };
@@ -21,9 +22,13 @@ const ITEMS: Array<{ id: DesktopSidebarView; label: string; icon: typeof Files }
 export function WorkbenchActivityRail({
   activePanel,
   sidebarCollapsed,
+  availablePanels,
   onToggleSidebar,
   onSelectPanel,
 }: Props) {
+  const items = availablePanels?.length
+    ? ITEMS.filter((item) => availablePanels.includes(item.id))
+    : ITEMS;
   return (
     <aside
       data-testid="desktop-workbench-activity-rail"
@@ -37,7 +42,7 @@ export function WorkbenchActivityRail({
       >
         {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </button>
-      {ITEMS.map(({ id, label, icon: Icon }) => (
+      {items.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
           type="button"

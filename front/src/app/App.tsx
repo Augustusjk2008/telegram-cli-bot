@@ -16,7 +16,7 @@ import {
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import type { BotStatus, BotSummary, PublicHostInfo } from "../services/types";
+import type { BotStatus, BotSummary, PublicHostInfo, SessionState } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -48,10 +48,12 @@ import {
   type ChatBodyParagraphSpacingName,
   type UiThemeName,
 } from "../theme";
+import { hasCapability, isGuest } from "../utils/capabilities";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
-const TOKEN_STORAGE_KEY = "web-api-token";
+const SESSION_TOKEN_STORAGE_KEY = "web-session-token";
+const LEGACY_TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
 const UNREAD_STORAGE_KEY = "web-unread-bots";
 const MAX_CACHED_CHAT_SCREENS = 3;
@@ -61,7 +63,11 @@ const TerminalScreen = lazy(() =>
 
 function readStoredToken() {
   try {
-    return sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() || "";
+    return (
+      sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY)?.trim()
+      || sessionStorage.getItem(LEGACY_TOKEN_STORAGE_KEY)?.trim()
+      || ""
+    );
   } catch {
     return "";
   }
@@ -71,14 +77,16 @@ function storeToken(token: string) {
   const trimmed = token.trim();
   if (!trimmed) {
     try {
-      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      sessionStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
     } catch {
       // Ignore storage failures and keep the in-memory state.
     }
     return;
   }
   try {
-    sessionStorage.setItem(TOKEN_STORAGE_KEY, trimmed);
+    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
+    sessionStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
@@ -86,7 +94,8 @@ function storeToken(token: string) {
 
 function clearStoredToken() {
   try {
-    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+    sessionStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
@@ -211,7 +220,7 @@ export function App() {
   const [chatBodyParagraphSpacing, setChatBodyParagraphSpacing] = useState<ChatBodyParagraphSpacingName>(() => readStoredChatBodyParagraphSpacing());
   const [viewMode, setViewMode] = useState<ViewMode>(() => readStoredViewMode());
   const [viewportWidth, setViewportWidth] = useState(() => readViewportWidth());
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [session, setSession] = useState<SessionState | null>(null);
   const [currentTab, setCurrentTab] = useState<AppTab>("chat");
   const [currentBot, setCurrentBot] = useState<string | null>(null);
   const [showBotManager, setShowBotManager] = useState(false);
@@ -228,6 +237,15 @@ export function App() {
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
+  const isLoggedIn = Boolean(session?.isLoggedIn);
+  const chatReadOnly = !hasCapability(session, "chat_send");
+  const allowTrace = hasCapability(session, "view_chat_trace");
+  const structureOnly = !hasCapability(session, "read_file_content");
+  const canUseTerminal = hasCapability(session, "terminal_exec");
+  const canUseDebug = hasCapability(session, "debug_exec");
+  const canUseGit = hasCapability(session, "git_ops");
+  const canUseSettings = hasCapability(session, "admin_ops");
+  const canManageBots = hasCapability(session, "admin_ops");
   const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots), [bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
   const hasUnreadOtherBots = useMemo(() => {
@@ -286,6 +304,30 @@ export function App() {
     }
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      return;
+    }
+    const allowedTabs: AppTab[] = ["chat", "files"];
+    if (canUseDebug) {
+      allowedTabs.push("debug");
+    }
+    if (canUseTerminal) {
+      allowedTabs.push("terminal");
+    }
+    if (canUseGit) {
+      allowedTabs.push("git");
+    }
+    if (canUseSettings) {
+      allowedTabs.push("settings");
+    }
+    if (!allowedTabs.includes(currentTab)) {
+      setCurrentTab("chat");
+      setIsChatImmersive(false);
+      setIsTerminalImmersive(false);
+    }
+  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, currentTab, isLoggedIn]);
 
   useEffect(() => {
     storeViewMode(viewMode);
@@ -390,43 +432,44 @@ export function App() {
 
   useEffect(() => {
     const storedToken = readStoredToken();
-    if (!storedToken) {
+    if (!storedToken && useMockClient) {
       return;
     }
-
     const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
-    nextClient.login(storedToken)
-      .then((session) => {
-        const restoredAlias = readStoredBotAlias() || session.currentBotAlias || "";
+    nextClient.restoreSession(storedToken)
+      .then((nextSession) => {
+        const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
         setClient(nextClient);
-        setIsLoggedIn(true);
+        setSession(nextSession);
         setCurrentBot(restoredAlias || null);
-      setShowBotManager(false);
-      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
-      setDesktopChatStatusByBot({});
-      setLoginError("");
-      setIsTerminalImmersive(false);
+        setShowBotManager(false);
+        setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+        setDesktopChatStatusByBot({});
+        setLoginError("");
+        setIsTerminalImmersive(false);
       })
       .catch(() => {
-        clearStoredToken();
-        setLoginError("本地保存的访问口令已失效，请重新登录");
+        if (storedToken) {
+          clearStoredToken();
+          setLoginError("本地登录已失效，请重登");
+        }
       })
       .finally(() => {
         setLoginLoading(false);
       });
   }, [useMockClient]);
 
-  async function handleLogin(token: string) {
+  async function handleLogin(input: { username: string; password: string }) {
     const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
     setLoginError("");
     try {
-      const session = await nextClient.login(token);
-      const restoredAlias = readStoredBotAlias() || session.currentBotAlias || "";
-      storeToken(token);
+      const nextSession = await nextClient.login(input);
+      const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      storeToken(nextSession.token || "");
       setClient(nextClient);
-      setIsLoggedIn(true);
+      setSession(nextSession);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
@@ -439,11 +482,56 @@ export function App() {
     }
   }
 
+  async function handleRegister(input: { username: string; password: string; registerCode: string }) {
+    const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      const nextSession = await nextClient.register(input);
+      const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      storeToken(nextSession.token || "");
+      setClient(nextClient);
+      setSession(nextSession);
+      setCurrentBot(restoredAlias || null);
+      setShowBotManager(false);
+      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setDesktopChatStatusByBot({});
+      setIsTerminalImmersive(false);
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "注册失败");
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleGuestLogin() {
+    const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      const nextSession = await nextClient.loginGuest();
+      const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      storeToken(nextSession.token || "");
+      setClient(nextClient);
+      setSession(nextSession);
+      setCurrentBot(restoredAlias || null);
+      setShowBotManager(false);
+      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setDesktopChatStatusByBot({});
+      setIsTerminalImmersive(false);
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "进入失败");
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
   function handleLogout() {
+    void client.logout().catch(() => undefined);
     clearStoredToken();
     storeUnreadBots([]);
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
-    setIsLoggedIn(false);
+    setSession(null);
     setCurrentBot(null);
     setShowBotManager(false);
     setCurrentTab("chat");
@@ -501,11 +589,20 @@ export function App() {
   }
 
   if (!isLoggedIn) {
-    return <LoginScreen onLogin={handleLogin} isLoading={loginLoading} error={loginError} hostInfo={publicHostInfo} />;
+    return (
+      <LoginScreen
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+        onGuestLogin={handleGuestLogin}
+        isLoading={loginLoading}
+        error={loginError}
+        hostInfo={publicHostInfo}
+      />
+    );
   }
 
   if (showBotManager || !currentBot) {
-    return <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} />;
+    return <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} canManage={canManageBots} />;
   }
 
   const hideOuterChrome = (currentTab === "chat" && isChatImmersive)
@@ -523,6 +620,8 @@ export function App() {
               botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
               userAvatarName={userAvatarName}
               isVisible={alias === currentBot}
+              readOnly={chatReadOnly}
+              allowTrace={allowTrace}
               isImmersive={alias === currentBot ? isChatImmersive : false}
               onToggleImmersive={alias === currentBot
                 ? () => setIsChatImmersive((prev) => !prev)
@@ -541,10 +640,11 @@ export function App() {
           botAlias={currentBot}
           botAvatarName={currentBotSummary?.avatarName}
           client={client}
+          structureOnly={structureOnly}
         />
       </div>
     );
-  } else if (currentTab === "debug") {
+  } else if (currentTab === "debug" && canUseDebug) {
     activeScreen = (
       <div className="absolute inset-0">
         <MobileDebugScreen
@@ -554,7 +654,7 @@ export function App() {
         />
       </div>
     );
-  } else if (currentTab === "terminal") {
+  } else if (currentTab === "terminal" && canUseTerminal) {
     activeScreen = (
       <div className="absolute inset-0">
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
@@ -571,13 +671,13 @@ export function App() {
         </Suspense>
       </div>
     );
-  } else if (currentTab === "git") {
+  } else if (currentTab === "git" && canUseGit) {
     activeScreen = (
       <div className="absolute inset-0">
         <GitScreen key={`git-${currentBot}`} botAlias={currentBot} botAvatarName={currentBotSummary?.avatarName} client={client} />
       </div>
     );
-  } else if (currentTab === "settings") {
+  } else if (currentTab === "settings" && canUseSettings) {
     activeScreen = (
       <div className="absolute inset-0">
         <SettingsScreen
@@ -629,6 +729,10 @@ export function App() {
           botAvatarName={currentBotSummary?.avatarName}
           userAvatarName={userAvatarName}
           client={client}
+          structureOnly={structureOnly}
+          chatReadOnly={chatReadOnly}
+          allowTrace={allowTrace}
+          allowCodeJump={!structureOnly && !isGuest(session)}
           themeName={themeName}
           onThemeChange={handleThemeChange}
           chatBodyFontFamily={chatBodyFontFamily}
@@ -653,6 +757,8 @@ export function App() {
                     botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
                     userAvatarName={userAvatarName}
                     isVisible={alias === currentBot && desktopChatPaneVisible}
+                    readOnly={chatReadOnly}
+                    allowTrace={allowTrace}
                     embedded
                     onUnreadResult={markBotUnread}
                     onWorkbenchStatusChange={(status) => {
@@ -692,6 +798,7 @@ export function App() {
   return (
     <>
       <MobileShell
+        session={session}
         currentBot={currentBot}
         currentTab={currentTab}
         hideOuterChrome={hideOuterChrome}

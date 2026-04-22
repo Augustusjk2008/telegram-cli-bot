@@ -95,7 +95,8 @@ function ancestorPathsForPath(path: string) {
   return ancestors;
 }
 
-export function useFileTree(botAlias: string, client: WebBotClient): UseFileTreeResult {
+export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean }): UseFileTreeResult {
+  const structureOnly = options?.structureOnly === true;
   const [rootPath, setRootPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -161,7 +162,9 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
     setError("");
     try {
       const nextRootPath = await client.getCurrentPath(botAlias);
-      await client.changeDirectory(botAlias, nextRootPath);
+      if (!structureOnly) {
+        await client.changeDirectory(botAlias, nextRootPath);
+      }
       const listing = await client.listFiles(botAlias, nextRootPath);
       const nextExpandedPaths = preserveExpandedPaths ? expandedPathsRef.current : [];
       const normalizedExpandedPaths = uniqueExpandedPaths(nextExpandedPaths);
@@ -186,7 +189,7 @@ export function useFileTree(botAlias: string, client: WebBotClient): UseFileTree
     } finally {
       setLoading(false);
     }
-  }, [botAlias, client, loadExpandedPathsForRoot]);
+  }, [botAlias, client, loadExpandedPathsForRoot, structureOnly]);
 
   useEffect(() => {
     void refreshRoot();

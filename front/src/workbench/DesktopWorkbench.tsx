@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult } from "../services/types";
+import type { FileReadResult, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { GitScreen } from "../screens/GitScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
@@ -50,6 +50,10 @@ type Props = {
   botAvatarName?: string;
   userAvatarName?: string;
   client?: WebBotClient;
+  structureOnly?: boolean;
+  chatReadOnly?: boolean;
+  allowTrace?: boolean;
+  allowCodeJump?: boolean;
   themeName?: UiThemeName;
   onThemeChange?: (themeName: UiThemeName) => void;
   chatBodyFontFamily?: ChatBodyFontFamilyName;
@@ -78,6 +82,10 @@ export function DesktopWorkbench({
   client = new MockWebBotClient(),
   botAlias,
   userAvatarName,
+  structureOnly = false,
+  chatReadOnly = false,
+  allowTrace = true,
+  allowCodeJump = true,
   themeName,
   onThemeChange,
   chatBodyFontFamily,
@@ -100,7 +108,7 @@ export function DesktopWorkbench({
   onChatPaneVisibilityChange,
 }: Props) {
   const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, resizePane } = useWorkbenchState();
-  const fileTree = useFileTree(botAlias, client);
+  const fileTree = useFileTree(botAlias, client, { structureOnly });
   const tabs = useEditorTabs({ botAlias, client });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
@@ -137,6 +145,9 @@ export function DesktopWorkbench({
   const [gitBranchName, setGitBranchName] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
+  const [definitionCandidates, setDefinitionCandidates] = useState<WorkspaceDefinitionItem[]>([]);
+  const [definitionMessage, setDefinitionMessage] = useState("");
+  const [definitionSource, setDefinitionSource] = useState("");
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -146,7 +157,7 @@ export function DesktopWorkbench({
     authToken,
     botAlias,
     client,
-    enabled: layoutState.sidebarView === "debug",
+    enabled: !structureOnly && layoutState.sidebarView === "debug",
     onRevealLocation: ({ sourcePath }) => {
       void tabs.openFile(sourcePath);
     },
@@ -167,26 +178,37 @@ export function DesktopWorkbench({
       : null,
   });
 
-  const showTerminalPane = focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed);
+  const showTerminalPane = !structureOnly && (focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed));
   const showChatPane = focusedPane === "chat" || (!focusedPane && !layoutState.chatCollapsed);
-  const columnTemplate = focusedPane === "sidebar"
-    ? "minmax(0, 1fr) 0px 0px 0px 0px"
-    : focusedPane === "chat"
-      ? "0px 0px 0px 0px minmax(0, 1fr)"
-      : focusedPane === "editor" || focusedPane === "terminal"
-        ? "0px 0px minmax(0, 1fr) 0px 0px"
-        : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`;
-  const centerRowTemplate = focusedPane === "editor"
-    ? "minmax(0, 1fr) 0px 0px"
-    : focusedPane === "terminal"
-      ? `0px 0px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`
-      : layoutState.terminalCollapsed
-        ? "minmax(0, 1fr) 0px 0px"
-        : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
+  const columnTemplate = structureOnly
+    ? focusedPane === "sidebar"
+      ? "minmax(0, 1fr) 0px 0px 0px 0px"
+      : focusedPane === "chat"
+        ? "0px 0px 0px 0px minmax(0, 1fr)"
+        : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px 0px ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`
+    : focusedPane === "sidebar"
+      ? "minmax(0, 1fr) 0px 0px 0px 0px"
+      : focusedPane === "chat"
+        ? "0px 0px 0px 0px minmax(0, 1fr)"
+        : focusedPane === "editor" || focusedPane === "terminal"
+          ? "0px 0px minmax(0, 1fr) 0px 0px"
+          : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`;
+  const centerRowTemplate = structureOnly
+    ? "0px 0px 0px"
+    : focusedPane === "editor"
+      ? "minmax(0, 1fr) 0px 0px"
+      : focusedPane === "terminal"
+        ? `0px 0px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`
+        : layoutState.terminalCollapsed
+          ? "minmax(0, 1fr) 0px 0px"
+          : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
+  const availableSidebarPanels = structureOnly
+    ? ["files"] as const
+    : ["files", "search", "outline", "debug", "git", "settings"] as const;
   const activeEditorLine = tabs.activeTab && editorReveal?.path === tabs.activeTab.path
     ? editorReveal.line
     : tabs.activeTab
@@ -311,7 +333,16 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, terminalStatus.currentCwd]);
 
   useEffect(() => {
+    if (structureOnly && layoutState.sidebarView !== "files") {
+      setSidebarView("files");
+    }
+  }, [layoutState.sidebarView, setSidebarView, structureOnly]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (structureOnly) {
+        return;
+      }
       const key = event.key.toLowerCase();
       const primary = event.ctrlKey || event.metaKey;
       if (!primary) {
@@ -332,7 +363,7 @@ export function DesktopWorkbench({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [setSidebarView]);
+  }, [setSidebarView, structureOnly]);
 
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
@@ -354,9 +385,47 @@ export function DesktopWorkbench({
   }
 
   async function openWorkspaceFile(path: string, line?: number) {
-    await tabs.openFile(path);
+    await Promise.allSettled([
+      tabs.openFile(path),
+      fileTree.revealPath(path),
+    ]);
     if (line && line > 0) {
       setEditorReveal({ path, line });
+      return;
+    }
+    setEditorReveal(null);
+  }
+
+  function clearDefinitionOverlay() {
+    setDefinitionCandidates([]);
+    setDefinitionMessage("");
+    setDefinitionSource("");
+  }
+
+  async function handleResolveDefinition(input: { path: string; line: number; column: number; symbol?: string }) {
+    if (!allowCodeJump || structureOnly) {
+      return;
+    }
+    try {
+      const result = await client.resolveWorkspaceDefinition(botAlias, input);
+      if (result.items.length === 1) {
+        clearDefinitionOverlay();
+        await openWorkspaceFile(result.items[0].path, result.items[0].line);
+        return;
+      }
+      if (result.items.length > 1) {
+        setDefinitionCandidates(result.items);
+        setDefinitionMessage("");
+        setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+        return;
+      }
+      setDefinitionCandidates([]);
+      setDefinitionMessage("未找到定义");
+      setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+    } catch (error) {
+      setDefinitionCandidates([]);
+      setDefinitionMessage(error instanceof Error ? error.message : "解析定义失败");
+      setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
     }
   }
 
@@ -369,6 +438,39 @@ export function DesktopWorkbench({
   }
 
   function renderSidebarContent() {
+    if (structureOnly || layoutState.sidebarView === "files") {
+      return (
+        <FileTreePane
+          tree={fileTree}
+          onOpenFile={(path) => {
+            void tabs.openFile(path);
+          }}
+          onCreatedFile={(path, content, lastModifiedNs) => {
+            tabs.openCreatedFile(path, content, lastModifiedNs);
+            fileTree.highlightPath(path);
+          }}
+          onRenamedFile={(oldPath, nextPath) => {
+            tabs.syncRenamedPath(oldPath, nextPath);
+            fileTree.highlightPath(nextPath);
+          }}
+          onDeletedFile={(path) => {
+            tabs.closePath(path);
+          }}
+          onRequestPreview={(path) => {
+            void loadPreview(path, "preview");
+          }}
+          onRequestUpload={handleUpload}
+          onRequestSetWorkdir={(path) => {
+            setPendingSidebarWorkdir(path);
+            setSidebarView("settings");
+          }}
+          structureOnly={structureOnly}
+          focused={focusedPane === "sidebar"}
+          onToggleFocus={() => toggleFocusedPane("sidebar")}
+        />
+      );
+    }
+
     if (layoutState.sidebarView === "search") {
       return (
         <SearchPane
@@ -472,36 +574,6 @@ export function DesktopWorkbench({
         />
       );
     }
-
-    return (
-      <FileTreePane
-        tree={fileTree}
-        onOpenFile={(path) => {
-          void tabs.openFile(path);
-        }}
-        onCreatedFile={(path, content, lastModifiedNs) => {
-          tabs.openCreatedFile(path, content, lastModifiedNs);
-          fileTree.highlightPath(path);
-        }}
-        onRenamedFile={(oldPath, nextPath) => {
-          tabs.syncRenamedPath(oldPath, nextPath);
-          fileTree.highlightPath(nextPath);
-        }}
-        onDeletedFile={(path) => {
-          tabs.closePath(path);
-        }}
-        onRequestPreview={(path) => {
-          void loadPreview(path, "preview");
-        }}
-        onRequestUpload={handleUpload}
-        onRequestSetWorkdir={(path) => {
-          setPendingSidebarWorkdir(path);
-          setSidebarView("settings");
-        }}
-        focused={focusedPane === "sidebar"}
-        onToggleFocus={() => toggleFocusedPane("sidebar")}
-      />
-    );
   }
 
   return (
@@ -529,8 +601,9 @@ export function DesktopWorkbench({
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
         sidebarVisible={!layoutState.sidebarCollapsed}
-        terminalVisible={!layoutState.terminalCollapsed}
+        terminalVisible={!structureOnly && !layoutState.terminalCollapsed}
         chatVisible={!layoutState.chatCollapsed}
+        availableLayoutControls={structureOnly ? ["sidebar", "chat"] : undefined}
         onToggleSidebar={toggleSidebar}
         onToggleTerminal={toggleTerminal}
         onToggleChat={toggleChat}
@@ -560,6 +633,7 @@ export function DesktopWorkbench({
               <WorkbenchActivityRail
                 activePanel={layoutState.sidebarView}
                 sidebarCollapsed={layoutState.sidebarCollapsed}
+                availablePanels={[...availableSidebarPanels]}
                 onToggleSidebar={toggleSidebar}
                 onSelectPanel={setSidebarView}
               />
@@ -592,44 +666,50 @@ export function DesktopWorkbench({
             className="grid min-h-0 overflow-hidden"
             style={{ gridTemplateRows: centerRowTemplate }}
           >
-            <section
-              data-testid="desktop-pane-editor"
-              ref={editorPaneRef}
-              data-focused={focusedPane === "editor" ? "true" : "false"}
-              className="desktop-workbench-pane min-h-0 overflow-hidden"
-            >
-              <EditorPane
-                tabs={tabs.tabs}
-                activeTab={tabs.activeTab}
-                activeTabPath={tabs.activeTabPath}
-                breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                currentLine={activeEditorLine}
-                onToggleBreakpoint={tabs.activeTab
-                  ? (line) => {
-                      void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
-                    }
-                  : undefined}
-                onActivateTab={(path) => {
-                  void tabs.activateTab(path);
-                }}
-                onCloseTab={tabs.closeTab}
-                onChangeActiveContent={tabs.updateActiveContent}
-                onSaveActiveTab={() => void tabs.saveActiveTab()}
-                onCloseOthers={tabs.closeOtherTabs}
-                onCloseTabsToRight={tabs.closeTabsToRight}
-                onReopenLastClosed={() => {
-                  void tabs.reopenLastClosedTab();
-                }}
-                onRevealInTree={(path) => {
-                  setSidebarView("files");
-                  void fileTree.revealPath(path);
-                }}
-                focused={focusedPane === "editor"}
-                onToggleFocus={() => toggleFocusedPane("editor")}
-              />
-            </section>
+            {!structureOnly ? (
+              <section
+                data-testid="desktop-pane-editor"
+                ref={editorPaneRef}
+                data-focused={focusedPane === "editor" ? "true" : "false"}
+                className="desktop-workbench-pane min-h-0 overflow-hidden"
+              >
+                <EditorPane
+                  tabs={tabs.tabs}
+                  activeTab={tabs.activeTab}
+                  activeTabPath={tabs.activeTabPath}
+                  breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                  currentLine={activeEditorLine}
+                  allowCodeJump={allowCodeJump}
+                  onResolveDefinition={(input) => {
+                    void handleResolveDefinition(input);
+                  }}
+                  onToggleBreakpoint={tabs.activeTab
+                    ? (line) => {
+                        void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                      }
+                    : undefined}
+                  onActivateTab={(path) => {
+                    void tabs.activateTab(path);
+                  }}
+                  onCloseTab={tabs.closeTab}
+                  onChangeActiveContent={tabs.updateActiveContent}
+                  onSaveActiveTab={() => void tabs.saveActiveTab()}
+                  onCloseOthers={tabs.closeOtherTabs}
+                  onCloseTabsToRight={tabs.closeTabsToRight}
+                  onReopenLastClosed={() => {
+                    void tabs.reopenLastClosedTab();
+                  }}
+                  onRevealInTree={(path) => {
+                    setSidebarView("files");
+                    void fileTree.revealPath(path);
+                  }}
+                  focused={focusedPane === "editor"}
+                  onToggleFocus={() => toggleFocusedPane("editor")}
+                />
+              </section>
+            ) : null}
 
-            {!focusedPane && showTerminalPane ? (
+            {!structureOnly && !focusedPane && showTerminalPane ? (
               <PaneResizer
                 ariaLabel="调整编辑器高度"
                 axis="y"
@@ -643,37 +723,39 @@ export function DesktopWorkbench({
               <div aria-hidden="true" />
             )}
 
-            <section
-              data-testid="desktop-pane-terminal"
-              data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
-              data-focused={focusedPane === "terminal" ? "true" : "false"}
-              className={clsx(
-                "desktop-workbench-pane min-h-0 overflow-hidden",
-                !showTerminalPane && "hidden",
-              )}
-            >
-              <TerminalPane
-                authToken={authToken}
-                botAlias={botAlias}
-                client={client}
-                preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
-                pendingWorkingDir={pendingTerminalOverride?.cwd}
-                themeName={themeName}
-                visible={showTerminalPane}
-                focused={focusedPane === "terminal"}
-                onToggleFocus={() => toggleFocusedPane("terminal")}
-                onWorkbenchStatusChange={setTerminalStatus}
-                onAcceptPendingWorkingDir={() => {
-                  if (pendingTerminalOverride) {
-                    setTerminalOverride(pendingTerminalOverride);
-                  }
-                  setPendingTerminalOverride(null);
-                }}
-                onCancelPendingWorkingDir={() => {
-                  setPendingTerminalOverride(null);
-                }}
-              />
-            </section>
+            {!structureOnly ? (
+              <section
+                data-testid="desktop-pane-terminal"
+                data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
+                data-focused={focusedPane === "terminal" ? "true" : "false"}
+                className={clsx(
+                  "desktop-workbench-pane min-h-0 overflow-hidden",
+                  !showTerminalPane && "hidden",
+                )}
+              >
+                <TerminalPane
+                  authToken={authToken}
+                  botAlias={botAlias}
+                  client={client}
+                  preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
+                  pendingWorkingDir={pendingTerminalOverride?.cwd}
+                  themeName={themeName}
+                  visible={showTerminalPane}
+                  focused={focusedPane === "terminal"}
+                  onToggleFocus={() => toggleFocusedPane("terminal")}
+                  onWorkbenchStatusChange={setTerminalStatus}
+                  onAcceptPendingWorkingDir={() => {
+                    if (pendingTerminalOverride) {
+                      setTerminalOverride(pendingTerminalOverride);
+                    }
+                    setPendingTerminalOverride(null);
+                  }}
+                  onCancelPendingWorkingDir={() => {
+                    setPendingTerminalOverride(null);
+                  }}
+                />
+              </section>
+            ) : null}
           </div>
 
           {!focusedPane && showChatPane ? (
@@ -705,6 +787,8 @@ export function DesktopWorkbench({
                 botAvatarName={botAvatarName}
                 userAvatarName={userAvatarName}
                 client={client}
+                readOnly={chatReadOnly}
+                allowTrace={allowTrace}
                 visible={showChatPane}
                 focused={focusedPane === "chat"}
                 onToggleFocus={() => toggleFocusedPane("chat")}
@@ -727,13 +811,15 @@ export function DesktopWorkbench({
         viewMode={viewMode}
       />
 
-      <CommandPalette
-        open={commandPaletteOpen}
-        botAlias={botAlias}
-        client={client}
-        onClose={() => setCommandPaletteOpen(false)}
-        onOpenFile={openWorkspaceFile}
-      />
+      {!structureOnly ? (
+        <CommandPalette
+          open={commandPaletteOpen}
+          botAlias={botAlias}
+          client={client}
+          onClose={() => setCommandPaletteOpen(false)}
+          onOpenFile={openWorkspaceFile}
+        />
+      ) : null}
 
       {previewName ? (
         <FilePreviewDialog
@@ -759,6 +845,59 @@ export function DesktopWorkbench({
           }}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
+      ) : null}
+
+      {definitionCandidates.length > 0 || definitionMessage ? (
+        <div className="absolute inset-0 z-30 flex items-start justify-center bg-black/35 px-4 py-12">
+          <div
+            data-testid="desktop-definition-picker"
+            className="w-full max-w-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-[var(--text)]">代码跳转</div>
+                <div className="text-xs text-[var(--muted)]">{definitionSource || "当前位置"}</div>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭代码跳转"
+                onClick={clearDefinitionOverlay}
+                className="rounded border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+              >
+                关闭
+              </button>
+            </div>
+            {definitionMessage ? (
+              <div className="px-4 py-4 text-sm text-[var(--muted)]">{definitionMessage}</div>
+            ) : (
+              <div className="max-h-[min(60vh,28rem)] overflow-y-auto">
+                {definitionCandidates.map((item) => (
+                  <button
+                    key={`${item.path}:${item.line}:${item.column || 0}:${item.matchKind}`}
+                    type="button"
+                    onClick={() => {
+                      clearDefinitionOverlay();
+                      void openWorkspaceFile(item.path, item.line);
+                    }}
+                    className="flex w-full items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-strong)]"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-[var(--text)]">{item.path}</div>
+                      <div className="mt-1 text-xs text-[var(--muted)]">
+                        第 {item.line} 行
+                        {item.column ? `，列 ${item.column}` : ""}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right text-[11px] text-[var(--muted)]">
+                      <div>{item.matchKind}</div>
+                      <div>{Math.round(item.confidence * 100)}%</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       ) : null}
     </div>
   );

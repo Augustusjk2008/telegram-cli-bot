@@ -1,5 +1,6 @@
 import { WebApiClientError } from "./types";
 import type {
+  Capability,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   AssistantCronJob,
@@ -34,6 +35,7 @@ import type {
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
+  WorkspaceDefinitionResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -50,6 +52,29 @@ import {
 import { APP_VERSION } from "../theme";
 
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
+const MEMBER_CAPABILITIES: Capability[] = [
+  "view_bots",
+  "view_bot_status",
+  "view_file_tree",
+  "mutate_browse_state",
+  "view_chat_history",
+  "view_chat_trace",
+  "read_file_content",
+  "write_files",
+  "chat_send",
+  "terminal_exec",
+  "debug_exec",
+  "git_ops",
+  "run_scripts",
+  "manage_cli_params",
+  "admin_ops",
+];
+const GUEST_CAPABILITIES: Capability[] = [
+  "view_bots",
+  "view_bot_status",
+  "view_file_tree",
+  "view_chat_history",
+];
 
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
@@ -156,6 +181,15 @@ export class MockWebBotClient implements WebBotClient {
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
   private fileContents = new Map<string, string>();
   private fileVersions = new Map<string, number>();
+  private session: SessionState = {
+    currentBotAlias: "main",
+    currentPath: "/",
+    isLoggedIn: true,
+    token: "mock-session-member",
+    username: "demo",
+    role: "member",
+    capabilities: [...MEMBER_CAPABILITIES],
+  };
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -244,13 +278,63 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async login(password: string): Promise<SessionState> {
-    return {
+  async login(_input: { username: string; password: string } | string): Promise<SessionState> {
+    const legacyToken = typeof _input === "string"
+      ? _input
+      : !_input.password
+        ? _input.username.trim()
+        : "";
+    this.session = {
       currentBotAlias: "main",
       currentPath: "/",
       isLoggedIn: true,
-      canExec: true,
-      canAdmin: true,
+      token: legacyToken || "mock-session-member",
+      username: "alice",
+      role: "member",
+      capabilities: [...MEMBER_CAPABILITIES],
+    };
+    return { ...this.session };
+  }
+
+  async register(input: { username: string; password: string; registerCode: string }): Promise<SessionState> {
+    this.session = {
+      currentBotAlias: "main",
+      currentPath: "/",
+      isLoggedIn: true,
+      token: "mock-session-member",
+      username: input.username,
+      role: "member",
+      capabilities: [...MEMBER_CAPABILITIES],
+    };
+    return { ...this.session };
+  }
+
+  async loginGuest(): Promise<SessionState> {
+    this.session = {
+      currentBotAlias: "main",
+      currentPath: "/",
+      isLoggedIn: true,
+      token: "mock-session-guest",
+      username: "guest",
+      role: "guest",
+      capabilities: [...GUEST_CAPABILITIES],
+    };
+    return { ...this.session };
+  }
+
+  async restoreSession(): Promise<SessionState> {
+    return { ...this.session };
+  }
+
+  async logout(): Promise<void> {
+    this.session = {
+      currentBotAlias: "",
+      currentPath: "",
+      isLoggedIn: false,
+      token: "",
+      username: "",
+      role: "guest",
+      capabilities: [],
     };
   }
 
@@ -632,6 +716,28 @@ export class MockWebBotClient implements WebBotClient {
       }
     });
     return { items };
+  }
+
+  async resolveWorkspaceDefinition(
+    botAlias: string,
+    input: { path: string; line: number; column: number; symbol?: string },
+  ): Promise<WorkspaceDefinitionResult> {
+    const symbol = input.symbol?.trim();
+    if (symbol === "run") {
+      return {
+        items: [
+          {
+            path: "src/service.py",
+            line: 12,
+            matchKind: "workspace_search",
+            confidence: 0.78,
+          },
+        ],
+      };
+    }
+    return {
+      items: [],
+    };
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

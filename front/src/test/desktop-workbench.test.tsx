@@ -193,6 +193,139 @@ test("desktop workbench keeps chat session actions visible in the embedded chat 
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
 });
 
+test("desktop workbench resolves a single definition target and opens that file", async () => {
+  const client = new MockWebBotClient();
+  const resolveDefinition = vi.spyOn(client, "resolveWorkspaceDefinition").mockResolvedValue({
+    items: [
+      {
+        path: "src/service.py",
+        line: 12,
+        matchKind: "workspace_search",
+        confidence: 0.78,
+      },
+    ],
+  });
+
+  const readFileFull = vi.spyOn(client, "readFileFull").mockImplementation(async (_botAlias, path) => ({
+    content: path === "app.py"
+      ? "from service import run\nrun()\n"
+      : "def run():\n    return 1\n",
+    mode: "cat",
+    fileSizeBytes: 64,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  }));
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (path === "/workspace/src") {
+      return {
+        workingDir: "/workspace/src",
+        entries: [{ name: "service.py", isDir: false, size: 64, updatedAt: "2026-04-22T10:00:00Z" }],
+      };
+    }
+    return {
+      workingDir: "/workspace",
+      entries: [
+        { name: "app.py", isDir: false, size: 64, updatedAt: "2026-04-22T10:00:00Z" },
+        { name: "src", isDir: true, updatedAt: "2026-04-22T10:00:00Z" },
+      ],
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await userEvent.click(await screen.findByRole("button", { name: "打开 app.py" }));
+
+  const editor = await screen.findByLabelText("文件内容");
+  (editor as HTMLTextAreaElement).setSelectionRange(25, 25);
+  fireEvent.click(editor, { button: 0, ctrlKey: true });
+
+  await waitFor(() => {
+    expect(resolveDefinition).toHaveBeenCalledWith("main", {
+      path: "app.py",
+      line: 2,
+      column: 2,
+      symbol: "run",
+    });
+  });
+  await waitFor(() => {
+    expect(readFileFull).toHaveBeenCalledWith("main", "src/service.py");
+  });
+  expect(await screen.findByRole("tab", { name: "service.py" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("desktop workbench shows a picker when multiple definition targets are returned", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "resolveWorkspaceDefinition").mockResolvedValue({
+    items: [
+      {
+        path: "src/service.py",
+        line: 12,
+        matchKind: "workspace_search",
+        confidence: 0.78,
+      },
+      {
+        path: "src/helpers.py",
+        line: 4,
+        matchKind: "workspace_search",
+        confidence: 0.52,
+      },
+    ],
+  });
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "app.py", isDir: false, size: 64, updatedAt: "2026-04-22T10:00:00Z" }],
+  });
+  vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "from service import run\nrun()\n",
+    mode: "cat",
+    fileSizeBytes: 64,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await userEvent.click(await screen.findByRole("button", { name: "打开 app.py" }));
+
+  const editor = await screen.findByLabelText("文件内容");
+  (editor as HTMLTextAreaElement).setSelectionRange(25, 25);
+  fireEvent.click(editor, { button: 0, ctrlKey: true });
+
+  expect(await screen.findByTestId("desktop-definition-picker")).toBeInTheDocument();
+  expect(screen.getByText("src/service.py")).toBeInTheDocument();
+  expect(screen.getByText("src/helpers.py")).toBeInTheDocument();
+});
+
 test("focused panes maximize into the available workbench area", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
