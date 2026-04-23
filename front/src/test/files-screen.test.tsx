@@ -437,12 +437,35 @@ test("can load full file content from preview modal", async () => {
   expect(screen.getByText("已加载全文")).toBeInTheDocument();
 });
 
-test("shows a download-only warning for files larger than 200KB", async () => {
+test("shows a download-only warning for files larger than 1MB", async () => {
   const user = userEvent.setup();
   const client = createClient({
     listFiles: async (): Promise<DirectoryListing> => ({
       workingDir: "C:\\workspace",
-      entries: [{ name: "big.log", isDir: false, size: 205 * 1024, updatedAt: "2026-04-09T10:00:00Z" }],
+      entries: [{ name: "big.log", isDir: false, size: 2 * 1024 * 1024, updatedAt: "2026-04-09T10:00:00Z" }],
+    }),
+    readFile: async () => ({
+      content: "preview line 1\npreview line 2",
+      mode: "head",
+      fileSizeBytes: 2 * 1024 * 1024,
+      isFullContent: false,
+    }),
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 big.log" }));
+
+  expect(await screen.findByText("文件超过1MB，请下载后读取全文")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+});
+
+test("keeps full-read enabled for preview files within 1MB", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "medium.log", isDir: false, size: 205 * 1024, updatedAt: "2026-04-09T10:00:00Z" }],
     }),
     readFile: async () => ({
       content: "preview line 1\npreview line 2",
@@ -454,10 +477,10 @@ test("shows a download-only warning for files larger than 200KB", async () => {
 
   render(<FilesScreen botAlias="main" client={client} />);
 
-  await user.click(await screen.findByRole("button", { name: "打开 big.log" }));
+  await user.click(await screen.findByRole("button", { name: "打开 medium.log" }));
 
-  expect(await screen.findByText("文件超过200KB，请下载后读取全文")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+  expect(screen.queryByText("文件超过1MB，请下载后读取全文")).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "全文读取" })).toBeInTheDocument();
 });
 
 test("home button resets the browser directory to the bot working directory", async () => {

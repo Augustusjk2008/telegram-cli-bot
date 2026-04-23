@@ -1,6 +1,6 @@
 import type { FileReadResult } from "../services/types";
 
-export const FILE_PREVIEW_FULL_READ_LIMIT_BYTES = 200 * 1024;
+export const FILE_PREVIEW_FULL_READ_LIMIT_BYTES = 1024 * 1024;
 
 export function isFilePreviewTooLarge(fileSizeBytes?: number) {
   return typeof fileSizeBytes === "number" && fileSizeBytes > FILE_PREVIEW_FULL_READ_LIMIT_BYTES;
@@ -18,7 +18,7 @@ export function getFilePreviewStatusText(result: FileReadResult | null) {
     return "";
   }
   if (isFilePreviewTooLarge(result.fileSizeBytes)) {
-    return "文件超过200KB，请下载后读取全文";
+    return "文件超过1MB，请下载后读取全文";
   }
   if (isFilePreviewFullyLoaded(result)) {
     return "已加载全文";
