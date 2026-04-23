@@ -688,6 +688,101 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("copyPath posts to the copy endpoint and maps the copied file", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            source_path: "README.md",
+            path: "README 副本.md",
+            file_size_bytes: 12,
+            last_modified_ns: "99",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const result = await client.copyPath("main", "README.md");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/files/copy",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ path: "README.md" }),
+      }),
+    );
+    expect(result).toEqual({
+      sourcePath: "README.md",
+      path: "README 副本.md",
+      fileSizeBytes: 12,
+      lastModifiedNs: "99",
+    });
+  });
+
+  test("movePath posts to the move endpoint and maps the new path", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            old_path: "README.md",
+            path: "docs/README.md",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const result = await client.movePath("main", "README.md", "docs");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/files/move",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          path: "README.md",
+          target_parent_path: "docs",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      oldPath: "README.md",
+      path: "docs/README.md",
+    });
+  });
+
   test("getBotOverview maps running reply snapshot", async () => {
     fetchMock
       .mockResolvedValueOnce({

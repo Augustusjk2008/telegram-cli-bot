@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { FilePlus, FolderPlus, RefreshCw, Upload } from "lucide-react";
-import { type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { FileNameDialog } from "../components/FileNameDialog";
 import type { GitTreeDecorationKind } from "../services/types";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
@@ -31,6 +31,7 @@ type TreeContextMenuState = {
 
 const TREE_CONTEXT_MENU_WIDTH_PX = 152;
 const TREE_CONTEXT_MENU_PADDING_PX = 8;
+const INTERNAL_FILE_DRAG_TYPE = "application/x-tcb-file-path";
 
 function branchLabel(path: string) {
   const parts = path.split("/");
@@ -58,11 +59,28 @@ function joinAbsoluteTreePath(rootPath: string, path: string) {
 }
 
 function resolveContextMenuPosition(x: number, y: number, isDir: boolean) {
-  const estimatedHeight = isDir ? 96 : 152;
+  const estimatedHeight = isDir ? 96 : 192;
   return {
     x: clamp(x, TREE_CONTEXT_MENU_PADDING_PX, window.innerWidth - TREE_CONTEXT_MENU_WIDTH_PX - TREE_CONTEXT_MENU_PADDING_PX),
     y: clamp(y, TREE_CONTEXT_MENU_PADDING_PX, window.innerHeight - estimatedHeight - TREE_CONTEXT_MENU_PADDING_PX),
   };
+}
+
+function parentTreePath(path: string) {
+  const lastSlash = path.lastIndexOf("/");
+  return lastSlash >= 0 ? path.slice(0, lastSlash) : "";
+}
+
+function dataTransferTypes(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer?.types || []);
+}
+
+function hasInternalFileDrag(event: DragEvent<HTMLElement>) {
+  return dataTransferTypes(event).includes(INTERNAL_FILE_DRAG_TYPE);
+}
+
+function canMoveFileToDirectory(sourcePath: string, targetDirectoryPath: string) {
+  return Boolean(sourcePath) && parentTreePath(sourcePath) !== targetDirectoryPath;
 }
 
 function resolveGitDecoration(
@@ -851,6 +869,9 @@ export function FileTreePane({
   const [renameError, setRenameError] = useState("");
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [dragDepth, setDragDepth] = useState(0);
+  const [draggedFilePath, setDraggedFilePath] = useState("");
+  const [dropTargetPath, setDropTargetPath] = useState("");
+  const [actionError, setActionError] = useState("");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const contextMenuDecoration = contextMenu
     ? resolveGitDecoration(contextMenu.entry.path, contextMenu.entry.isDir, gitDecorations)
@@ -858,6 +879,11 @@ export function FileTreePane({
 
   function closeContextMenu() {
     setContextMenu(null);
+  }
+
+  function resetInternalDrag() {
+    setDraggedFilePath("");
+    setDropTargetPath("");
   }
 
   function openRenameDialog(path: string, name: string) {
@@ -900,6 +926,7 @@ export function FileTreePane({
   async function handleCreateFile() {
     setCreateFileBusy(true);
     setCreateFileError("");
+    setActionError("");
     try {
       const result = await tree.createFile(pendingFileName.trim(), "");
       setShowCreateFileDialog(false);
@@ -916,6 +943,7 @@ export function FileTreePane({
   async function handleRenameFile() {
     setRenameBusy(true);
     setRenameError("");
+    setActionError("");
     try {
       const result = await tree.renameFile(renameTargetPath, renameValue.trim());
       closeContextMenu();
@@ -936,11 +964,12 @@ export function FileTreePane({
     if (!name) {
       return;
     }
+    setActionError("");
     try {
       await tree.createDirectory(name);
       await onRefreshGitDecorations();
-    } catch {
-      // tree.error is surfaced by the hook state
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "新建文件夹失败");
     }
   }
 
@@ -952,23 +981,102 @@ export function FileTreePane({
       return;
     }
 
-    await tree.deletePath(entry.path);
-    if (!entry.isDir) {
-      onDeletedFile(entry.path);
+    setActionError("");
+    try {
+      await tree.deletePath(entry.path);
+      if (!entry.isDir) {
+        onDeletedFile(entry.path);
+      }
+      await onRefreshGitDecorations();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "删除失败");
     }
-    await onRefreshGitDecorations();
+  }
+
+  async function handleCopyFile(path: string) {
+    setActionError("");
+    try {
+      await tree.copyFile(path);
+      await onRefreshGitDecorations();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "复制失败");
+    }
+  }
+
+  async function handleMoveFile(path: string, targetParentPath: string) {
+    if (!canMoveFileToDirectory(path, targetParentPath)) {
+      return;
+    }
+    setActionError("");
+    try {
+      const result = await tree.moveFile(path, targetParentPath);
+      onRenamedFile(result.oldPath, result.path);
+      await onRefreshGitDecorations();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "移动失败");
+    } finally {
+      resetInternalDrag();
+    }
+  }
+
+  function handleFileDragStart(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
+    if (structureOnly || entry.isDir) {
+      event.preventDefault();
+      return;
+    }
+    setDraggedFilePath(entry.path);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(INTERNAL_FILE_DRAG_TYPE, entry.path);
+    event.dataTransfer.setData("text/plain", entry.path);
+  }
+
+  function handleDirectoryDragOver(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
+    if (structureOnly || !entry.isDir || !hasInternalFileDrag(event)) {
+      return;
+    }
+    const sourcePath = draggedFilePath || event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
+    if (!canMoveFileToDirectory(sourcePath, entry.path)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetPath(entry.path);
+  }
+
+  function handleDirectoryDragLeave(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
+    if (!hasInternalFileDrag(event)) {
+      return;
+    }
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+      return;
+    }
+    setDropTargetPath((current) => current === entry.path ? "" : current);
+  }
+
+  function handleDirectoryDrop(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
+    if (structureOnly || !entry.isDir || !hasInternalFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const sourcePath = event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
+    void handleMoveFile(sourcePath, entry.path);
   }
 
   async function handleUpload(files: File[]) {
     if (files.length === 0) {
       return;
     }
+    setActionError("");
     await onRequestUpload(files);
     await tree.refreshRoot({ preserveExpandedPaths: true });
     await onRefreshGitDecorations();
   }
 
   async function handleRefresh() {
+    setActionError("");
     await tree.refreshRoot({ preserveExpandedPaths: true });
     await onRefreshGitDecorations();
   }
@@ -996,6 +1104,7 @@ export function FileTreePane({
                 data-git-state={gitDecoration || "clean"}
                 data-git-ignored={isIgnored ? "true" : "false"}
                 data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
+                data-drop-target={dropTargetPath === entry.path ? "true" : "false"}
                 style={{ paddingLeft: `${depth * 12}px` }}
               >
                 {entry.isDir ? (
@@ -1004,8 +1113,15 @@ export function FileTreePane({
                     aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
                     onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
                     onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
+                    onDragOver={(event) => handleDirectoryDragOver(event, entry)}
+                    onDragLeave={(event) => handleDirectoryDragLeave(event, entry)}
+                    onDrop={(event) => handleDirectoryDrop(event, entry)}
                     onClick={() => void tree.toggleDirectory(entry.path)}
-                    className={clsx("min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
+                    className={clsx(
+                      "min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]",
+                      dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
+                      itemToneClass,
+                    )}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <TreeNodeIcon kind={iconKind} />
@@ -1015,9 +1131,12 @@ export function FileTreePane({
                 ) : (
                   <button
                     type="button"
+                    draggable={!structureOnly}
                     aria-label={`打开 ${entry.path}`}
                     onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
                     onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
+                    onDragStart={(event) => handleFileDragStart(event, entry)}
+                    onDragEnd={resetInternalDrag}
                     onClick={() => {
                       if (!structureOnly) {
                         onOpenFile(entry.path);
@@ -1059,17 +1178,31 @@ export function FileTreePane({
     <div
       data-testid="desktop-file-tree-dropzone"
       onDragEnter={(event) => {
+        if (hasInternalFileDrag(event)) {
+          return;
+        }
         event.preventDefault();
         setDragDepth((current) => current + 1);
       }}
       onDragOver={(event) => {
+        if (hasInternalFileDrag(event)) {
+          return;
+        }
         event.preventDefault();
       }}
       onDragLeave={(event) => {
+        if (hasInternalFileDrag(event)) {
+          return;
+        }
         event.preventDefault();
         setDragDepth((current) => Math.max(0, current - 1));
       }}
       onDrop={(event) => {
+        if (hasInternalFileDrag(event)) {
+          event.preventDefault();
+          resetInternalDrag();
+          return;
+        }
         event.preventDefault();
         if (structureOnly) {
           return;
@@ -1160,6 +1293,11 @@ export function FileTreePane({
       </div>
 
       <div data-testid="desktop-file-tree-scroll" className="flex-1 overflow-y-auto px-2 py-2">
+        {actionError ? (
+          <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[12px] text-red-700">
+            {actionError}
+          </div>
+        ) : null}
         {tree.loading ? (
           <div className="px-2 py-2 text-[12px] text-[var(--muted)]">加载中...</div>
         ) : null}
@@ -1232,6 +1370,17 @@ export function FileTreePane({
                   className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                 >
                   改名
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const path = contextMenu.entry.path;
+                    closeContextMenu();
+                    void handleCopyFile(path);
+                  }}
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  复制
                 </button>
                 <button
                   type="button"

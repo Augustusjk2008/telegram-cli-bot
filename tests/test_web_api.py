@@ -53,10 +53,12 @@ from bot.web.api_service import (
     kill_user_process,
     list_bots,
     list_system_scripts,
+    copy_path,
     create_text_file,
     delete_chat_attachment,
     execute_assistant_run_request,
     read_file_content,
+    move_path,
     rename_path,
     run_chat,
     run_cli_chat,
@@ -1189,6 +1191,36 @@ def test_rename_path_accepts_nested_relative_path(web_manager: MultiBotManager, 
     assert result["path"] == "docs/draft.md"
     assert not (target / "notes.md").exists()
     assert (target / "draft.md").exists()
+
+def test_copy_path_creates_numbered_sibling_copy(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    source = workspace / "notes.md"
+    source.write_text("# hello\n", encoding="utf-8")
+    (workspace / "notes 副本.md").write_text("old copy\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = copy_path(web_manager, "main", 1001, "notes.md")
+
+    assert result["source_path"] == "notes.md"
+    assert result["path"] == "notes 副本 2.md"
+    assert source.read_text(encoding="utf-8") == "# hello\n"
+    assert (workspace / "notes 副本 2.md").read_text(encoding="utf-8") == "# hello\n"
+
+def test_move_path_moves_file_into_target_directory(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    target = workspace / "docs"
+    target.mkdir(parents=True)
+    source = workspace / "notes.md"
+    source.write_text("# hello\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = move_path(web_manager, "main", 1001, "notes.md", "docs")
+
+    assert result["old_path"] == "notes.md"
+    assert result["path"] == "docs/notes.md"
+    assert not source.exists()
+    assert (target / "notes.md").read_text(encoding="utf-8") == "# hello\n"
 
 def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -2327,6 +2359,52 @@ async def test_rename_path_route_renames_file(web_manager: MultiBotManager, monk
     assert payload["data"]["path"] == "draft.md"
     assert not (workspace / "notes.md").exists()
     assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
+
+@pytest.mark.asyncio
+async def test_copy_path_route_copies_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.md").write_text("# hello\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/copy", json={"path": "notes.md"})
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["source_path"] == "notes.md"
+    assert payload["data"]["path"] == "notes 副本.md"
+    assert (workspace / "notes 副本.md").read_text(encoding="utf-8") == "# hello\n"
+
+@pytest.mark.asyncio
+async def test_move_path_route_moves_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    target = workspace / "docs"
+    target.mkdir(parents=True)
+    (workspace / "notes.md").write_text("# hello\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/move", json={"path": "notes.md", "target_parent_path": "docs"})
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["old_path"] == "notes.md"
+    assert payload["data"]["path"] == "docs/notes.md"
+    assert not (workspace / "notes.md").exists()
+    assert (target / "notes.md").read_text(encoding="utf-8") == "# hello\n"
 
 @pytest.mark.asyncio
 async def test_delete_path_route_recursively_removes_directory(

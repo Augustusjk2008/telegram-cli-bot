@@ -172,7 +172,7 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
     searchRequestRef.current = 0;
     childrenRequestRef.current = {};
     treeEpochRef.current = 0;
-  }, [initialRoots, summary.statsText, view.pluginId, view.sessionId]);
+  }, [initialRoots, summary.statsText, view.pluginId, session?.sessionId]);
 
   useEffect(() => {
     if (!session) {
@@ -200,7 +200,7 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
     void client.queryPluginViewWindow(
       botAlias,
       view.pluginId,
-      view.sessionId,
+      session.sessionId,
       {
         op: "search",
         query: nextQuery,
@@ -229,7 +229,7 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
     });
 
     return () => controller.abort();
-  }, [botAlias, client, deferredQuery, session, summary.statsText, view.pluginId, view.sessionId]);
+  }, [botAlias, client, deferredQuery, session, summary.statsText, view.pluginId]);
 
   async function loadChildren(node: TreeNode) {
     if (!session || !nodeHasChildren(node)) {
@@ -241,7 +241,7 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
     setLoadingByNode((current) => ({ ...current, [node.id]: true }));
     setErrorByNode((current) => ({ ...current, [node.id]: "" }));
     try {
-      const payload = await client.queryPluginViewWindow(botAlias, view.pluginId, view.sessionId, {
+      const payload = await client.queryPluginViewWindow(botAlias, view.pluginId, session.sessionId, {
         op: "children",
         nodeId: node.id,
       });

@@ -36,8 +36,10 @@ import type {
   DirectoryListing,
   AvatarAsset,
   FileOpenTarget,
+  FileCopyResult,
   FileCreateResult,
   FileEntry,
+  FileMoveResult,
   FileReadMode,
   FileReadResult,
   FileRenameResult,
@@ -183,7 +185,19 @@ type RawFileCreateResult = {
   last_modified_ns: string | number;
 };
 
+type RawFileCopyResult = {
+  source_path: string;
+  path: string;
+  file_size_bytes: number;
+  last_modified_ns: string | number;
+};
+
 type RawFileRenameResult = {
+  old_path: string;
+  path: string;
+};
+
+type RawFileMoveResult = {
   old_path: string;
   path: string;
 };
@@ -1626,6 +1640,36 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ path, new_name: newName }),
+    });
+    return {
+      oldPath: data.old_path,
+      path: data.path,
+    };
+  }
+
+  async copyPath(botAlias: string, path: string): Promise<FileCopyResult> {
+    const data = await this.requestJson<RawFileCopyResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/copy`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+    return {
+      sourcePath: data.source_path,
+      path: data.path,
+      fileSizeBytes: data.file_size_bytes,
+      lastModifiedNs: String(data.last_modified_ns),
+    };
+  }
+
+  async movePath(botAlias: string, path: string, targetParentPath: string): Promise<FileMoveResult> {
+    const data = await this.requestJson<RawFileMoveResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/move`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path, target_parent_path: targetParentPath }),
     });
     return {
       oldPath: data.old_path,

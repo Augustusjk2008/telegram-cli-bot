@@ -1307,6 +1307,81 @@ def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, n
     }
 
 
+def _build_copy_filename(source_name: str, directory: str) -> str:
+    stem, suffix = os.path.splitext(source_name)
+    candidate = f"{stem} 副本{suffix}"
+    counter = 2
+    while os.path.exists(os.path.join(directory, candidate)):
+        candidate = f"{stem} 副本 {counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def copy_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
+    _ensure_file_browser_supported(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
+    source_rel = str(path or "").strip().replace("\\", "/")
+    if not source_rel:
+        _raise(400, "invalid_copy_path", "缺少待复制路径")
+
+    source_path = _resolve_safe_write_path(browser_dir, source_rel)
+    if not os.path.isfile(source_path):
+        _raise(404, "file_not_found", "文件不存在")
+
+    target_name = _build_copy_filename(os.path.basename(source_path), os.path.dirname(source_path))
+    target_path = os.path.abspath(os.path.join(os.path.dirname(source_path), target_name))
+
+    try:
+        shutil.copy2(source_path, target_path)
+    except FileExistsError:
+        _raise(409, "copy_target_exists", "目标已存在")
+    except Exception as exc:
+        _raise(500, "copy_path_failed", str(exc))
+
+    target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
+    return {
+        "source_path": source_rel,
+        "path": target_relative_path,
+        "file_size_bytes": os.path.getsize(target_path),
+        "last_modified_ns": _stat_file_version(target_path),
+    }
+
+
+def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, target_parent_path: str) -> dict[str, Any]:
+    _ensure_file_browser_supported(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
+    source_rel = str(path or "").strip().replace("\\", "/")
+    if not source_rel:
+        _raise(400, "invalid_move_path", "缺少待移动路径")
+
+    source_path = _resolve_safe_write_path(browser_dir, source_rel)
+    if not os.path.isfile(source_path):
+        _raise(404, "file_not_found", "文件不存在")
+
+    target_dir = _resolve_action_parent_dir(session, target_parent_path)
+    target_path = os.path.abspath(os.path.join(target_dir, os.path.basename(source_path)))
+
+    if os.path.normcase(os.path.abspath(source_path)) == os.path.normcase(target_path):
+        _raise(400, "same_move_target", "文件已在目标文件夹中")
+    if os.path.exists(target_path):
+        _raise(409, "move_target_exists", "目标已存在")
+
+    try:
+        shutil.move(source_path, target_path)
+    except FileExistsError:
+        _raise(409, "move_target_exists", "目标已存在")
+    except Exception as exc:
+        _raise(500, "move_path_failed", str(exc))
+
+    target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
+    return {
+        "old_path": source_rel,
+        "path": target_relative_path,
+    }
+
+
 def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)

@@ -22,12 +22,15 @@ import type {
   DirectoryListing,
   AvatarAsset,
   FileOpenTarget,
+  FileCopyResult,
   FileCreateResult,
+  FileEntry,
   GitActionResult,
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
   GitTreeStatus,
+  FileMoveResult,
   FileRenameResult,
   HostEffect,
   PluginAction,
@@ -835,6 +838,67 @@ export class MockWebBotClient implements WebBotClient {
     return candidate && candidate.length > 0 ? candidate : this.getBrowserPath(botAlias);
   }
 
+  private normalizeMockPath(path: string): string {
+    return path.trim().replace(/\\/g, "/").replace(/\/+$/g, "") || "/";
+  }
+
+  private resolveFileTreePath(botAlias: string, path: string): string {
+    const candidate = this.normalizeMockPath(path);
+    if (candidate.startsWith("/")) {
+      return candidate;
+    }
+    const root = this.normalizeMockPath(this.getBrowserPath(botAlias));
+    return root === "/" ? `/${candidate}` : `${root}/${candidate}`;
+  }
+
+  private splitMockFilePath(fullPath: string) {
+    const normalized = this.normalizeMockPath(fullPath);
+    const lastSlash = normalized.lastIndexOf("/");
+    if (lastSlash <= 0) {
+      return { dir: "/", name: normalized.replace(/^\/+/, "") };
+    }
+    return {
+      dir: normalized.slice(0, lastSlash),
+      name: normalized.slice(lastSlash + 1),
+    };
+  }
+
+  private relativeMockPath(botAlias: string, fullPath: string): string {
+    const root = this.normalizeMockPath(this.getBrowserPath(botAlias));
+    const normalized = this.normalizeMockPath(fullPath);
+    if (normalized === root) {
+      return "";
+    }
+    if (normalized.startsWith(`${root}/`)) {
+      return normalized.slice(root.length + 1);
+    }
+    return normalized.replace(/^\/+/, "");
+  }
+
+  private buildCopyName(botFiles: Record<string, FileEntry[]>, dir: string, sourceName: string) {
+    const dotIndex = sourceName.lastIndexOf(".");
+    const hasExtension = dotIndex > 0 && dotIndex < sourceName.length - 1;
+    const stem = hasExtension ? sourceName.slice(0, dotIndex) : sourceName;
+    const suffix = hasExtension ? sourceName.slice(dotIndex) : "";
+    const existing = new Set((botFiles[dir] || []).map((entry) => entry.name));
+    let candidate = `${stem} 副本${suffix}`;
+    let counter = 2;
+    while (existing.has(candidate)) {
+      candidate = `${stem} 副本 ${counter}${suffix}`;
+      counter += 1;
+    }
+    return candidate;
+  }
+
+  private sortFileEntries(entries: Array<{ name: string; isDir: boolean }>) {
+    entries.sort((left, right) => {
+      if (left.isDir !== right.isDir) {
+        return left.isDir ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, "zh-CN");
+    });
+  }
+
   private cronRunKey(botAlias: string, jobId: string): string {
     return `${botAlias}:${jobId}`;
   }
@@ -1000,7 +1064,7 @@ export class MockWebBotClient implements WebBotClient {
   async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {
     const index = this.plugins.findIndex((plugin) => plugin.id === pluginId);
     if (index < 0) {
-      throw new WebApiClientError("插件不存在", 404, "plugin_not_found");
+      throw new WebApiClientError("插件不存在", { status: 404, code: "plugin_not_found" });
     }
     const current = this.plugins[index];
     const updated: PluginSummary = {
@@ -1646,6 +1710,77 @@ export class MockWebBotClient implements WebBotClient {
     return {
       oldPath: path,
       path: nextName,
+    };
+  }
+
+  async copyPath(botAlias: string, path: string): Promise<FileCopyResult> {
+    const sourceFullPath = this.resolveFileTreePath(botAlias, path);
+    const { dir: sourceDir, name: sourceName } = this.splitMockFilePath(sourceFullPath);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const source = (botFiles[sourceDir] || []).find((entry) => entry.name === sourceName);
+    if (!source || source.isDir) {
+      throw new Error("文件不存在");
+    }
+
+    const copyName = this.buildCopyName(botFiles, sourceDir, sourceName);
+    const content = this.getFileContent(botAlias, sourceDir, sourceName);
+    const version = this.setFileState(botAlias, sourceDir, copyName, content);
+    const nextEntry = {
+      ...source,
+      name: copyName,
+      updatedAt: new Date().toISOString(),
+    };
+    const entries = [...(botFiles[sourceDir] || []), nextEntry];
+    this.sortFileEntries(entries);
+    botFiles[sourceDir] = entries;
+
+    const targetFullPath = sourceDir === "/" ? `/${copyName}` : `${sourceDir}/${copyName}`;
+    return {
+      sourcePath: this.relativeMockPath(botAlias, sourceFullPath),
+      path: this.relativeMockPath(botAlias, targetFullPath),
+      fileSizeBytes: source.size || new TextEncoder().encode(content).length,
+      lastModifiedNs: String(version),
+    };
+  }
+
+  async movePath(botAlias: string, path: string, targetParentPath: string): Promise<FileMoveResult> {
+    const sourceFullPath = this.resolveFileTreePath(botAlias, path);
+    const targetDir = this.resolveFileTreePath(botAlias, targetParentPath);
+    const { dir: sourceDir, name: sourceName } = this.splitMockFilePath(sourceFullPath);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const sourceEntries = [...(botFiles[sourceDir] || [])];
+    const source = sourceEntries.find((entry) => entry.name === sourceName);
+    if (!source || source.isDir) {
+      throw new Error("文件不存在");
+    }
+    if (sourceDir === targetDir) {
+      throw new Error("文件已在目标文件夹中");
+    }
+    if (!(botFiles[targetDir] || []).some((entry) => entry.isDir) && !(targetDir in botFiles)) {
+      throw new Error("目录不存在");
+    }
+
+    const targetEntries = [...(botFiles[targetDir] || [])];
+    if (targetEntries.some((entry) => entry.name === sourceName)) {
+      throw new Error("目标已存在");
+    }
+
+    botFiles[sourceDir] = sourceEntries.filter((entry) => entry.name !== sourceName);
+    targetEntries.push({ ...source, updatedAt: new Date().toISOString() });
+    this.sortFileEntries(targetEntries);
+    botFiles[targetDir] = targetEntries;
+
+    const content = this.getFileContent(botAlias, sourceDir, sourceName);
+    const version = this.getFileVersion(botAlias, sourceDir, sourceName);
+    this.fileContents.delete(this.fileKey(botAlias, sourceDir, sourceName));
+    this.fileVersions.delete(this.fileKey(botAlias, sourceDir, sourceName));
+    this.fileContents.set(this.fileKey(botAlias, targetDir, sourceName), content);
+    this.fileVersions.set(this.fileKey(botAlias, targetDir, sourceName), version);
+
+    const targetFullPath = targetDir === "/" ? `/${sourceName}` : `${targetDir}/${sourceName}`;
+    return {
+      oldPath: this.relativeMockPath(botAlias, sourceFullPath),
+      path: this.relativeMockPath(botAlias, targetFullPath),
     };
   }
 

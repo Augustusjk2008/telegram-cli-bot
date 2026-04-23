@@ -82,6 +82,7 @@ from .api_service import (
     change_working_directory,
     create_directory,
     create_text_file,
+    copy_path,
     delete_path,
     dispose_plugin_view,
     execute_shell_command,
@@ -107,6 +108,7 @@ from .api_service import (
     list_system_scripts,
     read_file_content,
     rename_path,
+    move_path,
     remove_managed_bot,
     reject_assistant_proposal,
     reset_user_session,
@@ -1459,6 +1461,20 @@ class WebApiServer:
         data = rename_path(self.manager, alias, auth.user_id, body.get("path", ""), body.get("new_name", ""))
         return _json({"ok": True, "data": data})
 
+    async def copy_path_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = copy_path(self.manager, alias, auth.user_id, body.get("path", ""))
+        return _json({"ok": True, "data": _serialize_file_version_fields(data)})
+
+    async def move_path_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = move_path(self.manager, alias, auth.user_id, body.get("path", ""), body.get("target_parent_path", ""))
+        return _json({"ok": True, "data": data})
+
     async def delete_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
@@ -1940,6 +1956,8 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/files/write", self.write_file_view)
         app.router.add_post("/api/bots/{alias}/files/create", self.create_text_file_view)
         app.router.add_post("/api/bots/{alias}/files/rename", self.rename_path_view)
+        app.router.add_post("/api/bots/{alias}/files/copy", self.copy_path_view)
+        app.router.add_post("/api/bots/{alias}/files/move", self.move_path_view)
         app.router.add_post("/api/bots/{alias}/files/delete", self.delete_path_view)
         app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
         app.router.add_get("/api/bots/{alias}/files/read", self.read_file)

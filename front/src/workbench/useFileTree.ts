@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCreateResult, FileRenameResult } from "../services/types";
+import type { FileCopyResult, FileCreateResult, FileMoveResult, FileRenameResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
 
@@ -35,6 +35,8 @@ export type UseFileTreeResult = {
   createDirectory: (name: string, parentPath?: string) => Promise<void>;
   createFile: (filename: string, content?: string, parentPath?: string) => Promise<FileCreateResult>;
   renameFile: (path: string, newName: string) => Promise<FileRenameResult>;
+  copyFile: (path: string) => Promise<FileCopyResult>;
+  moveFile: (path: string, targetParentPath: string) => Promise<FileMoveResult>;
   deletePath: (path: string) => Promise<void>;
   downloadFile: (path: string) => Promise<void>;
 };
@@ -290,6 +292,23 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     return result;
   }
 
+  async function copyFile(path: string) {
+    const result = await client.copyPath(botAlias, path);
+    await refreshBranch(parentTreePath(path));
+    highlightPath(result.path);
+    return result;
+  }
+
+  async function moveFile(path: string, targetParentPath: string) {
+    const result = await client.movePath(botAlias, path, targetParentPath);
+    const sourceParentPath = parentTreePath(path);
+    if (sourceParentPath !== targetParentPath) {
+      await refreshBranch(sourceParentPath);
+    }
+    await revealPath(result.path);
+    return result;
+  }
+
   async function deletePath(path: string) {
     await client.deletePath(botAlias, path);
     setExpandedPaths((current) => current.filter((item) => item !== path && !item.startsWith(`${path}/`)));
@@ -320,6 +339,8 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     createDirectory,
     createFile,
     renameFile,
+    copyFile,
+    moveFile,
     deletePath,
     downloadFile,
   };

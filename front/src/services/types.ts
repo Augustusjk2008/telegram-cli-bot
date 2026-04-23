@@ -580,7 +580,19 @@ export type FileCreateResult = {
   lastModifiedNs: string;
 };
 
+export type FileCopyResult = {
+  sourcePath: string;
+  path: string;
+  fileSizeBytes: number;
+  lastModifiedNs: string;
+};
+
 export type FileRenameResult = {
+  oldPath: string;
+  path: string;
+};
+
+export type FileMoveResult = {
   oldPath: string;
   path: string;
 };

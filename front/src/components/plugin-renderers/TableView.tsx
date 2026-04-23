@@ -71,7 +71,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
     setOffset(Number(initialWindow.offset || 0));
     setSort(initialWindow.appliedSort);
     setQuery("");
-  }, [initialWindow, view.sessionId]);
+  }, [initialWindow, session?.sessionId]);
 
   useEffect(() => {
     if (!session) {
@@ -83,7 +83,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
     void client.queryPluginViewWindow(
       botAlias,
       view.pluginId,
-      view.sessionId,
+      session.sessionId,
       {
         offset,
         limit: pageSize,
@@ -105,7 +105,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
       throw error;
     });
     return () => controller.abort();
-  }, [botAlias, client, deferredQuery, offset, pageSize, session, sort, view.pluginId, view.sessionId]);
+  }, [botAlias, client, deferredQuery, offset, pageSize, session, sort, view.pluginId]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">

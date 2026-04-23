@@ -3,6 +3,7 @@ import type {
   HostEffect,
   PluginAction,
   PluginRenderResult,
+  WaveformSnapshotRenderResult,
   WaveformViewSummary,
   WaveformWindowPayload,
 } from "../../services/types";
@@ -28,7 +29,7 @@ type Props = {
   onNotice?: (message: string) => void;
 };
 
-function snapshotSummary(view: Extract<PluginRenderResult, { mode: "snapshot" }>): WaveformViewSummary {
+function snapshotSummary(view: WaveformSnapshotRenderResult): WaveformViewSummary {
   return {
     path: view.payload.path,
     timescale: view.payload.timescale,
@@ -45,7 +46,7 @@ function snapshotSummary(view: Extract<PluginRenderResult, { mode: "snapshot" }>
   };
 }
 
-function snapshotWindow(view: Extract<PluginRenderResult, { mode: "snapshot" }>): WaveformWindowPayload {
+function snapshotWindow(view: WaveformSnapshotRenderResult): WaveformWindowPayload {
   return {
     startTime: view.payload.startTime,
     endTime: view.payload.endTime,

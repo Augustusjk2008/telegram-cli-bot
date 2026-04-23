@@ -16,7 +16,9 @@ import type {
   DebugState,
   DirectoryListing,
   FileOpenTarget,
+  FileCopyResult,
   FileCreateResult,
+  FileMoveResult,
   FileReadResult,
   FileRenameResult,
   FileWriteResult,
@@ -104,6 +106,8 @@ export interface WebBotClient {
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
+  copyPath(botAlias: string, path: string): Promise<FileCopyResult>;
+  movePath(botAlias: string, path: string, targetParentPath: string): Promise<FileMoveResult>;
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;

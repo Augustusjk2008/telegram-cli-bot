@@ -26,6 +26,20 @@ function expectFileIconNode(fileName: string, iconKind: string) {
   return icon as HTMLElement;
 }
 
+function createDragData(path: string) {
+  const store = new Map<string, string>([["application/x-tcb-file-path", path]]);
+  return {
+    types: ["application/x-tcb-file-path", "text/plain"],
+    effectAllowed: "move",
+    dropEffect: "move",
+    setData: vi.fn((type: string, value: string) => {
+      store.set(type, value);
+    }),
+    getData: vi.fn((type: string) => store.get(type) || ""),
+    files: [],
+  };
+}
+
 test("directory click expands the tree without changing the working directory", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -77,6 +91,106 @@ test("directory click expands the tree without changing the working directory", 
   expect(changeDirectorySpy).toHaveBeenCalledTimes(callsBeforeToggle);
 });
 
+test("file context menu copies a sibling file", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rootEntries = [
+    { name: "docs", isDir: true },
+    { name: "README.md", isDir: false, size: 12 },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => ({
+    workingDir: path || "/workspace",
+    entries: !path || path === "/workspace" ? rootEntries : [],
+  }));
+  const copyPath = vi.spyOn(client, "copyPath").mockImplementation(async (_botAlias, path) => {
+    rootEntries = [
+      ...rootEntries,
+      { name: "README 副本.md", isDir: false, size: 12 },
+    ];
+    return {
+      sourcePath: path,
+      path: "README 副本.md",
+      fileSizeBytes: 12,
+      lastModifiedNs: "2",
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "复制" }));
+
+  expect(copyPath).toHaveBeenCalledWith("main", "README.md");
+  expect(await screen.findByRole("button", { name: "打开 README 副本.md" })).toBeInTheDocument();
+});
+
+test("dragging a file onto a folder moves it into that folder", async () => {
+  const client = new MockWebBotClient();
+  let rootEntries = [
+    { name: "docs", isDir: true },
+    { name: "README.md", isDir: false, size: 12 },
+  ];
+  let docsEntries: Array<{ name: string; isDir: boolean; size?: number }> = [];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return { workingDir: "/workspace", entries: rootEntries };
+    }
+    if (path === "/workspace/docs") {
+      return { workingDir: "/workspace/docs", entries: docsEntries };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+  const movePath = vi.spyOn(client, "movePath").mockImplementation(async (_botAlias, path, targetParentPath) => {
+    rootEntries = rootEntries.filter((entry) => entry.name !== "README.md");
+    docsEntries = [{ name: "README.md", isDir: false, size: 12 }];
+    return {
+      oldPath: path,
+      path: `${targetParentPath}/README.md`,
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const fileButton = await screen.findByRole("button", { name: "打开 README.md" });
+  const folderButton = screen.getByRole("button", { name: "展开 docs" });
+  const dataTransfer = createDragData("README.md");
+
+  fireEvent.dragStart(fileButton, { dataTransfer });
+  fireEvent.dragOver(folderButton, { dataTransfer });
+  fireEvent.drop(folderButton, { dataTransfer });
+
+  await waitFor(() => {
+    expect(movePath).toHaveBeenCalledWith("main", "README.md", "docs");
+  });
+  expect(await screen.findByRole("button", { name: "打开 docs/README.md" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开 README.md" })).not.toBeInTheDocument();
+});
+
 test("tree can hand a directory off to embedded settings as the next workdir target", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -109,4 +223,3 @@ test("tree can hand a directory off to embedded settings as the next workdir tar
 
   expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
 });
-
