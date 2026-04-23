@@ -141,6 +141,11 @@ export function PluginCatalog({
             const extraActions = primaryAction
               ? (plugin.catalogActions || []).filter((action) => action.id !== primaryAction.id)
               : (plugin.catalogActions || []);
+            const pluginEnabled = plugin.enabled !== false;
+            const statusClassName = pluginEnabled ? "text-emerald-600" : "text-red-600";
+            const toggleButtonClassName = pluginEnabled
+              ? "rounded-lg border border-red-500 px-3 py-1.5 text-sm text-red-600 hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              : "rounded-lg border border-emerald-500 px-3 py-1.5 text-sm text-emerald-600 hover:bg-[var(--surface-strong)] disabled:opacity-60";
 
             return (
               <>
@@ -149,7 +154,7 @@ export function PluginCatalog({
               <div className="font-medium text-[var(--text)]">{plugin.name}</div>
               {onUpdatePlugin ? (
                 <div className="mt-1 text-xs text-[var(--muted)]">
-                  {plugin.enabled === false ? "已禁用" : "已启用"} · v{plugin.version}
+                  <span className={statusClassName}>{pluginEnabled ? "已启用" : "已禁用"}</span> · v{plugin.version}
                 </div>
               ) : null}
             </div>
@@ -158,7 +163,7 @@ export function PluginCatalog({
                 type="button"
                 disabled={updatingPluginId === plugin.id}
                 onClick={() => onUpdatePlugin(plugin.id, { enabled: plugin.enabled === false })}
-                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className={toggleButtonClassName}
                 aria-label={`${plugin.enabled === false ? "启用" : "禁用"} ${plugin.name}`}
               >
                 {plugin.enabled === false ? "启用" : "禁用"}

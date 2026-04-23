@@ -599,6 +599,7 @@ export function ChatScreen({
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const scrollContentRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
@@ -979,6 +980,19 @@ export function ChatScreen({
 
   const lastItem = items[items.length - 1];
 
+  const scrollToBottom = useCallback(() => {
+    if (scrollContainerRef.current) {
+      try {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      } catch {
+        // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
+      }
+    }
+    if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
+      bottomAnchorRef.current.scrollIntoView({ block: "end" });
+    }
+  }, []);
+
   useEffect(() => {
     if (!isVisible) {
       return;
@@ -994,18 +1008,31 @@ export function ChatScreen({
     if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
       return;
     }
-    if (scrollContainerRef.current) {
-      try {
-        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-      } catch {
-        // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
-      }
-    }
-    if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
-      bottomAnchorRef.current.scrollIntoView({ block: "end" });
-    }
+    scrollToBottom();
     forceAutoScrollRef.current = false;
-  }, [isVisible, isStreaming, lastItem?.id, lastItem?.state, lastItem?.text, loading, items.length]);
+  }, [isVisible, isStreaming, lastItem?.id, lastItem?.state, lastItem?.text, loading, items.length, scrollToBottom]);
+
+  useEffect(() => {
+    if (!isVisible || loading || typeof window.ResizeObserver !== "function") {
+      return;
+    }
+    const content = scrollContentRef.current;
+    if (!content) {
+      return;
+    }
+
+    const observer = new window.ResizeObserver(() => {
+      if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
+        return;
+      }
+      scrollToBottom();
+      forceAutoScrollRef.current = false;
+    });
+    observer.observe(content);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isVisible, loading, scrollToBottom]);
 
   function updateAutoScrollStickiness() {
     const container = scrollContainerRef.current;
@@ -1441,59 +1468,61 @@ export function ChatScreen({
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
         onScroll={updateAutoScrollStickiness}
-        className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4 space-y-4" : "flex-1 overflow-y-auto p-4 space-y-4"}
+        className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4" : "flex-1 overflow-y-auto p-4"}
       >
-        {loading ? (
-          <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
-        ) : null}
-        {error ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        ) : null}
-        {items.length === 0 && !isStreaming && !loading ? (
-          <div className="text-center text-[var(--muted)] mt-10">
-            暂无消息，开始聊天吧
-          </div>
-        ) : null}
-        {items.map((item) => (
-          <ChatMessageRow
-            key={item.id}
-            item={item}
-            assistantName={assistantName}
-            assistantAvatarName={assistantAvatarName}
-            userAvatarName={userAvatarName}
-            allowTrace={allowTrace}
-            deletedAttachmentKeys={deletedAttachmentKeys}
-            deletingAttachmentKeys={deletingAttachmentKeys}
-            tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
-            traceLoadState={traceLoadState[getMessageClientStateKey(item)]}
-            onDeleteAttachment={handleDeleteAttachment}
-            onFileLinkClick={handleFileLinkClick}
-            onLoadTrace={loadMessageTrace}
-            onToggleTracePanel={() => {
-              const messageClientStateKey = getMessageClientStateKey(item);
-              setExpandedTracePanels((prev) => {
-                const nextExpanded = !prev[messageClientStateKey];
-                if (nextExpanded) {
-                  return {
-                    ...prev,
-                    [messageClientStateKey]: true,
-                  };
-                }
+        <div ref={scrollContentRef} className="space-y-4">
+          {loading ? (
+            <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
+          ) : null}
+          {error ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
+          {items.length === 0 && !isStreaming && !loading ? (
+            <div className="text-center text-[var(--muted)] mt-10">
+              暂无消息，开始聊天吧
+            </div>
+          ) : null}
+          {items.map((item) => (
+            <ChatMessageRow
+              key={item.id}
+              item={item}
+              assistantName={assistantName}
+              assistantAvatarName={assistantAvatarName}
+              userAvatarName={userAvatarName}
+              allowTrace={allowTrace}
+              deletedAttachmentKeys={deletedAttachmentKeys}
+              deletingAttachmentKeys={deletingAttachmentKeys}
+              tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
+              traceLoadState={traceLoadState[getMessageClientStateKey(item)]}
+              onDeleteAttachment={handleDeleteAttachment}
+              onFileLinkClick={handleFileLinkClick}
+              onLoadTrace={loadMessageTrace}
+              onToggleTracePanel={() => {
+                const messageClientStateKey = getMessageClientStateKey(item);
+                setExpandedTracePanels((prev) => {
+                  const nextExpanded = !prev[messageClientStateKey];
+                  if (nextExpanded) {
+                    return {
+                      ...prev,
+                      [messageClientStateKey]: true,
+                    };
+                  }
 
-                if (!prev[messageClientStateKey]) {
-                  return prev;
-                }
+                  if (!prev[messageClientStateKey]) {
+                    return prev;
+                  }
 
-                const nextState = { ...prev };
-                delete nextState[messageClientStateKey];
-                return nextState;
-              });
-            }}
-          />
-        ))}
-        <div ref={bottomAnchorRef} aria-hidden="true" />
+                  const nextState = { ...prev };
+                  delete nextState[messageClientStateKey];
+                  return nextState;
+                });
+              }}
+            />
+          ))}
+          <div ref={bottomAnchorRef} aria-hidden="true" />
+        </div>
       </section>
       {showImmersiveButton ? (
         <button

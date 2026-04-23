@@ -1057,6 +1057,89 @@ test("scrolls back to the bottom when a hidden chat screen becomes visible again
   });
 });
 
+test("keeps a newly visible chat screen pinned when rendered content grows", async () => {
+  const originalResizeObserver = window.ResizeObserver;
+  let resizeCallback: ResizeObserverCallback | null = null;
+  class MockResizeObserver {
+    observe = vi.fn();
+    disconnect = vi.fn();
+
+    constructor(callback: ResizeObserverCallback) {
+      resizeCallback = callback;
+    }
+  }
+  Object.defineProperty(window, "ResizeObserver", {
+    configurable: true,
+    value: MockResizeObserver,
+  });
+
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "第一条",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        text: "第二条",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+    ],
+  });
+
+  try {
+    const { rerender } = render(<ChatScreen botAlias="main" client={client} isVisible />);
+    expect(await screen.findByText("第二条")).toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId("chat-scroll-container");
+    let scrollHeight = 1200;
+    let scrollTop = 0;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: {
+        configurable: true,
+        get: () => scrollHeight,
+      },
+      clientHeight: {
+        configurable: true,
+        get: () => 600,
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+
+    rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
+    rerender(<ChatScreen botAlias="main" client={client} isVisible />);
+
+    await waitFor(() => {
+      expect(scrollTop).toBe(1200);
+    });
+
+    scrollHeight = 2200;
+    resizeCallback?.([] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+
+    expect(scrollTop).toBe(2200);
+  } finally {
+    if (originalResizeObserver) {
+      Object.defineProperty(window, "ResizeObserver", {
+        configurable: true,
+        value: originalResizeObserver,
+      });
+    } else {
+      delete (window as { ResizeObserver?: unknown }).ResizeObserver;
+    }
+  }
+});
+
 test("opens system functions with bot-scoped calls and compact titles", async () => {
   const user = userEvent.setup();
   const listSystemScripts = vi.fn(async () => [{
