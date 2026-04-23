@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "vivado-waveform",
   "name": "Vivado Waveform",
   "version": "0.1.0",
@@ -8,10 +8,28 @@
   "config": {
     "lodEnabled": true
   },
+  "configSchema": {
+    "title": "Waveform Settings",
+    "sections": [
+      {
+        "id": "display",
+        "fields": [
+          {
+            "key": "lodEnabled",
+            "label": "启用 LOD",
+            "type": "boolean",
+            "default": true,
+            "description": "缩放较大时自动降采样。"
+          }
+        ]
+      }
+    ]
+  },
   "runtime": {
     "type": "python",
     "entry": "backend/main.py",
-    "protocol": "jsonrpc-stdio"
+    "protocol": "jsonrpc-stdio",
+    "permissions": {}
   },
   "views": [
     {

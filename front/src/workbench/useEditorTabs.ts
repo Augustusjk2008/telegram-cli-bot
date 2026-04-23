@@ -254,12 +254,19 @@ export function useEditorTabs({ botAlias, client }: Props) {
         basename: target.title,
         kind: "plugin-view",
         pluginView: view,
+        pluginInput: { ...target.input },
         sourcePath,
         readOnly: true,
         statusText: "插件视图",
         loading: false,
         contentPersistence: "none",
       });
+      if (
+        existing?.pluginView?.mode === "session"
+        && (view.mode !== "session" || existing.pluginView.sessionId !== view.sessionId)
+      ) {
+        void client.disposePluginViewSession(botAlias, existing.pluginView.pluginId, existing.pluginView.sessionId).catch(() => {});
+      }
       setTabs((current) => {
         const existingIndex = current.findIndex((item) => item.path === tabPath);
         if (existingIndex >= 0) {
@@ -272,14 +279,15 @@ export function useEditorTabs({ botAlias, client }: Props) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "打开插件视图失败";
       setTabs((current) => current.map((item) => item.path === tabPath
-        ? {
-            ...item,
-            basename: target.title,
-            kind: "plugin-view",
-            sourcePath,
-            readOnly: true,
-            loading: false,
-            error: message,
+          ? {
+              ...item,
+              basename: target.title,
+              kind: "plugin-view",
+              pluginInput: { ...target.input },
+              sourcePath,
+              readOnly: true,
+              loading: false,
+              error: message,
             statusText: "插件视图",
           }
         : item));

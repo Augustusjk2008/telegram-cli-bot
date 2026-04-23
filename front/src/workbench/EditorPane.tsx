@@ -2,6 +2,7 @@ import { clsx } from "clsx";
 import { useState } from "react";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { FileEditorSurface } from "../components/FileEditorSurface";
+import type { HostEffect } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import type { EditorTab } from "./workbenchTypes";
 
@@ -24,6 +25,15 @@ type Props = {
   onCloseTabsToRight: (path: string) => void;
   onReopenLastClosed: () => void | Promise<void>;
   onRevealInTree: (path: string) => void | Promise<void>;
+  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onClosePluginTab?: (path: string) => void | Promise<void>;
+  onReopenPluginView?: (target: {
+    pluginId: string;
+    viewId: string;
+    title: string;
+    input: Record<string, unknown>;
+  }) => Promise<void> | void;
+  onNotice?: (message: string) => void;
   focused: boolean;
   onToggleFocus: () => void;
 };
@@ -115,6 +125,10 @@ export function EditorPane({
   onCloseTabsToRight,
   onReopenLastClosed,
   onRevealInTree,
+  onApplyHostEffects,
+  onClosePluginTab,
+  onReopenPluginView,
+  onNotice,
   focused,
   onToggleFocus,
 }: Props) {
@@ -274,7 +288,24 @@ export function EditorPane({
         ) : activeTab.kind === "plugin-view" ? (
           <div data-testid="desktop-plugin-view" className="h-full min-h-0">
             {activeTab.pluginView ? (
-              <PluginViewSurface botAlias={botAlias} client={client} view={activeTab.pluginView} />
+              <PluginViewSurface
+                botAlias={botAlias}
+                client={client}
+                view={activeTab.pluginView}
+                inputPayload={activeTab.pluginInput || {}}
+                onApplyHostEffects={onApplyHostEffects}
+                onClosePluginSession={() => onClosePluginTab?.(activeTab.path)}
+                onRefreshPluginSession={() => activeTab.pluginInput
+                  ? onReopenPluginView?.({
+                      pluginId: activeTab.pluginView?.pluginId || "",
+                      viewId: activeTab.pluginView?.viewId || "",
+                      title: activeTab.pluginView?.title || activeTab.basename,
+                      input: activeTab.pluginInput,
+                    })
+                  : undefined}
+                onReopenPluginView={onReopenPluginView}
+                onNotice={onNotice}
+              />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
                 正在加载插件视图

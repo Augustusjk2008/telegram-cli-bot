@@ -4,10 +4,13 @@ import asyncio
 import logging
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
+from .artifacts import ArtifactStore
+from .host_api import PluginHostApi, PluginHostPermissionError, PluginHostContext
 from .models import PluginManifest
-from .protocol import decode_message, encode_request
+from .protocol import decode_message, encode_error, encode_request, encode_result, unwrap_result
 
 logger = logging.getLogger(__name__)
 
@@ -18,18 +21,54 @@ PLUGIN_STDIO_LIMIT = 64 * 1024 * 1024
 class _PluginProcess:
     process: asyncio.subprocess.Process
     request_id: int = 0
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pending: dict[int, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
     stderr_task: asyncio.Task[None] | None = None
+    reader_task: asyncio.Task[None] | None = None
 
 
 class PluginRuntime:
-    def __init__(self) -> None:
-        self._processes: dict[str, _PluginProcess] = {}
-        self._manifests: dict[str, PluginManifest] = {}
+    def __init__(
+        self,
+        *,
+        workspace_root_for: Callable[[str], Path] | None = None,
+        host_api: PluginHostApi | None = None,
+        audit_hook: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        self._workspace_root_for = workspace_root_for or (lambda _alias: Path.cwd())
+        self._host_api = host_api or PluginHostApi(ArtifactStore(Path.cwd()))
+        self._audit_hook = audit_hook
+        self._processes: dict[tuple[str, str], _PluginProcess] = {}
+        self._manifests: dict[tuple[str, str], PluginManifest] = {}
 
-    async def _read_stderr(self, plugin_id: str, process: asyncio.subprocess.Process) -> None:
+    def _context_payload(self, bot_alias: str, manifest: PluginManifest) -> dict[str, Any]:
+        workspace_root = self._workspace_root_for(bot_alias).expanduser().resolve()
+        return {
+            "plugin": {
+                "id": manifest.plugin_id,
+                "version": manifest.version,
+                "config": dict(manifest.config),
+            },
+            "host": {
+                "apiVersion": 1,
+                "botAlias": bot_alias,
+                "workspaceRoot": str(workspace_root),
+                "permissions": {
+                    "workspaceRead": manifest.runtime.permissions.workspace_read,
+                    "workspaceList": manifest.runtime.permissions.workspace_list,
+                    "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
+                },
+            },
+        }
+
+    async def _read_stderr(
+        self,
+        key: tuple[str, str],
+        process: asyncio.subprocess.Process,
+    ) -> None:
         if process.stderr is None:
             return
+        bot_alias, plugin_id = key
         try:
             while True:
                 line = await process.stderr.readline()
@@ -37,39 +76,121 @@ class PluginRuntime:
                     return
                 text = line.decode("utf-8", errors="replace").strip()
                 if text:
-                    logger.debug("plugin[%s] stderr: %s", plugin_id, text)
+                    logger.debug("plugin[%s:%s] stderr: %s", bot_alias, plugin_id, text)
         except asyncio.CancelledError:
             return
+
+    async def _write_message(self, wrapped: _PluginProcess, payload: bytes) -> None:
+        process = wrapped.process
+        if process.returncode is not None:
+            raise RuntimeError(f"插件进程已退出: {process.returncode}")
+        if process.stdin is None:
+            raise RuntimeError("插件进程 stdin 不可用")
+        async with wrapped.write_lock:
+            process.stdin.write(payload)
+            await process.stdin.drain()
+
+    def _fail_pending(self, wrapped: _PluginProcess, message: str) -> None:
+        for future in list(wrapped.pending.values()):
+            if not future.done():
+                future.set_exception(RuntimeError(message))
+        wrapped.pending.clear()
+
+    async def _reader_loop(self, key: tuple[str, str], wrapped: _PluginProcess) -> None:
+        process = wrapped.process
+        if process.stdout is None:
+            self._fail_pending(wrapped, "插件进程 stdout 不可用")
+            return
+        try:
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    self._fail_pending(wrapped, "插件未返回结果")
+                    return
+                message = decode_message(line)
+                if "method" in message:
+                    asyncio.create_task(self._dispatch_plugin_request(key, wrapped, message))
+                    continue
+                try:
+                    response_id = int(message.get("id"))
+                except Exception:
+                    continue
+                future = wrapped.pending.pop(response_id, None)
+                if future is not None and not future.done():
+                    future.set_result(message)
+        except asyncio.CancelledError:
+            self._fail_pending(wrapped, "插件 reader 已取消")
+            raise
+        except Exception as exc:
+            self._fail_pending(wrapped, str(exc))
+
+    async def _dispatch_plugin_request(
+        self,
+        key: tuple[str, str],
+        wrapped: _PluginProcess,
+        message: dict[str, Any],
+    ) -> None:
+        bot_alias, plugin_id = key
+        manifest = self._manifests.get(key)
+        request_id = int(message.get("id") or 0)
+        method = str(message.get("method") or "")
+        params = dict(message.get("params") or {})
+        if manifest is None:
+            await self._write_message(wrapped, encode_error(request_id, f"unknown plugin runtime: {plugin_id}"))
+            return
+
+        permission_denied = False
+        artifact_id = ""
+        artifact_bytes = 0
+        try:
+            result = await self._host_api.dispatch(
+                PluginHostContext(
+                    bot_alias=bot_alias,
+                    plugin_id=plugin_id,
+                    workspace_root=self._workspace_root_for(bot_alias).expanduser().resolve(),
+                ),
+                manifest,
+                method,
+                params,
+            )
+            artifact_id = str(result.get("artifactId") or "")
+            artifact_bytes = int(result.get("sizeBytes") or 0)
+            await self._write_message(wrapped, encode_result(request_id, result))
+        except PluginHostPermissionError as exc:
+            permission_denied = True
+            await self._write_message(wrapped, encode_error(request_id, str(exc)))
+        except Exception as exc:
+            await self._write_message(wrapped, encode_error(request_id, str(exc)))
+        finally:
+            if self._audit_hook is not None:
+                self._audit_hook(
+                    {
+                        "event": "host_api",
+                        "plugin_id": plugin_id,
+                        "bot_alias": bot_alias,
+                        "host_api_method": method,
+                        "permission_denied": permission_denied,
+                        "artifact_id": artifact_id,
+                        "artifact_bytes": artifact_bytes,
+                    }
+                )
 
     async def _invoke(self, wrapped: _PluginProcess, method: str, params: dict[str, Any]) -> dict[str, Any]:
         process = wrapped.process
         if process.returncode is not None:
             raise RuntimeError(f"插件进程已退出: {process.returncode}")
-        if process.stdin is None or process.stdout is None:
-            raise RuntimeError("插件进程 stdio 不可用")
         wrapped.request_id += 1
         request_id = wrapped.request_id
-        process.stdin.write(encode_request(request_id, method, params))
-        await process.stdin.drain()
-        line = await process.stdout.readline()
-        if not line:
-            raise RuntimeError("插件未返回结果")
-        message = decode_message(line)
-        if message.get("id") != request_id:
-            raise RuntimeError("插件响应 id 不匹配")
-        if message.get("error"):
-            error = message["error"]
-            if isinstance(error, dict):
-                detail = str(error.get("message") or error.get("code") or "插件执行失败")
-            else:
-                detail = str(error)
-            raise RuntimeError(detail)
-        result = message.get("result")
-        if not isinstance(result, dict):
-            raise RuntimeError("插件 result 不是对象")
-        return dict(result)
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        wrapped.pending[request_id] = future
+        try:
+            await self._write_message(wrapped, encode_request(request_id, method, params))
+            message = await future
+        finally:
+            wrapped.pending.pop(request_id, None)
+        return unwrap_result(message)
 
-    async def _spawn_process(self, manifest: PluginManifest) -> _PluginProcess:
+    async def _spawn_process(self, bot_alias: str, manifest: PluginManifest) -> _PluginProcess:
         if manifest.runtime.runtime_type != "python":
             raise ValueError(f"unsupported runtime: {manifest.runtime.runtime_type}")
         if manifest.runtime.protocol != "jsonrpc-stdio":
@@ -85,93 +206,148 @@ class PluginRuntime:
             cwd=str(manifest.root),
             limit=PLUGIN_STDIO_LIMIT,
         )
+        key = (bot_alias, manifest.plugin_id)
         wrapped = _PluginProcess(process=process)
-        wrapped.stderr_task = asyncio.create_task(self._read_stderr(manifest.plugin_id, process))
-        self._processes[manifest.plugin_id] = wrapped
-        self._manifests[manifest.plugin_id] = manifest
-        async with wrapped.lock:
-            await self._invoke(wrapped, "plugin.initialize", {})
+        self._processes[key] = wrapped
+        self._manifests[key] = manifest
+        wrapped.stderr_task = asyncio.create_task(self._read_stderr(key, process))
+        wrapped.reader_task = asyncio.create_task(self._reader_loop(key, wrapped))
+        await self._invoke(
+            wrapped,
+            "plugin.initialize",
+            {
+                "context": self._context_payload(bot_alias, manifest),
+            },
+        )
         return wrapped
 
-    async def _ensure_process(self, manifest: PluginManifest) -> _PluginProcess:
-        existing = self._processes.get(manifest.plugin_id)
+    async def _ensure_process(self, bot_alias: str, manifest: PluginManifest) -> _PluginProcess:
+        key = (bot_alias, manifest.plugin_id)
+        existing = self._processes.get(key)
         if existing is not None and existing.process.returncode is None:
             return existing
-        return await self._spawn_process(manifest)
+        return await self._spawn_process(bot_alias, manifest)
 
-    async def _call(self, manifest: PluginManifest, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        wrapped = await self._ensure_process(manifest)
-        async with wrapped.lock:
-            return await self._invoke(wrapped, method, params)
+    async def _call(self, bot_alias: str, manifest: PluginManifest, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        wrapped = await self._ensure_process(bot_alias, manifest)
+        return await self._invoke(wrapped, method, params)
 
-    async def render_view(self, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+    async def render_view(self, bot_alias: str, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call(
+            bot_alias,
             manifest,
             "plugin.render_view",
             {
                 "viewId": view_id,
                 "input": input_payload,
+                "context": self._context_payload(bot_alias, manifest),
             },
         )
 
-    async def open_view(self, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+    async def open_view(self, bot_alias: str, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call(
+            bot_alias,
             manifest,
             "plugin.open_view",
             {
                 "viewId": view_id,
                 "input": input_payload,
+                "context": self._context_payload(bot_alias, manifest),
             },
         )
 
-    async def get_view_window(self, manifest: PluginManifest, session_id: str, request_payload: dict[str, Any]) -> dict[str, Any]:
+    async def get_view_window(
+        self,
+        bot_alias: str,
+        manifest: PluginManifest,
+        session_id: str,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
         return await self._call(
+            bot_alias,
             manifest,
             "plugin.get_view_window",
             {
                 "sessionId": session_id,
                 **request_payload,
+                "context": self._context_payload(bot_alias, manifest),
             },
         )
 
-    async def dispose_view(self, manifest: PluginManifest, session_id: str) -> dict[str, Any]:
+    async def invoke_action(
+        self,
+        bot_alias: str,
+        manifest: PluginManifest,
+        *,
+        view_id: str,
+        session_id: str | None,
+        action_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         return await self._call(
+            bot_alias,
+            manifest,
+            "plugin.invoke_action",
+            {
+                "viewId": view_id,
+                "sessionId": session_id or "",
+                "actionId": action_id,
+                "payload": payload,
+                "context": self._context_payload(bot_alias, manifest),
+            },
+        )
+
+    async def dispose_view(self, bot_alias: str, manifest: PluginManifest, session_id: str) -> dict[str, Any]:
+        return await self._call(
+            bot_alias,
             manifest,
             "plugin.dispose_view",
             {
                 "sessionId": session_id,
+                "context": self._context_payload(bot_alias, manifest),
             },
         )
 
-    async def _stop_process(self, plugin_id: str, wrapped: _PluginProcess) -> None:
+    async def _stop_process(self, key: tuple[str, str], wrapped: _PluginProcess) -> None:
         process = wrapped.process
+        manifest = self._manifests.get(key)
+        if process.returncode is None and manifest is not None:
+            try:
+                await self._invoke(wrapped, "plugin.shutdown", {"context": self._context_payload(key[0], manifest)})
+            except Exception:
+                pass
         if process.returncode is None:
-            manifest = self._manifests.get(plugin_id)
-            if manifest is not None:
-                try:
-                    async with wrapped.lock:
-                        await self._invoke(wrapped, "plugin.shutdown", {})
-                except Exception:
-                    pass
             process.terminate()
             try:
                 await asyncio.wait_for(process.wait(), timeout=3)
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-        if wrapped.stderr_task is not None:
-            wrapped.stderr_task.cancel()
-            await asyncio.gather(wrapped.stderr_task, return_exceptions=True)
+        self._fail_pending(wrapped, "插件进程已停止")
+        tasks = [task for task in (wrapped.reader_task, wrapped.stderr_task) if task is not None]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def stop_plugin(self, plugin_id: str) -> None:
-        wrapped = self._processes.pop(plugin_id, None)
-        self._manifests.pop(plugin_id, None)
+    async def stop_plugin(self, bot_alias: str, plugin_id: str) -> None:
+        key = (bot_alias, plugin_id)
+        wrapped = self._processes.pop(key, None)
+        self._manifests.pop(key, None)
         if wrapped is not None:
-            await self._stop_process(plugin_id, wrapped)
+            await self._stop_process(key, wrapped)
+
+    async def stop_plugin_instances(self, plugin_id: str) -> None:
+        keys = [key for key in self._processes.keys() if key[1] == plugin_id]
+        for key in keys:
+            wrapped = self._processes.pop(key, None)
+            self._manifests.pop(key, None)
+            if wrapped is not None:
+                await self._stop_process(key, wrapped)
 
     async def shutdown(self) -> None:
         processes = list(self._processes.items())
         self._processes = {}
         self._manifests = {}
-        for plugin_id, wrapped in processes:
-            await self._stop_process(plugin_id, wrapped)
+        for key, wrapped in processes:
+            await self._stop_process(key, wrapped)

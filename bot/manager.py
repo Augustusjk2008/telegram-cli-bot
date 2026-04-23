@@ -32,7 +32,12 @@ class MultiBotManager:
         self.main_profile = main_profile
         self.storage_file = Path(storage_file)
         self.repo_root = self.storage_file.resolve().parent
-        self.plugin_service = PluginService(self.repo_root)
+        self.plugin_service = PluginService(
+            self.repo_root,
+            workspace_root_for=lambda alias: Path(
+                (self.main_profile if alias == self.main_profile.alias else self.managed_profiles.get(alias) or self.main_profile).working_dir
+            ),
+        )
         self.managed_profiles: Dict[str, BotProfile] = {}
         # Web-only 运行时保留该字段做兼容，不再持有 Telegram Application。
         self.applications: Dict[str, object] = {}

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult, GitTreeStatus, WorkspaceDefinitionItem } from "../services/types";
+import type { FileReadResult, GitTreeStatus, HostEffect, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { GitScreen } from "../screens/GitScreen";
 import { PluginsScreen } from "../screens/PluginsScreen";
@@ -470,6 +470,46 @@ export function DesktopWorkbench({
     });
   }
 
+  async function openPluginViewTab(target: {
+    pluginId: string;
+    viewId: string;
+    title: string;
+    input: Record<string, unknown>;
+  }) {
+    await tabs.openPluginView(target);
+    const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
+    if (sourcePath) {
+      setSidebarView("files");
+      await fileTree.revealPath(sourcePath);
+    }
+  }
+
+  async function runPluginHostEffects(effects: HostEffect[]) {
+    for (const effect of effects) {
+      if (effect.type === "open_file") {
+        setSidebarView("files");
+        await openWorkspaceFile(effect.path, effect.line);
+        continue;
+      }
+      if (effect.type === "reveal_in_files") {
+        setSidebarView("files");
+        await fileTree.revealPath(effect.path);
+        continue;
+      }
+      if (effect.type === "copy_text") {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(effect.text);
+        }
+        continue;
+      }
+      if (effect.type === "download_artifact") {
+        await client.downloadPluginArtifact(botAlias, effect.artifactId, effect.filename);
+        continue;
+      }
+      await openPluginViewTab(effect);
+    }
+  }
+
   function clearDefinitionOverlay() {
     setDefinitionCandidates([]);
     setDefinitionMessage("");
@@ -632,7 +672,10 @@ export function DesktopWorkbench({
       return (
         <PluginsScreen
           client={client}
+          botAlias={botAlias}
           embedded
+          onApplyHostEffects={runPluginHostEffects}
+          onOpenPluginView={openPluginViewTab}
         />
       );
     }
@@ -797,6 +840,13 @@ export function DesktopWorkbench({
                   onRevealInTree={(path) => {
                     setSidebarView("files");
                     void fileTree.revealPath(path);
+                  }}
+                  onApplyHostEffects={runPluginHostEffects}
+                  onClosePluginTab={(path) => {
+                    tabs.closePath(path);
+                  }}
+                  onReopenPluginView={(target) => {
+                    void openPluginViewTab(target);
                   }}
                   focused={focusedPane === "editor"}
                   onToggleFocus={() => toggleFocusedPane("editor")}

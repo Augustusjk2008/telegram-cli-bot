@@ -1,30 +1,52 @@
-import type { PluginSummary, PluginUpdateInput } from "../services/types";
+import { useState } from "react";
+import type { HostEffect, PluginSummary, PluginUpdateInput } from "../services/types";
+import type { WebBotClient } from "../services/webBotClient";
+import { PluginActionBar } from "./plugin-renderers/PluginActionBar";
+import { PluginConfigForm } from "./plugins/PluginConfigForm";
+import { runPluginAction } from "./plugins/pluginActions";
 
 type Props = {
   plugins: PluginSummary[];
+  botAlias?: string;
+  client?: WebBotClient;
   loading?: boolean;
   error?: string;
   emptyText?: string;
   showUsageHint?: boolean;
   updatingPluginId?: string;
   onUpdatePlugin?: (pluginId: string, input: PluginUpdateInput) => void;
+  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onOpenPluginView?: (target: {
+    pluginId: string;
+    viewId: string;
+    title: string;
+    input: Record<string, unknown>;
+  }) => Promise<void> | void;
+  onNotice?: (message: string) => void;
 };
 
 export function PluginCatalog({
   plugins,
+  botAlias = "",
+  client,
   loading = false,
   error = "",
   emptyText = "未检测到插件",
   showUsageHint = false,
   updatingPluginId = "",
   onUpdatePlugin,
+  onApplyHostEffects,
+  onOpenPluginView,
+  onNotice,
 }: Props) {
+  const [actionError, setActionError] = useState("");
+
   if (loading) {
     return <p className="text-sm text-[var(--muted)]">正在检测插件...</p>;
   }
 
-  if (error) {
-    return <p className="text-sm text-[var(--danger)]">{error}</p>;
+  if (error || actionError) {
+    return <p className="text-sm text-[var(--danger)]">{error || actionError}</p>;
   }
 
   if (plugins.length === 0) {
@@ -66,17 +88,40 @@ export function PluginCatalog({
           </div>
           <p className="mt-1 text-sm text-[var(--muted)]">{plugin.description}</p>
 
-          {onUpdatePlugin && typeof plugin.config?.lodEnabled === "boolean" ? (
-            <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">
-              <input
-                type="checkbox"
-                checked={plugin.config.lodEnabled}
-                disabled={updatingPluginId === plugin.id}
-                onChange={(event) => onUpdatePlugin(plugin.id, { config: { lodEnabled: event.currentTarget.checked } })}
-                aria-label={`${plugin.name} 启用 LOD`}
+          {client && botAlias && plugin.catalogActions?.length ? (
+            <div className="mt-3">
+              <PluginActionBar
+                actions={plugin.catalogActions}
+                onRunAction={(action) => {
+                  const defaultView = plugin.views[0];
+                  if (!defaultView) {
+                    return;
+                  }
+                  setActionError("");
+                  void runPluginAction(action, {
+                    client,
+                    botAlias,
+                    pluginId: plugin.id,
+                    viewId: defaultView.id,
+                    title: defaultView.title || plugin.name,
+                    inputPayload: action.payload || {},
+                    applyHostEffects: onApplyHostEffects,
+                    reopenView: onOpenPluginView,
+                    pushToast: onNotice,
+                  }).catch((nextError: unknown) => {
+                    setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
+                  });
+                }}
               />
-              启用 LOD
-            </label>
+            </div>
+          ) : null}
+
+          {onUpdatePlugin ? (
+            <PluginConfigForm
+              plugin={plugin}
+              disabled={updatingPluginId === plugin.id}
+              onSubmit={(input) => onUpdatePlugin(plugin.id, input)}
+            />
           ) : null}
 
           {plugin.views.length > 0 ? (

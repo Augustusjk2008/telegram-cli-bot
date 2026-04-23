@@ -85,7 +85,9 @@ from .api_service import (
     delete_path,
     dispose_plugin_view,
     execute_shell_command,
+    get_plugin_artifact,
     get_plugin_view_window,
+    invoke_plugin_action,
     get_directory_listing,
     get_file_metadata,
     get_history,
@@ -1528,6 +1530,24 @@ class WebApiServer:
         data = await dispose_plugin_view(self.manager, alias, auth, plugin_id, session_id)
         return _json({"ok": True, "data": data})
 
+    async def post_invoke_plugin_action(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        body = await self._parse_json(request)
+        data = await invoke_plugin_action(self.manager, alias, auth, plugin_id, dict(body or {}))
+        return _json({"ok": True, "data": data})
+
+    async def download_plugin_artifact(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        artifact_id = request.match_info.get("artifact_id", "").strip()
+        record = get_plugin_artifact(self.manager, alias, auth, artifact_id)
+        return web.FileResponse(
+            path=record.path,
+            headers={"Content-Disposition": f'attachment; filename="{record.filename}"'},
+        )
+
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
@@ -1928,6 +1948,8 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/open", self.post_open_plugin_view)
         app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}/window", self.post_plugin_view_window)
         app.router.add_delete("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}", self.delete_plugin_view_session)
+        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/actions/invoke", self.post_invoke_plugin_action)
+        app.router.add_get("/api/bots/{alias}/plugins/artifacts/{artifact_id}", self.download_plugin_artifact)
         app.router.add_get("/api/bots/{alias}/scripts", self.bot_scripts)
         app.router.add_post("/api/bots/{alias}/scripts/run/stream", self.bot_run_script_stream)
         app.router.add_post("/api/bots/{alias}/scripts/run", self.bot_run_script)

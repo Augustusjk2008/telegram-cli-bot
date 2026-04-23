@@ -47,6 +47,7 @@ def build_source_fingerprint(input_payload: dict[str, Any]) -> str:
 
 @dataclass
 class PluginViewSessionRecord:
+    bot_alias: str
     plugin_id: str
     view_id: str
     session_id: str
@@ -55,6 +56,7 @@ class PluginViewSessionRecord:
     source_fingerprint: str
     resolved_input: dict[str, Any]
     opened_payload: dict[str, Any]
+    last_window_request: dict[str, Any] | None = None
 
 
 class PluginViewSessionStore:
@@ -64,8 +66,19 @@ class PluginViewSessionStore:
         self._records_by_identity: dict[str, PluginViewSessionRecord] = {}
 
     @staticmethod
-    def build_cache_key(plugin_id: str, view_id: str, source_fingerprint: str) -> str:
-        return _stable_json({"pluginId": plugin_id, "viewId": view_id, "sourceFingerprint": source_fingerprint})
+    def build_cache_key(bot_alias: str, plugin_id: str, view_id: str, source_fingerprint: str) -> str:
+        return _stable_json(
+            {
+                "botAlias": bot_alias,
+                "pluginId": plugin_id,
+                "viewId": view_id,
+                "sourceFingerprint": source_fingerprint,
+            }
+        )
+
+    @staticmethod
+    def build_identity_key(bot_alias: str, source_identity: str) -> str:
+        return _stable_json({"botAlias": bot_alias, "sourceIdentity": source_identity})
 
     def get_cached(self, cache_key: str) -> PluginViewSessionRecord | None:
         return self._records_by_cache_key.get(cache_key)
@@ -77,25 +90,45 @@ class PluginViewSessionStore:
         return self._records_by_session.get(session_id)
 
     def replace(self, record: PluginViewSessionRecord) -> PluginViewSessionRecord | None:
-        stale = self._records_by_identity.get(record.source_identity)
+        identity_key = self.build_identity_key(record.bot_alias, record.source_identity)
+        stale = self._records_by_identity.get(identity_key)
         if stale is not None:
             self.remove(stale.session_id)
-        cache_key = self.build_cache_key(record.plugin_id, record.view_id, record.source_fingerprint)
+        cache_key = self.build_cache_key(record.bot_alias, record.plugin_id, record.view_id, record.source_fingerprint)
         self._records_by_session[record.session_id] = record
         self._records_by_cache_key[cache_key] = record
-        self._records_by_identity[record.source_identity] = record
+        self._records_by_identity[identity_key] = record
         return stale
+
+    def remember_window_request(self, session_id: str, request_payload: dict[str, Any]) -> None:
+        record = self._records_by_session.get(session_id)
+        if record is None:
+            return
+        record.last_window_request = dict(request_payload or {})
 
     def remove(self, session_id: str) -> PluginViewSessionRecord | None:
         record = self._records_by_session.pop(session_id, None)
         if record is None:
             return None
-        cache_key = self.build_cache_key(record.plugin_id, record.view_id, record.source_fingerprint)
+        cache_key = self.build_cache_key(record.bot_alias, record.plugin_id, record.view_id, record.source_fingerprint)
         self._records_by_cache_key.pop(cache_key, None)
-        current = self._records_by_identity.get(record.source_identity)
+        identity_key = self.build_identity_key(record.bot_alias, record.source_identity)
+        current = self._records_by_identity.get(identity_key)
         if current is not None and current.session_id == session_id:
-            self._records_by_identity.pop(record.source_identity, None)
+            self._records_by_identity.pop(identity_key, None)
         return record
+
+    def clear_plugin(self, plugin_id: str, *, bot_alias: str | None = None) -> list[PluginViewSessionRecord]:
+        removed: list[PluginViewSessionRecord] = []
+        for record in list(self._records_by_session.values()):
+            if record.plugin_id != plugin_id:
+                continue
+            if bot_alias is not None and record.bot_alias != bot_alias:
+                continue
+            removed_record = self.remove(record.session_id)
+            if removed_record is not None:
+                removed.append(removed_record)
+        return removed
 
     def records(self) -> list[PluginViewSessionRecord]:
         return list(self._records_by_session.values())

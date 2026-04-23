@@ -191,6 +191,94 @@ test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
   expect(screen.getByText("tb.clk")).toBeInTheDocument();
 });
 
+test("desktop workbench opens .rpt files as table plugin tabs and downloads artifacts", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const downloadArtifact = vi.spyOn(client, "downloadPluginArtifact").mockResolvedValue();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 reports" }));
+  await user.click(await screen.findByRole("button", { name: "打开 reports/timing.rpt" }));
+
+  expect(await screen.findByRole("tab", { name: "timing.rpt" })).toBeInTheDocument();
+  expect(screen.getByText("Endpoint")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "导出 CSV" }));
+  await waitFor(() => {
+    expect(downloadArtifact).toHaveBeenCalledWith("main", expect.stringMatching(/^artifact-/), "timing.csv");
+  });
+});
+
+test("desktop workbench opens .hier files as tree plugin tabs and handles open-file effects", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFileFull = vi.spyOn(client, "readFileFull");
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 reports" }));
+  await user.click(await screen.findByRole("button", { name: "打开 reports/design.hier" }));
+
+  expect(await screen.findByRole("tab", { name: "design.hier" })).toBeInTheDocument();
+  expect(screen.getByText("top")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "打开源码" }));
+  await waitFor(() => {
+    expect(readFileFull).toHaveBeenCalledWith("main", "src/index.ts");
+  });
+  expect(await screen.findByRole("tab", { name: "index.ts" })).toBeInTheDocument();
+});
+
+test("desktop plugin catalog actions can open another plugin view", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      sessionCapabilities={["view_plugins"]}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "插件" }));
+  await user.click(await screen.findByRole("button", { name: "打开 Timing" }));
+
+  expect(await screen.findByRole("tab", { name: "timing.rpt" })).toBeInTheDocument();
+  expect(screen.getByText("Endpoint")).toBeInTheDocument();
+});
+
 test("desktop workbench creates a loading plugin tab before the waveform session resolves", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

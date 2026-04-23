@@ -192,12 +192,115 @@ export type FileWriteResult = {
   lastModifiedNs: string;
 };
 
-export type PluginViewRenderer = "waveform";
+export type PluginViewRenderer = "waveform" | "table" | "tree";
 export type PluginViewMode = "snapshot" | "session";
 export type PluginViewDataProfile = "light" | "heavy";
 
+export type HostEffect =
+  | { type: "open_file"; path: string; line?: number; column?: number }
+  | { type: "reveal_in_files"; path: string }
+  | { type: "copy_text"; text: string }
+  | { type: "download_artifact"; artifactId: string; filename: string }
+  | {
+      type: "open_plugin_view";
+      pluginId: string;
+      viewId: string;
+      title: string;
+      input: Record<string, unknown>;
+    };
+
+export type PluginAction = {
+  id: string;
+  label: string;
+  target: "plugin" | "host";
+  location: "catalog" | "toolbar" | "row" | "node";
+  icon?: string;
+  tooltip?: string;
+  variant?: "default" | "primary" | "danger";
+  disabled?: boolean;
+  payload?: Record<string, unknown>;
+  confirm?: {
+    title?: string;
+    message?: string;
+    confirmLabel?: string;
+  };
+  hostAction?: HostEffect;
+};
+
+export type PluginActionResult = {
+  message?: string;
+  refresh?: "none" | "view" | "session";
+  hostEffects?: HostEffect[];
+  closeSession?: boolean;
+};
+
+export type PluginActionInvokeInput = {
+  viewId: string;
+  sessionId?: string;
+  actionId: string;
+  payload?: Record<string, unknown>;
+};
+
+export type PluginConfigFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type PluginConfigField =
+  | {
+      key: string;
+      label: string;
+      type: "boolean";
+      default?: boolean;
+      description?: string;
+    }
+  | {
+      key: string;
+      label: string;
+      type: "string";
+      default?: string;
+      description?: string;
+      placeholder?: string;
+    }
+  | {
+      key: string;
+      label: string;
+      type: "integer" | "number";
+      default?: number;
+      description?: string;
+      placeholder?: string;
+      minimum?: number;
+      maximum?: number;
+      step?: number;
+    }
+  | {
+      key: string;
+      label: string;
+      type: "select";
+      default?: string;
+      description?: string;
+      options: PluginConfigFieldOption[];
+    };
+
+export type PluginConfigSchema = {
+  title?: string;
+  sections: Array<{
+    id: string;
+    title?: string;
+    description?: string;
+    fields: PluginConfigField[];
+  }>;
+};
+
+export type PluginRuntimePermissions = {
+  workspaceRead?: boolean;
+  workspaceList?: boolean;
+  tempArtifacts?: boolean;
+};
+
 export type PluginSummary = {
   id: string;
+  schemaVersion?: number;
   name: string;
   version: string;
   description: string;
@@ -211,6 +314,14 @@ export type PluginSummary = {
     dataProfile?: PluginViewDataProfile;
   }>;
   fileHandlers: Array<{ id: string; label: string; extensions: string[]; viewId: string }>;
+  configSchema?: PluginConfigSchema;
+  catalogActions?: PluginAction[];
+  runtime?: {
+    type?: string;
+    entry?: string;
+    protocol?: string;
+    permissions?: PluginRuntimePermissions;
+  };
 };
 
 export type PluginUpdateInput = {
@@ -291,34 +402,163 @@ export type WaveformWindowPayload = {
   tracks: WaveformTrack[];
 };
 
-export type PluginSnapshotRenderResult = {
+export type TableColumn = {
+  id: string;
+  title: string;
+  kind?: "text" | "number" | "badge" | "code" | "link";
+  width?: number;
+  align?: "left" | "center" | "right";
+  sortable?: boolean;
+  wrap?: boolean;
+};
+
+export type TableRow = {
+  id: string;
+  cells: Record<string, unknown>;
+  actions?: PluginAction[];
+};
+
+export type TableSort = {
+  columnId: string;
+  direction: "asc" | "desc";
+};
+
+export type TableViewPayload = {
+  columns: TableColumn[];
+  rows: TableRow[];
+  actions?: PluginAction[];
+};
+
+export type TableViewSummary = {
+  columns: TableColumn[];
+  totalRows: number;
+  defaultPageSize: number;
+  actions?: PluginAction[];
+};
+
+export type TableWindowRequest = {
+  offset: number;
+  limit: number;
+  sort?: TableSort;
+  query?: string;
+  filters?: Record<string, unknown>;
+};
+
+export type TableWindowPayload = {
+  offset?: number;
+  limit?: number;
+  totalRows: number;
+  rows: TableRow[];
+  appliedSort?: TableSort;
+};
+
+export type TreeNode = {
+  id: string;
+  label: string;
+  description?: string;
+  badge?: string;
+  expandable?: boolean;
+  children?: TreeNode[];
+  actions?: PluginAction[];
+};
+
+export type TreeViewPayload = {
+  roots: TreeNode[];
+  actions?: PluginAction[];
+};
+
+export type TreeViewSummary = {
+  roots?: TreeNode[];
+  actions?: PluginAction[];
+  searchable?: boolean;
+};
+
+export type TreeWindowRequest = {
+  kind: "children" | "search";
+  nodeId?: string;
+  query?: string;
+};
+
+export type TreeWindowPayload = {
+  nodeId?: string;
+  roots?: TreeNode[];
+  nodes?: TreeNode[];
+};
+
+export type PluginViewWindowRequest = Record<string, unknown>;
+export type PluginViewWindowPayload = Record<string, unknown>;
+
+export type WaveformSnapshotRenderResult = {
   pluginId: string;
   viewId: string;
   title: string;
-  renderer: PluginViewRenderer;
+  renderer: "waveform";
   mode: "snapshot";
   payload: WaveformViewPayload;
 };
 
-export type PluginSessionRenderResult = {
+export type TableSnapshotRenderResult = {
   pluginId: string;
   viewId: string;
   title: string;
-  renderer: PluginViewRenderer;
+  renderer: "table";
+  mode: "snapshot";
+  payload: TableViewPayload;
+};
+
+export type TreeSnapshotRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "tree";
+  mode: "snapshot";
+  payload: TreeViewPayload;
+};
+
+export type WaveformSessionRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "waveform";
   mode: "session";
   sessionId: string;
   summary: WaveformViewSummary;
   initialWindow: WaveformWindowPayload;
 };
 
-export type PluginRenderResult = PluginSnapshotRenderResult | PluginSessionRenderResult;
-
-export type PluginViewWindowRequest = {
-  startTime: number;
-  endTime: number;
-  signalIds: string[];
-  pixelWidth: number;
+export type TableSessionRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "table";
+  mode: "session";
+  sessionId: string;
+  summary: TableViewSummary;
+  initialWindow: TableWindowPayload;
 };
+
+export type TreeSessionRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "tree";
+  mode: "session";
+  sessionId: string;
+  summary: TreeViewSummary;
+  initialWindow: TreeWindowPayload;
+};
+
+export type PluginSnapshotRenderResult =
+  | WaveformSnapshotRenderResult
+  | TableSnapshotRenderResult
+  | TreeSnapshotRenderResult;
+
+export type PluginSessionRenderResult =
+  | WaveformSessionRenderResult
+  | TableSessionRenderResult
+  | TreeSessionRenderResult;
+
+export type PluginRenderResult = PluginSnapshotRenderResult | PluginSessionRenderResult;
 
 export type FileCreateResult = {
   path: string;

@@ -193,12 +193,14 @@ async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -
 
     service = PluginService(repo_root, plugins_root=plugins_dir)
     view = await service.open_view(
+        bot_alias="main",
         plugin_id="vivado-waveform",
         view_id="waveform",
         input_payload={"path": str(wave_dir / "simple_counter.vcd")},
         audit_context={"account_id": "member_1", "bot_alias": "main"},
     )
     window = await service.get_view_window(
+        bot_alias="main",
         plugin_id="vivado-waveform",
         session_id=view["sessionId"],
         request_payload={

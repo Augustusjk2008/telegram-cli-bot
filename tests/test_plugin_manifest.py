@@ -8,7 +8,23 @@ import pytest
 from bot.plugins.registry import PluginRegistry
 
 
-def _write_plugin(root: Path, plugin_id: str, *, extensions: list[str] | None = None) -> None:
+def _deep_merge(base: dict, overrides: dict) -> dict:
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(dict(merged[key]), value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _write_plugin(
+    root: Path,
+    plugin_id: str,
+    *,
+    extensions: list[str] | None = None,
+    payload_overrides: dict | None = None,
+) -> None:
     plugin_dir = root / plugin_id
     (plugin_dir / "backend").mkdir(parents=True)
     (plugin_dir / "backend" / "main.py").write_text("print('plugin')\n", encoding="utf-8")
@@ -35,6 +51,8 @@ def _write_plugin(root: Path, plugin_id: str, *, extensions: list[str] | None = 
             }
         ],
     }
+    if payload_overrides:
+        payload = _deep_merge(payload, payload_overrides)
     (plugin_dir / "plugin.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -115,3 +133,122 @@ def test_manifest_tracks_enabled_state_and_config_and_registry_skips_disabled_ha
     assert manifest.enabled is False
     assert manifest.config["lodEnabled"] is False
     assert registry.resolve_file_handler("trace/run.vcd") is None
+
+
+def test_load_plugin_manifest_accepts_schema_v2_table_tree_and_permissions(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(
+        plugins_root,
+        "report-viewer",
+        payload_overrides={
+            "schemaVersion": 2,
+            "runtime": {
+                "type": "python",
+                "entry": "backend/main.py",
+                "protocol": "jsonrpc-stdio",
+                "permissions": {
+                    "workspaceRead": True,
+                    "workspaceList": True,
+                    "tempArtifacts": True,
+                },
+            },
+            "configSchema": {
+                "title": "Report Settings",
+                "sections": [
+                    {
+                        "id": "display",
+                        "title": "显示",
+                        "fields": [
+                            {
+                                "key": "pageSize",
+                                "label": "每页",
+                                "type": "integer",
+                                "default": 100,
+                                "minimum": 20,
+                            }
+                        ],
+                    }
+                ],
+            },
+            "catalogActions": [
+                {"id": "clear-cache", "label": "清缓存", "target": "plugin", "location": "catalog"},
+            ],
+            "views": [
+                {"id": "table", "title": "Timing", "renderer": "table", "viewMode": "session"},
+                {"id": "tree", "title": "Hierarchy", "renderer": "tree"},
+            ],
+            "fileHandlers": [
+                {"id": "timing-rpt", "label": "Timing", "extensions": [".rpt"], "viewId": "table"},
+            ],
+        },
+    )
+
+    manifest = PluginRegistry(plugins_root).discover()["report-viewer"]
+
+    assert manifest.schema_version == 2
+    assert manifest.runtime.permissions.workspace_read is True
+    assert manifest.runtime.permissions.workspace_list is True
+    assert manifest.runtime.permissions.temp_artifacts is True
+    assert manifest.views[0].renderer == "table"
+    assert manifest.views[1].renderer == "tree"
+    assert manifest.config_schema is not None
+    assert manifest.config_schema.sections[0].fields[0].key == "pageSize"
+    assert manifest.catalog_actions[0].location == "catalog"
+
+
+def test_load_plugin_manifest_rejects_v1_table_renderer(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(
+        plugins_root,
+        "legacy-viewer",
+        payload_overrides={
+            "schemaVersion": 1,
+            "views": [{"id": "table", "title": "Timing", "renderer": "table"}],
+            "fileHandlers": [],
+        },
+    )
+
+    with pytest.raises(ValueError, match="renderer"):
+        PluginRegistry(plugins_root).discover()
+
+
+def test_load_plugin_manifest_rejects_unknown_permission_key(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(
+        plugins_root,
+        "bad-permissions",
+        payload_overrides={
+            "schemaVersion": 2,
+            "runtime": {
+                "type": "python",
+                "entry": "backend/main.py",
+                "protocol": "jsonrpc-stdio",
+                "permissions": {"workspaceRead": True, "workspaceWrite": True},
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="permissions"):
+        PluginRegistry(plugins_root).discover()
+
+
+def test_load_plugin_manifest_rejects_v1_config_schema(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(
+        plugins_root,
+        "legacy-config",
+        payload_overrides={
+            "schemaVersion": 1,
+            "configSchema": {
+                "sections": [
+                    {
+                        "id": "display",
+                        "fields": [{"key": "lodEnabled", "label": "启用 LOD", "type": "boolean"}],
+                    }
+                ]
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="configSchema"):
+        PluginRegistry(plugins_root).discover()

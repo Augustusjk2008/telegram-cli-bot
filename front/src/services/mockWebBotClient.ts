@@ -29,7 +29,12 @@ import type {
   GitOverview,
   GitTreeStatus,
   FileRenameResult,
+  HostEffect,
+  PluginAction,
+  PluginActionInvokeInput,
+  PluginActionResult,
   PluginViewWindowRequest,
+  PluginViewWindowPayload,
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
@@ -47,6 +52,13 @@ import type {
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  TableColumn,
+  TableRow,
+  TableViewSummary,
+  TableWindowPayload,
+  TreeNode,
+  TreeViewSummary,
+  TreeWindowPayload,
   WaveformTrack,
   WaveformViewSummary,
   WaveformWindowPayload,
@@ -191,6 +203,133 @@ function buildMockWaveformSummary(sourcePath: string): WaveformViewSummary {
   };
 }
 
+const TIMING_COLUMNS: TableColumn[] = [
+  { id: "endpoint", title: "Endpoint" },
+  { id: "slack", title: "Slack", kind: "number", align: "right", sortable: true },
+];
+
+const TIMING_ROWS: TableRow[] = [
+  {
+    id: "path-1",
+    cells: { endpoint: "rx_data", slack: -0.132 },
+    actions: [{ id: "export-row", label: "导出行", target: "plugin", location: "row" }],
+  },
+  {
+    id: "path-2",
+    cells: { endpoint: "tx_data", slack: -0.081 },
+    actions: [{ id: "export-row", label: "导出行", target: "plugin", location: "row" }],
+  },
+  {
+    id: "path-3",
+    cells: { endpoint: "ctrl_state", slack: 0.014 },
+    actions: [{ id: "export-row", label: "导出行", target: "plugin", location: "row" }],
+  },
+];
+
+function clonePluginActions(actions: PluginAction[] | undefined) {
+  return (actions || []).map((action) => ({
+    ...action,
+    payload: action.payload ? { ...action.payload } : undefined,
+    confirm: action.confirm ? { ...action.confirm } : undefined,
+    hostAction: action.hostAction ? { ...action.hostAction } as HostEffect : undefined,
+  }));
+}
+
+function buildMockTimingRows(offset: number, limit: number, query = "", sort?: { columnId?: string; direction?: string }) {
+  let rows = TIMING_ROWS.filter((row) =>
+    !query.trim() || String(row.cells.endpoint || "").toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  if (sort?.columnId === "slack") {
+    rows = [...rows].sort((left, right) => {
+      const diff = Number(left.cells.slack || 0) - Number(right.cells.slack || 0);
+      return sort.direction === "desc" ? -diff : diff;
+    });
+  }
+  return rows.slice(offset, offset + limit).map((row) => ({
+    ...row,
+    cells: { ...row.cells },
+    actions: clonePluginActions(row.actions),
+  }));
+}
+
+function buildMockTimingSummary(defaultPageSize = 2): TableViewSummary {
+  return {
+    columns: TIMING_COLUMNS.map((column) => ({ ...column })),
+    totalRows: TIMING_ROWS.length,
+    defaultPageSize,
+    actions: [{ id: "export-all", label: "导出 CSV", target: "plugin", location: "toolbar", variant: "primary" }],
+  };
+}
+
+function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    actions: clonePluginActions(node.actions),
+    children: node.children ? cloneTreeNodes(node.children) : undefined,
+  }));
+}
+
+function buildMockTreeRoots(): TreeNode[] {
+  return [
+    {
+      id: "top",
+      label: "top",
+      badge: "root",
+      expandable: true,
+      actions: [{ id: "open-source", label: "打开源码", target: "plugin", location: "node" }],
+    },
+    {
+      id: "tb_uart",
+      label: "tb_uart",
+      description: "uart block",
+      expandable: false,
+      actions: [{ id: "copy-name", label: "复制名", target: "host", location: "node", hostAction: { type: "copy_text", text: "tb_uart" } }],
+    },
+  ];
+}
+
+function buildMockTreeChildren(nodeId: string): TreeNode[] {
+  if (nodeId === "top") {
+    return [
+      {
+        id: "top.u_core",
+        label: "u_core",
+        expandable: false,
+        actions: [{ id: "open-source", label: "打开源码", target: "plugin", location: "node" }],
+      },
+      {
+        id: "top.u_mem",
+        label: "u_mem",
+        expandable: false,
+        actions: [{ id: "copy-name", label: "复制名", target: "host", location: "node", hostAction: { type: "copy_text", text: "u_mem" } }],
+      },
+    ];
+  }
+  return [];
+}
+
+function buildMockTreeSummary(): TreeViewSummary {
+  return {
+    roots: cloneTreeNodes(buildMockTreeRoots()),
+    searchable: true,
+    actions: [
+      {
+        id: "open-timing",
+        label: "打开 Timing",
+        target: "host",
+        location: "toolbar",
+        hostAction: {
+          type: "open_plugin_view",
+          pluginId: "timing-report",
+          viewId: "timing-table",
+          title: "timing.rpt",
+          input: { path: "reports/timing.rpt" },
+        },
+      },
+    ],
+  };
+}
+
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -205,8 +344,15 @@ export class MockWebBotClient implements WebBotClient {
     ]),
   );
   private currentPaths = new Map<string, string>();
-  private pluginSessions = new Map<string, { pluginId: string; summary: WaveformViewSummary; tracks: WaveformTrack[] }>();
+  private pluginSessions = new Map<
+    string,
+    | { pluginId: string; renderer: "waveform"; summary: WaveformViewSummary; window: WaveformWindowPayload }
+    | { pluginId: string; renderer: "table"; summary: TableViewSummary; window: TableWindowPayload }
+    | { pluginId: string; renderer: "tree"; summary: TreeViewSummary; window: TreeWindowPayload }
+  >();
   private pluginSessionCounter = 0;
+  private pluginArtifacts = new Map<string, { filename: string; content: string }>();
+  private pluginArtifactCounter = 0;
   private workdirOverrides = new Map<string, string>();
   private gitOverviews = new Map<string, GitOverview>([
     [
@@ -297,13 +443,104 @@ export class MockWebBotClient implements WebBotClient {
   private plugins: PluginSummary[] = [
     {
       id: "vivado-waveform",
+      schemaVersion: 2,
       name: "Vivado Waveform",
       version: "0.1.0",
       description: "Vivado/HDL 波形预览，V1 支持 VCD。",
       enabled: true,
       config: { lodEnabled: true },
+      configSchema: {
+        title: "Waveform Settings",
+        sections: [
+          {
+            id: "display",
+            fields: [
+              {
+                key: "lodEnabled",
+                label: "启用 LOD",
+                type: "boolean",
+                default: true,
+                description: "缩放较大时自动降采样。",
+              },
+            ],
+          },
+        ],
+      },
       views: [{ id: "waveform", title: "波形预览", renderer: "waveform", viewMode: "session", dataProfile: "heavy" }],
       fileHandlers: [{ id: "wave-vcd", label: "VCD 波形预览", extensions: [".vcd"], viewId: "waveform" }],
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: {},
+      },
+    },
+    {
+      id: "timing-report",
+      schemaVersion: 2,
+      name: "Timing Report",
+      version: "0.2.0",
+      description: "结构化 timing 表格视图。",
+      enabled: true,
+      config: { defaultPageSize: 2 },
+      configSchema: {
+        title: "Timing Settings",
+        sections: [
+          {
+            id: "display",
+            fields: [
+              {
+                key: "defaultPageSize",
+                label: "默认页大小",
+                type: "integer",
+                default: 2,
+                minimum: 1,
+              },
+            ],
+          },
+        ],
+      },
+      views: [{ id: "timing-table", title: "Timing Paths", renderer: "table", viewMode: "session", dataProfile: "heavy" }],
+      fileHandlers: [{ id: "timing-rpt", label: "Timing 报告", extensions: [".rpt"], viewId: "timing-table" }],
+      catalogActions: [{ id: "export-all", label: "导出 CSV", target: "plugin", location: "catalog", variant: "primary" }],
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: { workspaceRead: true, tempArtifacts: true },
+      },
+    },
+    {
+      id: "rtl-hierarchy",
+      schemaVersion: 2,
+      name: "RTL Hierarchy",
+      version: "0.2.0",
+      description: "模块层级树视图。",
+      enabled: true,
+      config: {},
+      views: [{ id: "module-tree", title: "Hierarchy", renderer: "tree", viewMode: "session", dataProfile: "light" }],
+      fileHandlers: [{ id: "rtl-hier", label: "层级视图", extensions: [".hier"], viewId: "module-tree" }],
+      catalogActions: [
+        {
+          id: "open-timing",
+          label: "打开 Timing",
+          target: "host",
+          location: "catalog",
+          hostAction: {
+            type: "open_plugin_view",
+            pluginId: "timing-report",
+            viewId: "timing-table",
+            title: "timing.rpt",
+            input: { path: "reports/timing.rpt" },
+          },
+        },
+      ],
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: { workspaceRead: true },
+      },
     },
   ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
@@ -364,6 +601,36 @@ export class MockWebBotClient implements WebBotClient {
     return {
       ...base,
       workingDir,
+    };
+  }
+
+  private clonePluginSummary(plugin: PluginSummary): PluginSummary {
+    return {
+      ...plugin,
+      config: { ...(plugin.config || {}) },
+      configSchema: plugin.configSchema
+        ? {
+            title: plugin.configSchema.title,
+            sections: plugin.configSchema.sections.map((section) => ({
+              ...section,
+              fields: section.fields.map((field) => ({
+                ...field,
+                options: "options" in field && field.options
+                  ? field.options.map((option) => ({ ...option }))
+                  : undefined,
+              })),
+            })),
+          }
+        : undefined,
+      catalogActions: clonePluginActions(plugin.catalogActions),
+      views: plugin.views.map((view) => ({ ...view })),
+      fileHandlers: plugin.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
+      runtime: plugin.runtime
+        ? {
+            ...plugin.runtime,
+            permissions: plugin.runtime.permissions ? { ...plugin.runtime.permissions } : undefined,
+          }
+        : undefined,
     };
   }
 
@@ -535,12 +802,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async listPlugins(_refresh = false): Promise<PluginSummary[]> {
-    return this.plugins.map((plugin) => ({
-      ...plugin,
-      config: { ...(plugin.config || {}) },
-      views: plugin.views.map((view) => ({ ...view })),
-      fileHandlers: plugin.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
-    }));
+    return this.plugins.map((plugin) => this.clonePluginSummary(plugin));
   }
 
   async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {
@@ -555,14 +817,17 @@ export class MockWebBotClient implements WebBotClient {
       config: input.config ? { ...(current.config || {}), ...input.config } : { ...(current.config || {}) },
       views: current.views.map((view) => ({ ...view })),
       fileHandlers: current.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
+      configSchema: current.configSchema,
+      catalogActions: clonePluginActions(current.catalogActions),
+      runtime: current.runtime
+        ? {
+            ...current.runtime,
+            permissions: current.runtime.permissions ? { ...current.runtime.permissions } : undefined,
+          }
+        : undefined,
     };
     this.plugins[index] = updated;
-    return {
-      ...updated,
-      config: { ...(updated.config || {}) },
-      views: updated.views.map((view) => ({ ...view })),
-      fileHandlers: updated.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
-    };
+    return this.clonePluginSummary(updated);
   }
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {
@@ -656,11 +921,30 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async resolveFileOpenTarget(_botAlias: string, path: string): Promise<FileOpenTarget> {
-    if (path.toLowerCase().endsWith(".vcd")) {
+    const lower = path.toLowerCase();
+    if (lower.endsWith(".vcd")) {
       return {
         kind: "plugin_view",
         pluginId: "vivado-waveform",
         viewId: "waveform",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
+    if (lower.endsWith(".rpt")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "timing-report",
+        viewId: "timing-table",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
+    if (lower.endsWith(".hier")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "rtl-hierarchy",
+        viewId: "module-tree",
         title: path.split(/[\\/]/).pop() || path,
         input: { path },
       };
@@ -780,13 +1064,64 @@ export class MockWebBotClient implements WebBotClient {
     viewId: string,
     input: Record<string, unknown>,
   ): Promise<PluginRenderResult> {
+    if (pluginId === "timing-report") {
+      const sourcePath = typeof input.path === "string" ? input.path : "reports/timing.rpt";
+      const title = sourcePath.split(/[\\/]/).pop() || "timing.rpt";
+      const pageSize = Number(this.plugins.find((plugin) => plugin.id === "timing-report")?.config?.defaultPageSize || 2);
+      const summary = buildMockTimingSummary(pageSize);
+      const initialWindow: TableWindowPayload = {
+        offset: 0,
+        limit: pageSize,
+        totalRows: TIMING_ROWS.length,
+        rows: buildMockTimingRows(0, pageSize),
+      };
+      this.pluginSessionCounter += 1;
+      const sessionId = `timing-session-${this.pluginSessionCounter}`;
+      this.pluginSessions.set(sessionId, { pluginId, renderer: "table", summary, window: initialWindow });
+      return {
+        pluginId,
+        viewId,
+        title,
+        renderer: "table",
+        mode: "session",
+        sessionId,
+        summary,
+        initialWindow,
+      };
+    }
+    if (pluginId === "rtl-hierarchy") {
+      const sourcePath = typeof input.path === "string" ? input.path : "reports/design.hier";
+      const title = sourcePath.split(/[\\/]/).pop() || "design.hier";
+      const summary = buildMockTreeSummary();
+      const initialWindow: TreeWindowPayload = {
+        roots: cloneTreeNodes(summary.roots || []),
+      };
+      this.pluginSessionCounter += 1;
+      const sessionId = `tree-session-${this.pluginSessionCounter}`;
+      this.pluginSessions.set(sessionId, { pluginId, renderer: "tree", summary, window: initialWindow });
+      return {
+        pluginId,
+        viewId,
+        title,
+        renderer: "tree",
+        mode: "session",
+        sessionId,
+        summary,
+        initialWindow,
+      };
+    }
+
     const sourcePath = typeof input.path === "string" ? input.path : "waves/simple_counter.vcd";
     const title = sourcePath.split(/[\\/]/).pop() || "simple_counter.vcd";
     const summary = buildMockWaveformSummary(sourcePath);
-    const tracks = buildMockWaveformTracks();
+    const window: WaveformWindowPayload = {
+      startTime: summary.startTime,
+      endTime: summary.endTime,
+      tracks: buildMockWaveformTracks(),
+    };
     this.pluginSessionCounter += 1;
     const sessionId = `session-${this.pluginSessionCounter}`;
-    this.pluginSessions.set(sessionId, { pluginId, summary, tracks });
+    this.pluginSessions.set(sessionId, { pluginId, renderer: "waveform", summary, window });
     return {
       pluginId,
       viewId,
@@ -795,11 +1130,7 @@ export class MockWebBotClient implements WebBotClient {
       mode: "session",
       sessionId,
       summary,
-      initialWindow: {
-        startTime: summary.startTime,
-        endTime: summary.endTime,
-        tracks,
-      },
+      initialWindow: window,
     };
   }
 
@@ -809,10 +1140,46 @@ export class MockWebBotClient implements WebBotClient {
       return existing.pluginId === pluginId ? existing : null;
     }
     if (!/^session-\d+$/.test(sessionId)) {
+      if (/^timing-session-\d+$/.test(sessionId)) {
+        const summary = buildMockTimingSummary(2);
+        const session = {
+          pluginId,
+          renderer: "table" as const,
+          summary,
+          window: {
+            offset: 0,
+            limit: 2,
+            totalRows: TIMING_ROWS.length,
+            rows: buildMockTimingRows(0, 2),
+          },
+        };
+        this.pluginSessions.set(sessionId, session);
+        return session;
+      }
+      if (/^tree-session-\d+$/.test(sessionId)) {
+        const summary = buildMockTreeSummary();
+        const session = {
+          pluginId,
+          renderer: "tree" as const,
+          summary,
+          window: { roots: cloneTreeNodes(summary.roots || []) },
+        };
+        this.pluginSessions.set(sessionId, session);
+        return session;
+      }
       return null;
     }
     const summary = buildMockWaveformSummary("waves/simple_counter.vcd");
-    const session = { pluginId, summary, tracks: buildMockWaveformTracks() };
+    const session = {
+      pluginId,
+      renderer: "waveform" as const,
+      summary,
+      window: {
+        startTime: summary.startTime,
+        endTime: summary.endTime,
+        tracks: buildMockWaveformTracks(),
+      },
+    };
     this.pluginSessions.set(sessionId, session);
     return session;
   }
@@ -823,16 +1190,49 @@ export class MockWebBotClient implements WebBotClient {
     sessionId: string,
     request: PluginViewWindowRequest,
     signal?: AbortSignal,
-  ): Promise<WaveformWindowPayload> {
+  ): Promise<PluginViewWindowPayload> {
     signal?.throwIfAborted?.();
     const session = this.ensurePluginSession(sessionId, pluginId);
     if (!session) {
       throw new Error("插件会话不存在");
     }
+    if (session.renderer === "table") {
+      const offset = Number(request.offset || 0);
+      const limit = Number(request.limit || session.summary.defaultPageSize || 2);
+      const query = typeof request.query === "string" ? request.query : "";
+      const sort = request.sort as { columnId?: string; direction?: string } | undefined;
+      return {
+        offset,
+        limit,
+        totalRows: query.trim()
+          ? TIMING_ROWS.filter((row) => String(row.cells.endpoint || "").toLowerCase().includes(query.trim().toLowerCase())).length
+          : TIMING_ROWS.length,
+        rows: buildMockTimingRows(offset, limit, query, sort),
+        appliedSort: sort,
+      };
+    }
+    if (session.renderer === "tree") {
+      if (request.kind === "search") {
+        const query = String(request.query || "").trim().toLowerCase();
+        const roots = buildMockTreeRoots().filter((node) =>
+          !query || node.label.toLowerCase().includes(query) || String(node.description || "").toLowerCase().includes(query),
+        );
+        return { roots: cloneTreeNodes(roots) };
+      }
+      return {
+        nodeId: String(request.nodeId || ""),
+        nodes: cloneTreeNodes(buildMockTreeChildren(String(request.nodeId || ""))),
+      };
+    }
+    const waveformRequest = request as {
+      startTime: number;
+      endTime: number;
+      signalIds: string[];
+    };
     return {
-      startTime: request.startTime,
-      endTime: request.endTime,
-      tracks: session.tracks.filter((track) => request.signalIds.includes(track.signalId)),
+      startTime: waveformRequest.startTime,
+      endTime: waveformRequest.endTime,
+      tracks: session.window.tracks.filter((track) => waveformRequest.signalIds.includes(track.signalId)),
     };
   }
 
@@ -842,6 +1242,51 @@ export class MockWebBotClient implements WebBotClient {
       return;
     }
     this.pluginSessions.delete(sessionId);
+  }
+
+  async invokePluginAction(
+    _botAlias: string,
+    pluginId: string,
+    input: PluginActionInvokeInput,
+  ): Promise<PluginActionResult> {
+    if (pluginId === "timing-report") {
+      this.pluginArtifactCounter += 1;
+      const artifactId = `artifact-${this.pluginArtifactCounter}`;
+      const content = input.payload?.rowId
+        ? `endpoint,slack\n${String(input.payload.rowId)},-0.132\n`
+        : "endpoint,slack\nrx_data,-0.132\ntx_data,-0.081\n";
+      this.pluginArtifacts.set(artifactId, { filename: "timing.csv", content });
+      return {
+        message: "已导出",
+        refresh: "session",
+        hostEffects: [{ type: "download_artifact", artifactId, filename: "timing.csv" }],
+      };
+    }
+    if (pluginId === "rtl-hierarchy") {
+      if (input.actionId === "open-source") {
+        return {
+          message: "已打开源码",
+          hostEffects: [{ type: "open_file", path: "src/index.ts", line: 12 }],
+        };
+      }
+      return {
+        hostEffects: [{ type: "copy_text", text: String(input.payload?.nodeId || "") }],
+      };
+    }
+    return { message: "已执行" };
+  }
+
+  async downloadPluginArtifact(_botAlias: string, artifactId: string, filename: string): Promise<void> {
+    const artifact = this.pluginArtifacts.get(artifactId);
+    const blob = new Blob([artifact?.content || ""], { type: "text/plain" });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = artifact?.filename || filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
   }
 
   async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {

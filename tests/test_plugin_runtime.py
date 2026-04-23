@@ -198,6 +198,86 @@ for line in sys.stdin:
     (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_host_call_plugin(root: Path, *, plugin_id: str, permissions: dict[str, bool]) -> None:
+    plugin_dir = root / plugin_id
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+
+next_request_id = 9000
+
+
+def emit(message):
+    sys.stdout.write(json.dumps(message) + "\\n")
+    sys.stdout.flush()
+
+
+def call_host(method, params):
+    global next_request_id
+    request_id = next_request_id
+    next_request_id += 1
+    emit({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            raise SystemExit(0)
+        message = json.loads(line)
+        if int(message.get("id") or 0) == request_id and "method" not in message:
+            return message
+
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "plugin.initialize":
+        emit({"jsonrpc": "2.0", "id": request["id"], "result": {"ok": True}})
+    elif method == "plugin.render_view":
+        response = call_host("host.workspace.read_text", {"path": "reports/timing.rpt", "encoding": "utf-8"})
+        if response.get("error"):
+            emit({"jsonrpc": "2.0", "id": request["id"], "error": response["error"]})
+        else:
+            content = response["result"]["content"].strip()
+            emit(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request["id"],
+                    "result": {
+                        "renderer": "table",
+                        "title": "timing.rpt",
+                        "payload": {
+                            "columns": [{"id": "path", "title": "Path"}],
+                            "rows": [{"id": content, "cells": {"path": content}}],
+                        },
+                    },
+                }
+            )
+    elif method == "plugin.shutdown":
+        emit({"jsonrpc": "2.0", "id": request["id"], "result": {"ok": True}})
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "schemaVersion": 2,
+        "id": plugin_id,
+        "name": plugin_id,
+        "version": "0.1.0",
+        "description": "host api runtime test",
+        "runtime": {
+            "type": "python",
+            "entry": "backend/main.py",
+            "protocol": "jsonrpc-stdio",
+            "permissions": permissions,
+        },
+        "views": [{"id": "timing-table", "title": "Timing", "renderer": "table"}],
+        "fileHandlers": [],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @pytest.mark.asyncio
 async def test_plugin_runtime_initializes_renders_and_shuts_down(tmp_path: Path) -> None:
     plugins_root = tmp_path / "plugins"
@@ -206,7 +286,7 @@ async def test_plugin_runtime_initializes_renders_and_shuts_down(tmp_path: Path)
     manifest = registry.discover()["echo-wave"]
 
     runtime = PluginRuntime()
-    result = await runtime.render_view(manifest, "waveform", {"path": "waves/trace.vcd"})
+    result = await runtime.render_view("main", manifest, "waveform", {"path": "waves/trace.vcd"})
 
     assert result["renderer"] == "waveform"
     assert result["payload"]["path"] == "waves/trace.vcd"
@@ -221,7 +301,7 @@ async def test_plugin_runtime_reads_large_jsonrpc_response_lines(tmp_path: Path)
     manifest = registry.discover()["large-wave"]
 
     runtime = PluginRuntime()
-    result = await runtime.render_view(manifest, "waveform", {"path": "waves/large.vcd"})
+    result = await runtime.render_view("main", manifest, "waveform", {"path": "waves/large.vcd"})
 
     assert result["renderer"] == "waveform"
     assert len(result["payload"]["blob"]) == 100_000
@@ -235,17 +315,66 @@ async def test_plugin_runtime_opens_session_queries_window_and_disposes(tmp_path
     manifest = PluginRegistry(plugins_root).discover()["session-wave"]
 
     runtime = PluginRuntime()
-    opened = await runtime.open_view(manifest, "waveform", {"path": "waves/demo.vcd"})
+    opened = await runtime.open_view("main", manifest, "waveform", {"path": "waves/demo.vcd"})
     assert opened["mode"] == "session"
     assert opened["sessionId"]
 
     window = await runtime.get_view_window(
+        "main",
         manifest,
         opened["sessionId"],
         {"startTime": 0, "endTime": 40, "signalIds": ["tb.clk"], "pixelWidth": 1200},
     )
     assert [track["signalId"] for track in window["tracks"]] == ["tb.clk"]
 
-    disposed = await runtime.dispose_view(manifest, opened["sessionId"])
+    disposed = await runtime.dispose_view("main", manifest, opened["sessionId"])
     assert disposed["disposed"] is True
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_runtime_handles_plugin_initiated_host_read_text(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    report = repo_root / "reports" / "timing.rpt"
+    report.parent.mkdir(parents=True)
+    report.write_text("path-1\n", encoding="utf-8")
+    plugins_root = tmp_path / "plugins"
+    _write_host_call_plugin(plugins_root, plugin_id="timing-report", permissions={"workspaceRead": True})
+    manifest = PluginRegistry(plugins_root).discover()["timing-report"]
+
+    runtime = PluginRuntime(workspace_root_for=lambda _alias: repo_root)
+    result = await runtime.render_view("main", manifest, "timing-table", {"path": "reports/timing.rpt"})
+
+    assert result["payload"]["rows"][0]["id"] == "path-1"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_runtime_rejects_host_call_without_permission(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    report = repo_root / "reports" / "timing.rpt"
+    report.parent.mkdir(parents=True)
+    report.write_text("path-1\n", encoding="utf-8")
+    plugins_root = tmp_path / "plugins"
+    _write_host_call_plugin(plugins_root, plugin_id="denied-report", permissions={})
+    manifest = PluginRegistry(plugins_root).discover()["denied-report"]
+
+    runtime = PluginRuntime(workspace_root_for=lambda _alias: repo_root)
+    with pytest.raises(RuntimeError, match="permission_denied"):
+        await runtime.render_view("main", manifest, "timing-table", {"path": "reports/timing.rpt"})
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_runtime_scopes_processes_by_bot_alias(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_echo_plugin(plugins_root)
+    manifest = PluginRegistry(plugins_root).discover()["echo-wave"]
+
+    runtime = PluginRuntime(workspace_root_for=lambda _alias: tmp_path)
+    await runtime.render_view("main", manifest, "waveform", {"path": "waves/a.vcd"})
+    await runtime.render_view("lab", manifest, "waveform", {"path": "waves/a.vcd"})
+
+    assert ("main", "echo-wave") in runtime._processes
+    assert ("lab", "echo-wave") in runtime._processes
     await runtime.shutdown()

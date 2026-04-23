@@ -151,6 +151,7 @@ export type EditorTab = {
   savedContent: string;
   kind?: "file" | "git-diff" | "plugin-view";
   pluginView?: PluginRenderResult;
+  pluginInput?: Record<string, unknown>;
   sourcePath?: string;
   readOnly?: boolean;
   dirty: boolean;

@@ -101,7 +101,7 @@ export function useWaveformViewport({
       },
       controller.signal,
     ).then((nextWindow) => {
-      setWindowData(nextWindow);
+      setWindowData(nextWindow as WaveformWindowPayload);
     }).catch((error) => {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;

@@ -1893,6 +1893,231 @@ for line in sys.stdin:
 
     await web_manager.plugin_service.shutdown()
 
+
+@pytest.mark.asyncio
+async def test_web_api_invokes_plugin_action_and_downloads_artifact(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_root = temp_dir / "repo"
+    repo_root.mkdir()
+    report = repo_root / "reports" / "timing.rpt"
+    report.parent.mkdir(parents=True)
+    report.write_text("path,slack\npath-1,0.1\n", encoding="utf-8")
+    plugins_root = temp_dir / "home" / ".tcb" / "plugins"
+    plugin_dir = plugins_root / "timing-report"
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+from pathlib import Path
+
+sessions = {}
+next_request_id = 9000
+session_counter = 0
+
+
+def emit(message):
+    sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\\n")
+    sys.stdout.flush()
+
+
+def call_host(method, params):
+    global next_request_id
+    request_id = next_request_id
+    next_request_id += 1
+    emit({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            raise SystemExit(0)
+        message = json.loads(line)
+        if int(message.get("id") or 0) == request_id and "method" not in message:
+            return message
+
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    params = request.get("params") or {}
+    context = params.get("context") or {}
+    if method == "plugin.initialize":
+        emit({"jsonrpc": "2.0", "id": request["id"], "result": {"ok": True}})
+    elif method == "plugin.open_view":
+        session_counter += 1
+        path = str(Path(params["input"]["path"]).resolve())
+        session_id = f"{context['host']['botAlias']}-timing-{session_counter}"
+        sessions[session_id] = path
+        emit(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "renderer": "table",
+                    "title": Path(path).name,
+                    "mode": "session",
+                    "sessionId": session_id,
+                    "summary": {
+                        "path": path,
+                        "columns": [
+                            {"id": "path", "title": "Path"},
+                            {"id": "slack", "title": "Slack", "sortable": True},
+                        ],
+                        "defaultPageSize": context["plugin"]["config"].get("defaultPageSize", 100),
+                    },
+                    "initialWindow": {
+                        "rows": [{"id": "path-1", "cells": {"path": "path-1", "slack": "0.1"}}],
+                        "totalRows": 1,
+                    },
+                },
+            }
+        )
+    elif method == "plugin.get_view_window":
+        emit(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "rows": [{"id": "path-1", "cells": {"path": "path-1", "slack": "0.1"}}],
+                    "totalRows": 1,
+                },
+            }
+        )
+    elif method == "plugin.invoke_action":
+        path = sessions[str(params.get("sessionId") or "")]
+        report_response = call_host("host.workspace.read_text", {"path": path, "encoding": "utf-8"})
+        if report_response.get("error"):
+            emit({"jsonrpc": "2.0", "id": request["id"], "error": report_response["error"]})
+            continue
+        artifact_response = call_host(
+            "host.temp.write_artifact",
+            {"filename": "timing.csv", "text": report_response["result"]["content"], "encoding": "utf-8"},
+        )
+        if artifact_response.get("error"):
+            emit({"jsonrpc": "2.0", "id": request["id"], "error": artifact_response["error"]})
+            continue
+        emit(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "message": "已导出",
+                    "refresh": "session",
+                    "hostEffects": [
+                        {
+                            "type": "download_artifact",
+                            "artifactId": artifact_response["result"]["artifactId"],
+                            "filename": "timing.csv",
+                        }
+                    ],
+                },
+            }
+        )
+    elif method == "plugin.dispose_view":
+        sessions.pop(str(params.get("sessionId") or ""), None)
+        emit({"jsonrpc": "2.0", "id": request["id"], "result": {"disposed": True}})
+    elif method == "plugin.shutdown":
+        emit({"jsonrpc": "2.0", "id": request["id"], "result": {"ok": True}})
+    else:
+        emit({"jsonrpc": "2.0", "id": request["id"], "result": {"ok": True}})
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "id": "timing-report",
+                "name": "Timing Report",
+                "version": "0.2.0",
+                "description": "table plugin",
+                "config": {"defaultPageSize": 100},
+                "runtime": {
+                    "type": "python",
+                    "entry": "backend/main.py",
+                    "protocol": "jsonrpc-stdio",
+                    "permissions": {"workspaceRead": True, "tempArtifacts": True},
+                },
+                "configSchema": {
+                    "title": "Timing Settings",
+                    "sections": [
+                        {
+                            "id": "display",
+                            "fields": [
+                                {"key": "defaultPageSize", "label": "每页", "type": "integer", "default": 100, "minimum": 10}
+                            ],
+                        }
+                    ],
+                },
+                "views": [
+                    {"id": "timing-table", "title": "Timing Paths", "renderer": "table", "viewMode": "session", "dataProfile": "heavy"}
+                ],
+                "fileHandlers": [{"id": "timing-rpt", "label": "Timing 报告", "extensions": [".rpt"], "viewId": "timing-table"}],
+                "catalogActions": [{"id": "export-all", "label": "导出 CSV", "target": "plugin", "location": "catalog"}],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    web_manager.plugin_service = PluginService(repo_root, plugins_root=plugins_root)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            plugins_response = await client.get("/api/plugins?refresh=1")
+            plugins_payload = await plugins_response.json()
+            plugin_payload = plugins_payload["data"][0]
+            assert plugin_payload["schemaVersion"] == 2
+            assert plugin_payload["configSchema"]["sections"][0]["fields"][0]["key"] == "defaultPageSize"
+            assert plugin_payload["catalogActions"][0]["id"] == "export-all"
+            assert plugin_payload["runtime"]["permissions"]["workspaceRead"] is True
+            assert plugin_payload["runtime"]["permissions"]["tempArtifacts"] is True
+
+            open_response = await client.post(
+                "/api/bots/main/plugins/timing-report/views/timing-table/open",
+                json={"input": {"path": str(report)}},
+            )
+            open_payload = await open_response.json()
+            session_id = open_payload["data"]["sessionId"]
+            assert open_payload["data"]["renderer"] == "table"
+
+            window_response = await client.post(
+                f"/api/bots/main/plugins/timing-report/sessions/{session_id}/window",
+                json={"offset": 0, "limit": 1},
+            )
+            window_payload = await window_response.json()
+            assert window_payload["data"]["rows"][0]["id"] == "path-1"
+
+            action_response = await client.post(
+                "/api/bots/main/plugins/timing-report/actions/invoke",
+                json={
+                    "viewId": "timing-table",
+                    "sessionId": session_id,
+                    "actionId": "export-all",
+                    "payload": {"path": str(report)},
+                },
+            )
+            action_payload = await action_response.json()
+            effect = action_payload["data"]["hostEffects"][0]
+            assert action_payload["data"]["refresh"] == "session"
+            assert effect["type"] == "download_artifact"
+
+            artifact_response = await client.get(f"/api/bots/main/plugins/artifacts/{effect['artifactId']}")
+            assert artifact_response.status == 200
+            assert "timing.csv" in artifact_response.headers.get("Content-Disposition", "")
+            assert await artifact_response.text() == "path,slack\npath-1,0.1\n"
+
+    await web_manager.plugin_service.shutdown()
+
 @pytest.mark.asyncio
 async def test_git_tree_status_route_returns_decoration_payload(
     web_manager: MultiBotManager,

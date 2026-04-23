@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 2,
+  "id": "timing-report",
+  "name": "Timing Report",
+  "version": "0.2.0",
+  "description": "结构化 timing 表格视图。",
+  "enabled": true,
+  "config": {
+    "defaultPageSize": 50
+  },
+  "configSchema": {
+    "title": "Timing Settings",
+    "sections": [
+      {
+        "id": "display",
+        "fields": [
+          {
+            "key": "defaultPageSize",
+            "label": "默认页大小",
+            "type": "integer",
+            "default": 50,
+            "minimum": 1,
+            "description": "首次打开和翻页时默认加载的行数。"
+          }
+        ]
+      }
+    ]
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true,
+      "tempArtifacts": true
+    }
+  },
+  "views": [
+    {
+      "id": "timing-table",
+      "title": "Timing Paths",
+      "renderer": "table",
+      "viewMode": "session",
+      "dataProfile": "heavy"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "timing-rpt",
+      "label": "Timing 报告",
+      "extensions": [
+        ".rpt"
+      ],
+      "viewId": "timing-table"
+    }
+  ],
+  "catalogActions": [
+    {
+      "id": "export-all",
+      "label": "导出 CSV",
+      "target": "plugin",
+      "location": "catalog",
+      "variant": "primary"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ export const mockFiles: Record<string, Record<string, FileEntry[]>> = {
   main: {
     [DEMO_MAIN_WORKDIR]: [
       entry("docs", true),
+      entry("reports", true),
       entry("src", true),
       entry("waves", true),
       entry("README.md", false, 640),
@@ -26,6 +27,10 @@ export const mockFiles: Record<string, Record<string, FileEntry[]>> = {
     [`${DEMO_MAIN_WORKDIR}/src`]: [
       entry("index.ts", false, 512),
       entry("server.ts", false, 896),
+    ],
+    [`${DEMO_MAIN_WORKDIR}/reports`]: [
+      entry("timing.rpt", false, 768),
+      entry("design.hier", false, 512),
     ],
     [`${DEMO_MAIN_WORKDIR}/waves`]: [
       entry("simple_counter.vcd", false, 1024),

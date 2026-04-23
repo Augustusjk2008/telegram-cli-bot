@@ -42,7 +42,10 @@ import type {
   FileReadResult,
   FileRenameResult,
   FileWriteResult,
+  PluginActionInvokeInput,
+  PluginActionResult,
   PluginViewWindowRequest,
+  PluginViewWindowPayload,
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
@@ -60,7 +63,6 @@ import type {
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
-  WaveformWindowPayload,
   WorkdirChangeConflict,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
@@ -1518,8 +1520,8 @@ export class RealWebBotClient implements WebBotClient {
     sessionId: string,
     request: PluginViewWindowRequest,
     signal?: AbortSignal,
-  ): Promise<WaveformWindowPayload> {
-    return this.requestJson<WaveformWindowPayload>(
+  ): Promise<PluginViewWindowPayload> {
+    return this.requestJson<PluginViewWindowPayload>(
       `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/sessions/${encodeURIComponent(sessionId)}/window`,
       {
         method: "POST",
@@ -1539,6 +1541,44 @@ export class RealWebBotClient implements WebBotClient {
         method: "DELETE",
       },
     );
+  }
+
+  async invokePluginAction(
+    botAlias: string,
+    pluginId: string,
+    input: PluginActionInvokeInput,
+  ): Promise<PluginActionResult> {
+    return this.requestJson<PluginActionResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/actions/invoke`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  async downloadPluginArtifact(botAlias: string, artifactId: string, filename: string): Promise<void> {
+    const response = await fetch(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`,
+      {
+        headers: this.headers(),
+      },
+    );
+    if (!response.ok) {
+      throw new Error("下载插件产物失败");
+    }
+    const blob = await response.blob();
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
   }
 
   async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {

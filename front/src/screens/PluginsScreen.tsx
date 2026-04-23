@@ -2,21 +2,33 @@ import { useEffect, useRef, useState } from "react";
 import { Puzzle } from "lucide-react";
 import { PluginCatalog } from "../components/PluginCatalog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { PluginSummary } from "../services/types";
+import type { HostEffect, PluginSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
   client?: WebBotClient;
+  botAlias?: string;
   embedded?: boolean;
+  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onOpenPluginView?: (target: {
+    pluginId: string;
+    viewId: string;
+    title: string;
+    input: Record<string, unknown>;
+  }) => Promise<void> | void;
 };
 
 export function PluginsScreen({
   client = new MockWebBotClient(),
+  botAlias = "main",
   embedded = false,
+  onApplyHostEffects,
+  onOpenPluginView,
 }: Props) {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [updatingPluginId, setUpdatingPluginId] = useState("");
   const requestIdRef = useRef(0);
 
@@ -25,6 +37,7 @@ export function PluginsScreen({
     requestIdRef.current = requestId;
     setLoading(true);
     setError("");
+    setNotice("");
 
     client.listPlugins(refresh)
       .then((data) => {
@@ -53,9 +66,11 @@ export function PluginsScreen({
   function updatePlugin(pluginId: string, input: Parameters<WebBotClient["updatePlugin"]>[1]) {
     setUpdatingPluginId(pluginId);
     setError("");
+    setNotice("");
     client.updatePlugin(pluginId, input)
       .then((updated) => {
         setPlugins((current) => current.map((plugin) => (plugin.id === updated.id ? updated : plugin)));
+        setNotice(`${updated.name} 设置已保存`);
       })
       .catch((err: unknown) => {
         setError(err instanceof Error && err.message ? err.message : "插件配置保存失败");
@@ -89,11 +104,17 @@ export function PluginsScreen({
 
       <PluginCatalog
         plugins={plugins}
+        botAlias={botAlias}
+        client={client}
         loading={loading}
         error={error}
         updatingPluginId={updatingPluginId}
         onUpdatePlugin={updatePlugin}
+        onApplyHostEffects={onApplyHostEffects}
+        onOpenPluginView={onOpenPluginView}
+        onNotice={setNotice}
       />
+      {notice ? <p className="text-sm text-[var(--muted)]">{notice}</p> : null}
     </div>
   );
 }

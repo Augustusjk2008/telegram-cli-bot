@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .artifacts import ArtifactRecord, ArtifactStore
 from .audit import append_plugin_audit_event
+from .host_api import PluginHostApi
 from .paths import default_plugins_root
 from .registry import PluginRegistry
 from .runtime import PluginRuntime
@@ -20,12 +23,33 @@ def _payload_bytes(payload: dict[str, Any]) -> int:
     return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
+def _count_tree_nodes(nodes: list[dict[str, Any]]) -> int:
+    total = 0
+    stack = list(nodes)
+    while stack:
+        node = stack.pop()
+        total += 1
+        stack.extend(item for item in list(node.get("children") or []) if isinstance(item, dict))
+    return total
+
+
 class PluginService:
-    def __init__(self, repo_root: Path | str, plugins_root: Path | str | None = None):
+    def __init__(
+        self,
+        repo_root: Path | str,
+        plugins_root: Path | str | None = None,
+        *,
+        workspace_root_for: Callable[[str], Path] | None = None,
+    ):
         self.repo_root = Path(repo_root)
         self.plugins_root = Path(plugins_root) if plugins_root is not None else default_plugins_root()
         self.registry = PluginRegistry(self.plugins_root)
-        self.runtime = PluginRuntime()
+        self.artifacts = ArtifactStore(self.repo_root)
+        self.runtime = PluginRuntime(
+            workspace_root_for=workspace_root_for or (lambda _alias: self.repo_root),
+            host_api=PluginHostApi(self.artifacts),
+            audit_hook=self._record_runtime_audit,
+        )
         self.sessions = PluginViewSessionStore()
 
     def _get_view_spec(self, plugin_id: str, view_id: str):
@@ -37,9 +61,87 @@ class PluginService:
                 return manifest, view
         raise KeyError(f"未知插件视图: {plugin_id}/{view_id}")
 
-    def _manifest_payload(self, manifest) -> dict[str, Any]:
+    def _serialize_permissions(self, manifest) -> dict[str, Any]:
         return {
+            "workspaceRead": manifest.runtime.permissions.workspace_read,
+            "workspaceList": manifest.runtime.permissions.workspace_list,
+            "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
+        }
+
+    def _serialize_config_schema(self, manifest) -> dict[str, Any] | None:
+        if manifest.config_schema is None:
+            return None
+        return {
+            "title": manifest.config_schema.title,
+            "sections": [
+                {
+                    "id": section.id,
+                    "title": section.title,
+                    "description": section.description,
+                    "fields": [
+                        {
+                            "key": field.key,
+                            "label": field.label,
+                            "type": field.field_type,
+                            "default": field.default,
+                            "description": field.description,
+                            "placeholder": field.placeholder,
+                            "minimum": field.minimum,
+                            "maximum": field.maximum,
+                            "step": field.step,
+                            "options": [
+                                {"value": option.value, "label": option.label}
+                                for option in field.options
+                            ],
+                        }
+                        for field in section.fields
+                    ],
+                }
+                for section in manifest.config_schema.sections
+            ],
+        }
+
+    def _serialize_action(self, action) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "id": action.id,
+            "label": action.label,
+            "target": action.target,
+            "location": action.location,
+            "variant": action.variant,
+            "disabled": action.disabled,
+            "payload": dict(action.payload or {}),
+        }
+        if action.icon:
+            payload["icon"] = action.icon
+        if action.tooltip:
+            payload["tooltip"] = action.tooltip
+        if action.confirm is not None:
+            payload["confirm"] = dict(action.confirm)
+        if action.host_action is not None:
+            payload["hostAction"] = dict(action.host_action)
+        return payload
+
+    def _get_session_record(
+        self,
+        *,
+        session_id: str,
+        plugin_id: str,
+        bot_alias: str,
+        view_id: str | None = None,
+    ) -> PluginViewSessionRecord:
+        record = self.sessions.get_optional(session_id)
+        if record is None:
+            raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
+        if record.bot_alias != bot_alias or record.plugin_id != plugin_id:
+            raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
+        if view_id is not None and record.view_id != view_id:
+            raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
+        return record
+
+    def _manifest_payload(self, manifest) -> dict[str, Any]:
+        payload = {
             "id": manifest.plugin_id,
+            "schemaVersion": manifest.schema_version,
             "name": manifest.name,
             "version": manifest.version,
             "description": manifest.description,
@@ -64,6 +166,29 @@ class PluginService:
                 }
                 for handler in manifest.file_handlers
             ],
+            "catalogActions": [self._serialize_action(action) for action in manifest.catalog_actions],
+            "runtime": {
+                "type": manifest.runtime.runtime_type,
+                "entry": manifest.runtime.entry,
+                "protocol": manifest.runtime.protocol,
+                "permissions": self._serialize_permissions(manifest),
+            },
+        }
+        if manifest.config_schema is not None:
+            payload["configSchema"] = self._serialize_config_schema(manifest)
+        return payload
+
+    def _build_payload_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
+        tracks = [item for item in list(payload.get("tracks") or []) if isinstance(item, dict)]
+        rows = [item for item in list(payload.get("rows") or []) if isinstance(item, dict)]
+        roots = [item for item in list(payload.get("roots") or []) if isinstance(item, dict)]
+        nodes = [item for item in list(payload.get("nodes") or []) if isinstance(item, dict)]
+        return {
+            "payload_bytes": _payload_bytes(payload),
+            "track_count": len(tracks),
+            "segment_count": sum(len(track.get("segments") or []) for track in tracks),
+            "row_count": len(rows),
+            "node_count": _count_tree_nodes(roots) + _count_tree_nodes(nodes),
         }
 
     def _record_audit(
@@ -75,9 +200,8 @@ class PluginService:
         payload: dict[str, Any],
         audit_context: dict[str, Any],
         session_id: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
-        track_count = len(payload.get("tracks") or [])
-        segment_count = sum(len(track.get("segments") or []) for track in payload.get("tracks") or [])
         append_plugin_audit_event(
             self.repo_root,
             {
@@ -85,13 +209,63 @@ class PluginService:
                 "plugin_id": plugin_id,
                 "view_id": view_id,
                 "session_id": session_id or "",
-                "payload_bytes": _payload_bytes(payload),
-                "track_count": track_count,
-                "segment_count": segment_count,
+                **self._build_payload_metrics(payload),
                 "account_id": str(audit_context.get("account_id") or ""),
                 "bot_alias": str(audit_context.get("bot_alias") or ""),
+                **(extra or {}),
             },
         )
+
+    def _record_runtime_audit(self, payload: dict[str, Any]) -> None:
+        append_plugin_audit_event(self.repo_root, payload)
+
+    def _validate_render_result(
+        self,
+        plugin_id: str,
+        view,
+        result: dict[str, Any],
+        *,
+        expect_session: bool,
+    ) -> dict[str, Any]:
+        renderer = str(result.get("renderer") or "")
+        if renderer != view.renderer:
+            raise RuntimeError(f"插件 renderer 不匹配: expected={view.renderer} actual={renderer}")
+        payload = {
+            "pluginId": plugin_id,
+            "viewId": view.id,
+            "title": str(result.get("title") or view.title or ""),
+            "renderer": renderer,
+        }
+        if expect_session:
+            session_id = str(result.get("sessionId") or "")
+            if not session_id:
+                raise RuntimeError("插件未返回 sessionId")
+            return {
+                **payload,
+                "mode": "session",
+                "sessionId": session_id,
+                "summary": dict(result.get("summary") or {}),
+                "initialWindow": dict(result.get("initialWindow") or {}),
+            }
+        return {
+            **payload,
+            "mode": "snapshot",
+            "payload": dict(result.get("payload") or {}),
+        }
+
+    def _normalize_action_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        refresh = str(result.get("refresh") or "none").strip() or "none"
+        if refresh not in {"none", "view", "session"}:
+            refresh = "none"
+        host_effects = result.get("hostEffects") or []
+        if not isinstance(host_effects, list):
+            raise RuntimeError("插件 action hostEffects 必须是数组")
+        return {
+            "message": str(result.get("message") or ""),
+            "refresh": refresh,
+            "hostEffects": [dict(item) for item in host_effects if isinstance(item, dict)],
+            "closeSession": bool(result.get("closeSession", False)),
+        }
 
     def list_plugins(self, refresh: bool = False) -> list[dict[str, Any]]:
         manifests = list(self.registry.discover().values()) if refresh else self.registry.list_manifests()
@@ -99,6 +273,7 @@ class PluginService:
 
     async def reload_plugins(self) -> list[dict[str, Any]]:
         self.sessions = PluginViewSessionStore()
+        self.artifacts.clear_all()
         await self.runtime.shutdown()
         return self.list_plugins(refresh=True)
 
@@ -119,7 +294,17 @@ class PluginService:
             current_config = raw.get("config") if isinstance(raw.get("config"), dict) else {}
             raw["config"] = {**current_config, **dict(config)}
         manifest_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        await self.reload_plugins()
+        self.registry.discover()
+
+        stale_records = self.sessions.clear_plugin(plugin_id)
+        for record in stale_records:
+            try:
+                current_manifest = self.registry.get_manifest(plugin_id)
+                await self.runtime.dispose_view(record.bot_alias, current_manifest, record.session_id)
+            except Exception:
+                pass
+        self.artifacts.clear_plugin(plugin_id)
+        await self.runtime.stop_plugin_instances(plugin_id)
         return self._manifest_payload(self.registry.get_manifest(plugin_id))
 
     def resolve_file_target(self, path: str) -> dict[str, Any]:
@@ -137,6 +322,7 @@ class PluginService:
     async def render_view(
         self,
         *,
+        bot_alias: str,
         plugin_id: str,
         view_id: str,
         input_payload: dict[str, Any],
@@ -145,20 +331,14 @@ class PluginService:
         manifest, view = self._get_view_spec(plugin_id, view_id)
         if view.view_mode == "session":
             return await self.open_view(
+                bot_alias=bot_alias,
                 plugin_id=plugin_id,
                 view_id=view_id,
                 input_payload=input_payload,
                 audit_context=audit_context,
             )
-        result = await self.runtime.render_view(manifest, view_id, input_payload)
-        payload = {
-            "pluginId": plugin_id,
-            "viewId": view_id,
-            "title": str(result.get("title") or ""),
-            "renderer": str(result.get("renderer") or ""),
-            "mode": "snapshot",
-            "payload": dict(result.get("payload") or {}),
-        }
+        result = await self.runtime.render_view(bot_alias, manifest, view_id, input_payload)
+        payload = self._validate_render_result(plugin_id, view, result, expect_session=False)
         self._record_audit(
             event="render_view",
             plugin_id=plugin_id,
@@ -171,6 +351,7 @@ class PluginService:
     async def open_view(
         self,
         *,
+        bot_alias: str,
         plugin_id: str,
         view_id: str,
         input_payload: dict[str, Any],
@@ -179,6 +360,7 @@ class PluginService:
         manifest, view = self._get_view_spec(plugin_id, view_id)
         if view.view_mode == "snapshot":
             return await self.render_view(
+                bot_alias=bot_alias,
                 plugin_id=plugin_id,
                 view_id=view_id,
                 input_payload=input_payload,
@@ -187,27 +369,17 @@ class PluginService:
         resolved_input = dict(input_payload or {})
         source_identity = build_source_identity(resolved_input)
         source_fingerprint = build_source_fingerprint(resolved_input)
-        cache_key = self.sessions.build_cache_key(plugin_id, view_id, source_fingerprint)
+        cache_key = self.sessions.build_cache_key(bot_alias, plugin_id, view_id, source_fingerprint)
         cached = self.sessions.get_cached(cache_key)
         if cached is not None:
             return dict(cached.opened_payload)
 
-        result = await self.runtime.open_view(manifest, view_id, resolved_input)
-        payload = {
-            "pluginId": plugin_id,
-            "viewId": view_id,
-            "title": str(result.get("title") or ""),
-            "renderer": str(result.get("renderer") or ""),
-            "mode": "session",
-            "sessionId": str(result.get("sessionId") or ""),
-            "summary": dict(result.get("summary") or {}),
-            "initialWindow": dict(result.get("initialWindow") or {}),
-        }
-        if not payload["sessionId"]:
-            raise RuntimeError("插件未返回 sessionId")
+        result = await self.runtime.open_view(bot_alias, manifest, view_id, resolved_input)
+        payload = self._validate_render_result(plugin_id, view, result, expect_session=True)
 
         stale = self.sessions.replace(
             PluginViewSessionRecord(
+                bot_alias=bot_alias,
                 plugin_id=plugin_id,
                 view_id=view_id,
                 session_id=payload["sessionId"],
@@ -218,9 +390,9 @@ class PluginService:
                 opened_payload=payload,
             )
         )
-        if stale is not None and stale.plugin_id == plugin_id:
+        if stale is not None:
             try:
-                await self.runtime.dispose_view(manifest, stale.session_id)
+                await self.runtime.dispose_view(stale.bot_alias, manifest, stale.session_id)
             except Exception:
                 pass
 
@@ -237,18 +409,22 @@ class PluginService:
     async def get_view_window(
         self,
         *,
+        bot_alias: str,
         plugin_id: str,
         session_id: str,
         request_payload: dict[str, Any],
         audit_context: dict[str, Any],
     ) -> dict[str, Any]:
-        record = self.sessions.get(session_id)
-        if record.plugin_id != plugin_id:
-            raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
+        record = self._get_session_record(
+            session_id=session_id,
+            plugin_id=plugin_id,
+            bot_alias=bot_alias,
+        )
         manifest = self.registry.get_manifest(plugin_id)
         if not manifest.enabled:
             raise KeyError(f"插件已禁用: {plugin_id}")
-        payload = await self.runtime.get_view_window(manifest, session_id, request_payload)
+        payload = await self.runtime.get_view_window(bot_alias, manifest, session_id, request_payload)
+        self.sessions.remember_window_request(session_id, request_payload)
         self._record_audit(
             event="query_window",
             plugin_id=plugin_id,
@@ -259,41 +435,82 @@ class PluginService:
         )
         return payload
 
+    async def invoke_action(
+        self,
+        *,
+        bot_alias: str,
+        plugin_id: str,
+        view_id: str,
+        action_id: str,
+        payload: dict[str, Any],
+        audit_context: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        manifest, _view = self._get_view_spec(plugin_id, view_id)
+        if session_id:
+            self._get_session_record(
+                session_id=session_id,
+                plugin_id=plugin_id,
+                bot_alias=bot_alias,
+                view_id=view_id,
+            )
+        result = await self.runtime.invoke_action(
+            bot_alias,
+            manifest,
+            view_id=view_id,
+            session_id=session_id,
+            action_id=action_id,
+            payload=dict(payload or {}),
+        )
+        normalized = self._normalize_action_result(result)
+        self._record_audit(
+            event="invoke_action",
+            plugin_id=plugin_id,
+            view_id=view_id,
+            payload=normalized,
+            audit_context=audit_context,
+            session_id=session_id,
+            extra={
+                "action_id": action_id,
+                "action_target": "plugin",
+            },
+        )
+        return normalized
+
     async def dispose_view(
         self,
         *,
+        bot_alias: str,
         plugin_id: str,
         session_id: str,
         audit_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         record = self.sessions.remove(session_id)
-        if record is None or record.plugin_id != plugin_id:
+        if record is None or record.bot_alias != bot_alias or record.plugin_id != plugin_id:
             raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
         manifest = self.registry.get_manifest(plugin_id)
-        payload = await self.runtime.dispose_view(manifest, session_id)
-        append_plugin_audit_event(
-            self.repo_root,
-            {
-                "event": "dispose_view",
-                "plugin_id": plugin_id,
-                "view_id": record.view_id,
-                "session_id": session_id,
-                "payload_bytes": _payload_bytes(payload),
-                "track_count": 0,
-                "segment_count": 0,
-                "account_id": str((audit_context or {}).get("account_id") or ""),
-                "bot_alias": str((audit_context or {}).get("bot_alias") or ""),
-            },
+        payload = await self.runtime.dispose_view(bot_alias, manifest, session_id)
+        self._record_audit(
+            event="dispose_view",
+            plugin_id=plugin_id,
+            view_id=record.view_id,
+            payload=payload,
+            audit_context=audit_context or {},
+            session_id=session_id,
         )
         return payload
+
+    def get_artifact(self, *, bot_alias: str, artifact_id: str) -> ArtifactRecord:
+        return self.artifacts.get(bot_alias=bot_alias, artifact_id=artifact_id)
 
     async def shutdown(self) -> None:
         records = self.sessions.records()
         for record in records:
-            manifest = self.registry.get_manifest(record.plugin_id)
             try:
-                await self.runtime.dispose_view(manifest, record.session_id)
+                manifest = self.registry.get_manifest(record.plugin_id)
+                await self.runtime.dispose_view(record.bot_alias, manifest, record.session_id)
             except Exception:
                 pass
         self.sessions = PluginViewSessionStore()
+        self.artifacts.clear_all()
         await self.runtime.shutdown()

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
+import { runPluginAction } from "../components/plugins/pluginActions";
 
 test("plugin view surface renders aligned zoomable waveform with time axis and bus tracks", async () => {
   const user = userEvent.setup();
@@ -332,4 +333,261 @@ test("plugin view surface renders dense LOD segments as activity bands with labe
     expect(label).toHaveAttribute("text-anchor", "middle");
     expect(Number(label.getAttribute("y"))).toBeLessThan(20);
   });
+});
+
+test("plugin view surface renders table snapshot views", () => {
+  const client = new MockWebBotClient();
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "timing-report",
+        viewId: "timing-table",
+        title: "timing.rpt",
+        renderer: "table",
+        mode: "snapshot",
+        payload: {
+          columns: [
+            { id: "endpoint", title: "Endpoint" },
+            { id: "slack", title: "Slack", kind: "number", align: "right" },
+          ],
+          rows: [
+            { id: "path-1", cells: { endpoint: "rx_data", slack: -0.132 } },
+            { id: "path-2", cells: { endpoint: "tx_data", slack: -0.081 } },
+          ],
+        },
+      }}
+    />,
+  );
+
+  expect(screen.getByText("Endpoint")).toBeInTheDocument();
+  expect(screen.getByText("rx_data")).toBeInTheDocument();
+  expect(screen.getByText("-0.132")).toBeInTheDocument();
+});
+
+test("plugin view surface ignores stale table window responses", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const requests: Array<{
+    request: Record<string, unknown>;
+    resolve: (payload: Record<string, unknown>) => void;
+  }> = [];
+  vi.spyOn(client, "queryPluginViewWindow").mockImplementation(
+    async (_botAlias, _pluginId, _sessionId, request) =>
+      await new Promise((resolve) => {
+        requests.push({ request, resolve });
+      }),
+  );
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "timing-report",
+        viewId: "timing-table",
+        title: "timing.rpt",
+        renderer: "table",
+        mode: "session",
+        sessionId: "timing-session-1",
+        summary: {
+          columns: [
+            { id: "endpoint", title: "Endpoint" },
+            { id: "slack", title: "Slack", kind: "number", align: "right", sortable: true },
+          ],
+          totalRows: 3,
+          defaultPageSize: 2,
+        },
+        initialWindow: {
+          offset: 0,
+          limit: 2,
+          totalRows: 3,
+          rows: [
+            { id: "path-1", cells: { endpoint: "rx_data", slack: -0.132 } },
+            { id: "path-2", cells: { endpoint: "tx_data", slack: -0.081 } },
+          ],
+        },
+      }}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(requests).toHaveLength(1);
+  });
+  requests[0]?.resolve({
+    offset: 0,
+    limit: 2,
+    totalRows: 3,
+    rows: [
+      { id: "path-1", cells: { endpoint: "rx_data", slack: -0.132 } },
+      { id: "path-2", cells: { endpoint: "tx_data", slack: -0.081 } },
+    ],
+  });
+
+  await user.click(screen.getByRole("button", { name: "下一页" }));
+  await waitFor(() => {
+    expect(requests).toHaveLength(2);
+  });
+  await user.click(screen.getByRole("button", { name: "上一页" }));
+  await waitFor(() => {
+    expect(requests).toHaveLength(3);
+  });
+
+  requests[2]?.resolve({
+    offset: 0,
+    limit: 2,
+    totalRows: 3,
+    rows: [
+      { id: "path-1", cells: { endpoint: "rx_data", slack: -0.132 } },
+      { id: "path-2", cells: { endpoint: "tx_data", slack: -0.081 } },
+    ],
+  });
+  await waitFor(() => {
+    expect(screen.getByText("rx_data")).toBeInTheDocument();
+  });
+
+  requests[1]?.resolve({
+    offset: 2,
+    limit: 2,
+    totalRows: 3,
+    rows: [
+      { id: "path-3", cells: { endpoint: "ctrl_state", slack: 0.014 } },
+    ],
+  });
+
+  await waitFor(() => {
+    expect(screen.getByText("rx_data")).toBeInTheDocument();
+    expect(screen.queryByText("ctrl_state")).toBeNull();
+  });
+});
+
+test("plugin view surface loads tree children on demand", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "rtl-hierarchy",
+        viewId: "module-tree",
+        title: "design.hier",
+        renderer: "tree",
+        mode: "session",
+        sessionId: "tree-session-1",
+        summary: {
+          searchable: true,
+        },
+        initialWindow: {
+          roots: [
+            { id: "top", label: "top", expandable: true },
+          ],
+        },
+      }}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "展开 top" }));
+  expect(await screen.findByText("u_core")).toBeInTheDocument();
+  expect(screen.getByText("u_mem")).toBeInTheDocument();
+});
+
+test("plugin view surface ignores stale tree search responses", async () => {
+  const client = new MockWebBotClient();
+  const requests: Array<{
+    request: Record<string, unknown>;
+    resolve: (payload: Record<string, unknown>) => void;
+  }> = [];
+  vi.spyOn(client, "queryPluginViewWindow").mockImplementation(
+    async (_botAlias, _pluginId, _sessionId, request) =>
+      await new Promise((resolve) => {
+        requests.push({ request, resolve });
+      }),
+  );
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "rtl-hierarchy",
+        viewId: "module-tree",
+        title: "design.hier",
+        renderer: "tree",
+        mode: "session",
+        sessionId: "tree-session-2",
+        summary: {
+          searchable: true,
+        },
+        initialWindow: {
+          roots: [],
+        },
+      }}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(requests).toHaveLength(1);
+  });
+  requests[0]?.resolve({ roots: [] });
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "top" } });
+  await waitFor(() => {
+    expect(requests).toHaveLength(2);
+  });
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "tb" } });
+  await waitFor(() => {
+    expect(requests).toHaveLength(3);
+  });
+
+  requests[2]?.resolve({
+    roots: [{ id: "tb_uart", label: "tb_uart", expandable: false }],
+  });
+  await waitFor(() => {
+    expect(screen.getByText("tb_uart")).toBeInTheDocument();
+  });
+
+  requests[1]?.resolve({
+    roots: [{ id: "top", label: "top", expandable: true }],
+  });
+  await waitFor(() => {
+    expect(screen.getByText("tb_uart")).toBeInTheDocument();
+    expect(screen.queryByText("top")).toBeNull();
+  });
+});
+
+test("runPluginAction closes session before refreshing", async () => {
+  const client = new MockWebBotClient();
+  const closeSession = vi.fn();
+  const refreshSession = vi.fn();
+  vi.spyOn(client, "invokePluginAction").mockResolvedValue({
+    message: "已删除",
+    refresh: "session",
+    closeSession: true,
+  });
+
+  await runPluginAction(
+    { id: "delete-row", label: "删除", target: "plugin", location: "row" },
+    {
+      client,
+      botAlias: "main",
+      pluginId: "timing-report",
+      viewId: "timing-table",
+      title: "timing.rpt",
+      sessionId: "session-1",
+      inputPayload: { path: "reports/timing.rpt" },
+      payload: { rowId: "path-1" },
+      applyHostEffects: vi.fn(),
+      closeSession,
+      refreshSession,
+      reopenView: vi.fn(),
+      pushToast: vi.fn(),
+    },
+  );
+
+  expect(closeSession).toHaveBeenCalledWith("timing-report", "session-1");
+  expect(refreshSession).not.toHaveBeenCalled();
 });

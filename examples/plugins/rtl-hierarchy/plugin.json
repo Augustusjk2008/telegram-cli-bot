@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 2,
+  "id": "rtl-hierarchy",
+  "name": "RTL Hierarchy",
+  "version": "0.2.0",
+  "description": "模块层级树视图。",
+  "enabled": true,
+  "config": {},
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "module-tree",
+      "title": "Hierarchy",
+      "renderer": "tree",
+      "viewMode": "session",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "rtl-hier",
+      "label": "层级视图",
+      "extensions": [
+        ".hier"
+      ],
+      "viewId": "module-tree"
+    }
+  ],
+  "catalogActions": [
+    {
+      "id": "open-timing",
+      "label": "打开 Timing",
+      "target": "host",
+      "location": "catalog",
+      "hostAction": {
+        "type": "open_plugin_view",
+        "pluginId": "timing-report",
+        "viewId": "timing-table",
+        "title": "timing.rpt",
+        "input": {
+          "path": "reports/timing.rpt"
+        }
+      }
+    }
+  ]
+}

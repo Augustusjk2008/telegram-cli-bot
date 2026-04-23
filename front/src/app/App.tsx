@@ -724,6 +724,7 @@ export function App() {
         <PluginsScreen
           key={`plugins-${currentBot}`}
           client={client}
+          botAlias={currentBot}
         />
       </div>
     );
