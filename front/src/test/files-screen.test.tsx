@@ -386,6 +386,35 @@ test("keeps non-markdown files in plain-text preview mode", async () => {
   expect(screen.queryByRole("heading", { name: "Raw Heading" })).not.toBeInTheDocument();
 });
 
+test("renders svg files as images in preview mode", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "diagram.svg", isDir: false, size: 256, updatedAt: "2026-04-09T10:00:00Z" }],
+    }),
+    readFile: async () => ({
+      content: [
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 60\">",
+        "  <rect width=\"120\" height=\"60\" fill=\"#0f172a\" />",
+        "  <circle cx=\"30\" cy=\"30\" r=\"18\" fill=\"#38bdf8\" />",
+        "</svg>",
+      ].join("\n"),
+      mode: "head" as const,
+      fileSizeBytes: 256,
+      isFullContent: true,
+    }),
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 diagram.svg" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "diagram.svg" });
+  expect(within(dialog).getByRole("img", { name: "diagram.svg" })).toBeInTheDocument();
+  expect(within(dialog).queryByText(/<svg/i)).not.toBeInTheDocument();
+});
+
 test("can load full file content from preview modal", async () => {
   const user = userEvent.setup();
   const readFullSpy = vi.fn(async () => ({

@@ -980,6 +980,14 @@ export function ChatScreen({
   const lastItem = items[items.length - 1];
 
   useEffect(() => {
+    if (!isVisible) {
+      return;
+    }
+    shouldStickToBottomRef.current = true;
+    forceAutoScrollRef.current = true;
+  }, [isVisible]);
+
+  useEffect(() => {
     if (!isVisible || loading) {
       return;
     }

@@ -1003,6 +1003,60 @@ test("does not force-scroll to the bottom once the user scrolls away during stre
   }
 }, 10000);
 
+test("scrolls back to the bottom when a hidden chat screen becomes visible again", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "第一条",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        text: "第二条",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+    ],
+  });
+
+  const { rerender } = render(<ChatScreen botAlias="main" client={client} isVisible />);
+  expect(await screen.findByText("第二条")).toBeInTheDocument();
+
+  const scrollContainer = screen.getByTestId("chat-scroll-container");
+  let scrollTop = 0;
+  Object.defineProperties(scrollContainer, {
+    scrollHeight: {
+      configurable: true,
+      get: () => 2200,
+    },
+    clientHeight: {
+      configurable: true,
+      get: () => 600,
+    },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    },
+  });
+
+  scrollTop = 100;
+  fireEvent.scroll(scrollContainer);
+
+  rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
+  rerender(<ChatScreen botAlias="main" client={client} isVisible />);
+
+  await waitFor(() => {
+    expect(scrollTop).toBe(2200);
+  });
+});
+
 test("opens system functions with bot-scoped calls and compact titles", async () => {
   const user = userEvent.setup();
   const listSystemScripts = vi.fn(async () => [{
