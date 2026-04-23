@@ -63,8 +63,9 @@ def test_prepare_dream_prompt_uses_recent_history_and_captures(temp_dir: Path):
     assert "最近要把 dream 跑起来" in prepared.prompt_text
     assert "这条太旧，不该进入上下文" not in prepared.prompt_text
     assert "用户提醒要后台静默执行" in prepared.prompt_text
-    assert "knowledge_entries 每项必须包含 bucket/title/body" in prepared.prompt_text
-    assert "proposal 若非 null，必须包含 kind/title/body" in prepared.prompt_text
+    assert "不要输出 JSON" in prepared.prompt_text
+    assert "<DREAM_SUMMARY>" in prepared.prompt_text
+    assert "程序会把这些块组装回原协议对象" in prepared.prompt_text
     assert prepared.context_stats["history_count"] == 1
     assert prepared.context_stats["capture_count"] == 1
 
@@ -74,28 +75,33 @@ def test_apply_dream_result_writes_working_memory_knowledge_proposal_and_audit(t
     workdir.mkdir()
     home = bootstrap_assistant_home(workdir)
     raw_output = """
-这轮 dream 完成了整理。
+<DREAM_SUMMARY>
+完成 dream 整理
+</DREAM_SUMMARY>
 
-<DREAM_RESULT>{
-  "summary": "完成 dream 整理",
-  "working_memory": {
-    "current_goal": ["补齐 dream 后台执行闭环"],
-    "open_loops": ["确认 cron 配置时间"],
-    "recent_summary": ["已实现 dream 方案并补测试"]
-  },
-  "knowledge_entries": [
-    {
-      "bucket": "self-improving-agent",
-      "title": "dream-rtk-lesson",
-      "body": ["PowerShell cmdlet 需要用 rtk pwsh -Command 包装"]
-    }
-  ],
-  "proposal": {
-    "kind": "rule",
-    "title": "后续评审 dream 默认配置",
-    "body": "- 保持 silent 为默认投递方式"
-  }
-}</DREAM_RESULT>
+<DREAM_CURRENT_GOAL>
+- 补齐 dream 后台执行闭环
+</DREAM_CURRENT_GOAL>
+
+<DREAM_OPEN_LOOPS>
+- 确认 cron 配置时间
+</DREAM_OPEN_LOOPS>
+
+<DREAM_RECENT_SUMMARY>
+- 已实现 dream 方案并补测试
+</DREAM_RECENT_SUMMARY>
+
+<DREAM_KNOWLEDGE>
+bucket: self-improving-agent
+title: dream-rtk-lesson
+- PowerShell cmdlet 需要用 rtk pwsh -Command 包装
+</DREAM_KNOWLEDGE>
+
+<DREAM_PROPOSAL>
+kind: rule
+title: 后续评审 dream 默认配置
+- 保持 silent 为默认投递方式
+</DREAM_PROPOSAL>
 """.strip()
 
     result = apply_dream_result(
@@ -216,3 +222,33 @@ def test_apply_dream_result_rejects_invalid_working_memory_key_and_still_writes_
     audit_payload = json.loads(audit_files[0].read_text(encoding="utf-8"))
     assert "bad_key" in audit_payload["error"]
     assert not (home.root / "memory" / "working" / "current_goal.md").exists()
+
+
+def test_apply_dream_result_rejects_malformed_dream_blocks_and_still_writes_audit(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    raw_output = """
+<DREAM_CURRENT_GOAL>
+- 补齐 dream 后台执行闭环
+</DREAM_CURRENT_GOAL>
+""".strip()
+
+    with pytest.raises(RuntimeError):
+        apply_dream_result(
+            home,
+            raw_output=raw_output,
+            visible_text="执行 dream",
+            prompt_excerpt="dream prompt excerpt",
+            context_stats={"history_count": 0, "capture_count": 0},
+            run_id="run_bad_blocks",
+            job_id="daily_dream",
+            scheduled_at="2026-04-20T09:00:00+08:00",
+            context_user_id=1001,
+            synthetic_user_id=-42,
+        )
+
+    audit_files = list((home.root / "audit" / "dream").glob("*.json"))
+    assert len(audit_files) == 1
+    audit_payload = json.loads(audit_files[0].read_text(encoding="utf-8"))
+    assert "<DREAM_SUMMARY>" in audit_payload["error"]

@@ -18,6 +18,24 @@ _DREAM_RESULT_RE = re.compile(r"<DREAM_RESULT>\s*(\{.*\})\s*</DREAM_RESULT>\s*$"
 _SAFE_BUCKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SAFE_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _DEFAULT_KNOWLEDGE_BUCKET = "self-improving-agent"
+_DREAM_WORKING_MEMORY_BLOCKS: dict[str, str] = {
+    "DREAM_CURRENT_GOAL": "current_goal",
+    "DREAM_OPEN_LOOPS": "open_loops",
+    "DREAM_USER_PREFS": "user_prefs",
+    "DREAM_RECENT_SUMMARY": "recent_summary",
+}
+_DREAM_BLOCK_TAGS = {
+    "DREAM_SUMMARY",
+    *list(_DREAM_WORKING_MEMORY_BLOCKS.keys()),
+    "DREAM_KNOWLEDGE",
+    "DREAM_PROPOSAL",
+}
+_DREAM_ANY_BLOCK_RE = re.compile(
+    r"</?(?:"
+    + "|".join(sorted(_DREAM_BLOCK_TAGS))
+    + r")>",
+    re.DOTALL,
+)
 _WORKING_MEMORY_LIMITS: dict[str, tuple[int, int]] = {
     "current_goal": (3, 180),
     "open_loops": (8, 180),
@@ -176,17 +194,33 @@ def prepare_dream_prompt(
             "你正在执行一个后台 dream 自维护任务。任务必须单轮完成，不能向用户提问，不能要求额外确认。",
             "原则：只基于提供的证据归纳；拿不准的内容写到 open_loops 或 proposal；不要编造用户状态。",
             "边界：不要直接修改业务源码；涉及代码、长期规则、技能安装或协议升级时，只能通过 proposal 提交。",
-            "你需要先输出 1 到 3 句中文摘要，然后在最后输出一个严格的 JSON envelope，格式必须是 <DREAM_RESULT>{json}</DREAM_RESULT>。",
+            "不要输出 JSON，也不要输出 <DREAM_RESULT>；只填写固定标签里的内容，标签名和顺序不要改。",
             (
-                "JSON 必须包含 summary、working_memory、knowledge_entries、proposal 四个字段；"
-                "working_memory 只允许 current_goal/open_loops/user_prefs/recent_summary 四个 key；"
-                "knowledge_entries 是数组；proposal 可以为 null。"
+                "程序会把这些块组装回原协议对象 summary、working_memory、knowledge_entries、proposal；"
+                "working_memory 只接受 current_goal/open_loops/user_prefs/recent_summary 四类内容。"
             ),
             (
-                "knowledge_entries 每项必须包含 bucket/title/body，其中 bucket 推荐写 self-improving-agent，"
-                "body 必须是字符串或字符串数组；proposal 若非 null，必须包含 kind/title/body。"
+                "可选块可以省略；<DREAM_KNOWLEDGE> 可重复，前面可写 bucket: / title:；"
+                "<DREAM_PROPOSAL> 前面可写 kind: / title:；其余正文尽量用 Markdown 列表。"
             ),
-            "不要输出 type/content/evidence/reason/scope/blocked_by 这类替代字段。",
+            "输出模板如下：",
+            (
+                "<DREAM_SUMMARY>\n1 到 3 句摘要\n</DREAM_SUMMARY>\n\n"
+                "<DREAM_CURRENT_GOAL>\n- 如有更新再写\n</DREAM_CURRENT_GOAL>\n\n"
+                "<DREAM_OPEN_LOOPS>\n- 如有更新再写\n</DREAM_OPEN_LOOPS>\n\n"
+                "<DREAM_USER_PREFS>\n- 如有更新再写\n</DREAM_USER_PREFS>\n\n"
+                "<DREAM_RECENT_SUMMARY>\n- 如有更新再写\n</DREAM_RECENT_SUMMARY>\n\n"
+                "<DREAM_KNOWLEDGE>\n"
+                "bucket: self-improving-agent\n"
+                "title: 简短标题\n"
+                "- 知识条目正文\n"
+                "</DREAM_KNOWLEDGE>\n\n"
+                "<DREAM_PROPOSAL>\n"
+                "kind: rule\n"
+                "title: 提案标题\n"
+                "- 提案正文\n"
+                "</DREAM_PROPOSAL>"
+            ),
             f"用户配置的 dream 提示词：{config.prompt}",
             f"当前这轮任务的可见提示词：{visible_text}",
             "## 当前工作记忆",
@@ -218,6 +252,8 @@ def prepare_dream_prompt(
 
 def _extract_dream_payload(raw_output: str) -> tuple[dict[str, Any], str]:
     text = str(raw_output or "").strip()
+    if _DREAM_ANY_BLOCK_RE.search(text):
+        return _extract_dream_block_payload(text)
     match = _DREAM_RESULT_RE.search(text)
     if match is None:
         raise ValueError("dream 输出缺少 <DREAM_RESULT> JSON")
@@ -228,6 +264,105 @@ def _extract_dream_payload(raw_output: str) -> tuple[dict[str, Any], str]:
     if not isinstance(payload, dict):
         raise ValueError("dream JSON 顶层必须是对象")
     summary = str(payload.get("summary") or text[: match.start()]).strip()
+    return payload, summary
+
+
+def _extract_dream_block_contents(text: str, tag: str) -> list[str]:
+    pattern = re.compile(rf"<{tag}>\s*(.*?)\s*</{tag}>", re.DOTALL)
+    return [match.group(1).strip() for match in pattern.finditer(text)]
+
+
+def _extract_single_dream_block(text: str, tag: str, *, required: bool = False) -> str:
+    blocks = _extract_dream_block_contents(text, tag)
+    if len(blocks) > 1:
+        raise ValueError(f"dream <{tag}> 只能出现一次")
+    if required and not blocks:
+        raise ValueError(f"dream 输出缺少 <{tag}>")
+    return blocks[0] if blocks else ""
+
+
+def _parse_dream_detail_block(block: str, *, allowed_fields: set[str]) -> tuple[dict[str, str], str]:
+    fields: dict[str, str] = {}
+    body_lines: list[str] = []
+    body_started = False
+    for raw_line in str(block or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped and not body_started:
+            continue
+        if not body_started:
+            matched = re.match(r"^([A-Za-z_]+)\s*:\s*(.*)$", stripped)
+            if matched is not None:
+                field = matched.group(1).strip().lower()
+                value = matched.group(2).strip()
+                if field == "body":
+                    body_started = True
+                    if value:
+                        body_lines.append(value)
+                    continue
+                if field in allowed_fields:
+                    fields[field] = value
+                    continue
+            body_started = True
+        body_lines.append(line)
+    return fields, "\n".join(body_lines).strip()
+
+
+def _parse_dream_knowledge_block(block: str) -> dict[str, Any]:
+    fields, body = _parse_dream_detail_block(
+        block,
+        allowed_fields={"bucket", "knowledge_bucket", "title"},
+    )
+    payload: dict[str, Any] = {}
+    bucket = fields.get("bucket") or fields.get("knowledge_bucket") or ""
+    if bucket:
+        payload["bucket"] = bucket
+    if fields.get("title"):
+        payload["title"] = fields["title"]
+    if body:
+        payload["body"] = body
+    return payload
+
+
+def _parse_dream_proposal_block(block: str) -> dict[str, Any]:
+    fields, body = _parse_dream_detail_block(
+        block,
+        allowed_fields={"kind", "title"},
+    )
+    payload: dict[str, Any] = {}
+    if fields.get("kind"):
+        payload["kind"] = fields["kind"]
+    if fields.get("title"):
+        payload["title"] = fields["title"]
+    if body:
+        payload["body"] = body
+    return payload
+
+
+def _extract_dream_block_payload(text: str) -> tuple[dict[str, Any], str]:
+    summary = _extract_single_dream_block(text, "DREAM_SUMMARY", required=True)
+    if not summary:
+        raise ValueError("dream <DREAM_SUMMARY> 不能为空")
+
+    working_memory: dict[str, str] = {}
+    for tag, key in _DREAM_WORKING_MEMORY_BLOCKS.items():
+        block = _extract_single_dream_block(text, tag)
+        if block:
+            working_memory[key] = block
+
+    proposal_blocks = _extract_dream_block_contents(text, "DREAM_PROPOSAL")
+    if len(proposal_blocks) > 1:
+        raise ValueError("dream <DREAM_PROPOSAL> 只能出现一次")
+
+    payload = {
+        "summary": summary,
+        "working_memory": working_memory,
+        "knowledge_entries": [
+            _parse_dream_knowledge_block(block)
+            for block in _extract_dream_block_contents(text, "DREAM_KNOWLEDGE")
+        ],
+        "proposal": _parse_dream_proposal_block(proposal_blocks[0]) if proposal_blocks else None,
+    }
     return payload, summary
 
 

@@ -232,7 +232,29 @@ def _is_loopback_value(value: object) -> bool:
         return text.lower() == "localhost"
 
 
+_FORWARDED_CLIENT_IP_HEADER_NAMES = (
+    "Forwarded",
+    "X-Forwarded-For",
+    "X-Real-IP",
+    "CF-Connecting-IP",
+    "True-Client-IP",
+)
+
+
+def _has_forwarded_client_headers(request: web.Request) -> bool:
+    return any(str(request.headers.get(name, "")).strip() for name in _FORWARDED_CLIENT_IP_HEADER_NAMES)
+
+
+def _request_targets_non_loopback_host(request: web.Request) -> bool:
+    host = str(request.headers.get("Host", "")).strip()
+    return bool(host) and not _is_loopback_value(host)
+
+
 def _is_loopback_request(request: web.Request) -> bool:
+    if _has_forwarded_client_headers(request):
+        return False
+    if _request_targets_non_loopback_host(request):
+        return False
     if _is_loopback_value(request.remote):
         return True
     transport = request.transport

@@ -34,6 +34,7 @@ from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.plugins.service import PluginService
 from bot.session_store import save_session
+from bot.web.auth_store import WebAuthStore
 from bot.web.server import WebApiServer, _TERMINAL_OUTPUT_EOF
 from bot.web.api_service import (
     AuthContext,
@@ -110,6 +111,17 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
         enabled=True,
     )
     return MultiBotManager(main_profile=profile, storage_file=str(storage_file))
+
+
+@pytest.fixture
+def isolated_web_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WebAuthStore:
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=tmp_path / ".web_register_codes.json",
+        secret_path=tmp_path / ".web_auth_secret.json",
+    )
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
+    return store
 
 def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_dir: Path):
     import bot.session_store as session_store
@@ -1569,6 +1581,68 @@ async def test_auth_route_auto_authenticates_loopback_as_admin(web_manager: Mult
     assert payload["data"]["token_protected"] is True
     assert "admin_ops" in payload["data"]["capabilities"]
     assert "manage_register_codes" in payload["data"]["capabilities"]
+
+@pytest.mark.asyncio
+async def test_auth_route_auto_authenticates_direct_loopback_request(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["username"] == "127.0.0.1"
+    assert payload["data"]["account_id"] == "local-admin"
+    assert payload["data"]["user_id"] == 1001
+
+
+@pytest.mark.asyncio
+async def test_auth_route_rejects_forwarded_loopback_request_for_local_admin(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me", headers={"X-Forwarded-For": "8.8.8.8"})
+            assert resp.status == 401
+            payload = await resp.json()
+
+    assert payload["error"]["code"] == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_auth_route_rejects_public_host_loopback_request_for_local_admin(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me", headers={"Host": "demo.trycloudflare.com"})
+            assert resp.status == 401
+            payload = await resp.json()
+
+    assert payload["error"]["code"] == "unauthorized"
+
 
 @pytest.mark.asyncio
 async def test_loopback_login_ignores_credentials_and_returns_local_admin(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
