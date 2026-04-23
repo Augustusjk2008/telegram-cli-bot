@@ -101,6 +101,66 @@ def test_begin_turn_reuses_active_conversation_within_same_session_epoch(monkeyp
     assert [item["content"] for item in items] == ["第一问", "", "第二问", ""]
 
 
+def test_rename_bot_identity_merges_old_history_into_new_bot_id(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    old_handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="sub1",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="旧问题",
+        native_provider="codex",
+    )
+    store.complete_turn(old_handle, content="旧回答", completion_state="completed")
+
+    new_handle = store.begin_turn(
+        bot_id=9,
+        bot_alias="team1",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="新问题",
+        native_provider="codex",
+    )
+    store.complete_turn(new_handle, content="新回答", completion_state="completed")
+
+    moved = store.rename_bot_identity(old_bot_id=1, new_bot_id=9, old_alias="sub1", new_alias="team1")
+
+    assert moved == 1
+    items = store.list_active_history(
+        bot_id=9,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        limit=10,
+    )
+    assert [item["content"] for item in items] == ["旧问题", "旧回答", "新问题", "新回答"]
+    assert store.list_active_history(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        limit=10,
+    ) == []
+
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT bot_id, bot_alias, COUNT(*) AS count FROM conversations GROUP BY bot_id, bot_alias"
+        ).fetchone()
+    assert row == (9, "team1", 1)
+
+
 def test_legacy_project_store_is_migrated_to_home_store_on_first_read(monkeypatch, tmp_path: Path):
     original_home = tmp_path / "home"
     original_home.mkdir()

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { WaveformTrack } from "../../../services/types";
+import { getDenseSegmentLayout } from "./denseSegmentLayout";
 
 type Props = {
   track: WaveformTrack;
@@ -30,9 +31,10 @@ export function WaveformCanvas({ track, width, height, startTime, endTime }: Pro
       return;
     }
     const range = Math.max(1, endTime - startTime);
-    const top = height * 0.28;
-    const middle = height / 2;
-    const bottom = height * 0.72;
+    const denseLayout = getDenseSegmentLayout(height);
+    const top = denseLayout.bandTop;
+    const middle = denseLayout.middleY;
+    const bottom = denseLayout.bandBottom;
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.strokeStyle = "rgba(15, 23, 42, 0.92)";
     context.fillStyle = "rgba(15, 23, 42, 0.92)";
@@ -54,7 +56,10 @@ export function WaveformCanvas({ track, width, height, startTime, endTime }: Pro
         context.stroke();
         context.globalAlpha = 1;
         if (segmentWidth >= 56 && segment.transitionCount) {
-          context.fillText(`${segment.transitionCount} changes`, startX + 8, middle + 4);
+          context.save();
+          context.textAlign = "center";
+          context.fillText(`${segment.transitionCount} changes`, startX + segmentWidth / 2, denseLayout.labelY);
+          context.restore();
         }
         continue;
       }

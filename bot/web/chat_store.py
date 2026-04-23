@@ -40,6 +40,10 @@ def _parse_json(value: str | None) -> Any:
     return json.loads(value)
 
 
+def _row_text(row: sqlite3.Row, key: str) -> str:
+    return str(row[key] or "")
+
+
 class ChatStore:
     def __init__(self, workspace_dir: Path | str) -> None:
         self.workspace_dir = Path(workspace_dir)
@@ -763,6 +767,137 @@ class ChatStore:
                 "started_at": row["started_at"],
                 "updated_at": row["updated_at"] or row["started_at"],
             }
+
+    def _turn_count(self, conn: sqlite3.Connection, conversation_id: str) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM turns WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def _merge_conversation_metadata(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source: sqlite3.Row,
+        target: sqlite3.Row,
+        new_alias: str,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE conversations
+            SET bot_alias = ?,
+                bot_mode = ?,
+                cli_type = ?,
+                status = ?,
+                native_provider = ?,
+                native_session_id = ?,
+                assistant_home = ?,
+                managed_prompt_hash = ?,
+                prompt_surface_version = ?,
+                created_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                new_alias,
+                _row_text(target, "bot_mode") or _row_text(source, "bot_mode"),
+                _row_text(target, "cli_type") or _row_text(source, "cli_type"),
+                "active"
+                if _row_text(target, "status") == "active" or _row_text(source, "status") == "active"
+                else _row_text(target, "status") or _row_text(source, "status") or "active",
+                _row_text(target, "native_provider") or _row_text(source, "native_provider") or None,
+                _row_text(target, "native_session_id") or _row_text(source, "native_session_id") or None,
+                _row_text(target, "assistant_home") or _row_text(source, "assistant_home") or None,
+                _row_text(target, "managed_prompt_hash") or _row_text(source, "managed_prompt_hash") or None,
+                _row_text(target, "prompt_surface_version") or _row_text(source, "prompt_surface_version") or None,
+                min(_row_text(source, "created_at"), _row_text(target, "created_at")),
+                max(_row_text(source, "updated_at"), _row_text(target, "updated_at")),
+                str(target["id"]),
+            ),
+        )
+
+    def _merge_conversation_into_target(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source: sqlite3.Row,
+        target: sqlite3.Row,
+        new_alias: str,
+    ) -> None:
+        source_id = str(source["id"])
+        target_id = str(target["id"])
+        source_turns = self._turn_count(conn, source_id)
+        target_turns = self._turn_count(conn, target_id)
+        prepend_source = _row_text(source, "created_at") <= _row_text(target, "created_at")
+
+        if prepend_source:
+            conn.execute(
+                "UPDATE turns SET seq = seq + ? WHERE conversation_id = ?",
+                (source_turns, target_id),
+            )
+            conn.execute(
+                "UPDATE turns SET conversation_id = ? WHERE conversation_id = ?",
+                (target_id, source_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE turns SET conversation_id = ?, seq = seq + ? WHERE conversation_id = ?",
+                (target_id, target_turns, source_id),
+            )
+
+        conn.execute(
+            "UPDATE messages SET conversation_id = ? WHERE conversation_id = ?",
+            (target_id, source_id),
+        )
+        self._merge_conversation_metadata(conn, source=source, target=target, new_alias=new_alias)
+        conn.execute("DELETE FROM conversations WHERE id = ?", (source_id,))
+
+    def rename_bot_identity(self, *, old_bot_id: int, new_bot_id: int, old_alias: str, new_alias: str) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+
+        moved = 0
+        with conn:
+            if old_bot_id == new_bot_id:
+                return conn.execute(
+                    "UPDATE conversations SET bot_alias = ?, updated_at = ? WHERE bot_id = ? AND bot_alias = ?",
+                    (new_alias, _utc_now(), new_bot_id, old_alias),
+                ).rowcount
+
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM conversations
+                WHERE bot_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (old_bot_id,),
+            ).fetchall()
+            for source in rows:
+                target = conn.execute(
+                    """
+                    SELECT *
+                    FROM conversations
+                    WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ?
+                    """,
+                    (
+                        new_bot_id,
+                        source["user_id"],
+                        source["working_dir"],
+                        source["session_epoch"],
+                    ),
+                ).fetchone()
+                if target is None:
+                    conn.execute(
+                        "UPDATE conversations SET bot_id = ?, bot_alias = ?, updated_at = ? WHERE id = ?",
+                        (new_bot_id, new_alias, _utc_now(), str(source["id"])),
+                    )
+                else:
+                    self._merge_conversation_into_target(conn, source=source, target=target, new_alias=new_alias)
+                moved += 1
+        return moved
 
     def delete_conversation(
         self,

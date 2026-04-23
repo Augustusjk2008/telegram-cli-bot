@@ -33,7 +33,7 @@ from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.plugins.service import PluginService
-from bot.session_store import save_session
+from bot.session_store import load_session, save_session
 from bot.web.auth_store import WebAuthStore
 from bot.web.server import WebApiServer, _TERMINAL_OUTPUT_EOF
 from bot.web.api_service import (
@@ -2838,6 +2838,66 @@ async def test_admin_rename_bot_route_updates_alias(web_manager: MultiBotManager
             assert payload["data"]["bot"]["alias"] == "team1"
             assert "team1" in web_manager.managed_profiles
             assert "sub1" not in web_manager.managed_profiles
+
+
+@pytest.mark.asyncio
+async def test_admin_rename_bot_route_keeps_existing_chat_history(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    home = temp_dir / "home"
+    home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    workdir = temp_dir / "repo"
+    workdir.mkdir()
+    profile = BotProfile(
+        alias="sub1",
+        token="sub-token",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+    )
+    web_manager.managed_profiles["sub1"] = profile
+
+    old_bot_id = resolve_session_bot_id(web_manager, "sub1")
+    session = get_session_for_alias(web_manager, "sub1", 1001)
+    session.codex_session_id = "thread-old"
+    session.persist()
+
+    service = ChatHistoryService(ChatStore(workdir))
+    handle = service.start_turn(
+        profile=profile,
+        session=session,
+        user_text="改名前问题",
+        native_provider="codex",
+    )
+    service.complete_turn(handle, content="改名前回答", completion_state="completed")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch("/api/admin/bots/sub1/alias", json={"new_alias": "team1"})
+            assert resp.status == 200
+
+    new_bot_id = resolve_session_bot_id(web_manager, "team1")
+    history = get_history(web_manager, "team1", 1001, limit=10)
+    assert [item["content"] for item in history["items"]] == ["改名前问题", "改名前回答"]
+
+    restored = get_session_for_alias(web_manager, "team1", 1001)
+    assert restored.bot_alias == "team1"
+    assert restored.bot_id == new_bot_id
+    assert restored.codex_session_id == "thread-old"
+    assert load_session(old_bot_id, 1001) is None
+    persisted = load_session(new_bot_id, 1001)
+    assert persisted is not None
+    assert persisted["codex_session_id"] == "thread-old"
+
 
 @pytest.mark.asyncio
 async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):

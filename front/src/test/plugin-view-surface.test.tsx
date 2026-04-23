@@ -274,7 +274,7 @@ test("plugin view surface queries the horizontally visible time window", async (
   });
 });
 
-test("plugin view surface renders dense LOD segments as activity bands", () => {
+test("plugin view surface renders dense LOD segments as activity bands with labels above the band", () => {
   const client = new MockWebBotClient();
   render(
     <PluginViewSurface
@@ -311,11 +311,25 @@ test("plugin view surface renders dense LOD segments as activity bands", () => {
                 { start: 0, end: 40, value: "mixed", kind: "dense", transitionCount: 40 },
               ],
             },
+            {
+              signalId: "bus",
+              label: "tb.bus",
+              width: 8,
+              segments: [
+                { start: 0, end: 40, value: "mixed", kind: "dense", transitionCount: 40 },
+              ],
+            },
           ],
         },
       }}
     />,
   );
 
-  expect(screen.getByTestId("waveform-dense-segment")).toBeInTheDocument();
+  expect(screen.getAllByTestId("waveform-dense-segment")).toHaveLength(2);
+  const changeLabels = screen.getAllByText("40 changes");
+  expect(changeLabels).toHaveLength(2);
+  changeLabels.forEach((label) => {
+    expect(label).toHaveAttribute("text-anchor", "middle");
+    expect(Number(label.getAttribute("y"))).toBeLessThan(20);
+  });
 });

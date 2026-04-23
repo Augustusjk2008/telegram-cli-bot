@@ -74,9 +74,11 @@ from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_hidden_process_kwargs
 from bot.platform.scripts import execute_script, get_scripts_dir, list_available_scripts, stream_execute_script
 from bot.runtime_paths import get_chat_attachments_dir
+from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
 from bot.sessions import (
     align_session_paths,
     get_or_create_session,
+    rekey_bot_sessions,
     reset_session,
     sessions,
     sessions_lock,
@@ -2946,7 +2948,20 @@ async def update_bot_cli(manager: MultiBotManager, alias: str, cli_type: str, cl
 
 
 async def rename_managed_bot(manager: MultiBotManager, alias: str, new_alias: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    old_alias = profile.alias
+    old_bot_id = resolve_session_bot_id(manager, old_alias)
+    workdir = profile.working_dir
     profile = await manager.rename_bot(alias, new_alias)
+    new_bot_id = resolve_session_bot_id(manager, profile.alias)
+    rekey_bot_sessions(old_bot_id, new_bot_id, old_alias=old_alias, new_alias=profile.alias)
+    rename_stored_bot_sessions(old_bot_id, new_bot_id)
+    ChatStore(Path(workdir)).rename_bot_identity(
+        old_bot_id=old_bot_id,
+        new_bot_id=new_bot_id,
+        old_alias=old_alias,
+        new_alias=profile.alias,
+    )
     return {"bot": build_bot_summary(manager, profile.alias)}
 
 

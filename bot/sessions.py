@@ -31,6 +31,50 @@ def _parse_stored_datetime(value) -> datetime:
     return datetime.now()
 
 
+def _session_rank(session: UserSession) -> tuple[int, int, int, str]:
+    with session._lock:
+        return (
+            max(0, int(getattr(session, "message_count", 0) or 0)),
+            int(bool(getattr(session, "codex_session_id", None))) + int(bool(getattr(session, "claude_session_id", None))),
+            max(0, int(getattr(session, "session_epoch", 0) or 0)),
+            getattr(session, "last_activity", datetime.min).isoformat() if getattr(session, "last_activity", None) else "",
+        )
+
+
+def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_id: int, bot_alias: str) -> UserSession:
+    with preferred._lock, fallback._lock:
+        preferred.bot_id = bot_id
+        preferred.bot_alias = bot_alias
+        preferred.working_dir = preferred.working_dir or fallback.working_dir
+        preferred.browse_dir = preferred.browse_dir or fallback.browse_dir or preferred.working_dir
+        preferred.codex_session_id = preferred.codex_session_id or fallback.codex_session_id
+        preferred.claude_session_id = preferred.claude_session_id or fallback.claude_session_id
+        preferred.claude_session_initialized = (
+            preferred.claude_session_initialized or fallback.claude_session_initialized
+        )
+        preferred.message_count = max(preferred.message_count, fallback.message_count)
+        preferred.session_epoch = max(preferred.session_epoch, fallback.session_epoch)
+        preferred.managed_prompt_hash_seen = (
+            preferred.managed_prompt_hash_seen or fallback.managed_prompt_hash_seen
+        )
+        preferred.local_history_backend = preferred.local_history_backend or fallback.local_history_backend
+        if fallback.last_activity > preferred.last_activity:
+            preferred.last_activity = fallback.last_activity
+        if (not preferred.is_processing and fallback.is_processing) or (
+            preferred.process is None and fallback.process is not None
+        ):
+            preferred.process = fallback.process
+            preferred.is_processing = fallback.is_processing
+            preferred.running_user_text = fallback.running_user_text
+            preferred.running_preview_text = fallback.running_preview_text
+            preferred.running_started_at = fallback.running_started_at
+            preferred.running_updated_at = fallback.running_updated_at
+            preferred.stop_requested = fallback.stop_requested
+        if not preferred.web_turn_overlays and fallback.web_turn_overlays:
+            preferred.web_turn_overlays = list(fallback.web_turn_overlays)
+    return preferred
+
+
 def get_or_create_session(
     bot_id: int,
     bot_alias: str,
@@ -242,6 +286,36 @@ def update_bot_alias(old_alias: str, new_alias: str) -> int:
                 session.persist()
                 updated_count += 1
     return updated_count
+
+
+def rekey_bot_sessions(old_bot_id: int, new_bot_id: int, *, old_alias: str, new_alias: str) -> int:
+    """将内存中的 bot 会话迁移到新的 bot_id。"""
+    if old_bot_id == new_bot_id:
+        return update_bot_alias(old_alias, new_alias)
+
+    moved = 0
+    with sessions_lock:
+        for key in [item for item in list(sessions.keys()) if item[0] == old_bot_id]:
+            source = sessions.pop(key)
+            target_key = (new_bot_id, source.user_id)
+            target = sessions.pop(target_key, None)
+
+            if target is None:
+                source.bot_id = new_bot_id
+                source.bot_alias = new_alias
+                sessions[target_key] = source
+                moved += 1
+                continue
+
+            preferred, fallback = (
+                (source, target) if _session_rank(source) >= _session_rank(target) else (target, source)
+            )
+            merged = _merge_session_state(preferred, fallback, bot_id=new_bot_id, bot_alias=new_alias)
+            sessions[target_key] = merged
+            fallback.disable_persistence()
+            moved += 1
+
+    return moved
 
 
 def save_all_sessions():

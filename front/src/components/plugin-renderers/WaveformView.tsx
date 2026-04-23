@@ -9,6 +9,7 @@ import type {
   WaveformWindowPayload,
 } from "../../services/types";
 import { WaveformCanvas } from "./waveform/WaveformCanvas";
+import { getDenseSegmentLayout } from "./waveform/denseSegmentLayout";
 import { useWaveformViewport } from "./waveform/useWaveformViewport";
 
 type Props = {
@@ -206,6 +207,7 @@ function DigitalTrackSvg({
   display: ResolvedWaveformDisplay;
 }) {
   const path = buildDigitalPath(track, startTime, endTime, width, display);
+  const denseLayout = getDenseSegmentLayout(display.trackHeight);
   const denseSegments = track.segments
     .map((segment, index) => {
       const clipped = clipSegment(segment, startTime, endTime);
@@ -220,8 +222,6 @@ function DigitalTrackSvg({
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
-  const denseTop = display.trackHeight * 0.25;
-  const denseBottom = display.trackHeight * 0.75;
   return (
     <svg
       width={width}
@@ -234,16 +234,38 @@ function DigitalTrackSvg({
         <g key={`dense-${track.signalId}-${segment.index}`} data-testid="waveform-dense-segment">
           <rect
             x={segment.startX}
-            y={denseTop}
+            y={denseLayout.bandTop}
             width={Math.max(1, segment.endX - segment.startX)}
-            height={denseBottom - denseTop}
+            height={denseLayout.bandBottom - denseLayout.bandTop}
             fill="currentColor"
             opacity="0.12"
           />
-          <line x1={segment.startX} y1={denseTop} x2={segment.endX} y2={denseBottom} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
-          <line x1={segment.startX} y1={denseBottom} x2={segment.endX} y2={denseTop} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
+          <line
+            x1={segment.startX}
+            y1={denseLayout.bandTop}
+            x2={segment.endX}
+            y2={denseLayout.bandBottom}
+            stroke="currentColor"
+            strokeWidth="1.5"
+            opacity="0.75"
+          />
+          <line
+            x1={segment.startX}
+            y1={denseLayout.bandBottom}
+            x2={segment.endX}
+            y2={denseLayout.bandTop}
+            stroke="currentColor"
+            strokeWidth="1.5"
+            opacity="0.75"
+          />
           {(segment.transitionCount ?? 0) > 0 && segment.endX - segment.startX >= 48 ? (
-            <text x={segment.startX + 8} y={display.trackHeight / 2 + 4} fontSize="11" className="fill-current">
+            <text
+              x={segment.startX + (segment.endX - segment.startX) / 2}
+              y={denseLayout.labelY}
+              textAnchor="middle"
+              fontSize="11"
+              className="fill-current"
+            >
               {segment.transitionCount} changes
             </text>
           ) : null}
@@ -267,6 +289,7 @@ function BusTrackSvg({
   display: ResolvedWaveformDisplay;
 }) {
   const levels = busLevels(display);
+  const denseLayout = getDenseSegmentLayout(display.trackHeight);
   const visibleSegments = track.segments
     .map((segment, index) => {
       const clipped = clipSegment(segment, startTime, endTime);
@@ -298,16 +321,32 @@ function BusTrackSvg({
             <g key={`${track.signalId}-${segment.index}`} data-testid="waveform-dense-segment">
               <rect
                 x={segment.startX}
-                y={levels.top}
+                y={denseLayout.bandTop}
                 width={segmentWidth}
-                height={levels.bottom - levels.top}
+                height={denseLayout.bandBottom - denseLayout.bandTop}
                 fill="currentColor"
                 opacity="0.12"
               />
-              <line x1={segment.startX} y1={levels.top} x2={segment.endX} y2={levels.bottom} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
-              <line x1={segment.startX} y1={levels.bottom} x2={segment.endX} y2={levels.top} stroke="currentColor" strokeWidth="1.5" opacity="0.75" />
+              <line
+                x1={segment.startX}
+                y1={denseLayout.bandTop}
+                x2={segment.endX}
+                y2={denseLayout.bandBottom}
+                stroke="currentColor"
+                strokeWidth="1.5"
+                opacity="0.75"
+              />
+              <line
+                x1={segment.startX}
+                y1={denseLayout.bandBottom}
+                x2={segment.endX}
+                y2={denseLayout.bandTop}
+                stroke="currentColor"
+                strokeWidth="1.5"
+                opacity="0.75"
+              />
               {segmentWidth >= 48 ? (
-                <text x={segment.startX + segmentWidth / 2} y={levels.middle + 4} textAnchor="middle" fontSize="11" className="fill-current">
+                <text x={segment.startX + segmentWidth / 2} y={denseLayout.labelY} textAnchor="middle" fontSize="11" className="fill-current">
                   {segment.transitionCount ? `${segment.transitionCount} changes` : "变化"}
                 </text>
               ) : null}
