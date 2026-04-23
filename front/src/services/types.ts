@@ -455,6 +455,14 @@ export type TableWindowPayload = {
 export type TreeNode = {
   id: string;
   label: string;
+  kind?: "folder" | "file" | "class" | "function" | "method" | "heading" | "symbol";
+  secondaryText?: string;
+  badges?: Array<{
+    text: string;
+    tone?: "default" | "info" | "success" | "warning" | "danger";
+  }>;
+  hasChildren?: boolean;
+  payload?: Record<string, unknown>;
   description?: string;
   badge?: string;
   expandable?: boolean;
@@ -471,18 +479,24 @@ export type TreeViewSummary = {
   roots?: TreeNode[];
   actions?: PluginAction[];
   searchable?: boolean;
+  searchPlaceholder?: string;
+  statsText?: string;
+  emptySearchText?: string;
 };
 
 export type TreeWindowRequest = {
-  kind: "children" | "search";
+  op?: "children" | "search";
+  kind?: "children" | "search";
   nodeId?: string;
   query?: string;
 };
 
 export type TreeWindowPayload = {
+  op?: "children" | "search";
   nodeId?: string;
   roots?: TreeNode[];
   nodes?: TreeNode[];
+  statsText?: string;
 };
 
 export type PluginViewWindowRequest = Record<string, unknown>;

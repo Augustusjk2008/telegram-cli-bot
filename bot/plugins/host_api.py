@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bot.web.workspace_search_service import build_file_outline
+
 from .artifacts import ArtifactStore
 from .models import PluginManifest
 
@@ -110,6 +112,15 @@ class PluginHostApi:
                     }
                 )
             return {"path": str(path), "entries": entries}
+        if method == "host.workspace.outline":
+            self._require(permissions.workspace_read, "workspaceRead")
+            path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))
+            relative_path = path.relative_to(context.workspace_root.expanduser().resolve()).as_posix()
+            outline = build_file_outline(context.workspace_root, relative_path)
+            return {
+                "path": relative_path,
+                "items": list(outline.get("items") or []),
+            }
         if method == "host.temp.write_artifact":
             self._require(permissions.temp_artifacts, "tempArtifacts")
             record = self.artifacts.write(

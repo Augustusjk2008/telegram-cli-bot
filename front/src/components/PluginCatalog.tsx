@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { HostEffect, PluginSummary, PluginUpdateInput } from "../services/types";
+import type { HostEffect, PluginAction, PluginSummary, PluginUpdateInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { PluginActionBar } from "./plugin-renderers/PluginActionBar";
 import { PluginConfigForm } from "./plugins/PluginConfigForm";
@@ -25,6 +25,35 @@ type Props = {
   onNotice?: (message: string) => void;
 };
 
+function getPrimaryCatalogAction(plugin: PluginSummary): PluginAction | null {
+  const directAction = (plugin.catalogActions || []).find((action) =>
+    action.location === "catalog"
+    && action.target === "host"
+    && action.hostAction?.type === "open_plugin_view",
+  );
+  if (directAction) {
+    return directAction;
+  }
+  if (plugin.fileHandlers.length === 0 && plugin.views.length > 0) {
+    const view = plugin.views[0];
+    return {
+      id: `open-${plugin.id}`,
+      label: `打开${view.title || plugin.name}`,
+      target: "host",
+      location: "catalog",
+      variant: "primary",
+      hostAction: {
+        type: "open_plugin_view",
+        pluginId: plugin.id,
+        viewId: view.id,
+        title: view.title || plugin.name,
+        input: {},
+      },
+    };
+  }
+  return null;
+}
+
 export function PluginCatalog({
   plugins,
   botAlias = "",
@@ -40,6 +69,50 @@ export function PluginCatalog({
   onNotice,
 }: Props) {
   const [actionError, setActionError] = useState("");
+
+  function runCatalogAction(plugin: PluginSummary, action: PluginAction) {
+    const defaultView = plugin.views[0];
+    const openViewAction = action.hostAction?.type === "open_plugin_view" ? action.hostAction : null;
+    if (action.target === "plugin" && !defaultView) {
+      setActionError("插件未提供默认视图");
+      return;
+    }
+    if (client && botAlias && openViewAction) {
+      setActionError("");
+      if (onOpenPluginView) {
+        void onOpenPluginView({
+          pluginId: openViewAction.pluginId,
+          viewId: openViewAction.viewId,
+          title: openViewAction.title,
+          input: openViewAction.input,
+        });
+        return;
+      }
+      void client.openPluginView(
+        botAlias,
+        openViewAction.pluginId,
+        openViewAction.viewId,
+        openViewAction.input,
+      ).catch((nextError: unknown) => {
+        setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
+      });
+      return;
+    }
+    setActionError("");
+    void runPluginAction(action, {
+      client: client as WebBotClient,
+      botAlias,
+      pluginId: plugin.id,
+      viewId: openViewAction?.viewId || defaultView?.id || "",
+      title: openViewAction?.title || defaultView?.title || plugin.name,
+      inputPayload: openViewAction?.input || action.payload || {},
+      applyHostEffects: onApplyHostEffects,
+      reopenView: onOpenPluginView,
+      pushToast: onNotice,
+    }).catch((nextError: unknown) => {
+      setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
+    });
+  }
 
   if (loading) {
     return <p className="text-sm text-[var(--muted)]">正在检测插件...</p>;
@@ -63,6 +136,14 @@ export function PluginCatalog({
 
       {plugins.map((plugin) => (
         <article key={plugin.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          {(() => {
+            const primaryAction = client && botAlias ? getPrimaryCatalogAction(plugin) : null;
+            const extraActions = primaryAction
+              ? (plugin.catalogActions || []).filter((action) => action.id !== primaryAction.id)
+              : (plugin.catalogActions || []);
+
+            return (
+              <>
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-medium text-[var(--text)]">{plugin.name}</div>
@@ -88,31 +169,22 @@ export function PluginCatalog({
           </div>
           <p className="mt-1 text-sm text-[var(--muted)]">{plugin.description}</p>
 
-          {client && botAlias && plugin.catalogActions?.length ? (
+          {client && botAlias && primaryAction ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => runCatalogAction(plugin, primaryAction)}
+                className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm text-white hover:opacity-90"
+              >
+                {primaryAction.label}
+              </button>
+              {extraActions.length > 0 ? <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} /> : null}
+            </div>
+          ) : null}
+
+          {client && botAlias && !primaryAction && extraActions.length > 0 ? (
             <div className="mt-3">
-              <PluginActionBar
-                actions={plugin.catalogActions}
-                onRunAction={(action) => {
-                  const defaultView = plugin.views[0];
-                  if (!defaultView) {
-                    return;
-                  }
-                  setActionError("");
-                  void runPluginAction(action, {
-                    client,
-                    botAlias,
-                    pluginId: plugin.id,
-                    viewId: defaultView.id,
-                    title: defaultView.title || plugin.name,
-                    inputPayload: action.payload || {},
-                    applyHostEffects: onApplyHostEffects,
-                    reopenView: onOpenPluginView,
-                    pushToast: onNotice,
-                  }).catch((nextError: unknown) => {
-                    setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
-                  });
-                }}
-              />
+              <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} />
             </div>
           ) : null}
 
@@ -143,6 +215,9 @@ export function PluginCatalog({
               ))}
             </div>
           ) : null}
+              </>
+            );
+          })()}
         </article>
       ))}
     </div>

@@ -161,6 +161,7 @@ def open_view(input_payload: dict[str, Any], context: dict[str, Any]) -> dict[st
         "summary": {
             "roots": clone_nodes(roots, include_children=False),
             "searchable": True,
+            "searchPlaceholder": "搜索层级",
             "actions": [
                 {
                     "id": "open-timing",
@@ -177,19 +178,21 @@ def open_view(input_payload: dict[str, Any], context: dict[str, Any]) -> dict[st
                 }
             ],
         },
-        "initialWindow": {"roots": clone_nodes(roots, include_children=False)},
+        "initialWindow": {"op": "children", "nodeId": None, "nodes": clone_nodes(roots, include_children=False)},
     }
 
 
 def get_view_window(params: dict[str, Any]) -> dict[str, Any]:
     session = SESSIONS[str(params.get("sessionId") or "")]
-    if params.get("kind") == "children":
+    op = str(params.get("op") or params.get("kind") or "")
+    if op == "children":
         node = find_node(session["roots"], str(params.get("nodeId") or ""))
         return {
+            "op": "children",
             "nodeId": str(params.get("nodeId") or ""),
             "nodes": clone_nodes(list(node.get("children") or []) if node else [], include_children=False),
         }
-    return {"roots": search_nodes(session["roots"], str(params.get("query") or ""))}
+    return {"op": "search", "nodes": search_nodes(session["roots"], str(params.get("query") or ""))}
 
 
 def invoke_action(params: dict[str, Any]) -> dict[str, Any]:

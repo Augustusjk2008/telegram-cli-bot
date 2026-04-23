@@ -481,8 +481,10 @@ test("plugin view surface loads tree children on demand", async () => {
           searchable: true,
         },
         initialWindow: {
-          roots: [
-            { id: "top", label: "top", expandable: true },
+          op: "children",
+          nodeId: null,
+          nodes: [
+            { id: "top", label: "top", kind: "folder", hasChildren: true },
           ],
         },
       }}
@@ -492,6 +494,100 @@ test("plugin view surface loads tree children on demand", async () => {
   await user.click(screen.getByRole("button", { name: "展开 top" }));
   expect(await screen.findByText("u_core")).toBeInTheDocument();
   expect(screen.getByText("u_mem")).toBeInTheDocument();
+});
+
+test("plugin view surface does not send tree search for empty query", async () => {
+  const client = new MockWebBotClient();
+  const querySpy = vi.spyOn(client, "queryPluginViewWindow");
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "repo-outline",
+        viewId: "repo-tree",
+        title: "仓库大纲",
+        renderer: "tree",
+        mode: "session",
+        sessionId: "repo-tree-session-1",
+        summary: {
+          searchable: true,
+          searchPlaceholder: "搜目录、文件、符号",
+          statsText: "2 文件 · 1 符号",
+        },
+        initialWindow: {
+          op: "children",
+          nodeId: null,
+          nodes: [{ id: "dir:bot", label: "bot", kind: "folder", hasChildren: true }],
+        },
+      }}
+    />,
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(querySpy).not.toHaveBeenCalled();
+});
+
+test("plugin view surface shows local loading and ignores stale tree children responses", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const requests: Array<{
+    request: Record<string, unknown>;
+    resolve: (payload: Record<string, unknown>) => void;
+  }> = [];
+  vi.spyOn(client, "queryPluginViewWindow").mockImplementation(
+    async (_botAlias, _pluginId, _sessionId, request) =>
+      await new Promise((resolve) => {
+        requests.push({ request, resolve });
+      }),
+  );
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "repo-outline",
+        viewId: "repo-tree",
+        title: "仓库大纲",
+        renderer: "tree",
+        mode: "session",
+        sessionId: "repo-tree-session-2",
+        summary: {
+          searchable: true,
+        },
+        initialWindow: {
+          op: "children",
+          nodeId: null,
+          nodes: [{ id: "dir:src", label: "src", kind: "folder", hasChildren: true }],
+        },
+      }}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "展开 src" }));
+  expect(await screen.findByText("加载中...")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "api" } });
+  await waitFor(() => {
+    expect(requests).toHaveLength(2);
+  });
+
+  requests[1]?.resolve({
+    op: "search",
+    nodes: [{ id: "file:src/api.ts", label: "api.ts", kind: "file" }],
+  });
+  expect(await screen.findByText("api.ts")).toBeInTheDocument();
+
+  requests[0]?.resolve({
+    op: "children",
+    nodeId: "dir:src",
+    nodes: [{ id: "file:src/stale.ts", label: "stale.ts", kind: "file" }],
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("stale.ts")).toBeNull();
+  });
 });
 
 test("plugin view surface ignores stale tree search responses", async () => {
@@ -522,41 +618,105 @@ test("plugin view surface ignores stale tree search responses", async () => {
           searchable: true,
         },
         initialWindow: {
-          roots: [],
+          op: "children",
+          nodeId: null,
+          nodes: [],
         },
       }}
     />,
   );
 
-  await waitFor(() => {
-    expect(requests).toHaveLength(1);
-  });
-  requests[0]?.resolve({ roots: [] });
-
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "top" } });
   await waitFor(() => {
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(1);
   });
 
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "tb" } });
   await waitFor(() => {
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(2);
   });
 
-  requests[2]?.resolve({
-    roots: [{ id: "tb_uart", label: "tb_uart", expandable: false }],
+  requests[1]?.resolve({
+    op: "search",
+    nodes: [{ id: "tb_uart", label: "tb_uart", kind: "symbol", hasChildren: false }],
   });
   await waitFor(() => {
     expect(screen.getByText("tb_uart")).toBeInTheDocument();
   });
 
-  requests[1]?.resolve({
-    roots: [{ id: "top", label: "top", expandable: true }],
+  requests[0]?.resolve({
+    op: "search",
+    nodes: [{ id: "top", label: "top", kind: "folder", hasChildren: true }],
   });
   await waitFor(() => {
     expect(screen.getByText("tb_uart")).toBeInTheDocument();
     expect(screen.queryByText("top")).toBeNull();
   });
+});
+
+test("plugin view surface runs file and symbol primary actions", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const applyHostEffects = vi.fn();
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      onApplyHostEffects={applyHostEffects}
+      view={{
+        pluginId: "repo-outline",
+        viewId: "repo-tree",
+        title: "仓库大纲",
+        renderer: "tree",
+        mode: "snapshot",
+        payload: {
+          roots: [
+            {
+              id: "file:bot/web/api_service.py",
+              label: "api_service.py",
+              kind: "file",
+              secondaryText: "bot/web",
+              hasChildren: true,
+              actions: [
+                {
+                  id: "open-file",
+                  label: "打开文件",
+                  target: "host",
+                  location: "node",
+                  hostAction: { type: "open_file", path: "bot/web/api_service.py" },
+                },
+              ],
+              children: [
+                {
+                  id: "symbol:bot/web/api_service.py:run_cli_chat:184",
+                  label: "run_cli_chat",
+                  kind: "function",
+                  secondaryText: "function · line 184",
+                  actions: [
+                    {
+                      id: "jump-definition",
+                      label: "跳到定义",
+                      target: "host",
+                      location: "node",
+                      hostAction: { type: "open_file", path: "bot/web/api_service.py", line: 184 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      }}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "打开文件 api_service.py" }));
+  await user.click(screen.getByRole("button", { name: "展开 api_service.py" }));
+  await user.click(screen.getByRole("button", { name: "跳到定义 run_cli_chat" }));
+
+  expect(applyHostEffects).toHaveBeenNthCalledWith(1, [{ type: "open_file", path: "bot/web/api_service.py" }]);
+  expect(applyHostEffects).toHaveBeenNthCalledWith(2, [{ type: "open_file", path: "bot/web/api_service.py", line: 184 }]);
 });
 
 test("runPluginAction closes session before refreshing", async () => {

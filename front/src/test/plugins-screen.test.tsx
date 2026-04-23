@@ -28,3 +28,17 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
     expect(updateSpy).toHaveBeenCalledWith("timing-report", { config: { defaultPageSize: 200 } });
   });
 });
+
+test("plugins screen shows primary open button for utility plugins", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const openSpy = vi.spyOn(client, "openPluginView");
+
+  render(<PluginsScreen client={client} botAlias="main" />);
+
+  await user.click(await screen.findByRole("button", { name: "打开仓库大纲" }));
+
+  await waitFor(() => {
+    expect(openSpy).toHaveBeenCalledWith("main", "repo-outline", "repo-tree", {});
+  });
+});

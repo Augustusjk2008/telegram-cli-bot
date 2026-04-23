@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 2,
+  "id": "repo-outline",
+  "name": "Repo Outline",
+  "version": "0.1.0",
+  "description": "浏览仓库目录、文件和符号。",
+  "enabled": true,
+  "config": {
+    "includeHidden": false,
+    "maxFiles": 2000,
+    "maxSymbolsPerFile": 200,
+    "codeExtensions": ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md"
+  },
+  "configSchema": {
+    "title": "仓库大纲设置",
+    "sections": [
+      {
+        "id": "scan",
+        "title": "扫描",
+        "fields": [
+          {
+            "key": "includeHidden",
+            "label": "包含隐藏目录",
+            "type": "boolean",
+            "default": false
+          },
+          {
+            "key": "maxFiles",
+            "label": "最大扫描文件数",
+            "type": "integer",
+            "default": 2000,
+            "minimum": 200,
+            "maximum": 20000
+          },
+          {
+            "key": "maxSymbolsPerFile",
+            "label": "单文件最大符号数",
+            "type": "integer",
+            "default": 200,
+            "minimum": 20,
+            "maximum": 1000
+          },
+          {
+            "key": "codeExtensions",
+            "label": "代码扩展名",
+            "type": "string",
+            "default": ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md"
+          }
+        ]
+      }
+    ]
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true,
+      "workspaceList": true
+    }
+  },
+  "views": [
+    {
+      "id": "repo-tree",
+      "title": "仓库大纲",
+      "renderer": "tree",
+      "viewMode": "session",
+      "dataProfile": "light"
+    }
+  ],
+  "catalogActions": [
+    {
+      "id": "open-outline",
+      "label": "打开仓库大纲",
+      "target": "host",
+      "location": "catalog",
+      "variant": "primary",
+      "hostAction": {
+        "type": "open_plugin_view",
+        "pluginId": "repo-outline",
+        "viewId": "repo-tree",
+        "title": "仓库大纲",
+        "input": {}
+      }
+    }
+  ]
+}

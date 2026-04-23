@@ -279,6 +279,31 @@ test("desktop plugin catalog actions can open another plugin view", async () => 
   expect(screen.getByText("Endpoint")).toBeInTheDocument();
 });
 
+test("desktop workbench opens repo outline from plugin catalog CTA", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      sessionCapabilities={["view_plugins", "read_file_content"]}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "插件" }));
+  await user.click(await screen.findByRole("button", { name: "打开仓库大纲" }));
+
+  expect(await screen.findByRole("tab", { name: "仓库大纲" })).toBeInTheDocument();
+  expect(screen.getByText("bot")).toBeInTheDocument();
+});
+
 test("desktop workbench creates a loading plugin tab before the waveform session resolves", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

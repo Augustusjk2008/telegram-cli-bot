@@ -274,14 +274,17 @@ function buildMockTreeRoots(): TreeNode[] {
     {
       id: "top",
       label: "top",
-      badge: "root",
+      kind: "folder",
+      badges: [{ text: "root" }],
+      hasChildren: true,
       expandable: true,
       actions: [{ id: "open-source", label: "打开源码", target: "plugin", location: "node" }],
     },
     {
       id: "tb_uart",
       label: "tb_uart",
-      description: "uart block",
+      kind: "symbol",
+      secondaryText: "uart block",
       expandable: false,
       actions: [{ id: "copy-name", label: "复制名", target: "host", location: "node", hostAction: { type: "copy_text", text: "tb_uart" } }],
     },
@@ -294,12 +297,14 @@ function buildMockTreeChildren(nodeId: string): TreeNode[] {
       {
         id: "top.u_core",
         label: "u_core",
+        kind: "symbol",
         expandable: false,
         actions: [{ id: "open-source", label: "打开源码", target: "plugin", location: "node" }],
       },
       {
         id: "top.u_mem",
         label: "u_mem",
+        kind: "symbol",
         expandable: false,
         actions: [{ id: "copy-name", label: "复制名", target: "host", location: "node", hostAction: { type: "copy_text", text: "u_mem" } }],
       },
@@ -312,6 +317,7 @@ function buildMockTreeSummary(): TreeViewSummary {
   return {
     roots: cloneTreeNodes(buildMockTreeRoots()),
     searchable: true,
+    searchPlaceholder: "搜索层级",
     actions: [
       {
         id: "open-timing",
@@ -326,6 +332,140 @@ function buildMockTreeSummary(): TreeViewSummary {
           input: { path: "reports/timing.rpt" },
         },
       },
+    ],
+  };
+}
+
+function buildRepoOutlineFileNode(path: string, symbolCount?: number): TreeNode {
+  const parts = path.split("/");
+  const label = parts[parts.length - 1] || path;
+  const parent = parts.slice(0, -1).join("/");
+  return {
+    id: `file:${path}`,
+    label,
+    kind: "file",
+    secondaryText: parent,
+    badges: typeof symbolCount === "number" ? [{ text: `${symbolCount} symbols` }] : undefined,
+    hasChildren: path === "bot/web/api_service.py",
+    expandable: path === "bot/web/api_service.py",
+    payload: { path, nodeType: "file" },
+    actions: [
+      {
+        id: "open-file",
+        label: "打开文件",
+        target: "host",
+        location: "node",
+        hostAction: { type: "open_file", path },
+      },
+    ],
+  };
+}
+
+function buildRepoOutlineDirNode(path: string): TreeNode {
+  const parts = path.split("/");
+  const label = parts[parts.length - 1] || path;
+  const parent = parts.slice(0, -1).join("/");
+  return {
+    id: `dir:${path}`,
+    label,
+    kind: "folder",
+    secondaryText: parent,
+    hasChildren: true,
+    expandable: true,
+    payload: { path, nodeType: "directory" },
+  };
+}
+
+function buildRepoOutlineSymbolNode(): TreeNode {
+  return {
+    id: "symbol:bot/web/api_service.py:run_cli_chat:184",
+    label: "run_cli_chat",
+    kind: "function",
+    secondaryText: "function · line 184",
+    payload: {
+      path: "bot/web/api_service.py",
+      line: 184,
+      symbol: "run_cli_chat",
+      nodeType: "symbol",
+    },
+    actions: [
+      {
+        id: "jump-definition",
+        label: "跳到定义",
+        target: "host",
+        location: "node",
+        hostAction: { type: "open_file", path: "bot/web/api_service.py", line: 184 },
+      },
+    ],
+  };
+}
+
+function buildRepoOutlineRoots(): TreeNode[] {
+  return [
+    buildRepoOutlineDirNode("bot"),
+    buildRepoOutlineFileNode("README.md"),
+  ];
+}
+
+function buildRepoOutlineChildren(nodeId: string): TreeNode[] {
+  if (nodeId === "dir:bot") {
+    return [buildRepoOutlineDirNode("bot/web")];
+  }
+  if (nodeId === "dir:bot/web") {
+    return [buildRepoOutlineFileNode("bot/web/api_service.py", 1)];
+  }
+  if (nodeId === "file:bot/web/api_service.py") {
+    return [buildRepoOutlineSymbolNode()];
+  }
+  return [];
+}
+
+function buildRepoOutlineSearch(query: string): TreeWindowPayload {
+  const keyword = query.trim().toLowerCase();
+  if (!keyword) {
+    return {
+      op: "search",
+      nodes: cloneTreeNodes(buildRepoOutlineRoots()),
+      statsText: "2 文件 · 1 符号",
+    };
+  }
+  const matchesApiFile = [
+    "bot/web/api_service.py",
+    "api_service.py",
+    "web",
+    "bot",
+    "run_cli_chat",
+  ].some((value) => value.toLowerCase().includes(keyword));
+  const matchesReadme = ["readme.md", "readme"].some((value) => value.includes(keyword));
+
+  const nodes: TreeNode[] = [];
+  if (matchesApiFile) {
+    const fileNode = buildRepoOutlineFileNode("bot/web/api_service.py", 1);
+    fileNode.children = keyword.includes("run") || keyword.includes("chat") || keyword.includes("api") || keyword.includes("web")
+      ? [buildRepoOutlineSymbolNode()]
+      : [];
+    nodes.push(fileNode);
+  }
+  if (matchesReadme) {
+    nodes.push(buildRepoOutlineFileNode("README.md"));
+  }
+  return {
+    op: "search",
+    nodes: cloneTreeNodes(nodes),
+    statsText: `${nodes.length} 文件 · ${nodes.some((node) => node.id.startsWith("file:bot/web/api_service.py")) ? 1 : 0} 符号`,
+  };
+}
+
+function buildRepoOutlineSummary(): TreeViewSummary {
+  return {
+    roots: cloneTreeNodes(buildRepoOutlineRoots()),
+    searchable: true,
+    searchPlaceholder: "搜目录、文件、符号",
+    statsText: "2 文件 · 1 符号",
+    emptySearchText: "未找到匹配目录、文件、符号",
+    actions: [
+      { id: "refresh-tree", label: "刷新", target: "plugin", location: "toolbar" },
+      { id: "collapse-all", label: "折叠全部", target: "plugin", location: "toolbar" },
     ],
   };
 }
@@ -508,6 +648,58 @@ export class MockWebBotClient implements WebBotClient {
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
         permissions: { workspaceRead: true, tempArtifacts: true },
+      },
+    },
+    {
+      id: "repo-outline",
+      schemaVersion: 2,
+      name: "Repo Outline",
+      version: "0.1.0",
+      description: "浏览仓库目录、文件和符号。",
+      enabled: true,
+      config: {
+        includeHidden: false,
+        maxFiles: 2000,
+        maxSymbolsPerFile: 200,
+        codeExtensions: ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md",
+      },
+      configSchema: {
+        title: "仓库大纲设置",
+        sections: [
+          {
+            id: "scan",
+            fields: [
+              { key: "includeHidden", label: "包含隐藏目录", type: "boolean", default: false },
+              { key: "maxFiles", label: "最大扫描文件数", type: "integer", default: 2000, minimum: 200, maximum: 20000 },
+              { key: "maxSymbolsPerFile", label: "单文件最大符号数", type: "integer", default: 200, minimum: 20, maximum: 1000 },
+              { key: "codeExtensions", label: "代码扩展名", type: "string", default: ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md" },
+            ],
+          },
+        ],
+      },
+      views: [{ id: "repo-tree", title: "仓库大纲", renderer: "tree", viewMode: "session", dataProfile: "light" }],
+      fileHandlers: [],
+      catalogActions: [
+        {
+          id: "open-outline",
+          label: "打开仓库大纲",
+          target: "host",
+          location: "catalog",
+          variant: "primary",
+          hostAction: {
+            type: "open_plugin_view",
+            pluginId: "repo-outline",
+            viewId: "repo-tree",
+            title: "仓库大纲",
+            input: {},
+          },
+        },
+      ],
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: { workspaceRead: true, workspaceList: true },
       },
     },
     {
@@ -1094,7 +1286,9 @@ export class MockWebBotClient implements WebBotClient {
       const title = sourcePath.split(/[\\/]/).pop() || "design.hier";
       const summary = buildMockTreeSummary();
       const initialWindow: TreeWindowPayload = {
-        roots: cloneTreeNodes(summary.roots || []),
+        op: "children",
+        nodeId: null,
+        nodes: cloneTreeNodes(summary.roots || []),
       };
       this.pluginSessionCounter += 1;
       const sessionId = `tree-session-${this.pluginSessionCounter}`;
@@ -1103,6 +1297,28 @@ export class MockWebBotClient implements WebBotClient {
         pluginId,
         viewId,
         title,
+        renderer: "tree",
+        mode: "session",
+        sessionId,
+        summary,
+        initialWindow,
+      };
+    }
+    if (pluginId === "repo-outline") {
+      const summary = buildRepoOutlineSummary();
+      const initialWindow: TreeWindowPayload = {
+        op: "children",
+        nodeId: null,
+        nodes: cloneTreeNodes(summary.roots || []),
+        statsText: summary.statsText,
+      };
+      this.pluginSessionCounter += 1;
+      const sessionId = `repo-tree-session-${this.pluginSessionCounter}`;
+      this.pluginSessions.set(sessionId, { pluginId, renderer: "tree", summary, window: initialWindow });
+      return {
+        pluginId,
+        viewId,
+        title: "仓库大纲",
         renderer: "tree",
         mode: "session",
         sessionId,
@@ -1162,7 +1378,23 @@ export class MockWebBotClient implements WebBotClient {
           pluginId,
           renderer: "tree" as const,
           summary,
-          window: { roots: cloneTreeNodes(summary.roots || []) },
+          window: { op: "children" as const, nodeId: null, nodes: cloneTreeNodes(summary.roots || []) },
+        };
+        this.pluginSessions.set(sessionId, session);
+        return session;
+      }
+      if (/^repo-tree-session-\d+$/.test(sessionId)) {
+        const summary = buildRepoOutlineSummary();
+        const session = {
+          pluginId,
+          renderer: "tree" as const,
+          summary,
+          window: {
+            op: "children" as const,
+            nodeId: null,
+            nodes: cloneTreeNodes(summary.roots || []),
+            statsText: summary.statsText,
+          },
         };
         this.pluginSessions.set(sessionId, session);
         return session;
@@ -1212,14 +1444,29 @@ export class MockWebBotClient implements WebBotClient {
       };
     }
     if (session.renderer === "tree") {
-      if (request.kind === "search") {
+      const op = String((request as { op?: string; kind?: string }).op || (request as { op?: string; kind?: string }).kind || "children");
+      if (session.pluginId === "repo-outline") {
+        if (op === "search") {
+          return buildRepoOutlineSearch(String(request.query || ""));
+        }
+        return {
+          op: "children",
+          nodeId: String(request.nodeId || ""),
+          nodes: cloneTreeNodes(buildRepoOutlineChildren(String(request.nodeId || ""))),
+          statsText: "2 文件 · 1 符号",
+        };
+      }
+      if (op === "search") {
         const query = String(request.query || "").trim().toLowerCase();
         const roots = buildMockTreeRoots().filter((node) =>
-          !query || node.label.toLowerCase().includes(query) || String(node.description || "").toLowerCase().includes(query),
+          !query
+            || node.label.toLowerCase().includes(query)
+            || String(node.secondaryText || node.description || "").toLowerCase().includes(query),
         );
-        return { roots: cloneTreeNodes(roots) };
+        return { op: "search", nodes: cloneTreeNodes(roots) };
       }
       return {
+        op: "children",
         nodeId: String(request.nodeId || ""),
         nodes: cloneTreeNodes(buildMockTreeChildren(String(request.nodeId || ""))),
       };
@@ -1272,6 +1519,12 @@ export class MockWebBotClient implements WebBotClient {
       return {
         hostEffects: [{ type: "copy_text", text: String(input.payload?.nodeId || "") }],
       };
+    }
+    if (pluginId === "repo-outline") {
+      if (input.actionId === "refresh-tree") {
+        return { message: "已刷新", refresh: "session" };
+      }
+      return { message: "已折叠" };
     }
     return { message: "已执行" };
   }
