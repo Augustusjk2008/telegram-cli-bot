@@ -560,7 +560,10 @@ export function TerminalScreen({
             }}
             className="h-full"
           >
-            <div ref={containerRef} className="terminal-shell h-full w-full min-h-full min-w-0 px-3 py-2" />
+            <div data-testid="terminal-shell-frame" className="h-full w-full px-3 py-2">
+              {/* Keep padding off the xterm host; FitAddon measures the host size directly. */}
+              <div ref={containerRef} className="terminal-shell h-full w-full min-h-full min-w-0" />
+            </div>
           </div>
         )}
         {!isFollowing ? (
