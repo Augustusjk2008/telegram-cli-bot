@@ -15,6 +15,15 @@ from bot.platform.processes import build_subprocess_group_kwargs
 logger = logging.getLogger(__name__)
 
 try:
+    import fcntl
+    import struct
+    import termios
+except ImportError:
+    fcntl = None
+    struct = None
+    termios = None
+
+try:
     from winpty import PtyProcess
 
     _WINPTY_AVAILABLE = True
@@ -56,6 +65,24 @@ class PtyWrapper:
             else:
                 self.process.stdin.write(data)
                 self.process.stdin.flush()
+
+    def resize(self, cols: int, rows: int) -> bool:
+        if not self.is_pty:
+            return False
+
+        try:
+            resize = getattr(self.process, "resize", None)
+            if callable(resize):
+                resize(cols, rows)
+                return True
+
+            setwinsize = getattr(self.process, "setwinsize", None)
+            if callable(setwinsize):
+                setwinsize(rows, cols)
+                return True
+        except Exception:
+            return False
+        return False
 
     def isalive(self) -> bool:
         if self.is_pty:
@@ -109,6 +136,12 @@ class PosixPtyProcess:
     def write(self, data: str) -> None:
         os.write(self._master_fd, data.encode("utf-8", errors="replace"))
 
+    def resize(self, cols: int, rows: int) -> None:
+        if not fcntl or not struct or not termios:
+            return
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+
     def isalive(self) -> bool:
         return self._process.poll() is None
 
@@ -122,7 +155,19 @@ class PosixPtyProcess:
             pass
 
 
-def create_shell_process(shell_type: str, cwd: str, use_pty: bool = True) -> PtyWrapper:
+def _normalize_terminal_size(cols: int | None, rows: int | None) -> tuple[int, int]:
+    safe_cols = max(2, int(cols or 120))
+    safe_rows = max(2, int(rows or 40))
+    return safe_cols, safe_rows
+
+
+def create_shell_process(
+    shell_type: str,
+    cwd: str,
+    use_pty: bool = True,
+    cols: int | None = None,
+    rows: int | None = None,
+) -> PtyWrapper:
     if shell_type == "powershell":
         cmdline = "powershell.exe -NoLogo -NoExit" if sys.platform == "win32" else "pwsh -NoLogo -NoExit"
     elif shell_type == "cmd":
@@ -132,11 +177,13 @@ def create_shell_process(shell_type: str, cwd: str, use_pty: bool = True) -> Pty
     else:
         cmdline = shell_type
 
+    cols, rows = _normalize_terminal_size(cols, rows)
+
     if sys.platform == "win32" and use_pty and _WINPTY_AVAILABLE and PtyProcess is not None:
         process = PtyProcess.spawn(
             cmdline,
             cwd=cwd,
-            dimensions=(40, 120),
+            dimensions=(rows, cols),
             env={
                 **os.environ,
                 "FORCE_COLOR": "1",
@@ -181,7 +228,9 @@ def create_shell_process(shell_type: str, cwd: str, use_pty: bool = True) -> Pty
             **build_subprocess_group_kwargs(),
         )
         os.close(slave_fd)
-        return PtyWrapper(PosixPtyProcess(process, master_fd), is_pty=True)
+        pty_process = PosixPtyProcess(process, master_fd)
+        pty_process.resize(cols, rows)
+        return PtyWrapper(pty_process, is_pty=True)
 
     process = subprocess.Popen(
         cmdline.split(),

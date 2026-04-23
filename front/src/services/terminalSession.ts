@@ -15,14 +15,20 @@ export type TerminalSessionOptions = {
   onPtyMode?: (enabled: boolean) => void;
 };
 
+export type TerminalGeometry = {
+  cols: number;
+  rows: number;
+};
+
 export type TerminalSession = {
   term: Terminal;
   connect: () => void;
   dispose: () => void;
-  fit: () => void;
+  fit: () => TerminalGeometry | null;
   focus: () => void;
   sendControl: (sequence: string) => void;
   sendText: (text: string) => void;
+  setTheme: (themeName: UiThemeName) => void;
 };
 
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
@@ -45,6 +51,34 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     fitAddon.fit();
   } catch {
     // Hidden containers can report zero size; callers will re-fit after layout settles.
+  }
+
+  function getGeometry(): TerminalGeometry | null {
+    if (term.cols < 1 || term.rows < 1) {
+      return null;
+    }
+    return {
+      cols: term.cols,
+      rows: term.rows,
+    };
+  }
+
+  function sendJson(payload: Record<string, unknown>) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(payload));
+    }
+  }
+
+  function sendResize() {
+    const geometry = getGeometry();
+    if (geometry) {
+      sendJson({
+        type: "resize",
+        cols: geometry.cols,
+        rows: geometry.rows,
+      });
+    }
+    return geometry;
   }
 
   function cleanupSocket() {
@@ -80,10 +114,13 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     isAttached = false;
 
     socket.addEventListener("open", () => {
-      socket?.send(JSON.stringify({
+      const geometry = getGeometry();
+      sendJson({
         shell: options.shell || "auto",
         cwd: options.cwd,
-      }));
+        cols: geometry?.cols,
+        rows: geometry?.rows,
+      });
     });
 
     initialMessageListener = (event: MessageEvent) => {
@@ -142,7 +179,9 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
         fitAddon.fit();
       } catch {
         // Ignore fit failures while the terminal is hidden or mid-layout.
+        return null;
       }
+      return sendResize();
     },
     focus: () => {
       term.focus();
@@ -157,6 +196,9 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(text);
       }
+    },
+    setTheme: (themeName: UiThemeName) => {
+      term.options.theme = getTerminalTheme(themeName);
     },
   };
 }

@@ -12,6 +12,7 @@ const terminalSessionMock = vi.hoisted(() => ({
   focus: vi.fn(),
   dispose: vi.fn(),
   scrollToBottom: vi.fn(),
+  setTheme: vi.fn(),
 }));
 
 vi.mock("../services/terminalSession", () => ({
@@ -28,6 +29,7 @@ vi.mock("../services/terminalSession", () => ({
     focus: terminalSessionMock.focus,
     sendControl: terminalSessionMock.sendControl,
     sendText: terminalSessionMock.sendText,
+    setTheme: terminalSessionMock.setTheme,
   })),
 }));
 
@@ -38,6 +40,7 @@ beforeEach(() => {
   terminalSessionMock.focus.mockReset();
   terminalSessionMock.dispose.mockReset();
   terminalSessionMock.scrollToBottom.mockReset();
+  terminalSessionMock.setTheme.mockReset();
   localStorage.clear();
   sessionStorage.clear();
 });

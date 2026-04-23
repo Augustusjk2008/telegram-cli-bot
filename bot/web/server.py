@@ -12,6 +12,7 @@ import platform
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -392,12 +393,14 @@ def _build_public_host_info() -> dict[str, str]:
 class _TerminalOutputPump:
     """用 daemon 线程读取终端输出，避免阻塞读把主进程退出卡住。"""
 
-    def __init__(self, process: Any):
+    def __init__(self, process: Any, *, flush_interval_ms: int = 8, max_chunk_bytes: int = 65536):
         self._process = process
         self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._flush_interval = max(flush_interval_ms, 0) / 1000
+        self._max_chunk_bytes = max(max_chunk_bytes, 1)
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         if self._thread is not None:
@@ -428,10 +431,12 @@ class _TerminalOutputPump:
             return
 
     def _run(self) -> None:
+        pending = bytearray()
+        last_flush_at = time.monotonic()
         try:
             while not self._stop_event.is_set():
                 try:
-                    data = self._process.read(timeout=100)
+                    data = self._process.read(timeout=20)
                 except Exception as exc:
                     logger.debug("终端输出读取结束 pid=%s: %s", getattr(self._process, "pid", "unknown"), exc)
                     break
@@ -439,8 +444,18 @@ class _TerminalOutputPump:
                 if data:
                     if isinstance(data, str):
                         data = data.encode("utf-8", errors="replace")
-                    self._put(data)
+                    pending.extend(data)
+                    now = time.monotonic()
+                    if len(pending) >= self._max_chunk_bytes or now - last_flush_at >= self._flush_interval:
+                        self._put(bytes(pending))
+                        pending.clear()
+                        last_flush_at = now
                     continue
+
+                if pending:
+                    self._put(bytes(pending))
+                    pending.clear()
+                    last_flush_at = time.monotonic()
 
                 try:
                     if not self._process.isalive():
@@ -448,9 +463,23 @@ class _TerminalOutputPump:
                 except Exception:
                     break
 
-                self._stop_event.wait(0.02)
+                self._stop_event.wait(0.01)
         finally:
+            if pending:
+                self._put(bytes(pending))
             self._put(_TERMINAL_OUTPUT_EOF)
+
+
+def _parse_terminal_size(payload: dict[str, Any]) -> tuple[int, int] | None:
+    try:
+        cols = int(payload.get("cols") or 0)
+        rows = int(payload.get("rows") or 0)
+    except (TypeError, ValueError):
+        return None
+
+    if cols < 2 or rows < 2:
+        return None
+    return cols, rows
 
 
 @web.middleware
@@ -928,7 +957,14 @@ class WebApiServer:
                 cwd = os.getcwd()
 
             force_no_pty = bool(init_data.get("no_pty", False))
-            process = create_shell_process(shell_type, cwd, use_pty=not force_no_pty)
+            initial_size = _parse_terminal_size(init_data)
+            process = create_shell_process(
+                shell_type,
+                cwd,
+                use_pty=not force_no_pty,
+                cols=initial_size[0] if initial_size else None,
+                rows=initial_size[1] if initial_size else None,
+            )
             try:
                 await ws.send_json({"pty_mode": process.is_pty})
             except _CLIENT_DISCONNECT_ERRORS:
@@ -954,10 +990,7 @@ class WebApiServer:
                     transport = request.transport
                     if transport is None or transport.is_closing():
                         break
-                    try:
-                        message = await asyncio.wait_for(ws.receive(), timeout=0.25)
-                    except asyncio.TimeoutError:
-                        continue
+                    message = await ws.receive()
                     if message.type == WSMsgType.BINARY:
                         process.write(message.data)
                         continue
@@ -969,8 +1002,15 @@ class WebApiServer:
                                 payload = json.loads(text)
                             except json.JSONDecodeError:
                                 payload = None
-                            if isinstance(payload, dict) and payload.get("type") in {"resize", "ping"}:
-                                continue
+                            if isinstance(payload, dict):
+                                if payload.get("type") == "ping":
+                                    continue
+                                if payload.get("type") == "resize":
+                                    resize = getattr(process, "resize", None)
+                                    size = _parse_terminal_size(payload)
+                                    if callable(resize) and size is not None:
+                                        resize(*size)
+                                    continue
                         process.write(text.encode("utf-8"))
                         await asyncio.sleep(0)
                         continue

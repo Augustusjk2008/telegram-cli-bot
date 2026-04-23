@@ -20,6 +20,7 @@ const terminalSessionMock = vi.hoisted(() => ({
   focus: vi.fn(),
   dispose: vi.fn(),
   scrollToBottom: vi.fn(),
+  setTheme: vi.fn(),
 }));
 
 vi.mock("../services/terminalSession", () => ({
@@ -54,6 +55,7 @@ vi.mock("../services/terminalSession", () => ({
     focus: terminalSessionMock.focus,
     sendControl: terminalSessionMock.sendControl,
     sendText: terminalSessionMock.sendText,
+    setTheme: terminalSessionMock.setTheme,
   })),
 }));
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   terminalSessionMock.focus.mockReset();
   terminalSessionMock.dispose.mockReset();
   terminalSessionMock.scrollToBottom.mockReset();
+  terminalSessionMock.setTheme.mockReset();
   vi.stubGlobal(
     "matchMedia",
     vi.fn().mockImplementation((query: string) => ({
@@ -118,7 +121,7 @@ test("shows mobile terminal controls in the shared terminal screen", async () =>
   expect(terminalSessionMock.sendControl).toHaveBeenCalledWith("\u0003");
 });
 
-test("uses a smaller terminal font and a viewport that supports bidirectional drag", async () => {
+test("uses a smaller terminal font and keeps scrolling inside xterm viewport", async () => {
   render(
     <TerminalScreen
       authToken="123"
@@ -134,7 +137,7 @@ test("uses a smaller terminal font and a viewport that supports bidirectional dr
   const xtermScreen = viewport.querySelector(".xterm-screen");
 
   expect(viewport).toHaveStyle({
-    overflow: "scroll",
+    overflow: "hidden",
     touchAction: "pan-x pan-y",
   });
   expect(container).toHaveClass("w-full");
@@ -209,7 +212,6 @@ test("shows a jump-to-latest action after scrolling away from terminal output bo
   Object.defineProperty(scrollTarget, "clientHeight", { value: 200, writable: true });
 
   await act(async () => {
-    fireEvent.scroll(scrollTarget);
     terminalEventHandlers.onScroll?.();
   });
 
@@ -278,4 +280,35 @@ test("refits the terminal when the viewport size changes without rebuilding the 
   });
 
   expect(terminalSessionMock.fit).toHaveBeenCalledTimes(1);
+});
+
+test("theme change updates terminal without rebuilding the session", async () => {
+  const view = render(
+    <TerminalScreen
+      authToken="123"
+      botAlias="main"
+      isVisible
+      preferredWorkingDir="C:\\workspace\\demo"
+      themeName="deep-space"
+    />,
+  );
+
+  await screen.findByTestId("terminal-viewport");
+  createTerminalSessionMock.mockClear();
+  terminalSessionMock.setTheme.mockClear();
+
+  view.rerender(
+    <TerminalScreen
+      authToken="123"
+      botAlias="main"
+      isVisible
+      preferredWorkingDir="C:\\workspace\\demo"
+      themeName="classic"
+    />,
+  );
+
+  await waitFor(() => {
+    expect(terminalSessionMock.setTheme).toHaveBeenCalledWith("classic");
+  });
+  expect(createTerminalSessionMock).not.toHaveBeenCalled();
 });

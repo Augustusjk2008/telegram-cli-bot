@@ -294,13 +294,12 @@ export function App() {
   }
 
   async function openBotSwitcher() {
+    setShowSwitcher(true);
     try {
       const nextBots = await client.listBots();
       setBots(nextBots);
     } catch {
-      setBots([]);
-    } finally {
-      setShowSwitcher(true);
+      // Keep the current list so the switcher can open immediately even if refresh fails.
     }
   }
 

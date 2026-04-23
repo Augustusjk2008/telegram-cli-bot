@@ -49,7 +49,7 @@ function cancelScheduledLayout(handle: number) {
 
 function getScrollTarget(viewport: HTMLDivElement | null) {
   const nestedViewport = viewport?.querySelector(".xterm-viewport");
-  return nestedViewport instanceof HTMLElement ? nestedViewport : viewport;
+  return nestedViewport instanceof HTMLElement ? nestedViewport : null;
 }
 
 function isNearBottom(element: HTMLElement) {
@@ -202,7 +202,7 @@ export function TerminalScreen({
       return;
     }
 
-    viewport.style.overflow = "scroll";
+    viewport.style.overflow = "hidden";
     viewport.style.touchAction = "pan-x pan-y";
     viewport.style.overscrollBehavior = "contain";
 
@@ -211,7 +211,7 @@ export function TerminalScreen({
       scrollTarget.style.overflow = "auto";
       scrollTarget.style.touchAction = "pan-x pan-y";
       scrollTarget.style.overscrollBehavior = "contain";
-      scrollTarget.style.scrollbarGutter = "stable both-edges";
+      scrollTarget.style.scrollbarGutter = "stable";
       (scrollTarget.style as CSSStyleDeclaration & { webkitOverflowScrolling?: string }).webkitOverflowScrolling = "touch";
     }
 
@@ -229,12 +229,7 @@ export function TerminalScreen({
   }
 
   function jumpToLatest() {
-    const session = sessionRef.current;
-    const scrollTarget = getScrollTarget(viewportRef.current);
-    session?.term.scrollToBottom();
-    if (scrollTarget) {
-      scrollTarget.scrollTop = scrollTarget.scrollHeight;
-    }
+    sessionRef.current?.term.scrollToBottom();
     setFollowing(true);
   }
 
@@ -447,7 +442,7 @@ export function TerminalScreen({
     if (!sessionRef.current) {
       return;
     }
-    rebuildTerminal();
+    sessionRef.current.setTheme(themeName);
   }, [themeName]);
 
   useEffect(() => {
@@ -559,12 +554,9 @@ export function TerminalScreen({
             ref={viewportRef}
             data-testid="terminal-viewport"
             style={{
-              overflow: "scroll",
+              overflow: "hidden",
               touchAction: "pan-x pan-y",
               overscrollBehavior: "contain",
-            }}
-            onScroll={() => {
-              queueLayoutWork({ syncFollowing: true });
             }}
             className="h-full"
           >

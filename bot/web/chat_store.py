@@ -185,6 +185,9 @@ class ChatStore:
                 FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
             );
 
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation
+            ON messages(conversation_id);
+
             CREATE TABLE IF NOT EXISTS trace_events (
                 id TEXT PRIMARY KEY,
                 turn_id TEXT NOT NULL,
@@ -570,29 +573,50 @@ class ChatStore:
                 )
         return self.get_message(handle.assistant_message_id)
 
-    def _message_from_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
-        trace_count = int(
-            conn.execute(
-                "SELECT COUNT(*) AS count FROM trace_events WHERE turn_id = ?",
-                (row["turn_id"],),
-            ).fetchone()["count"]
-        )
-        tool_call_count = int(
-            conn.execute(
-                "SELECT COUNT(*) AS count FROM trace_events WHERE turn_id = ? AND kind = ?",
-                (row["turn_id"], "tool_call"),
-            ).fetchone()["count"]
-        )
-        process_count = int(
-            conn.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM trace_events
-                WHERE turn_id = ? AND kind NOT IN (?, ?)
-                """,
-                (row["turn_id"], "tool_call", "tool_result"),
-            ).fetchone()["count"]
-        )
+    def _load_trace_stats(
+        self,
+        conn: sqlite3.Connection,
+        turn_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        normalized_turn_ids = [str(turn_id) for turn_id in turn_ids if turn_id]
+        if not normalized_turn_ids:
+            return {}
+
+        placeholders = ", ".join("?" for _ in normalized_turn_ids)
+        rows = conn.execute(
+            f"""
+            SELECT
+                turn_id,
+                COUNT(*) AS trace_count,
+                SUM(CASE WHEN kind = ? THEN 1 ELSE 0 END) AS tool_call_count,
+                SUM(CASE WHEN kind NOT IN (?, ?) THEN 1 ELSE 0 END) AS process_count
+            FROM trace_events
+            WHERE turn_id IN ({placeholders})
+            GROUP BY turn_id
+            """,
+            ("tool_call", "tool_call", "tool_result", *normalized_turn_ids),
+        ).fetchall()
+
+        stats: dict[str, dict[str, int]] = {}
+        for item in rows:
+            turn_id = str(item["turn_id"])
+            stats[turn_id] = {
+                "trace_count": int(item["trace_count"] or 0),
+                "tool_call_count": int(item["tool_call_count"] or 0),
+                "process_count": int(item["process_count"] or 0),
+            }
+        return stats
+
+    def _message_from_row(
+        self,
+        conn: sqlite3.Connection,
+        row: sqlite3.Row,
+        trace_stats_by_turn: dict[str, dict[str, int]] | None = None,
+    ) -> dict[str, Any]:
+        turn_id = str(row["turn_id"])
+        if trace_stats_by_turn is None:
+            trace_stats_by_turn = self._load_trace_stats(conn, [turn_id])
+        trace_stats = trace_stats_by_turn.get(turn_id, {})
         return {
             "id": row["id"],
             "role": row["role"],
@@ -604,11 +628,100 @@ class ChatStore:
                 "completion_state": row["completion_state"],
                 "native_provider": row["native_provider"],
                 "native_session_id": row["native_session_id"],
-                "trace_count": trace_count,
-                "tool_call_count": tool_call_count,
-                "process_count": process_count,
+                "trace_count": int(trace_stats.get("trace_count", 0) or 0),
+                "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
+                "process_count": int(trace_stats.get("process_count", 0) or 0),
             },
         }
+
+    def _list_message_rows(
+        self,
+        conn: sqlite3.Connection,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        if limit is None:
+            return conn.execute(
+                """
+                SELECT
+                    m.id,
+                    m.turn_id,
+                    m.role,
+                    m.content,
+                    m.state,
+                    m.created_at,
+                    m.updated_at,
+                    t.seq,
+                    t.completion_state,
+                    t.native_provider,
+                    t.native_session_id
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE m.conversation_id = ?
+                ORDER BY
+                    t.seq ASC,
+                    CASE m.role WHEN 'user' THEN 0 ELSE 1 END ASC,
+                    m.created_at ASC,
+                    m.id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+
+        safe_limit = max(1, int(limit))
+        return conn.execute(
+            """
+            SELECT
+                recent.id,
+                recent.turn_id,
+                recent.role,
+                recent.content,
+                recent.state,
+                recent.created_at,
+                recent.updated_at,
+                recent.seq,
+                recent.completion_state,
+                recent.native_provider,
+                recent.native_session_id,
+                recent.role_order
+            FROM (
+                SELECT
+                    m.id,
+                    m.turn_id,
+                    m.role,
+                    m.content,
+                    m.state,
+                    m.created_at,
+                    m.updated_at,
+                    t.seq,
+                    t.completion_state,
+                    t.native_provider,
+                    t.native_session_id,
+                    CASE m.role WHEN 'user' THEN 0 ELSE 1 END AS role_order
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE m.conversation_id = ?
+                ORDER BY
+                    t.seq DESC,
+                    role_order DESC,
+                    m.created_at DESC,
+                    m.id DESC
+                LIMIT ?
+            ) AS recent
+            ORDER BY
+                recent.seq ASC,
+                recent.role_order ASC,
+                recent.created_at ASC,
+                recent.id ASC
+            """,
+            (conversation_id, safe_limit),
+        ).fetchall()
+
+    def _messages_from_rows(self, conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        trace_stats_by_turn = self._load_trace_stats(conn, [str(row["turn_id"]) for row in rows])
+        return [self._message_from_row(conn, row, trace_stats_by_turn) for row in rows]
 
     def get_message(self, message_id: str) -> dict[str, Any]:
         conn = self._connect(create=False)
@@ -636,39 +749,15 @@ class ChatStore:
             ).fetchone()
             if row is None:
                 raise KeyError(message_id)
-            return self._message_from_row(conn, row)
+            return self._messages_from_rows(conn, [row])[0]
 
-    def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
+    def list_messages(self, conversation_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
         conn = self._connect(create=False)
         if conn is None:
             return []
         with conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    m.id,
-                    m.turn_id,
-                    m.role,
-                    m.content,
-                    m.state,
-                    m.created_at,
-                    m.updated_at,
-                    t.seq,
-                    t.completion_state,
-                    t.native_provider,
-                    t.native_session_id
-                FROM messages AS m
-                JOIN turns AS t ON t.id = m.turn_id
-                WHERE m.conversation_id = ?
-                ORDER BY
-                    t.seq ASC,
-                    CASE m.role WHEN 'user' THEN 0 ELSE 1 END ASC,
-                    m.created_at ASC,
-                    m.id ASC
-                """,
-                (conversation_id,),
-            ).fetchall()
-            return [self._message_from_row(conn, row) for row in rows]
+            rows = self._list_message_rows(conn, conversation_id, limit=limit)
+            return self._messages_from_rows(conn, rows)
 
     def list_active_history(
         self,
@@ -692,8 +781,7 @@ class ChatStore:
             )
         if conversation_id is None:
             return []
-        items = self.list_messages(conversation_id)
-        return items[-max(1, limit):]
+        return self.list_messages(conversation_id, limit=max(1, limit))
 
     def count_history(
         self,

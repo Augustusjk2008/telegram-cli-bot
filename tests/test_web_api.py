@@ -2222,10 +2222,17 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
         def close(self) -> None:
             started["closed"] = True
 
-    def fake_create_shell_process(shell_type: str, cwd: str, use_pty: bool = True):
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
         started["shell_type"] = shell_type
         started["cwd"] = cwd
         started["use_pty"] = use_pty
+        started["initial_size"] = (cols, rows)
         return FakeProcess()
 
     app = WebApiServer(web_manager)._build_app()
@@ -2238,7 +2245,7 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
                     first_message = await ws.receive_json()
                     assert first_message == {"pty_mode": False}
                     output_message = await ws.receive()
-                    assert output_message.data == b"PS C:\\demo> "
+                    assert output_message.data.startswith(b"PS C:\\demo> ")
                     await ws.send_str("pwd\r")
                     for _ in range(20):
                         if started["writes"]:
@@ -2247,7 +2254,72 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
                     assert started["cwd"] == str(temp_dir)
                     assert started["shell_type"] == "bash"
                     assert started["use_pty"] is True
+                    assert started["initial_size"] == (None, None)
                     assert started["writes"] == [b"pwd\r"]
+                    await ws.close()
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_applies_resize_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    state: dict[str, object] = {"resize_calls": []}
+
+    class FakeProcess:
+        is_pty = True
+        pid = 4321
+
+        def read(self, timeout: int = 1000) -> bytes:
+            return b""
+
+        def write(self, data: bytes) -> None:
+            state["last_write"] = data
+
+        def resize(self, cols: int, rows: int) -> bool:
+            state["resize_calls"].append((cols, rows))
+            return True
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            state["terminated"] = True
+
+        def close(self) -> None:
+            state["closed"] = True
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        state["shell_type"] = shell_type
+        state["cwd"] = cwd
+        state["use_pty"] = use_pty
+        state["initial_size"] = (cols, rows)
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.create_shell_process", side_effect=fake_create_shell_process):
+                with patch("bot.web.server.get_default_shell", return_value="powershell"):
+                    ws = await client.ws_connect("/terminal/ws?token=secret")
+                    await ws.send_json({"cwd": str(temp_dir), "cols": 100, "rows": 30})
+                    assert await ws.receive_json() == {"pty_mode": True}
+                    await ws.send_json({"type": "resize", "cols": 140, "rows": 45})
+                    for _ in range(20):
+                        if state["resize_calls"]:
+                            break
+                        await asyncio.sleep(0.01)
+                    assert state["cwd"] == str(temp_dir)
+                    assert state["shell_type"] == "powershell"
+                    assert state["use_pty"] is True
+                    assert state["initial_size"] == (100, 30)
+                    assert state["resize_calls"] == [(140, 45)]
                     await ws.close()
 
 @pytest.mark.asyncio
