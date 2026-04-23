@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { HostEffect, PluginAction, PluginSummary, PluginUpdateInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { DirectoryPickerDialog } from "./DirectoryPickerDialog";
 import { PluginActionBar } from "./plugin-renderers/PluginActionBar";
 import { PluginConfigForm } from "./plugins/PluginConfigForm";
 import { runPluginAction } from "./plugins/pluginActions";
@@ -54,6 +55,24 @@ function getPrimaryCatalogAction(plugin: PluginSummary): PluginAction | null {
   return null;
 }
 
+function getOpenPluginViewAction(action: PluginAction) {
+  return action.hostAction?.type === "open_plugin_view" ? action.hostAction : null;
+}
+
+function shouldPickFolder(action: PluginAction) {
+  return Boolean(action.payload?.folderPicker);
+}
+
+function getFolderInputKey(action: PluginAction) {
+  const key = action.payload?.folderInputKey;
+  return typeof key === "string" && key.trim() ? key.trim() : "path";
+}
+
+function getFolderDialogTitle(action: PluginAction) {
+  const title = action.payload?.folderTitle;
+  return typeof title === "string" && title.trim() ? title.trim() : "选择文件夹";
+}
+
 export function PluginCatalog({
   plugins,
   botAlias = "",
@@ -69,33 +88,50 @@ export function PluginCatalog({
   onNotice,
 }: Props) {
   const [actionError, setActionError] = useState("");
+  const [folderAction, setFolderAction] = useState<{ plugin: PluginSummary; action: PluginAction } | null>(null);
+
+  function openCatalogPluginView(action: PluginAction, inputOverride?: Record<string, unknown>) {
+    const openViewAction = getOpenPluginViewAction(action);
+    if (!client || !botAlias || !openViewAction) {
+      return false;
+    }
+    const input = inputOverride || openViewAction.input;
+    setActionError("");
+    if (onOpenPluginView) {
+      void Promise.resolve(onOpenPluginView({
+        pluginId: openViewAction.pluginId,
+        viewId: openViewAction.viewId,
+        title: openViewAction.title,
+        input,
+      })).catch((nextError: unknown) => {
+        setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
+      });
+      return true;
+    }
+    void client.openPluginView(
+      botAlias,
+      openViewAction.pluginId,
+      openViewAction.viewId,
+      input,
+    ).catch((nextError: unknown) => {
+      setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
+    });
+    return true;
+  }
 
   function runCatalogAction(plugin: PluginSummary, action: PluginAction) {
     const defaultView = plugin.views[0];
-    const openViewAction = action.hostAction?.type === "open_plugin_view" ? action.hostAction : null;
+    const openViewAction = getOpenPluginViewAction(action);
     if (action.target === "plugin" && !defaultView) {
       setActionError("插件未提供默认视图");
       return;
     }
     if (client && botAlias && openViewAction) {
-      setActionError("");
-      if (onOpenPluginView) {
-        void onOpenPluginView({
-          pluginId: openViewAction.pluginId,
-          viewId: openViewAction.viewId,
-          title: openViewAction.title,
-          input: openViewAction.input,
-        });
+      if (shouldPickFolder(action)) {
+        setFolderAction({ plugin, action });
         return;
       }
-      void client.openPluginView(
-        botAlias,
-        openViewAction.pluginId,
-        openViewAction.viewId,
-        openViewAction.input,
-      ).catch((nextError: unknown) => {
-        setActionError(nextError instanceof Error ? nextError.message : "插件动作执行失败");
-      });
+      openCatalogPluginView(action);
       return;
     }
     setActionError("");
@@ -225,6 +261,26 @@ export function PluginCatalog({
           })()}
         </article>
       ))}
+      {folderAction && client && botAlias ? (
+        <DirectoryPickerDialog
+          title={getFolderDialogTitle(folderAction.action)}
+          botAlias={botAlias}
+          client={client}
+          initialPath={String(getOpenPluginViewAction(folderAction.action)?.input?.[getFolderInputKey(folderAction.action)] || "")}
+          onPick={(path) => {
+            const openViewAction = getOpenPluginViewAction(folderAction.action);
+            if (!openViewAction) {
+              return;
+            }
+            const key = getFolderInputKey(folderAction.action);
+            openCatalogPluginView(folderAction.action, {
+              ...openViewAction.input,
+              [key]: path,
+            });
+          }}
+          onClose={() => setFolderAction(null)}
+        />
+      ) : null}
     </div>
   );
 }

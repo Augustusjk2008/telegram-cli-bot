@@ -15,6 +15,7 @@ RUNTIME_CONTEXT: dict[str, Any] = {}
 @dataclass
 class SessionState:
     session_id: str
+    root_path: str
     include_hidden: bool
     max_files: int
     max_symbols_per_file: int
@@ -103,10 +104,12 @@ def parse_extensions(raw_value: Any) -> set[str]:
     return extensions or {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".md"}
 
 
-def build_session(session_id: str, context: dict[str, Any]) -> SessionState:
+def build_session(session_id: str, context: dict[str, Any], input_payload: dict[str, Any]) -> SessionState:
     config = plugin_config(context)
+    root_path = normalize_path(str(input_payload.get("path") or input_payload.get("rootPath") or "."))
     return SessionState(
         session_id=session_id,
+        root_path=root_path,
         include_hidden=bool(config.get("includeHidden", False)),
         max_files=bounded_int(config.get("maxFiles"), 2000, 200, 20000),
         max_symbols_per_file=bounded_int(config.get("maxSymbolsPerFile"), 200, 20, 1000),
@@ -263,7 +266,13 @@ def get_file_symbols(session: SessionState, path: str) -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
-    payload = host_result("host.workspace.outline", {"path": normalized}, "读取文件大纲失败")
+    try:
+        payload = host_result("host.workspace.outline", {"path": normalized}, "读取文件大纲失败")
+    except Exception:
+        session.file_symbols[normalized] = []
+        sync_cached_file_badges(session, normalized, 0)
+        session.search_cache.clear()
+        return []
     items: list[dict[str, Any]] = []
     for raw_item in list(payload.get("items") or []):
         if not isinstance(raw_item, dict):
@@ -283,7 +292,7 @@ def get_file_symbols(session: SessionState, path: str) -> list[dict[str, Any]]:
 
 def collect_workspace_files(session: SessionState) -> list[str]:
     files: list[str] = []
-    stack = ["."]
+    stack = [session.root_path]
     visited: set[str] = set()
     while stack and len(files) < session.max_files:
         current = stack.pop()
@@ -306,7 +315,7 @@ def collect_workspace_files(session: SessionState) -> list[str]:
 def search_workspace(session: SessionState, query: str) -> dict[str, Any]:
     keyword = query.strip().lower()
     if not keyword:
-        root_nodes = get_directory_children(session, ".")
+        root_nodes = get_directory_children(session, session.root_path)
         visible_files = sum(1 for node in root_nodes if str(node.get("id") or "").startswith("file:"))
         return {
             "op": "search",
@@ -357,24 +366,24 @@ def root_stats(session: SessionState, nodes: list[dict[str, Any]]) -> str:
     return stats_text(visible_files, visible_symbols)
 
 
-def open_view(_input_payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+def open_view(input_payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     global SESSION_COUNTER, RUNTIME_CONTEXT
     RUNTIME_CONTEXT = context
     SESSION_COUNTER += 1
     bot_alias = str(((context.get("host") or {}).get("botAlias")) or "main")
     session_id = f"{bot_alias}-repo-outline-{SESSION_COUNTER}"
-    session = build_session(session_id, context)
+    session = build_session(session_id, context, input_payload)
     SESSIONS[session_id] = session
-    root_nodes = get_directory_children(session, ".")
+    root_nodes = get_directory_children(session, session.root_path)
     stats = root_stats(session, root_nodes)
     return {
         "renderer": "tree",
-        "title": "仓库大纲",
+        "title": "文件夹大纲",
         "mode": "session",
         "sessionId": session_id,
         "summary": {
             "searchable": True,
-            "searchPlaceholder": "搜目录、文件、符号",
+            "searchPlaceholder": "搜当前文件夹目录、文件、符号",
             "emptySearchText": "未找到匹配目录、文件、符号",
             "statsText": stats,
             "actions": toolbar_actions(),
@@ -394,7 +403,7 @@ def get_view_window(params: dict[str, Any]) -> dict[str, Any]:
     if op == "children":
         node_id = str(params.get("nodeId") or "")
         if not node_id:
-            nodes = get_directory_children(session, ".")
+            nodes = get_directory_children(session, session.root_path)
             return {"op": "children", "nodeId": None, "nodes": nodes, "statsText": root_stats(session, nodes)}
         if node_id.startswith("dir:"):
             path = node_id.split(":", 1)[1]

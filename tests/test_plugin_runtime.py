@@ -118,6 +118,49 @@ for line in sys.stdin:
     (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_hanging_plugin(root: Path) -> None:
+    plugin_dir = root / "hanging-wave"
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "plugin.initialize":
+        result = {"name": "hanging-wave"}
+    elif method == "plugin.shutdown":
+        result = {"ok": True}
+    elif method == "plugin.render_view":
+        continue
+    else:
+        result = {"method": method}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\\n")
+    sys.stdout.flush()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "schemaVersion": 1,
+        "id": "hanging-wave",
+        "name": "Hanging Wave",
+        "version": "0.1.0",
+        "description": "timeout runtime test",
+        "runtime": {
+            "type": "python",
+            "entry": "backend/main.py",
+            "protocol": "jsonrpc-stdio",
+        },
+        "views": [{"id": "waveform", "title": "波形预览", "renderer": "waveform"}],
+        "fileHandlers": [],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _write_session_wave_plugin(root: Path) -> None:
     plugin_dir = root / "session-wave"
     backend_dir = plugin_dir / "backend"
@@ -305,6 +348,20 @@ async def test_plugin_runtime_reads_large_jsonrpc_response_lines(tmp_path: Path)
 
     assert result["renderer"] == "waveform"
     assert len(result["payload"]["blob"]) == 100_000
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_runtime_times_out_and_stops_unresponsive_plugin(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_hanging_plugin(plugins_root)
+    manifest = PluginRegistry(plugins_root).discover()["hanging-wave"]
+
+    runtime = PluginRuntime(call_timeout_seconds=0.1)
+    with pytest.raises(RuntimeError, match="插件响应超时"):
+        await runtime.render_view("main", manifest, "waveform", {"path": "waves/hang.vcd"})
+
+    assert ("main", "hanging-wave") not in runtime._processes
     await runtime.shutdown()
 
 

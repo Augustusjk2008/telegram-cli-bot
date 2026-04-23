@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import type { HostEffect } from "../services/types";
@@ -102,6 +102,26 @@ function GitDiffViewer({ content }: { content: string }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function PluginViewLoading() {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setElapsedSeconds((current) => current + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="space-y-2 text-center text-sm text-[var(--muted)]">
+      <p>正在加载插件视图</p>
+      {elapsedSeconds > 0 ? (
+        <p>已等待 {elapsedSeconds} 秒，首次启动插件或目录较大时可能更久。</p>
+      ) : null}
     </div>
   );
 }
@@ -308,7 +328,7 @@ export function EditorPane({
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
-                正在加载插件视图
+                <PluginViewLoading />
               </div>
             )}
           </div>

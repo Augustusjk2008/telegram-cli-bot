@@ -15,6 +15,7 @@ from .protocol import decode_message, encode_error, encode_request, encode_resul
 logger = logging.getLogger(__name__)
 
 PLUGIN_STDIO_LIMIT = 64 * 1024 * 1024
+PLUGIN_CALL_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass
@@ -34,10 +35,12 @@ class PluginRuntime:
         workspace_root_for: Callable[[str], Path] | None = None,
         host_api: PluginHostApi | None = None,
         audit_hook: Callable[[dict[str, Any]], None] | None = None,
+        call_timeout_seconds: float = PLUGIN_CALL_TIMEOUT_SECONDS,
     ) -> None:
         self._workspace_root_for = workspace_root_for or (lambda _alias: Path.cwd())
         self._host_api = host_api or PluginHostApi(ArtifactStore(Path.cwd()))
         self._audit_hook = audit_hook
+        self._call_timeout_seconds = call_timeout_seconds
         self._processes: dict[tuple[str, str], _PluginProcess] = {}
         self._manifests: dict[tuple[str, str], PluginManifest] = {}
 
@@ -230,7 +233,11 @@ class PluginRuntime:
 
     async def _call(self, bot_alias: str, manifest: PluginManifest, method: str, params: dict[str, Any]) -> dict[str, Any]:
         wrapped = await self._ensure_process(bot_alias, manifest)
-        return await self._invoke(wrapped, method, params)
+        try:
+            return await asyncio.wait_for(self._invoke(wrapped, method, params), timeout=self._call_timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            await self.stop_plugin(bot_alias, manifest.plugin_id)
+            raise RuntimeError(f"插件响应超时: {manifest.plugin_id}") from exc
 
     async def render_view(self, bot_alias: str, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call(
@@ -313,7 +320,10 @@ class PluginRuntime:
         manifest = self._manifests.get(key)
         if process.returncode is None and manifest is not None:
             try:
-                await self._invoke(wrapped, "plugin.shutdown", {"context": self._context_payload(key[0], manifest)})
+                await asyncio.wait_for(
+                    self._invoke(wrapped, "plugin.shutdown", {"context": self._context_payload(key[0], manifest)}),
+                    timeout=3,
+                )
             except Exception:
                 pass
         if process.returncode is None:

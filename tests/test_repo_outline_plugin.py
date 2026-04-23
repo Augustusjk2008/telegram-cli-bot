@@ -127,3 +127,89 @@ async def test_repo_outline_respects_hidden_and_symbol_limits(tmp_path: Path) ->
     assert symbols["nodes"][0]["label"] == "func_0"
 
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_repo_outline_opens_from_selected_folder(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / "bot" / "web").mkdir(parents=True)
+    (repo_root / "bot" / "web" / "api_service.py").write_text("def serve():\n    return True\n", encoding="utf-8")
+    (repo_root / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+    plugins_root = tmp_path / "plugins"
+    plugins_root.mkdir()
+    shutil.copytree(Path("examples/plugins/repo-outline"), plugins_root / "repo-outline")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    opened = await service.open_view(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        view_id="repo-tree",
+        input_payload={"path": "bot"},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    assert opened["title"] == "文件夹大纲"
+    assert any(node["label"] == "web" for node in opened["initialWindow"]["nodes"])
+    assert all(node["label"] != "README.md" for node in opened["initialWindow"]["nodes"])
+
+    search = await service.get_view_window(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        session_id=opened["sessionId"],
+        request_payload={"op": "search", "query": "serve"},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    assert search["nodes"][0]["label"] == "api_service.py"
+
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_repo_outline_ignores_file_outline_decode_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "legacy.py").write_bytes(b"def ok():\n    return '\\xce'\n")
+
+    plugins_root = tmp_path / "plugins"
+    plugins_root.mkdir()
+    shutil.copytree(Path("examples/plugins/repo-outline"), plugins_root / "repo-outline")
+
+    def raise_decode_error(_workspace: Path | str, _path: str) -> dict[str, object]:
+        raise UnicodeDecodeError("utf-8", b"\xce", 0, 1, "invalid continuation byte")
+
+    monkeypatch.setattr("bot.plugins.host_api.build_file_outline", raise_decode_error)
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    opened = await service.open_view(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        view_id="repo-tree",
+        input_payload={},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+    file_node = next(node for node in opened["initialWindow"]["nodes"] if node["label"] == "legacy.py")
+
+    symbols = await service.get_view_window(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        session_id=opened["sessionId"],
+        request_payload={"op": "children", "nodeId": file_node["id"]},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+    search = await service.get_view_window(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        session_id=opened["sessionId"],
+        request_payload={"op": "search", "query": "legacy"},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    assert symbols["nodes"] == []
+    assert search["nodes"][0]["label"] == "legacy.py"
+
+    await service.shutdown()

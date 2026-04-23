@@ -567,7 +567,7 @@ test("plugin view surface shows local loading and ignores stale tree children re
   );
 
   await user.click(screen.getByRole("button", { name: "展开 src" }));
-  expect(await screen.findByText("加载中...")).toBeInTheDocument();
+  expect(await screen.findAllByText("正在展开 src...")).toHaveLength(2);
 
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "api" } });
   await waitFor(() => {

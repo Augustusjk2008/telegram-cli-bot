@@ -29,16 +29,20 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
   });
 });
 
-test("plugins screen shows primary open button for utility plugins", async () => {
+test("plugins screen lets repo outline pick a folder before opening", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
   const openSpy = vi.spyOn(client, "openPluginView");
 
   render(<PluginsScreen client={client} botAlias="main" />);
 
-  await user.click(await screen.findByRole("button", { name: "打开仓库大纲" }));
+  await user.click(await screen.findByRole("button", { name: "选择文件夹大纲" }));
+  expect(await screen.findByRole("dialog", { name: "选择要生成大纲的文件夹" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "使用当前目录" }));
 
   await waitFor(() => {
-    expect(openSpy).toHaveBeenCalledWith("main", "repo-outline", "repo-tree", {});
+    expect(openSpy).toHaveBeenCalledWith("main", "repo-outline", "repo-tree", {
+      path: expect.any(String),
+    });
   });
 });

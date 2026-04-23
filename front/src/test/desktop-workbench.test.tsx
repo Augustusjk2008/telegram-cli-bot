@@ -298,9 +298,10 @@ test("desktop workbench opens repo outline from plugin catalog CTA", async () =>
   );
 
   await user.click(screen.getByRole("button", { name: "插件" }));
-  await user.click(await screen.findByRole("button", { name: "打开仓库大纲" }));
+  await user.click(await screen.findByRole("button", { name: "选择文件夹大纲" }));
+  await user.click(await screen.findByRole("button", { name: "使用当前目录" }));
 
-  expect(await screen.findByRole("tab", { name: "仓库大纲" })).toBeInTheDocument();
+  expect(await screen.findByRole("tab", { name: "文件夹大纲" })).toBeInTheDocument();
   expect(screen.getByText("bot")).toBeInTheDocument();
 });
 

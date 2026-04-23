@@ -62,7 +62,7 @@
   "views": [
     {
       "id": "repo-tree",
-      "title": "仓库大纲",
+      "title": "文件夹大纲",
       "renderer": "tree",
       "viewMode": "session",
       "dataProfile": "light"
@@ -71,15 +71,20 @@
   "catalogActions": [
     {
       "id": "open-outline",
-      "label": "打开仓库大纲",
+      "label": "选择文件夹大纲",
       "target": "host",
       "location": "catalog",
       "variant": "primary",
+      "payload": {
+        "folderPicker": true,
+        "folderInputKey": "path",
+        "folderTitle": "选择要生成大纲的文件夹"
+      },
       "hostAction": {
         "type": "open_plugin_view",
         "pluginId": "repo-outline",
         "viewId": "repo-tree",
-        "title": "仓库大纲",
+        "title": "文件夹大纲",
         "input": {}
       }
     }
