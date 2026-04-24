@@ -24,6 +24,7 @@ export const mockFiles: Record<string, Record<string, FileEntry[]>> = {
       entry("architecture.md", false, 1536),
       entry("plugin-plan.md", false, 2048),
       entry("roadmap.docx", false, 40960),
+      entry("roadmap.pdf", false, 24576),
     ],
     [`${DEMO_MAIN_WORKDIR}/src`]: [
       entry("index.ts", false, 512),

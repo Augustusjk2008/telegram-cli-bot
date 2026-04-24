@@ -1,4 +1,4 @@
-import { type ComponentType, useEffect, useState } from "react";
+import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
 type Props = {
@@ -35,6 +35,20 @@ type CodeMirrorComponent = ComponentType<{
 }>;
 
 type CodeMirrorEditorView = import("@codemirror/view").EditorView;
+
+const EMPTY_BREAKPOINT_LINES: number[] = [];
+const FILE_EDITOR_BASIC_SETUP = {
+  lineNumbers: true,
+  foldGutter: true,
+  highlightActiveLineGutter: true,
+};
+
+type EditorRuntime = {
+  CodeMirrorEditor: CodeMirrorComponent;
+  languageExtensions: unknown[];
+  stateModule: typeof import("@codemirror/state");
+  viewModule: typeof import("@codemirror/view");
+};
 
 function createEditorTheme(
   EditorView: typeof import("@codemirror/view").EditorView,
@@ -224,7 +238,7 @@ export function FileEditorSurface({
   saving = false,
   dirty = false,
   canSave = false,
-  breakpointLines = [],
+  breakpointLines,
   currentLine = null,
   statusText = "",
   error = "",
@@ -235,19 +249,19 @@ export function FileEditorSurface({
   onSave,
   onClose,
 }: Props) {
-  const [CodeMirrorEditor, setCodeMirrorEditor] = useState<CodeMirrorComponent | null>(null);
-  const [editorExtensions, setEditorExtensions] = useState<unknown[]>([]);
+  const [editorRuntime, setEditorRuntime] = useState<EditorRuntime | null>(null);
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
   const codeMirrorTheme = typeof document !== "undefined" && document.documentElement.dataset.theme === "classic"
     ? "light"
     : "dark";
+  const normalizedBreakpointLines = breakpointLines ?? EMPTY_BREAKPOINT_LINES;
 
   useEffect(() => {
     let active = true;
     if (!canUseCodeMirror) {
-      setCodeMirrorEditor(null);
-      setEditorExtensions([]);
+      setEditorRuntime(null);
+      setEditorView(null);
       return () => {
         active = false;
       };
@@ -259,30 +273,48 @@ export function FileEditorSurface({
       import("@codemirror/state"),
       import("@codemirror/view"),
     ])
-      .then(([module, loadedExtensions, stateModule, viewModule]) => {
+      .then(([module, languageExtensions, stateModule, viewModule]) => {
         if (!active) {
           return;
         }
-        setCodeMirrorEditor(() => module.default as CodeMirrorComponent);
-        setEditorExtensions([
-          ...loadedExtensions,
-          ...createDebugExtensions(viewModule, stateModule, breakpointLines, currentLine, onToggleBreakpoint),
-          createEditorTheme(viewModule.EditorView, codeMirrorTheme),
-        ]);
+        setEditorRuntime({
+          CodeMirrorEditor: module.default as CodeMirrorComponent,
+          languageExtensions,
+          stateModule,
+          viewModule,
+        });
       })
       .catch(() => {
         if (!active) {
           return;
         }
-        setCodeMirrorEditor(null);
-        setEditorExtensions([]);
+        setEditorRuntime(null);
         setEditorView(null);
       });
 
     return () => {
       active = false;
     };
-  }, [breakpointLines, canUseCodeMirror, codeMirrorTheme, currentLine, onToggleBreakpoint, path]);
+  }, [canUseCodeMirror, path]);
+
+  const editorExtensions = useMemo(() => {
+    if (!editorRuntime) {
+      return [];
+    }
+    return [
+      ...editorRuntime.languageExtensions,
+      ...createDebugExtensions(
+        editorRuntime.viewModule,
+        editorRuntime.stateModule,
+        normalizedBreakpointLines,
+        currentLine,
+        onToggleBreakpoint,
+      ),
+      createEditorTheme(editorRuntime.viewModule.EditorView, codeMirrorTheme),
+    ];
+  }, [codeMirrorTheme, currentLine, editorRuntime, normalizedBreakpointLines, onToggleBreakpoint]);
+
+  const CodeMirrorEditor = editorRuntime?.CodeMirrorEditor ?? null;
 
   useEffect(() => {
     if (!editorView || !currentLine || currentLine <= 0) {
@@ -384,11 +416,7 @@ export function FileEditorSurface({
               onCreateEditor={(view) => {
                 setEditorView(view);
               }}
-              basicSetup={{
-                lineNumbers: true,
-                foldGutter: true,
-                highlightActiveLineGutter: true,
-              }}
+              basicSetup={FILE_EDITOR_BASIC_SETUP}
               onChange={onChange}
             />
           </div>

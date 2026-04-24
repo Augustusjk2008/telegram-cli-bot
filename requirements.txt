@@ -3,6 +3,7 @@ aiohttp>=3.10.0
 PyYAML>=6.0
 qrcode>=8.0
 pygdbmi>=0.11
+pypdf>=5.4.0
 
 # Process management (optional, for better /exec timeout handling)
 psutil>=5.9.0

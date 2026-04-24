@@ -41,8 +41,14 @@ def test_local_release_script_supports_version_bump_and_publish():
     assert "AutoConfirmDirtyWorktree" in content
     assert "Read-Host" in content
     assert 'Set-Content -LiteralPath $script:VersionFile' in content
-    assert 'git" -Arguments @("add", "--", "VERSION")' in content
+    assert "Commit-ReleaseChanges" in content
     assert 'git" -Arguments @("add", "-A")' in content
+    assert 'git" -Arguments @("add", "--", "VERSION")' not in content
+    assert '"{0}-windows-x64-{1}.zip"' in content
+    assert '"{0}-windows-x64-installer-{1}.zip"' in content
+    assert '"{0}-linux-x64-{1}.tar.gz"' in content
+    assert "WindowsInstallerArchive" in content
+    assert "portable-win\\build-portable.ps1" in content
 
 
 def test_agent_guides_document_the_release_command():

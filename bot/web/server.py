@@ -16,8 +16,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from aiohttp import WSMsgType, WSCloseCode, web
 from aiohttp.client_exceptions import ClientConnectionResetError
+from aiohttp.http import WSCloseCode, WSMsgType
+from aiohttp import web
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
 from bot.config import (

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "id": "pdf-preview",
+  "name": "PDF Preview",
+  "version": "0.1.0",
+  "description": "快速浏览 PDF 文字层内容。",
+  "enabled": true,
+  "config": {},
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "document",
+      "title": "PDF 文本预览",
+      "renderer": "document",
+      "viewMode": "snapshot",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "pdf-file",
+      "label": "PDF 文本预览",
+      "extensions": [
+        ".pdf"
+      ],
+      "viewId": "document"
+    }
+  ]
+}

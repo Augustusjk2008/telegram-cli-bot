@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -6,8 +7,16 @@ import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
 let codemirrorMountCount = 0;
+let codemirrorExtensionVersionCount = 0;
+let codemirrorBasicSetupVersionCount = 0;
+let lastExtensionsRef: unknown[] | undefined;
+let lastBasicSetupRef: unknown;
+
+const noop = () => {};
+const mockedLoadFileEditorExtensions = vi.mocked(loadFileEditorExtensions);
 
 vi.mock("../utils/fileEditorLanguage", () => ({
   loadFileEditorExtensions: vi.fn(async () => []),
@@ -24,6 +33,7 @@ vi.mock("@uiw/react-codemirror", async () => {
       theme,
       extensions,
       autoFocus,
+      basicSetup,
     }: {
       className?: string;
       height?: string;
@@ -31,12 +41,23 @@ vi.mock("@uiw/react-codemirror", async () => {
       theme?: "light" | "dark";
       extensions?: unknown[];
       autoFocus?: boolean;
+      basicSetup?: unknown;
     }) => {
       const [isReady, setIsReady] = React.useState(false);
       const [instanceId] = React.useState(() => {
         codemirrorMountCount += 1;
         return `instance-${codemirrorMountCount}`;
       });
+
+      if (lastExtensionsRef !== extensions) {
+        lastExtensionsRef = extensions;
+        codemirrorExtensionVersionCount += 1;
+      }
+      if (lastBasicSetupRef !== basicSetup) {
+        lastBasicSetupRef = basicSetup;
+        codemirrorBasicSetupVersionCount += 1;
+      }
+
       React.useEffect(() => {
         setIsReady(true);
       }, []);
@@ -49,6 +70,8 @@ vi.mock("@uiw/react-codemirror", async () => {
           data-width={width}
           data-theme={theme}
           data-extension-count={String(extensions?.length ?? 0)}
+          data-extension-version-count={String(codemirrorExtensionVersionCount)}
+          data-basicsetup-version-count={String(codemirrorBasicSetupVersionCount)}
           data-autofocus={autoFocus ? "true" : "false"}
           data-instance-id={instanceId}
         >
@@ -65,6 +88,12 @@ vi.mock("@uiw/react-codemirror", async () => {
 
 beforeEach(() => {
   codemirrorMountCount = 0;
+  codemirrorExtensionVersionCount = 0;
+  codemirrorBasicSetupVersionCount = 0;
+  lastExtensionsRef = undefined;
+  lastBasicSetupRef = undefined;
+  mockedLoadFileEditorExtensions.mockClear();
+  mockedLoadFileEditorExtensions.mockResolvedValue([]);
   document.documentElement.dataset.theme = "deep-space";
   vi.stubGlobal(
     "ResizeObserver",
@@ -109,6 +138,46 @@ test("editor remounts codemirror when switching files inside the same surface", 
 
   const secondWrapper = await screen.findByTestId("codemirror-wrapper");
   expect(secondWrapper).toHaveAttribute("data-instance-id", "instance-2");
+});
+
+function StableRenderHarness() {
+  const [tick, setTick] = useState(0);
+
+  return (
+    <div>
+      <button type="button" onClick={() => setTick((value) => value + 1)}>
+        rerender
+      </button>
+      <span data-testid="tick">{tick}</span>
+      <FileEditorSurface
+        path="README.md"
+        value="### Heading"
+        onChange={noop}
+        onSave={noop}
+        onClose={noop}
+        hideHeader
+      />
+    </div>
+  );
+}
+
+test("keeps codemirror config stable when breakpointLines is omitted", async () => {
+  const user = userEvent.setup();
+
+  render(<StableRenderHarness />);
+
+  const wrapper = await screen.findByTestId("codemirror-wrapper");
+  await waitFor(() => expect(mockedLoadFileEditorExtensions).toHaveBeenCalledTimes(1));
+  expect(wrapper).toHaveAttribute("data-extension-version-count", "1");
+  expect(wrapper).toHaveAttribute("data-basicsetup-version-count", "1");
+
+  await user.click(screen.getByRole("button", { name: "rerender" }));
+
+  const rerenderedWrapper = await screen.findByTestId("codemirror-wrapper");
+  expect(rerenderedWrapper).toHaveAttribute("data-instance-id", "instance-1");
+  expect(rerenderedWrapper).toHaveAttribute("data-extension-version-count", "1");
+  expect(rerenderedWrapper).toHaveAttribute("data-basicsetup-version-count", "1");
+  expect(mockedLoadFileEditorExtensions).toHaveBeenCalledTimes(1);
 });
 
 test("structureOnly hides editing and preview-only actions", async () => {

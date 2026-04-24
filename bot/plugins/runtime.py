@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 PLUGIN_STDIO_STREAM_BUFFER_LIMIT = 1024 * 1024
 PLUGIN_STDOUT_READ_CHUNK_BYTES = 64 * 1024
 PLUGIN_CALL_TIMEOUT_SECONDS = 60.0
+PLUGIN_PYTHON_BOOTSTRAP = (
+    "import runpy, sys; "
+    "entry=sys.argv[1]; "
+    "entry_dir=sys.argv[2]; "
+    "plugin_root=sys.argv[3]; "
+    "sys.path.insert(0, entry_dir) if entry_dir not in sys.path else None; "
+    "sys.path.insert(0, plugin_root) if plugin_root not in sys.path else None; "
+    "sys.argv=[entry, *sys.argv[4:]]; "
+    "runpy.run_path(entry, run_name='__main__')"
+)
 
 
 @dataclass
@@ -220,14 +230,19 @@ class PluginRuntime:
         if manifest.runtime.protocol != "jsonrpc-stdio":
             raise ValueError(f"unsupported protocol: {manifest.runtime.protocol}")
 
-        entry = str((manifest.root / manifest.runtime.entry).resolve())
+        entry_path = (manifest.root / manifest.runtime.entry).resolve()
+        entry = str(entry_path)
         env = dict(os.environ)
         # Plugins speak JSON-RPC over stdio and the protocol decoder is UTF-8-only.
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         process = await asyncio.create_subprocess_exec(
             sys.executable,
+            "-c",
+            PLUGIN_PYTHON_BOOTSTRAP,
             entry,
+            str(entry_path.parent),
+            str(manifest.root),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

@@ -1,64 +1,130 @@
-:: Codex 换源
-:: 切换 Codex 当前配置与备份配置
+:: Switch codex source
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 
 set "CODEX_DIR=%USERPROFILE%\.codex"
 set "BACKUP_DIR=%CODEX_DIR%\backup"
+set "STATE_FILE=%CODEX_DIR%\.switch_state"
 
 if not exist "%CODEX_DIR%" (
-    echo 错误：Codex目录不存在。
+    echo Error: Codex directory does not exist.
     exit /b 1
+)
+
+if /i "%~1"=="clear" (
+    call :clear_files
+    exit /b %errorlevel%
 )
 
 if not exist "%BACKUP_DIR%" (
-    echo 错误：备份目录不存在。
+    echo Error: Backup directory does not exist.
     exit /b 1
 )
 
-call :swap_file "auth.json" "auth_temp.json"
-if errorlevel 1 exit /b 1
+set "FOLDER_COUNT=0"
+for /f "delims=" %%D in ('dir /b /ad /on "%BACKUP_DIR%"') do (
+    set /a FOLDER_COUNT+=1
+    set "FOLDER_!FOLDER_COUNT!=%%D"
+)
 
-call :swap_file "config.toml" "config_temp.toml"
-if errorlevel 1 exit /b 1
+if %FOLDER_COUNT% equ 0 (
+    echo Error: No subfolders found in backup directory.
+    exit /b 1
+)
 
-echo 交换完成。
+set "CURRENT_INDEX=0"
+if exist "%STATE_FILE%" (
+    for /f "usebackq delims=" %%A in ("%STATE_FILE%") do (
+        set "CURRENT_INDEX=%%A"
+    )
+)
+
+set /a NEXT_INDEX=CURRENT_INDEX + 1
+if %NEXT_INDEX% gtr %FOLDER_COUNT% set /a NEXT_INDEX=1
+if %NEXT_INDEX% lss 1 set /a NEXT_INDEX=1
+
+set "TARGET_FOLDER=!FOLDER_%NEXT_INDEX%!"
+set "TARGET_DIR=%BACKUP_DIR%\%TARGET_FOLDER%"
+
+echo Backup folders found: %FOLDER_COUNT%
+echo Current index: %CURRENT_INDEX%
+echo Switching to folder %NEXT_INDEX%: %TARGET_FOLDER%
+
+set "COPY_OK=1"
+
+set "SRC_FILE=%TARGET_DIR%\auth.json"
+set "DST_FILE=%CODEX_DIR%\auth.json"
+if exist "%SRC_FILE%" (
+    copy /y "%SRC_FILE%" "%DST_FILE%" >nul
+    if errorlevel 1 (
+        echo Error: Failed to copy auth.json
+        set "COPY_OK=0"
+    ) else (
+        echo Copied auth.json from %TARGET_FOLDER%
+    )
+) else (
+    echo Warning: auth.json not found in %TARGET_FOLDER%
+)
+
+set "SRC_FILE=%TARGET_DIR%\config.toml"
+set "DST_FILE=%CODEX_DIR%\config.toml"
+if exist "%SRC_FILE%" (
+    copy /y "%SRC_FILE%" "%DST_FILE%" >nul
+    if errorlevel 1 (
+        echo Error: Failed to copy config.toml
+        set "COPY_OK=0"
+    ) else (
+        echo Copied config.toml from %TARGET_FOLDER%
+    )
+) else (
+    echo Warning: config.toml not found in %TARGET_FOLDER%
+)
+
+if %COPY_OK% equ 0 (
+    echo Switch aborted due to copy errors.
+    exit /b 1
+)
+
+echo %NEXT_INDEX% > "%STATE_FILE%"
+echo Switch complete. Active folder: %TARGET_FOLDER%
 exit /b 0
 
-:swap_file
-set "FILE_NAME=%~1"
-set "TEMP_NAME=%~2"
-set "LIVE_FILE=%CODEX_DIR%\%FILE_NAME%"
-set "BACKUP_FILE=%BACKUP_DIR%\%FILE_NAME%"
-set "TEMP_FILE=%TEMP%\%TEMP_NAME%"
+:clear_files
+set "DEL_OK=1"
 
-if not exist "%LIVE_FILE%" (
-    echo 警告：Codex目录中未找到%FILE_NAME%文件。
-    exit /b 0
+if exist "%CODEX_DIR%\auth.json" (
+    del /q "%CODEX_DIR%\auth.json" >nul 2>&1
+    if errorlevel 1 (
+        echo Error: Failed to delete auth.json
+        set "DEL_OK=0"
+    ) else (
+        echo Deleted auth.json
+    )
+) else (
+    echo auth.json not found, skipped
 )
 
-if not exist "%BACKUP_FILE%" (
-    echo 警告：备份目录中未找到%FILE_NAME%文件。
-    exit /b 0
+if exist "%CODEX_DIR%\config.toml" (
+    del /q "%CODEX_DIR%\config.toml" >nul 2>&1
+    if errorlevel 1 (
+        echo Error: Failed to delete config.toml
+        set "DEL_OK=0"
+    ) else (
+        echo Deleted config.toml
+    )
+) else (
+    echo config.toml not found, skipped
 )
 
-copy /y "%LIVE_FILE%" "!TEMP_FILE!" >nul || (
-    echo 错误：无法创建临时备份文件 %FILE_NAME%。
+if exist "%STATE_FILE%" (
+    del /q "%STATE_FILE%" >nul 2>&1
+)
+
+if %DEL_OK% equ 0 (
+    echo Clear aborted due to errors.
     exit /b 1
 )
 
-copy /y "%BACKUP_FILE%" "%LIVE_FILE%" >nul || (
-    del /q "!TEMP_FILE!" >nul 2>&1
-    echo 错误：无法写入当前文件 %FILE_NAME%。
-    exit /b 1
-)
-
-copy /y "!TEMP_FILE!" "%BACKUP_FILE%" >nul || (
-    del /q "!TEMP_FILE!" >nul 2>&1
-    echo 错误：无法写回备份文件 %FILE_NAME%。
-    exit /b 1
-)
-
-del /q "!TEMP_FILE!" >nul 2>&1
+echo Clear complete.
 exit /b 0

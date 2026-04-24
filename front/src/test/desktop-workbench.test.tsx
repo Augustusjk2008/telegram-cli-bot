@@ -217,6 +217,32 @@ test("desktop workbench opens .docx files as document plugin tabs", async () => 
   expect(screen.getByText("交付物")).toBeInTheDocument();
 });
 
+test("desktop workbench opens .pdf files as document plugin tabs", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "打开 docs/roadmap.pdf" }));
+
+  expect(await screen.findByRole("tab", { name: "roadmap.pdf" })).toBeInTheDocument();
+  expect(screen.getByTestId("document-view")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "Project Roadmap" })).toBeInTheDocument();
+  expect(screen.getByText("Current status: in progress.")).toBeInTheDocument();
+});
+
 test("desktop workbench opens .rpt files as table plugin tabs and downloads artifacts", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

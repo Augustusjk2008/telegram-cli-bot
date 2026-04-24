@@ -364,6 +364,19 @@ function buildMockDocumentPayload(sourcePath: string): DocumentViewPayload {
   };
 }
 
+function buildMockPdfDocumentPayload(sourcePath: string): DocumentViewPayload {
+  return {
+    path: sourcePath,
+    title: "Project Roadmap",
+    statsText: "1 页 · 2 段",
+    blocks: [
+      { type: "heading", level: 1, runs: [{ text: "Project Roadmap" }] },
+      { type: "paragraph", runs: [{ text: "Current status: in progress." }] },
+      { type: "paragraph", runs: [{ text: "Deliver text PDF preview first." }] },
+    ],
+  };
+}
+
 function buildRepoOutlineFileNode(path: string, symbolCount?: number): TreeNode {
   const parts = path.split("/");
   const label = parts[parts.length - 1] || path;
@@ -1394,6 +1407,15 @@ export class MockWebBotClient implements WebBotClient {
         input: { path },
       };
     }
+    if (lower.endsWith(".pdf")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "pdf-preview",
+        viewId: "document",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
     return { kind: "file" };
   }
 
@@ -1552,6 +1574,17 @@ export class MockWebBotClient implements WebBotClient {
         renderer: "document",
         mode: "snapshot",
         payload: buildMockDocumentPayload(sourcePath),
+      };
+    }
+    if (pluginId === "pdf-preview") {
+      const sourcePath = typeof input.path === "string" ? input.path : "docs/roadmap.pdf";
+      return {
+        pluginId,
+        viewId,
+        title: sourcePath.split(/[\\/]/).pop() || "roadmap.pdf",
+        renderer: "document",
+        mode: "snapshot",
+        payload: buildMockPdfDocumentPayload(sourcePath),
       };
     }
     if (pluginId === "timing-report") {
