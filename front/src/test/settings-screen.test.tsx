@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AppUpdateStatus, CreateAssistantCronJobInput, DirectoryListing } from "../services/types";
+import type { AppUpdateStatus, CliParamsPayload, CreateAssistantCronJobInput, DirectoryListing } from "../services/types";
 
 class StreamingUpdateClient extends MockWebBotClient {
   releaseDownload: (() => void) | null = null;
@@ -75,6 +75,33 @@ class SettingsDirectoryPickerClient extends MockWebBotClient {
       : `${this.browserPath}\\${path}`;
     return this.browserPath;
   }
+}
+
+function cliParamsWithModel(params: Partial<Record<string, unknown>> = {}): CliParamsPayload {
+  return {
+    cliType: "codex",
+    params: {
+      model: "gpt-5.5",
+      reasoning_effort: "xhigh",
+      ...params,
+    },
+    defaults: {
+      model: "gpt-5.4",
+      reasoning_effort: "xhigh",
+    },
+    schema: {
+      model: {
+        type: "string",
+        description: "模型选择",
+        enum: ["gpt-5.5", "gpt-5.4"],
+      },
+      reasoning_effort: {
+        type: "string",
+        description: "推理努力程度",
+        enum: ["xhigh", "high", "medium", "low"],
+      },
+    },
+  };
 }
 
 test("assistant bots lock the default workdir in settings", async () => {
@@ -182,6 +209,52 @@ test("main settings merge update controls into the main bot operations card", as
   expect(within(opsRegion).getByText("当前版本")).toBeInTheDocument();
   expect(within(opsRegion).getByText("自动下载更新")).toBeInTheDocument();
   expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
+});
+
+test("settings CLI params hide model and exclude it from normal saves", async () => {
+  const user = userEvent.setup();
+  const updateCliParam = vi.fn(async (_botAlias: string, key: string, value: unknown) => (
+    cliParamsWithModel({ [key]: value })
+  ));
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCliParams").mockResolvedValue(cliParamsWithModel());
+  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+  expect(screen.queryByLabelText("模型选择")).not.toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("推理努力程度"), "high");
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "保存参数" })).toBeEnabled();
+  });
+  await user.click(screen.getByRole("button", { name: "保存参数" }));
+
+  await waitFor(() => {
+    expect(updateCliParam).toHaveBeenCalledWith("main", "reasoning_effort", "high");
+  });
+  expect(updateCliParam).not.toHaveBeenCalledWith("main", "model", expect.anything());
+});
+
+test("settings CLI reset preserves chat selected model", async () => {
+  const user = userEvent.setup();
+  const resetCliParams = vi.fn(async () => cliParamsWithModel({ model: "gpt-5.4" }));
+  const updateCliParam = vi.fn(async (_botAlias: string, _key: string, value: unknown) => (
+    cliParamsWithModel({ model: value })
+  ));
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCliParams").mockResolvedValue(cliParamsWithModel());
+  vi.spyOn(client, "resetCliParams").mockImplementation(resetCliParams);
+  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.click(await screen.findByRole("button", { name: "恢复默认参数" }));
+
+  await waitFor(() => {
+    expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.5", "codex");
+  });
 });
 
 test("manual assistant automation dispatches a chat handoff event", async () => {

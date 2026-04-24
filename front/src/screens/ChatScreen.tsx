@@ -14,6 +14,7 @@ import type {
   ChatAttachmentUploadResult,
   ChatMessage,
   ChatMessageMetaInfo,
+  CliParamsPayload,
   ChatTraceEvent,
   FileReadResult,
   SystemScript,
@@ -580,6 +581,8 @@ export function ChatScreen({
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill" | "scripts">("");
+  const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
+  const [modelSaving, setModelSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [showScripts, setShowScripts] = useState(false);
@@ -655,6 +658,27 @@ export function ChatScreen({
   useEffect(() => {
     pendingCronRunsRef.current = pendingCronRuns;
   }, [pendingCronRuns]);
+
+  useEffect(() => {
+    let active = true;
+    setCliParams(null);
+
+    void client.getCliParams(botAlias)
+      .then((payload) => {
+        if (active) {
+          setCliParams(payload);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setCliParams(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [botAlias, client]);
 
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
@@ -1381,6 +1405,22 @@ export function ChatScreen({
       setActionLoading("");
     }
   }
+  async function handleModelChange(nextModel: string) {
+    if (!cliParams || !nextModel || nextModel === cliParams.params.model) {
+      return;
+    }
+
+    setModelSaving(true);
+    setError("");
+    try {
+      const next = await client.updateCliParam(botAlias, "model", nextModel, cliParams.cliType);
+      setCliParams(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "模型切换失败");
+    } finally {
+      setModelSaving(false);
+    }
+  }
 
   async function handleOpenScripts() {
     setActionLoading("scripts");
@@ -1423,6 +1463,11 @@ export function ChatScreen({
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
+  const modelOptions = cliParams?.schema.model?.enum ?? [];
+  const selectedModel = typeof cliParams?.params.model === "string" ? cliParams.params.model : "";
+  const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
+    ? [selectedModel, ...modelOptions]
+    : modelOptions;
 
   return (
     <main className="relative flex flex-col h-full">
@@ -1445,6 +1490,19 @@ export function ChatScreen({
       {showActionBar ? (
         <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div className="flex gap-2 overflow-x-auto pb-1">
+            {visibleModelOptions.length > 0 ? (
+              <select
+                aria-label="模型"
+                value={selectedModel}
+                disabled={modelSaving}
+                onChange={(event) => void handleModelChange(event.target.value)}
+                className="h-9 shrink-0 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {visibleModelOptions.map((model) => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            ) : null}
             {embedded && onToggleFocus ? (
               <button
                 type="button"

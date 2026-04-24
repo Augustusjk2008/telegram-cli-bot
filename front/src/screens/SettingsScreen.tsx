@@ -69,6 +69,7 @@ type Props = {
 
 type DraftValues = Record<string, string | boolean>;
 type BuildLogStatus = "idle" | "running" | "success" | "error";
+const CHAT_CONTROLLED_CLI_PARAM_KEYS = new Set(["model"]);
 
 function fieldLabel(key: string, field: CliParamField) {
   return field.description || key;
@@ -89,6 +90,10 @@ function buildDraftValues(payload: CliParamsPayload): DraftValues {
     drafts[key] = value == null ? "" : String(value);
   }
   return drafts;
+}
+
+function getSettingsCliParamEntries(payload: CliParamsPayload) {
+  return Object.entries(payload.schema).filter(([key]) => !CHAT_CONTROLLED_CLI_PARAM_KEYS.has(key));
 }
 
 function toRequestValue(field: CliParamField, value: string | boolean) {
@@ -243,10 +248,9 @@ export function SettingsScreen({
   const isUpdateDownloading = updateAction === "download";
   const isAssistantCronEditing = assistantCronEditingJobId !== "";
   const cliParamDrafts = cliParams ? buildDraftValues(cliParams) : null;
-  const hasCliParamChanges = cliParams
-    ? Object.keys(cliParams.schema).some((key) =>
-      hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""),
-    )
+  const settingsCliParamEntries = cliParams ? getSettingsCliParamEntries(cliParams) : [];
+  const hasCliParamChanges = settingsCliParamEntries.length > 0
+    ? settingsCliParamEntries.some(([key]) => hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""))
     : false;
 
   const resetAssistantAutomationDraft = () => {
@@ -536,7 +540,7 @@ export function SettingsScreen({
 
   const saveCliParams = async () => {
     if (!cliParams) return;
-    const dirtyKeys = Object.keys(cliParams.schema).filter((key) =>
+    const dirtyKeys = settingsCliParamEntries.map(([key]) => key).filter((key) =>
       hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""),
     );
 
@@ -576,7 +580,11 @@ export function SettingsScreen({
     setError("");
     setNotice("");
     try {
-      const next = await client.resetCliParams(botAlias);
+      const currentModel = cliParams?.params.model;
+      let next = await client.resetCliParams(botAlias);
+      if (typeof currentModel === "string" && currentModel && next.params.model !== currentModel) {
+        next = await client.updateCliParam(botAlias, "model", currentModel, next.cliType);
+      }
       syncCliParams(next);
       setNotice("CLI 参数已恢复默认值");
     } catch (err) {
@@ -1622,7 +1630,7 @@ export function SettingsScreen({
             </div>
 
             <div className="space-y-3">
-              {Object.entries(cliParams.schema).map(([key, field]) => {
+              {settingsCliParamEntries.map(([key, field]) => {
                 const label = fieldLabel(key, field);
                 const value = draftValues[key] ?? "";
                 const inputId = `cli-param-${key}`;

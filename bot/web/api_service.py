@@ -55,6 +55,7 @@ from bot.assistant_state import (
     restore_assistant_runtime_state,
 )
 from bot.cli_params import get_default_params, get_params_schema
+from bot.config import CLI_MODEL_OPTIONS
 from bot.cli import (
     build_cli_command,
     normalize_cli_type,
@@ -958,6 +959,14 @@ def list_assistant_cron_runs(
     return {"items": items}
 
 
+def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
+    next_schema = copy.deepcopy(schema)
+    model_field = next_schema.get("model")
+    if isinstance(model_field, dict) and CLI_MODEL_OPTIONS:
+        model_field["enum"] = list(CLI_MODEL_OPTIONS)
+    return next_schema
+
+
 def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
@@ -966,7 +975,7 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
 
     try:
         params = profile.cli_params.get_params(resolved_cli_type)
-        schema = get_params_schema(resolved_cli_type)
+        schema = _apply_cli_model_options(get_params_schema(resolved_cli_type))
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))

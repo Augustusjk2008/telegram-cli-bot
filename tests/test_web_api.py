@@ -3202,6 +3202,15 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
             payload = await resp.json()
             assert payload["data"]["params"]["reasoning_effort"] == "xhigh"
 
+def test_cli_params_model_schema_uses_env_model_options(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    web_manager.main_profile.cli_type = "codex"
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", ["gpt-5.5", "gpt-5.4-mini"])
+
+    payload = api_service.get_cli_params_payload(web_manager, "main")
+
+    assert payload["schema"]["model"]["enum"] == ["gpt-5.5", "gpt-5.4-mini"]
+
+
 @pytest.mark.asyncio
 async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")

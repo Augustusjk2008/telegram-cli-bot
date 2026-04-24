@@ -83,6 +83,32 @@ function isMermaidVendor(packageName: string) {
   );
 }
 
+function resolveMermaidVendorChunk(id: string, packageName: string) {
+  const normalized = id.replace(/\\/g, '/');
+
+  if (packageName === 'mermaid') {
+    if (normalized.includes('/node_modules/mermaid/dist/chunks/')) {
+      return undefined;
+    }
+    return 'mermaid-core-vendor';
+  }
+
+  if (packageName === 'd3' || packageName.startsWith('d3-') || packageName === 'dagre-d3-es') {
+    return 'mermaid-d3-vendor';
+  }
+
+  if (
+    packageName === 'cytoscape'
+    || packageName === 'cytoscape-cose-bilkent'
+    || packageName === 'cytoscape-fcose'
+    || packageName === '@upsetjs/venn.js'
+  ) {
+    return 'mermaid-layout-vendor';
+  }
+
+  return 'mermaid-support-vendor';
+}
+
 function isEditorVendor(packageName: string) {
   return (
     packageName === '@babel/runtime'
@@ -129,7 +155,7 @@ function resolveVendorChunk(id: string) {
   }
 
   if (isMermaidVendor(packageName)) {
-    return 'mermaid-vendor';
+    return resolveMermaidVendorChunk(id, packageName);
   }
 
   if (isMarkdownVendor(packageName)) {

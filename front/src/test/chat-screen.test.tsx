@@ -3,8 +3,23 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { ChatMessage, ChatTraceDetails, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
+import type { ChatMessage, ChatTraceDetails, CliParamsPayload, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+
+function modelCliParams(model: string): CliParamsPayload {
+  return {
+    cliType: "codex",
+    params: { model },
+    defaults: { model: "gpt-5.4" },
+    schema: {
+      model: {
+        type: "string",
+        description: "模型选择",
+        enum: ["gpt-5.5", "gpt-5.4"],
+      },
+    },
+  };
+}
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   const client = new MockWebBotClient();
@@ -209,6 +224,25 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+test("shows model selector in chat action bar and saves selected model", async () => {
+  const updateCliParam = vi.fn(async (_botAlias: string, _key: string, value: unknown) => modelCliParams(String(value)));
+  const user = userEvent.setup();
+  const client = createClient({
+    getCliParams: async () => modelCliParams("gpt-5.5"),
+    updateCliParam,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const selector = await screen.findByLabelText("模型");
+  expect(selector).toHaveValue("gpt-5.5");
+
+  await user.selectOptions(selector, "gpt-5.4");
+
+  expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.4", "codex");
+  expect(selector).toHaveValue("gpt-5.4");
 });
 
 test("shows a user message after sending text", async () => {
