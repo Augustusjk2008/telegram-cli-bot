@@ -197,7 +197,7 @@ export type FileWriteResult = {
   lastModifiedNs: string;
 };
 
-export type PluginViewRenderer = "waveform" | "table" | "tree";
+export type PluginViewRenderer = "waveform" | "table" | "tree" | "document";
 export type PluginViewMode = "snapshot" | "session";
 export type PluginViewDataProfile = "light" | "heavy";
 
@@ -327,6 +327,15 @@ export type PluginSummary = {
     protocol?: string;
     permissions?: PluginRuntimePermissions;
   };
+};
+
+export type InstallablePluginSummary = {
+  id: string;
+  pluginId?: string;
+  name: string;
+  version: string;
+  description: string;
+  installed: boolean;
 };
 
 export type PluginUpdateInput = {
@@ -504,6 +513,47 @@ export type TreeWindowPayload = {
   statsText?: string;
 };
 
+export type DocumentTextRun = {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  code?: boolean;
+};
+
+export type DocumentBlock =
+  | {
+      type: "heading";
+      level: 1 | 2 | 3 | 4 | 5 | 6;
+      runs: DocumentTextRun[];
+    }
+  | {
+      type: "paragraph";
+      runs: DocumentTextRun[];
+    }
+  | {
+      type: "list_item";
+      ordered?: boolean;
+      depth?: number;
+      marker?: string;
+      runs: DocumentTextRun[];
+    }
+  | {
+      type: "table";
+      rows: Array<{
+        cells: Array<{
+          runs: DocumentTextRun[];
+        }>;
+      }>;
+    };
+
+export type DocumentViewPayload = {
+  path: string;
+  title?: string;
+  statsText?: string;
+  blocks: DocumentBlock[];
+};
+
 export type PluginViewWindowRequest = Record<string, unknown>;
 export type PluginViewWindowPayload = Record<string, unknown>;
 
@@ -532,6 +582,15 @@ export type TreeSnapshotRenderResult = {
   renderer: "tree";
   mode: "snapshot";
   payload: TreeViewPayload;
+};
+
+export type DocumentSnapshotRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "document";
+  mode: "snapshot";
+  payload: DocumentViewPayload;
 };
 
 export type WaveformSessionRenderResult = {
@@ -570,7 +629,8 @@ export type TreeSessionRenderResult = {
 export type PluginSnapshotRenderResult =
   | WaveformSnapshotRenderResult
   | TableSnapshotRenderResult
-  | TreeSnapshotRenderResult;
+  | TreeSnapshotRenderResult
+  | DocumentSnapshotRenderResult;
 
 export type PluginSessionRenderResult =
   | WaveformSessionRenderResult

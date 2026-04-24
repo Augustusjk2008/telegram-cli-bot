@@ -8,7 +8,12 @@ from bot.web.native_history_adapter import (
     create_stream_trace_state,
     load_native_transcript,
 )
-from bot.web.native_history_builder import build_web_chat_history, finalize_web_chat_turn, merge_native_turns_with_overlay
+from bot.web.native_history_builder import (
+    build_web_chat_history,
+    finalize_web_chat_turn,
+    merge_native_turns_with_overlay,
+    resolve_native_trace_for_turn,
+)
 from bot.web.native_history_locator import LocatedTranscript
 
 
@@ -204,6 +209,38 @@ def test_build_web_chat_history_maps_codex_custom_tool_calls(tmp_path: Path):
     assert turns[-1]["meta"]["trace"][2]["kind"] == "tool_result"
     assert turns[-1]["meta"]["trace"][2]["raw_type"] == "custom_tool_call_output"
     assert "Success. Updated the following files" in turns[-1]["meta"]["trace"][2]["summary"]
+
+
+def test_resolve_native_trace_for_turn_returns_codex_tool_trace(monkeypatch):
+    transcript = FIXTURE_DIR / "codex-session.jsonl"
+
+    def locate_transcript(session_id: str):
+        return LocatedTranscript(
+            provider="codex",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint="/srv/demo",
+        )
+
+    monkeypatch.setattr("bot.web.native_history_builder.locate_codex_transcript", locate_transcript)
+
+    trace_data = resolve_native_trace_for_turn(
+        "codex",
+        "thread-1",
+        user_text="列出当前目录",
+        assistant_text="目录已读取完成。",
+        cwd_hint="/srv/demo",
+    )
+
+    assert trace_data is not None
+    assert trace_data["trace_count"] == 3
+    assert trace_data["tool_call_count"] == 1
+    assert [item["kind"] for item in trace_data["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+    assert trace_data["trace"][1]["summary"] == "Get-ChildItem -Force"
 
 
 def test_build_web_chat_history_merges_cancelled_overlay_when_native_answer_missing():

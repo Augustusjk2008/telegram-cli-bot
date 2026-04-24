@@ -256,3 +256,117 @@ def test_finalize_turn_reuses_same_assistant_message_and_exposes_trace(monkeypat
     trace = store.get_message_trace(handle.assistant_message_id)
     assert trace["trace_count"] == 1
     assert trace["trace"][0]["summary"] == "Get-ChildItem -Force"
+
+
+def test_get_trace_recovery_context_returns_turn_native_context(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="我先检查目录结构。")
+    store.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    context = store.get_trace_recovery_context(handle.assistant_message_id)
+
+    assert context == {
+        "message_id": handle.assistant_message_id,
+        "turn_id": handle.turn_id,
+        "conversation_id": handle.conversation_id,
+        "role": "assistant",
+        "assistant_text": "目录已读取完成。",
+        "user_text": "列出当前目录",
+        "working_dir": str(workspace),
+        "native_provider": "codex",
+        "native_session_id": "thread-1",
+        "completion_state": "completed",
+        "trace_count": 1,
+        "tool_call_count": 0,
+        "process_count": 1,
+    }
+
+
+def test_replace_trace_events_replaces_previous_trace_and_updates_message_stats(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="旧 commentary")
+    store.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    store.replace_trace_events(
+        handle.turn_id,
+        [
+            {
+                "kind": "commentary",
+                "raw_type": "agent_message",
+                "summary": "我先检查目录结构。",
+            },
+            {
+                "kind": "tool_call",
+                "raw_type": "function_call",
+                "tool_name": "shell_command",
+                "call_id": "call_1",
+                "summary": "Get-ChildItem -Force",
+                "payload": {"arguments": {"command": "Get-ChildItem -Force"}},
+            },
+            {
+                "kind": "tool_result",
+                "raw_type": "function_call_output",
+                "call_id": "call_1",
+                "summary": "README.md\nbot\nfront",
+                "payload": {"output": "README.md\nbot\nfront"},
+            },
+        ],
+    )
+
+    trace = store.get_message_trace(handle.assistant_message_id)
+    message = store.get_message(handle.assistant_message_id)
+
+    assert [item["summary"] for item in trace["trace"]] == [
+        "我先检查目录结构。",
+        "Get-ChildItem -Force",
+        "README.md\nbot\nfront",
+    ]
+    assert trace["tool_call_count"] == 1
+    assert trace["process_count"] == 1
+    assert message["meta"]["trace_count"] == 3
+    assert message["meta"]["tool_call_count"] == 1
+    assert message["meta"]["process_count"] == 1

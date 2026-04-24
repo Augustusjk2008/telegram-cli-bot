@@ -82,6 +82,7 @@ from bot.web.git_service import (
     init_git_repository,
     stage_git_paths,
 )
+from bot.web.native_history_locator import LocatedTranscript
 from bot.assistant_proposals import create_proposal
 
 def _png_bytes(width: int, height: int) -> bytes:
@@ -1019,6 +1020,16 @@ def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager:
     assert content["file_size_bytes"] == len(b"line1\nline2\n")
     assert content["is_full_content"] is False
 
+def test_read_file_full_accepts_files_larger_than_previous_preview_limit(web_manager: MultiBotManager, temp_dir: Path):
+    large_text = "a" * (1024 * 1024 + 1)
+    save_uploaded_file(web_manager, "main", 1001, "big.txt", large_text.encode("utf-8"))
+
+    content = read_file_content(web_manager, "main", 1001, "big.txt", mode="cat", lines=0)
+
+    assert content["content"] == large_text
+    assert content["file_size_bytes"] == len(large_text.encode("utf-8"))
+    assert content["is_full_content"] is True
+
 def test_write_file_content_updates_text_and_returns_version(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
     previous = read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)
@@ -1082,14 +1093,14 @@ def test_write_file_content_rejects_stale_version(web_manager: MultiBotManager, 
     assert exc_info.value.code == "file_version_conflict"
     assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line2\n"
 
-def test_write_file_content_rejects_content_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
+def test_write_file_content_accepts_content_larger_than_previous_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
+    large_text = "a" * (512 * 1024 + 1)
 
-    with pytest.raises(WebApiError) as exc_info:
-        write_file_content(web_manager, "main", 1001, "notes.txt", "a" * (512 * 1024 + 1))
+    result = write_file_content(web_manager, "main", 1001, "notes.txt", large_text)
 
-    assert exc_info.value.code == "file_too_large_for_editor"
-    assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line1\n"
+    assert result["file_size_bytes"] == len(large_text.encode("utf-8"))
+    assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == large_text
 
 def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager, temp_dir: Path):
     binary_bytes = b"\xff\xfe\xfd\x00"
@@ -1101,14 +1112,14 @@ def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager
     assert exc_info.value.code == "not_text_file"
     assert (temp_dir / "notes.bin").read_bytes() == binary_bytes
 
-def test_write_file_content_rejects_existing_file_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
-    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"a" * (512 * 1024 + 1))
+def test_write_file_content_accepts_existing_file_larger_than_previous_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
+    large_text = "a" * (512 * 1024 + 1)
+    save_uploaded_file(web_manager, "main", 1001, "notes.txt", large_text.encode("utf-8"))
 
-    with pytest.raises(WebApiError) as exc_info:
-        write_file_content(web_manager, "main", 1001, "notes.txt", "changed\n")
+    result = write_file_content(web_manager, "main", 1001, "notes.txt", "changed\n")
 
-    assert exc_info.value.code == "file_too_large_for_editor"
-    assert (temp_dir / "notes.txt").stat().st_size == 512 * 1024 + 1
+    assert result["file_size_bytes"] == len("changed\n".encode("utf-8"))
+    assert (temp_dir / "notes.txt").read_text(encoding="utf-8") == "changed\n"
 
 def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1165,16 +1176,16 @@ def test_create_text_file_rejects_existing_target(web_manager: MultiBotManager, 
     assert exc_info.value.code == "file_already_exists"
     assert (workspace / "notes.md").read_text(encoding="utf-8") == "old\n"
 
-def test_create_text_file_rejects_content_larger_than_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
+def test_create_text_file_accepts_content_larger_than_previous_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     workspace.mkdir()
     change_working_directory(web_manager, "main", 1001, str(workspace))
+    large_text = "a" * (512 * 1024 + 1)
 
-    with pytest.raises(WebApiError) as exc_info:
-        create_text_file(web_manager, "main", 1001, "notes.md", "a" * (512 * 1024 + 1))
+    result = create_text_file(web_manager, "main", 1001, "notes.md", large_text)
 
-    assert exc_info.value.code == "file_too_large_for_editor"
-    assert not (workspace / "notes.md").exists()
+    assert result["file_size_bytes"] == len(large_text.encode("utf-8"))
+    assert (workspace / "notes.md").read_text(encoding="utf-8") == large_text
 
 def test_create_text_file_rejects_path_like_filename(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1944,6 +1955,74 @@ for line in sys.stdin:
             )
             disabled_resolve_payload = await disabled_resolve_response.json()
             assert disabled_resolve_payload["data"] == {"kind": "file"}
+
+    await web_manager.plugin_service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_web_api_lists_installable_plugins_and_installs_plugin(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_root = temp_dir / "repo"
+    repo_root.mkdir()
+    plugins_root = temp_dir / "home" / ".tcb" / "plugins"
+    plugins_root.mkdir(parents=True)
+    source_plugins_root = repo_root / "examples" / "plugins"
+    source_plugin_dir = source_plugins_root / "fresh-plugin"
+    source_backend_dir = source_plugin_dir / "backend"
+    source_backend_dir.mkdir(parents=True)
+    (source_backend_dir / "main.py").write_text("print('plugin')\n", encoding="utf-8")
+    (source_plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "id": "fresh-plugin",
+                "name": "Fresh Plugin",
+                "version": "0.1.0",
+                "description": "fresh plugin",
+                "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                "views": [],
+                "fileHandlers": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    web_manager.plugin_service = PluginService(repo_root, plugins_root=plugins_root)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            installable_response = await client.get("/api/plugins/installable")
+            installable_payload = await installable_response.json()
+            assert installable_payload["ok"] is True
+            assert installable_payload["data"] == [
+                {
+                    "id": "fresh-plugin",
+                    "pluginId": "fresh-plugin",
+                    "name": "Fresh Plugin",
+                    "version": "0.1.0",
+                    "description": "fresh plugin",
+                    "installed": False,
+                }
+            ]
+
+            install_response = await client.post("/api/plugins/install", json={"sourcePath": str(source_plugin_dir)})
+            install_payload = await install_response.json()
+            assert install_payload["ok"] is True
+            assert install_payload["data"]["id"] == "fresh-plugin"
+            assert (plugins_root / "fresh-plugin" / "plugin.json").exists()
+
+            plugins_response = await client.get("/api/plugins")
+            plugins_payload = await plugins_response.json()
+            assert {item["id"] for item in plugins_payload["data"]} == {"fresh-plugin"}
 
     await web_manager.plugin_service.shutdown()
 
@@ -4644,6 +4723,70 @@ def test_get_history_trace_returns_full_trace_for_assistant_message(
         "tool_result",
     ]
 
+
+def test_get_history_hydrates_missing_tool_trace_from_native_transcript(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    store = ChatStore(tmp_path)
+    service = ChatHistoryService(store)
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="我先检查目录结构。")
+    service.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    transcript = tmp_path / "codex-trace-recovery.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-04-14T00:32:53.427Z","type":"turn_context","payload":{"turn_id":"turn-1"}}',
+                '{"timestamp":"2026-04-14T00:32:53.430Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"列出当前目录"}]}}',
+                '{"timestamp":"2026-04-14T00:35:09.178Z","type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}',
+                '{"timestamp":"2026-04-14T00:35:09.200Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}',
+                '{"timestamp":"2026-04-14T00:35:09.240Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}',
+                '{"timestamp":"2026-04-14T00:35:09.260Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"目录已读取完成。"}],"phase":"final_answer"}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "bot.web.native_history_builder.locate_codex_transcript",
+        lambda session_id: LocatedTranscript(
+            provider="codex",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint=str(tmp_path),
+        ),
+    )
+
+    data = get_history(web_manager, "main", 1001, limit=10)
+    trace = get_history_trace(web_manager, "main", 1001, handle.assistant_message_id)
+
+    assert data["items"][1]["meta"]["trace_count"] == 3
+    assert data["items"][1]["meta"]["tool_call_count"] == 1
+    assert [item["kind"] for item in trace["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+    assert trace["trace"][1]["summary"] == "Get-ChildItem -Force"
+
 def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     process = MagicMock()
@@ -4922,6 +5065,153 @@ async def test_stream_cli_chat_persists_trace_counts_from_codex_response_items(
     assert assistant_items[0]["id"] == done_event["message"]["id"]
     assert assistant_items[0]["content"] == "目录已读取完成。"
     assert assistant_items[0]["meta"]["trace_count"] == 4
+    assert assistant_items[0]["meta"]["tool_call_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_reconciles_trace_from_native_transcript_before_done(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+
+    transcript = tmp_path / "codex-stream-trace-recovery.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-04-14T00:32:53.427Z","type":"turn_context","payload":{"turn_id":"turn-1"}}',
+                '{"timestamp":"2026-04-14T00:32:53.430Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"列出当前目录"}]}}',
+                '{"timestamp":"2026-04-14T00:35:09.178Z","type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}',
+                '{"timestamp":"2026-04-14T00:35:09.200Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}',
+                '{"timestamp":"2026-04-14T00:35:09.240Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}',
+                '{"timestamp":"2026-04-14T00:35:09.260Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"目录已读取完成。"}],"phase":"final_answer"}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "bot.web.native_history_builder.locate_codex_transcript",
+        lambda session_id: LocatedTranscript(
+            provider="codex",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint=str(tmp_path),
+        ),
+    )
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}\n',
+                '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"目录已读取完成。"}],"phase":"final_answer"}}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "列出当前目录")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    history = get_history(web_manager, "main", 1001, limit=10)
+    assistant_items = [item for item in history["items"] if item["role"] == "assistant"]
+
+    assert done_event["message"]["meta"]["tool_call_count"] == 1
+    assert assistant_items[0]["meta"]["trace_count"] == 3
+    assert assistant_items[0]["meta"]["tool_call_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_reconciles_trace_from_native_transcript(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+
+    transcript = tmp_path / "codex-run-trace-recovery.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-04-14T00:32:53.427Z","type":"turn_context","payload":{"turn_id":"turn-1"}}',
+                '{"timestamp":"2026-04-14T00:32:53.430Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"列出当前目录"}]}}',
+                '{"timestamp":"2026-04-14T00:35:09.178Z","type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}',
+                '{"timestamp":"2026-04-14T00:35:09.200Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}',
+                '{"timestamp":"2026-04-14T00:35:09.240Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}',
+                '{"timestamp":"2026-04-14T00:35:09.260Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"目录已读取完成。"}],"phase":"final_answer"}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "bot.web.native_history_builder.locate_codex_transcript",
+        lambda session_id: LocatedTranscript(
+            provider="codex",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint=str(tmp_path),
+        ),
+    )
+
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("目录已读取完成。", "thread-1", 0),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "列出当前目录")
+
+    history = get_history(web_manager, "main", 1001, limit=10)
+    assistant_items = [item for item in history["items"] if item["role"] == "assistant"]
+
+    assert data["message"]["meta"]["trace_count"] == 3
+    assert data["message"]["meta"]["tool_call_count"] == 1
+    assert assistant_items[0]["meta"]["trace_count"] == 3
     assert assistant_items[0]["meta"]["tool_call_count"] == 1
 
 def test_kill_user_process_preserves_local_streaming_row(

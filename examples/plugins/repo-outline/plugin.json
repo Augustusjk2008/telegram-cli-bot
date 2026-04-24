@@ -9,7 +9,7 @@
     "includeHidden": false,
     "maxFiles": 2000,
     "maxSymbolsPerFile": 200,
-    "codeExtensions": ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md"
+    "codeExtensions": ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md,.cpp"
   },
   "configSchema": {
     "title": "仓库大纲设置",

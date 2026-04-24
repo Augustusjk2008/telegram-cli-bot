@@ -169,6 +169,73 @@ test("plugin view surface requests windows for session waveform views and only r
   });
 });
 
+test("plugin view surface renders document snapshot blocks", () => {
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={new MockWebBotClient()}
+      view={{
+        pluginId: "docx-preview",
+        viewId: "document",
+        title: "roadmap.docx",
+        renderer: "document",
+        mode: "snapshot",
+        payload: {
+          path: "docs/roadmap.docx",
+          title: "项目路线图",
+          statsText: "4 段 · 1 表格",
+          blocks: [
+            {
+              type: "heading",
+              level: 1,
+              runs: [{ text: "项目路线图" }],
+            },
+            {
+              type: "paragraph",
+              runs: [
+                { text: "当前状态：" },
+                { text: "进行中", bold: true },
+                { text: "，需要补齐预览链路。" },
+              ],
+            },
+            {
+              type: "list_item",
+              ordered: true,
+              depth: 0,
+              marker: "1.",
+              runs: [{ text: "补 document renderer" }],
+            },
+            {
+              type: "table",
+              rows: [
+                {
+                  cells: [
+                    { runs: [{ text: "阶段" }] },
+                    { runs: [{ text: "状态" }] },
+                  ],
+                },
+                {
+                  cells: [
+                    { runs: [{ text: "MVP" }] },
+                    { runs: [{ text: "开发中", italic: true }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      }}
+    />,
+  );
+
+  expect(screen.getByRole("heading", { level: 1, name: "项目路线图" })).toBeInTheDocument();
+  expect(screen.getByText("4 段 · 1 表格")).toBeInTheDocument();
+  expect(screen.getByText("进行中").tagName.toLowerCase()).toBe("strong");
+  expect(screen.getByText("开发中").tagName.toLowerCase()).toBe("em");
+  expect(screen.getByText("1.")).toBeInTheDocument();
+  expect(screen.getByRole("table")).toBeInTheDocument();
+});
+
 test("plugin view surface uses the full summary range for session waveform timelines", () => {
   const client = new MockWebBotClient();
   render(

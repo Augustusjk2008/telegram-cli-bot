@@ -93,7 +93,6 @@ from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_VIEW_PLUGINS, MEMBER_CAPABIL
 from bot.web import workspace_index_service
 
 logger = logging.getLogger(__name__)
-EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
 UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -604,6 +603,38 @@ async def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: boo
     return manager.plugin_service.list_plugins()
 
 
+async def list_installable_plugins(manager: MultiBotManager, auth: AuthContext) -> list[dict[str, Any]]:
+    _require_capability(auth, CAP_VIEW_PLUGINS)
+    return manager.plugin_service.list_installable_plugins()
+
+
+async def install_plugin(
+    manager: MultiBotManager,
+    auth: AuthContext,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    plugin_id = str(body.get("pluginId") or body.get("plugin_id") or body.get("id") or "").strip()
+    source_path = str(body.get("sourcePath") or body.get("source_path") or "").strip()
+    if not plugin_id and not source_path:
+        _raise(400, "missing_plugin_id", "插件 ID 或目录不能为空")
+    install_args = {}
+    if source_path:
+        install_args["source_path"] = source_path
+    if not plugin_id:
+        plugin_id = None
+    try:
+        return await manager.plugin_service.install_plugin(plugin_id, **install_args)
+    except KeyError as exc:
+        _raise(404, "plugin_not_found", str(exc))
+    except FileNotFoundError as exc:
+        _raise(400, "invalid_plugin_source", str(exc))
+    except FileExistsError as exc:
+        _raise(409, "plugin_already_installed", str(exc))
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_request", str(exc))
+
+
 async def update_plugin(
     manager: MultiBotManager,
     auth: AuthContext,
@@ -1006,18 +1037,11 @@ def _resolve_safe_write_path(base_dir: str, path: str) -> str:
     return resolved_path
 
 
-def _ensure_editor_content_size(content: str) -> None:
-    if len(content.encode("utf-8")) > EDITOR_MAX_FILE_SIZE_BYTES:
-        _raise(400, "file_too_large_for_editor", "文件过大，无法在编辑器中编辑")
-
-
 def _ensure_editable_text_file(path: str) -> None:
-    if os.path.getsize(path) > EDITOR_MAX_FILE_SIZE_BYTES:
-        _raise(400, "file_too_large_for_editor", "文件过大，无法在编辑器中编辑")
-
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            handle.read()
+            while handle.read(1024 * 1024):
+                pass
     except UnicodeDecodeError:
         _raise(400, "not_text_file", "文件不是可编辑的文本文件")
 
@@ -1311,7 +1335,6 @@ def create_text_file(
     parent_path: str | None = None,
 ) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
-    _ensure_editor_content_size(content)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     parent_dir = _resolve_action_parent_dir(session, parent_path)
@@ -1938,6 +1961,41 @@ def _build_terminal_trace(
     return trace
 
 
+async def _reconcile_native_trace_before_completion(
+    service: ChatHistoryService,
+    turn_handle,
+    *,
+    profile: BotProfile,
+    session: UserSession,
+    user_text: str,
+    assistant_text: str,
+    completion_state: str,
+    native_session_id: str | None,
+    poll_attempts: int = 4,
+    poll_interval_seconds: float = 0.1,
+) -> None:
+    if completion_state != "completed":
+        return
+    normalized_session_id = str(native_session_id or "").strip()
+    if not normalized_session_id:
+        return
+
+    attempts = max(1, int(poll_attempts))
+    for attempt_index in range(attempts):
+        if service.reconcile_turn_trace(
+            turn_handle,
+            profile=profile,
+            session=session,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            native_session_id=normalized_session_id,
+        ):
+            return
+        if attempt_index + 1 >= attempts:
+            return
+        await asyncio.sleep(poll_interval_seconds)
+
+
 def _resolve_completion_state(
     session: UserSession,
     *,
@@ -2409,12 +2467,23 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             )
             for trace_event in final_trace[len(live_trace_events):]:
                 service.append_trace_event(turn_handle, trace_event)
+            native_session_id = session.codex_session_id if cli_type == "codex" else session.claude_session_id
+            await _reconcile_native_trace_before_completion(
+                service,
+                turn_handle,
+                profile=profile,
+                session=session,
+                user_text=text,
+                assistant_text=response,
+                completion_state=completion_state,
+                native_session_id=native_session_id,
+            )
             fallback_output = response if completion_state == "completed" else (latest_preview_text or response)
             done_message = service.complete_turn(
                 turn_handle,
                 completion_state=completion_state,
                 content=fallback_output,
-                native_session_id=session.codex_session_id if cli_type == "codex" else session.claude_session_id,
+                native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
             )
@@ -2637,11 +2706,22 @@ async def run_cli_chat(
             )
             for trace_event in terminal_trace:
                 service.append_trace_event(turn_handle, trace_event)
+            native_session_id = session.codex_session_id if cli_type == "codex" else session.claude_session_id
+            await _reconcile_native_trace_before_completion(
+                service,
+                turn_handle,
+                profile=profile,
+                session=session,
+                user_text=text,
+                assistant_text=response,
+                completion_state=completion_state,
+                native_session_id=native_session_id,
+            )
             done_message = service.complete_turn(
                 turn_handle,
                 content=response if completion_state == "completed" else (response or msg("chat", "no_output")),
                 completion_state=completion_state,
-                native_session_id=session.codex_session_id if cli_type == "codex" else session.claude_session_id,
+                native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
             )
@@ -2864,7 +2944,6 @@ def write_file_content(
     expected_mtime_ns: int | None = None,
 ) -> dict[str, Any]:
     _ensure_file_browser_supported(manager, alias)
-    _ensure_editor_content_size(content)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = _require_real_browser_directory(_get_browser_directory(session))
     file_path = _resolve_safe_write_path(browser_dir, path)
@@ -2920,9 +2999,6 @@ def read_file_content(
         _raise(404, "file_not_found", "文件不存在")
 
     file_size = os.path.getsize(file_path)
-    if mode == "cat" and file_size > 1024 * 1024:
-        _raise(400, "file_too_large", "文件太大，请使用下载接口")
-
     try:
         with open(file_path, "r", encoding="utf-8") as handle:
             if mode == "head":

@@ -8,6 +8,7 @@ import type {
   WaveformWindowPayload,
 } from "../../services/types";
 import { runPluginAction } from "../plugins/pluginActions";
+import { DocumentView } from "./DocumentView";
 import { TableView } from "./TableView";
 import { TreeView } from "./TreeView";
 import { WaveformView } from "./WaveformView";
@@ -119,6 +120,10 @@ export function PluginViewSurface({
         onRunAction={handleAction}
       />
     );
+  }
+
+  if (view.renderer === "document") {
+    return <DocumentView view={view} />;
   }
 
   return (

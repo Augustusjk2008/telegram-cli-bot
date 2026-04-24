@@ -15,7 +15,8 @@ from .protocol import decode_message, encode_error, encode_request, encode_resul
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_STDIO_LIMIT = 64 * 1024 * 1024
+PLUGIN_STDIO_STREAM_BUFFER_LIMIT = 1024 * 1024
+PLUGIN_STDOUT_READ_CHUNK_BYTES = 64 * 1024
 PLUGIN_CALL_TIMEOUT_SECONDS = 60.0
 
 
@@ -100,28 +101,47 @@ class PluginRuntime:
                 future.set_exception(RuntimeError(message))
         wrapped.pending.clear()
 
+    def _handle_incoming_message(
+        self,
+        key: tuple[str, str],
+        wrapped: _PluginProcess,
+        message: dict[str, Any],
+    ) -> None:
+        if "method" in message:
+            asyncio.create_task(self._dispatch_plugin_request(key, wrapped, message))
+            return
+        try:
+            response_id = int(message.get("id"))
+        except Exception:
+            return
+        future = wrapped.pending.pop(response_id, None)
+        if future is not None and not future.done():
+            future.set_result(message)
+
     async def _reader_loop(self, key: tuple[str, str], wrapped: _PluginProcess) -> None:
         process = wrapped.process
         if process.stdout is None:
             self._fail_pending(wrapped, "插件进程 stdout 不可用")
             return
+        pending = bytearray()
         try:
             while True:
-                line = await process.stdout.readline()
-                if not line:
+                chunk = await process.stdout.read(PLUGIN_STDOUT_READ_CHUNK_BYTES)
+                if not chunk:
+                    if pending.strip():
+                        self._handle_incoming_message(key, wrapped, decode_message(bytes(pending)))
                     self._fail_pending(wrapped, "插件未返回结果")
                     return
-                message = decode_message(line)
-                if "method" in message:
-                    asyncio.create_task(self._dispatch_plugin_request(key, wrapped, message))
-                    continue
-                try:
-                    response_id = int(message.get("id"))
-                except Exception:
-                    continue
-                future = wrapped.pending.pop(response_id, None)
-                if future is not None and not future.done():
-                    future.set_result(message)
+                pending.extend(chunk)
+                while True:
+                    line_end = pending.find(b"\n")
+                    if line_end < 0:
+                        break
+                    line = bytes(pending[:line_end + 1])
+                    del pending[:line_end + 1]
+                    if not line.strip():
+                        continue
+                    self._handle_incoming_message(key, wrapped, decode_message(line))
         except asyncio.CancelledError:
             self._fail_pending(wrapped, "插件 reader 已取消")
             raise
@@ -213,7 +233,7 @@ class PluginRuntime:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(manifest.root),
             env=env,
-            limit=PLUGIN_STDIO_LIMIT,
+            limit=PLUGIN_STDIO_STREAM_BUFFER_LIMIT,
         )
         key = (bot_alias, manifest.plugin_id)
         wrapped = _PluginProcess(process=process)

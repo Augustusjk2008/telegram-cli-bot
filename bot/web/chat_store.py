@@ -526,6 +526,53 @@ class ChatStore:
             )
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
 
+    def replace_trace_events(self, turn_id: str, trace: list[dict[str, Any]] | None) -> None:
+        now = _utc_now()
+        normalized_trace = [dict(item) for item in (trace or []) if isinstance(item, dict)]
+        with self._connect_for_write() as conn:
+            existing_turn = conn.execute(
+                "SELECT id FROM turns WHERE id = ?",
+                (turn_id,),
+            ).fetchone()
+            if existing_turn is None:
+                raise KeyError(turn_id)
+
+            conn.execute("DELETE FROM trace_events WHERE turn_id = ?", (turn_id,))
+            for ordinal, item in enumerate(normalized_trace, start=1):
+                payload = item.get("payload")
+                payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+                conn.execute(
+                    """
+                    INSERT INTO trace_events (
+                        id,
+                        turn_id,
+                        ordinal,
+                        kind,
+                        raw_type,
+                        title,
+                        tool_name,
+                        call_id,
+                        summary,
+                        payload_json,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"trace_{uuid.uuid4().hex}",
+                        turn_id,
+                        ordinal,
+                        str(item.get("kind") or "unknown"),
+                        str(item.get("raw_type") or ""),
+                        str(item.get("title") or ""),
+                        str(item.get("tool_name") or ""),
+                        str(item.get("call_id") or ""),
+                        str(item.get("summary") or ""),
+                        payload_json,
+                        str(item.get("created_at") or now),
+                    ),
+                )
+            conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+
     def complete_turn(
         self,
         handle: ChatTurnHandle,
@@ -1061,4 +1108,49 @@ class ChatStore:
                 "tool_call_count": tool_call_count,
                 "process_count": process_count,
                 "trace": trace,
+            }
+
+    def get_trace_recovery_context(self, message_id: str) -> dict[str, Any]:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(message_id)
+        with conn:
+            row = conn.execute(
+                """
+                SELECT
+                    assistant.id AS message_id,
+                    assistant.turn_id AS turn_id,
+                    assistant.conversation_id AS conversation_id,
+                    assistant.role AS role,
+                    assistant.content AS assistant_text,
+                    user.content AS user_text,
+                    conversation.working_dir AS working_dir,
+                    turn.native_provider AS native_provider,
+                    turn.native_session_id AS native_session_id,
+                    turn.completion_state AS completion_state
+                FROM messages AS assistant
+                JOIN turns AS turn ON turn.id = assistant.turn_id
+                JOIN conversations AS conversation ON conversation.id = assistant.conversation_id
+                JOIN messages AS user ON user.id = turn.user_message_id
+                WHERE assistant.id = ?
+                """,
+                (message_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(message_id)
+            trace_stats = self._load_trace_stats(conn, [str(row["turn_id"])]).get(str(row["turn_id"]), {})
+            return {
+                "message_id": str(row["message_id"]),
+                "turn_id": str(row["turn_id"]),
+                "conversation_id": str(row["conversation_id"]),
+                "role": str(row["role"] or ""),
+                "assistant_text": str(row["assistant_text"] or ""),
+                "user_text": str(row["user_text"] or ""),
+                "working_dir": str(row["working_dir"] or ""),
+                "native_provider": str(row["native_provider"] or ""),
+                "native_session_id": str(row["native_session_id"] or ""),
+                "completion_state": str(row["completion_state"] or ""),
+                "trace_count": int(trace_stats.get("trace_count", 0) or 0),
+                "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
+                "process_count": int(trace_stats.get("process_count", 0) or 0),
             }

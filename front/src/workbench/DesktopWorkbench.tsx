@@ -16,7 +16,7 @@ import type {
   ChatBodyParagraphSpacingName,
   UiThemeName,
 } from "../theme";
-import { getFilePreviewStatusText, isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
+import { isFilePreviewFullyLoaded } from "../utils/filePreview";
 import { ChatPane } from "./ChatPane";
 import { CommandPalette } from "./CommandPalette";
 import { DebugPane } from "./DebugPane";
@@ -212,8 +212,8 @@ export function DesktopWorkbench({
           ? "minmax(0, 1fr) 0px 0px"
           : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
-  const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
+  const previewStatusText = isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
+  const canLoadFull = !isFilePreviewFullyLoaded(previewResult);
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const availableSidebarPanels = structureOnly
     ? ["files"] as const

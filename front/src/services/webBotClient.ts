@@ -37,6 +37,7 @@ import type {
   PublicHostInfo,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
+  InstallablePluginSummary,
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
@@ -68,6 +69,8 @@ export interface WebBotClient {
   deleteRegisterCode(codeId: string): Promise<void>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
+  listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
+  installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;

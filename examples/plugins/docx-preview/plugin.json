@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "id": "docx-preview",
+  "name": "DOCX Preview",
+  "version": "0.1.0",
+  "description": "快速浏览 Word 文档内容结构。",
+  "enabled": true,
+  "config": {},
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "document",
+      "title": "文档预览",
+      "renderer": "document",
+      "viewMode": "snapshot",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "docx-file",
+      "label": "Word 文档预览",
+      "extensions": [
+        ".docx"
+      ],
+      "viewId": "document"
+    }
+  ]
+}

@@ -291,6 +291,27 @@ for line in sys.stdin:
     (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_minimal_plugin(root: Path, plugin_id: str, *, name: str) -> None:
+    plugin_dir = root / plugin_id
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text("print('plugin')\n", encoding="utf-8")
+    cache_dir = plugin_dir / "__pycache__"
+    cache_dir.mkdir()
+    (cache_dir / "main.cpython-312.pyc").write_bytes(b"pyc")
+    manifest = {
+        "schemaVersion": 1,
+        "id": plugin_id,
+        "name": name,
+        "version": "0.1.0",
+        "description": "install test plugin",
+        "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+        "views": [],
+        "fileHandlers": [],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @pytest.mark.asyncio
 async def test_plugin_service_resolves_vcd_and_writes_audit(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
@@ -571,4 +592,37 @@ async def test_update_plugin_reloads_only_target_plugin_sessions(tmp_path: Path)
     )
 
     assert wave_window["tracks"][0]["signalId"] == "tb.clk"
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_lists_installable_plugins_and_installs_folder(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "home" / ".tcb" / "plugins"
+    plugins_root.mkdir(parents=True)
+    source_plugins_root = repo_root / "examples" / "plugins"
+    source_plugins_root.mkdir(parents=True)
+    _write_minimal_plugin(source_plugins_root, "fresh-plugin", name="Fresh Plugin")
+
+    service = PluginService(repo_root, plugins_root=plugins_root, source_plugins_root=source_plugins_root)
+
+    installable = service.list_installable_plugins()
+    assert installable == [
+        {
+            "id": "fresh-plugin",
+            "pluginId": "fresh-plugin",
+            "name": "Fresh Plugin",
+            "version": "0.1.0",
+            "description": "install test plugin",
+            "installed": False,
+        }
+    ]
+
+    installed = await service.install_plugin(source_path=source_plugins_root / "fresh-plugin")
+
+    assert installed["id"] == "fresh-plugin"
+    assert (plugins_root / "fresh-plugin" / "plugin.json").exists()
+    assert not (plugins_root / "fresh-plugin" / "__pycache__").exists()
+    assert service.list_installable_plugins()[0]["installed"] is True
     await service.shutdown()

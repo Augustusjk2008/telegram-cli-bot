@@ -51,3 +51,22 @@ test("plugins screen lets repo outline pick a folder before opening", async () =
     });
   });
 });
+
+test("plugins screen opens folder picker before installing plugin", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const installSpy = vi.spyOn(client, "installPlugin");
+
+  render(<PluginsScreen client={client} botAlias="main" />);
+
+  await screen.findByText("Vivado Waveform");
+  await user.click(screen.getByRole("button", { name: "安装插件" }));
+  expect(await screen.findByRole("dialog", { name: "选择插件目录" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "使用当前目录" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      sourcePath: expect.any(String),
+    });
+  });
+});

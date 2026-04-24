@@ -47,6 +47,7 @@ import type {
   FileWriteResult,
   PluginActionInvokeInput,
   PluginActionResult,
+  InstallablePluginSummary,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
   PluginRenderResult,
@@ -1209,6 +1210,22 @@ export class RealWebBotClient implements WebBotClient {
   async listPlugins(refresh = false): Promise<PluginSummary[]> {
     const data = await this.requestJson<PluginSummary[]>(refresh ? "/api/plugins?refresh=1" : "/api/plugins");
     return Array.isArray(data) ? data : [];
+  }
+
+  async listInstallablePlugins(): Promise<InstallablePluginSummary[]> {
+    const data = await this.requestJson<InstallablePluginSummary[]>("/api/plugins/installable");
+    return Array.isArray(data) ? data : [];
+  }
+
+  async installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary> {
+    const body = typeof input === "string" ? { pluginId: input } : input;
+    return this.requestJson<PluginSummary>("/api/plugins/install", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
   }
 
   async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {

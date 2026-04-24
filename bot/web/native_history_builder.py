@@ -252,6 +252,115 @@ def build_web_chat_history(
     return messages
 
 
+def _locate_native_transcript(provider: str, session_id: str, *, cwd_hint: str | None) -> Any:
+    if provider == "codex":
+        return locate_codex_transcript(session_id)
+    if provider == "claude":
+        return locate_claude_transcript(session_id, cwd_hint=cwd_hint)
+    return None
+
+
+def _select_matching_native_turn(
+    turns: list[dict[str, Any]],
+    *,
+    provider: str,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+) -> dict[str, Any] | None:
+    normalized_user_text = str(user_text or "").strip()
+    normalized_assistant_text = str(assistant_text or "").strip()
+
+    scored: list[tuple[int, tuple[datetime, datetime, str], dict[str, Any]]] = []
+    for turn in turns:
+        if not _message_matches_turn(
+            turn,
+            provider=provider,
+            session_id=session_id,
+            user_text=normalized_user_text,
+        ):
+            continue
+        score = 1
+        if normalized_assistant_text and str(turn.get("content") or "").strip() == normalized_assistant_text:
+            score += 2
+        if int(turn.get("meta", {}).get("tool_call_count") or 0) > 0:
+            score += 1
+        scored.append((score, _turn_sort_key(turn), turn))
+
+    if not scored and normalized_assistant_text:
+        for turn in turns:
+            if not _message_matches_turn(
+                turn,
+                provider=provider,
+                session_id=session_id,
+                user_text="",
+            ):
+                continue
+            if str(turn.get("content") or "").strip() != normalized_assistant_text:
+                continue
+            score = 1
+            if int(turn.get("meta", {}).get("tool_call_count") or 0) > 0:
+                score += 1
+            scored.append((score, _turn_sort_key(turn), turn))
+
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return dict(scored[-1][2])
+
+
+def resolve_native_trace_for_turn(
+    provider: str,
+    session_id: str,
+    *,
+    user_text: str,
+    assistant_text: str = "",
+    cwd_hint: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_provider = normalize_cli_type(provider)
+    normalized_session_id = str(session_id or "").strip()
+    if normalized_provider not in {"codex", "claude"} or not normalized_session_id:
+        return None
+
+    ref = _locate_native_transcript(
+        normalized_provider,
+        normalized_session_id,
+        cwd_hint=cwd_hint,
+    )
+    if ref is None:
+        return None
+
+    turns = load_native_transcript(
+        normalized_provider,
+        ref.path,
+        session_id=ref.session_id,
+        include_trace=True,
+    )
+    matched = _select_matching_native_turn(
+        turns,
+        provider=normalized_provider,
+        session_id=ref.session_id,
+        user_text=user_text,
+        assistant_text=assistant_text,
+    )
+    if matched is None:
+        return None
+
+    meta = dict(matched.get("meta") or {})
+    trace = [dict(item) for item in meta.get("trace") or [] if isinstance(item, dict)]
+    return {
+        "provider": normalized_provider,
+        "session_id": ref.session_id,
+        "trace": trace,
+        "trace_count": int(meta.get("trace_count") or len(trace)),
+        "tool_call_count": int(meta.get("tool_call_count") or _count_tool_calls(trace)),
+        "process_count": int(meta.get("process_count") or _count_process_events(trace)),
+        "content": str(matched.get("content") or ""),
+        "user_text": str(matched.get("user_text") or ""),
+        "transcript_path": str(ref.path),
+    }
+
+
 def _get_native_session_id(provider: str, session) -> str:
     if provider == "codex":
         return str(getattr(session, "codex_session_id", "") or "")

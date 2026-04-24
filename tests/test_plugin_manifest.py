@@ -196,6 +196,47 @@ def test_load_plugin_manifest_accepts_schema_v2_table_tree_and_permissions(tmp_p
     assert manifest.catalog_actions[0].location == "catalog"
 
 
+def test_load_plugin_manifest_accepts_schema_v2_document_renderer(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(
+        plugins_root,
+        "docx-preview",
+        payload_overrides={
+            "schemaVersion": 2,
+            "runtime": {
+                "type": "python",
+                "entry": "backend/main.py",
+                "protocol": "jsonrpc-stdio",
+                "permissions": {"workspaceRead": True},
+            },
+            "views": [
+                {
+                    "id": "document",
+                    "title": "文档预览",
+                    "renderer": "document",
+                    "viewMode": "snapshot",
+                    "dataProfile": "light",
+                }
+            ],
+            "fileHandlers": [
+                {
+                    "id": "docx-file",
+                    "label": "Word 文档预览",
+                    "extensions": [".docx"],
+                    "viewId": "document",
+                }
+            ],
+        },
+    )
+
+    manifest = PluginRegistry(plugins_root).discover()["docx-preview"]
+
+    assert manifest.schema_version == 2
+    assert manifest.views[0].renderer == "document"
+    assert manifest.views[0].view_mode == "snapshot"
+    assert manifest.file_handlers[0].extensions == (".docx",)
+
+
 def test_load_plugin_manifest_rejects_v1_table_renderer(tmp_path: Path) -> None:
     plugins_root = tmp_path / "plugins"
     _write_plugin(

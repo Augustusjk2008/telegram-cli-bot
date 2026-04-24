@@ -191,6 +191,32 @@ test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
   expect(screen.getByText("tb.clk")).toBeInTheDocument();
 });
 
+test("desktop workbench opens .docx files as document plugin tabs", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "打开 docs/roadmap.docx" }));
+
+  expect(await screen.findByRole("tab", { name: "roadmap.docx" })).toBeInTheDocument();
+  expect(screen.getByTestId("document-view")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "项目路线图" })).toBeInTheDocument();
+  expect(screen.getByText("交付物")).toBeInTheDocument();
+});
+
 test("desktop workbench opens .rpt files as table plugin tabs and downloads artifacts", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -650,6 +676,65 @@ test("desktop chat file links reuse the workbench preview window", async () => {
   expect(String(readFile.mock.calls[0]?.[1] || "")).toMatch(/(^|[\\/])README\.md$/);
   expect(await screen.findByTestId("desktop-workbench-preview-window")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "在编辑器中打开" })).toBeInTheDocument();
+});
+
+test("desktop preview keeps full-read enabled for files larger than previous 1MB limit", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "big.log", isDir: false, size: 2 * 1024 * 1024, updatedAt: "2026-04-17T09:00:00Z" }],
+  });
+  vi.spyOn(client, "listMessages").mockResolvedValue([{
+    id: "assistant-1",
+    role: "assistant",
+    text: "[查看 big.log](C:/workspace/big.log)",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }]);
+  const readFile = vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "preview line 1\npreview line 2",
+    mode: "head",
+    fileSizeBytes: 2 * 1024 * 1024,
+    isFullContent: false,
+    lastModifiedNs: "1",
+  });
+  const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "FULL_BIG_LOG",
+    mode: "cat",
+    fileSizeBytes: 2 * 1024 * 1024,
+    isFullContent: true,
+    lastModifiedNs: "2",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("link", { name: "查看 big.log" }));
+
+  await waitFor(() => {
+    expect(readFile).toHaveBeenCalled();
+  });
+  expect(screen.queryByText("文件超过1MB，请下载后读取全文")).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "全文读取" }));
+  await waitFor(() => {
+    expect(readFileFull).toHaveBeenCalledWith("main", expect.stringMatching(/(^|[\\/])big\.log$/));
+  });
+  expect(await screen.findByText("FULL_BIG_LOG")).toBeInTheDocument();
 });
 
 test("desktop file clicks open tabs and sync rename and delete actions", async () => {

@@ -89,6 +89,7 @@ from .api_service import (
     get_plugin_artifact,
     get_plugin_view_window,
     invoke_plugin_action,
+    install_plugin,
     get_directory_listing,
     get_file_metadata,
     get_history,
@@ -104,6 +105,7 @@ from .api_service import (
     list_bots,
     list_assistant_cron_jobs,
     list_assistant_cron_runs,
+    list_installable_plugins,
     list_plugins,
     open_plugin_view,
     list_system_scripts,
@@ -864,6 +866,15 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
         refresh = str(request.query.get("refresh", "")).lower() in {"1", "true", "yes"}
         return _json({"ok": True, "data": await list_plugins(self.manager, auth, refresh=refresh)})
+
+    async def get_installable_plugins(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
+        return _json({"ok": True, "data": await list_installable_plugins(self.manager, auth)})
+
+    async def post_install_plugin(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await install_plugin(self.manager, auth, dict(body or {}))})
 
     async def patch_plugin(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_RUN_PLUGINS)
@@ -1906,7 +1917,9 @@ class WebApiServer:
             logger.warning("自动后台下载更新失败: %s", exc)
 
     def _build_app(self) -> web.Application:
-        app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=25 * 1024 * 1024)
+        # Desktop file editing/preview can legitimately exceed the default aiohttp body cap.
+        # Upload routes still enforce their own explicit limits in api_service.
+        app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=0)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/auth/me", self.auth_me)
         app.router.add_post("/api/auth/login", self.auth_login)
@@ -1919,6 +1932,8 @@ class WebApiServer:
         app.router.add_delete("/api/admin/register-codes/{code_id}", self.admin_register_code_delete)
         app.router.add_get("/api/bots", self.get_bots)
         app.router.add_get("/api/plugins", self.get_plugins)
+        app.router.add_get("/api/plugins/installable", self.get_installable_plugins)
+        app.router.add_post("/api/plugins/install", self.post_install_plugin)
         app.router.add_patch("/api/plugins/{plugin_id}", self.patch_plugin)
         app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)

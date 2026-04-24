@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 from .artifacts import ArtifactRecord, ArtifactStore
 from .audit import append_plugin_audit_event
 from .host_api import PluginHostApi
+from .manifest import load_plugin_manifest
 from .paths import default_plugins_root
 from .registry import PluginRegistry
 from .runtime import PluginRuntime
@@ -38,11 +40,17 @@ class PluginService:
         self,
         repo_root: Path | str,
         plugins_root: Path | str | None = None,
+        source_plugins_root: Path | str | None = None,
         *,
         workspace_root_for: Callable[[str], Path] | None = None,
     ):
         self.repo_root = Path(repo_root)
         self.plugins_root = Path(plugins_root) if plugins_root is not None else default_plugins_root()
+        self.source_plugins_root = (
+            Path(source_plugins_root)
+            if source_plugins_root is not None
+            else self.repo_root / "examples" / "plugins"
+        )
         self.registry = PluginRegistry(self.plugins_root)
         self.artifacts = ArtifactStore(self.repo_root)
         self.runtime = PluginRuntime(
@@ -178,6 +186,69 @@ class PluginService:
             payload["configSchema"] = self._serialize_config_schema(manifest)
         return payload
 
+    def _iter_source_plugin_dirs(self) -> list[Path]:
+        root = self.source_plugins_root
+        if not root.exists():
+            return []
+        return [
+            path
+            for path in sorted(root.iterdir(), key=lambda item: item.name.lower())
+            if path.is_dir() and (path / "plugin.json").is_file()
+        ]
+
+    def _build_installable_plugin_payload(self, source_dir: Path) -> dict[str, Any]:
+        raw: dict[str, Any] = {}
+        manifest_path = source_dir / "plugin.json"
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                raw = loaded
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raw = {}
+        plugin_id = str(raw.get("id") or source_dir.name).strip() or source_dir.name
+        return {
+            "id": source_dir.name,
+            "pluginId": plugin_id,
+            "name": str(raw.get("name") or source_dir.name).strip() or source_dir.name,
+            "version": str(raw.get("version") or "").strip(),
+            "description": str(raw.get("description") or "").strip(),
+            "installed": (self.plugins_root / source_dir.name).exists(),
+        }
+
+    def list_installable_plugins(self) -> list[dict[str, Any]]:
+        return [self._build_installable_plugin_payload(path) for path in self._iter_source_plugin_dirs()]
+
+    def _resolve_install_source_dir(
+        self,
+        install_id: str | None = None,
+        *,
+        source_path: str | Path | None = None,
+    ) -> Path:
+        if source_path is not None:
+            candidate = Path(source_path).expanduser().resolve()
+            manifest_path = candidate / "plugin.json"
+            if not candidate.is_dir():
+                raise FileNotFoundError(f"插件目录不存在: {candidate}")
+            if not manifest_path.is_file():
+                raise FileNotFoundError(f"目录缺少 plugin.json: {candidate}")
+            return candidate
+
+        normalized_install_id = str(install_id or "").strip()
+        if not normalized_install_id:
+            raise KeyError("未指定可安装插件")
+        source_dir = next(
+            (
+                path
+                for path in self._iter_source_plugin_dirs()
+                if path.name == normalized_install_id
+                or self._build_installable_plugin_payload(path)["pluginId"] == normalized_install_id
+            ),
+            None,
+        )
+        if source_dir is None:
+            raise KeyError(f"未找到可安装插件: {normalized_install_id}")
+        return source_dir
+
     def _build_payload_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
         tracks = [item for item in list(payload.get("tracks") or []) if isinstance(item, dict)]
         rows = [item for item in list(payload.get("rows") or []) if isinstance(item, dict)]
@@ -276,6 +347,40 @@ class PluginService:
         self.artifacts.clear_all()
         await self.runtime.shutdown()
         return self.list_plugins(refresh=True)
+
+    async def install_plugin(
+        self,
+        install_id: str | None = None,
+        *,
+        source_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        source_dir = self._resolve_install_source_dir(install_id, source_path=source_path)
+        manifest = load_plugin_manifest(source_dir / "plugin.json")
+        target_dir = self.plugins_root / source_dir.name
+        if target_dir.exists():
+            raise FileExistsError(f"插件已安装: {source_dir.name}")
+
+        discovered = self.registry.discover()
+        if manifest.plugin_id in discovered:
+            raise ValueError(f"插件已存在: {manifest.plugin_id}")
+
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copytree(
+                source_dir,
+                target_dir,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            self.registry.discover()
+            return self._manifest_payload(self.registry.get_manifest(manifest.plugin_id))
+        except Exception:
+            if target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+            try:
+                self.registry.discover()
+            except Exception:
+                pass
+            raise
 
     async def update_plugin(
         self,

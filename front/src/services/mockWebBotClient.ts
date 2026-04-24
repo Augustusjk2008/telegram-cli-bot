@@ -34,6 +34,7 @@ import type {
   FileMoveResult,
   FileRenameResult,
   HostEffect,
+  InstallablePluginSummary,
   PluginAction,
   PluginActionInvokeInput,
   PluginActionResult,
@@ -57,6 +58,7 @@ import type {
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
+  DocumentViewPayload,
   TableColumn,
   TableRow,
   TableViewSummary,
@@ -336,6 +338,27 @@ function buildMockTreeSummary(): TreeViewSummary {
           title: "timing.rpt",
           input: { path: "reports/timing.rpt" },
         },
+      },
+    ],
+  };
+}
+
+function buildMockDocumentPayload(sourcePath: string): DocumentViewPayload {
+  return {
+    path: sourcePath,
+    title: "项目路线图",
+    statsText: "5 段 · 1 表格",
+    blocks: [
+      { type: "heading", level: 1, runs: [{ text: "项目路线图" }] },
+      { type: "paragraph", runs: [{ text: "目标：" }, { text: "先打通 document renderer", bold: true }] },
+      { type: "list_item", ordered: false, depth: 0, marker: "•", runs: [{ text: "支持标题和段落" }] },
+      { type: "list_item", ordered: false, depth: 0, marker: "•", runs: [{ text: "支持列表和表格" }] },
+      {
+        type: "table",
+        rows: [
+          { cells: [{ runs: [{ text: "交付物" }] }, { runs: [{ text: "状态" }] }] },
+          { cells: [{ runs: [{ text: "MVP" }] }, { runs: [{ text: "开发中" }] }] },
+        ],
       },
     ],
   };
@@ -782,6 +805,16 @@ export class MockWebBotClient implements WebBotClient {
       },
     },
   ];
+  private installablePlugins: InstallablePluginSummary[] = [
+    {
+      id: "document-renderer",
+      pluginId: "document-renderer",
+      name: "Document Renderer",
+      version: "0.1.0",
+      description: "快速预览 docx 等文档内容。",
+      installed: false,
+    },
+  ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
   private fileContents = new Map<string, string>();
@@ -870,6 +903,62 @@ export class MockWebBotClient implements WebBotClient {
             permissions: plugin.runtime.permissions ? { ...plugin.runtime.permissions } : undefined,
           }
         : undefined,
+    };
+  }
+
+  private cloneInstallablePlugin(plugin: InstallablePluginSummary): InstallablePluginSummary {
+    return { ...plugin };
+  }
+
+  private getPathTail(path: string): string {
+    const parts = path.trim().split(/[\\/]+/).filter(Boolean);
+    return parts[parts.length - 1] || "custom-plugin";
+  }
+
+  private buildInstalledPluginFromInstallable(plugin: InstallablePluginSummary): PluginSummary {
+    return {
+      id: plugin.pluginId || plugin.id,
+      schemaVersion: 2,
+      name: plugin.name,
+      version: plugin.version || "0.1.0",
+      description: plugin.description,
+      enabled: true,
+      config: {},
+      views: [{ id: "document-view", title: "文档预览", renderer: "document", viewMode: "snapshot", dataProfile: "light" }],
+      fileHandlers: [{ id: "docx-preview", label: "文档预览", extensions: [".docx"], viewId: "document-view" }],
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: { workspaceRead: true },
+      },
+    };
+  }
+
+  private buildInstalledPluginFromSourcePath(sourcePath: string): PluginSummary {
+    const folderName = this.getPathTail(sourcePath);
+    const pluginId = folderName.toLowerCase();
+    const title = folderName
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((part) => part[0]?.toUpperCase() + part.slice(1))
+      .join(" ") || "Custom Plugin";
+    return {
+      id: pluginId,
+      schemaVersion: 2,
+      name: title,
+      version: "0.1.0",
+      description: `${sourcePath} 安装的插件`,
+      enabled: true,
+      config: {},
+      views: [],
+      fileHandlers: [],
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: {},
+      },
     };
   }
 
@@ -1105,6 +1194,41 @@ export class MockWebBotClient implements WebBotClient {
     return this.plugins.map((plugin) => this.clonePluginSummary(plugin));
   }
 
+  async listInstallablePlugins(): Promise<InstallablePluginSummary[]> {
+    return this.installablePlugins.map((plugin) => this.cloneInstallablePlugin(plugin));
+  }
+
+  async installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary> {
+    const pluginId = typeof input === "string" ? input : (input.pluginId || "").trim();
+    const sourcePath = typeof input === "string" ? "" : (input.sourcePath || "").trim();
+    const sourceTail = sourcePath ? this.getPathTail(sourcePath) : "";
+    const index = this.installablePlugins.findIndex((plugin) =>
+      plugin.id === pluginId
+      || plugin.pluginId === pluginId
+      || (sourceTail && (plugin.id === sourceTail || plugin.pluginId === sourceTail)),
+    );
+
+    let installed: PluginSummary;
+    if (index >= 0) {
+      const current = this.installablePlugins[index];
+      if (current.installed) {
+        throw new WebApiClientError("插件已安装", { status: 409, code: "plugin_already_installed" });
+      }
+      installed = this.buildInstalledPluginFromInstallable({ ...current, installed: true });
+      this.installablePlugins[index] = { ...current, installed: true };
+    } else if (sourcePath) {
+      installed = this.buildInstalledPluginFromSourcePath(sourcePath);
+    } else {
+      throw new WebApiClientError("插件不存在", { status: 404, code: "plugin_not_found" });
+    }
+
+    if (this.plugins.some((plugin) => plugin.id === installed.id)) {
+      throw new WebApiClientError("插件已安装", { status: 409, code: "plugin_already_installed" });
+    }
+    this.plugins = [...this.plugins, installed];
+    return this.clonePluginSummary(installed);
+  }
+
   async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {
     const index = this.plugins.findIndex((plugin) => plugin.id === pluginId);
     if (index < 0) {
@@ -1261,6 +1385,15 @@ export class MockWebBotClient implements WebBotClient {
         input: { path },
       };
     }
+    if (lower.endsWith(".docx")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "docx-preview",
+        viewId: "document",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
     return { kind: "file" };
   }
 
@@ -1410,6 +1543,17 @@ export class MockWebBotClient implements WebBotClient {
     viewId: string,
     input: Record<string, unknown>,
   ): Promise<PluginRenderResult> {
+    if (pluginId === "docx-preview") {
+      const sourcePath = typeof input.path === "string" ? input.path : "docs/roadmap.docx";
+      return {
+        pluginId,
+        viewId,
+        title: sourcePath.split(/[\\/]/).pop() || "roadmap.docx",
+        renderer: "document",
+        mode: "snapshot",
+        payload: buildMockDocumentPayload(sourcePath),
+      };
+    }
     if (pluginId === "timing-report") {
       const sourcePath = typeof input.path === "string" ? input.path : "reports/timing.rpt";
       const title = sourcePath.split(/[\\/]/).pop() || "timing.rpt";
