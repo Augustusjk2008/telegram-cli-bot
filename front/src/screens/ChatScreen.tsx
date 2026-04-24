@@ -616,6 +616,8 @@ export function ChatScreen({
   const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
   const assistantSendVersionRef = useRef(0);
+  const hasActivatedRef = useRef(false);
+  const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient } | null>(null);
   const isSseStreaming = () => streamModeRef.current === "sse";
 
   useEffect(() => {
@@ -774,6 +776,7 @@ export function ChatScreen({
 
       setBotOverview(overview);
       setWorkingDir(overview.workingDir || "");
+      const previousItems = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
       const previousCount = countPersistedHistoryItems(itemsRef.current);
 
       const nextPendingRuns = resolvePendingCronRuns(
@@ -791,9 +794,16 @@ export function ChatScreen({
         || (typeof overview.historyCount === "number" && overview.historyCount !== previousCount),
       );
 
-      const messages = shouldRefreshMessages
-        ? await client.listMessages(botAlias)
-        : itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
+      let messages = previousItems;
+      if (shouldRefreshMessages) {
+        const afterId = previousItems[previousItems.length - 1]?.id || "";
+        if (afterId) {
+          const delta = await client.listMessageDelta(botAlias, afterId, 50);
+          messages = delta.reset ? delta.items : [...previousItems, ...delta.items];
+        } else {
+          messages = await client.listMessages(botAlias);
+        }
+      }
       if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
         return;
       }
@@ -842,6 +852,19 @@ export function ChatScreen({
   }
 
   useEffect(() => {
+    const activatedTarget = activationTargetRef.current;
+    if (!activatedTarget || activatedTarget.botAlias !== botAlias || activatedTarget.client !== client) {
+      activationTargetRef.current = { botAlias, client };
+      hasActivatedRef.current = false;
+    }
+    if (!isVisible && !hasActivatedRef.current) {
+      return;
+    }
+    if (hasActivatedRef.current) {
+      return;
+    }
+    hasActivatedRef.current = true;
+
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -892,7 +915,7 @@ export function ChatScreen({
       stopAssistantPoll();
       stopSseRecoveryWatch();
     };
-  }, [applyHistoryView, botAlias, client, scheduleAssistantPoll, stopAssistantPoll, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, isVisible, scheduleAssistantPoll, stopAssistantPoll, stopSseRecoveryWatch]);
 
   useEffect(() => {
     const handleAssistantCronRunEnqueued = (event: Event) => {

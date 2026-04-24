@@ -22,6 +22,7 @@ import type {
   DirectoryListing,
   AvatarAsset,
   FileOpenTarget,
+  FileTreeRevealResult,
   FileCopyResult,
   FileCreateResult,
   FileEntry,
@@ -42,6 +43,7 @@ import type {
   PluginSummary,
   PluginUpdateInput,
   FileWriteResult,
+  HistoryDeltaResult,
   PublicHostInfo,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -1146,6 +1148,18 @@ export class MockWebBotClient implements WebBotClient {
     return mockChatMessages[botAlias] || [];
   }
 
+  async listMessageDelta(botAlias: string, afterId: string, limit = 50): Promise<HistoryDeltaResult> {
+    const messages = mockChatMessages[botAlias] || [];
+    if (!afterId) {
+      return { items: messages.slice(-limit), reset: false };
+    }
+    const index = messages.findIndex((message) => message.id === afterId);
+    if (index < 0) {
+      return { items: messages.slice(-limit), reset: true };
+    }
+    return { items: messages.slice(index + 1, index + 1 + limit), reset: false };
+  }
+
   async getMessageTrace(_botAlias: string, _messageId: string): Promise<ChatTraceDetails> {
     return {
       traceCount: 0,
@@ -1256,6 +1270,40 @@ export class MockWebBotClient implements WebBotClient {
     return {
       workingDir: currentPath,
       entries: botFiles[currentPath] || [],
+    };
+  }
+
+  async revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult> {
+    const botFiles = mockFiles[botAlias] || {};
+    const root = this.normalizeMockPath(this.getBrowserPath(botAlias));
+    const target = this.resolveFileTreePath(botAlias, path);
+    const split = this.splitMockFilePath(target);
+    const targetIsDir = Object.prototype.hasOwnProperty.call(botFiles, target);
+    const targetIsFile = (botFiles[split.dir] || []).some((entry) => !entry.isDir && entry.name === split.name);
+    if (!targetIsDir && !targetIsFile) {
+      throw new Error("文件或文件夹不存在");
+    }
+
+    const branchTarget = targetIsDir ? target : split.dir;
+    const branchPaths = [""];
+    const relativeBranchTarget = this.relativeMockPath(botAlias, branchTarget);
+    if (relativeBranchTarget) {
+      const parts = relativeBranchTarget.split("/");
+      for (let index = 1; index <= parts.length; index += 1) {
+        branchPaths.push(parts.slice(0, index).join("/"));
+      }
+    }
+
+    const branches = Object.fromEntries(branchPaths.map((branchPath) => {
+      const absolutePath = branchPath ? `${root}/${branchPath}` : root;
+      return [branchPath, botFiles[this.normalizeMockPath(absolutePath)] || []];
+    }));
+
+    return {
+      rootPath: root,
+      highlightPath: this.relativeMockPath(botAlias, target),
+      expandedPaths: branchPaths.filter(Boolean),
+      branches,
     };
   }
 

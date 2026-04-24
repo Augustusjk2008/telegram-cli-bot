@@ -64,9 +64,120 @@ class AssistantCronService:
             return 0
         return max(0, int((finished - started).total_seconds()))
 
+    @staticmethod
+    def _parse_timestamp(value: str) -> datetime | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
+    def _coordinator_has_run(self, run_id: str) -> bool:
+        checker = getattr(self.coordinator, "has_run", None)
+        if not callable(checker):
+            return False
+        return bool(checker(run_id))
+
+    def _schedule_watch_task(self, job_id: str, run_id: str, trigger_source: str) -> None:
+        task = asyncio.create_task(
+            self._watch_run(job_id, run_id, trigger_source),
+            name=f"assistant-cron-watch-{job_id}",
+        )
+        self._watch_tasks.add(task)
+        task.add_done_callback(self._watch_tasks.discard)
+
+    async def _recover_startup_state(self) -> None:
+        now = self.now_func()
+        for job in list_job_definitions(self.assistant_home):
+            state = load_job_runtime_state(self.assistant_home, job.id)
+            await self._recover_orphaned_run(job, state=state, now=now)
+
+    async def _recover_orphaned_run(
+        self,
+        job: AssistantCronJob,
+        *,
+        state: AssistantCronJobState,
+        now: datetime,
+    ) -> AssistantCronJobState:
+        run_id = state.pending_run_id or state.current_run_id
+        if not run_id:
+            return state
+
+        if self._coordinator_has_run(run_id):
+            self._schedule_watch_task(job.id, run_id, state.last_trigger_source or "schedule")
+            return state
+
+        finished_at = now.isoformat()
+        started_at = state.last_started_at if state.current_run_id else ""
+        elapsed_seconds = self._elapsed_seconds(started_at, finished_at)
+        stale_error = f"检测到孤儿 cron run，已按启动恢复处理: {run_id}"
+        scheduled_at_raw = state.pending_scheduled_at or state.last_scheduled_at
+
+        save_job_runtime_state(
+            self.assistant_home,
+            job.id,
+            AssistantCronJobState.from_dict(
+                {
+                    **state.to_dict(),
+                    "pending_run_id": "",
+                    "pending_scheduled_at": "",
+                    "current_run_id": "",
+                    "last_started_at": started_at,
+                    "last_finished_at": finished_at,
+                    "last_status": "error",
+                    "last_error": stale_error,
+                }
+            ),
+        )
+        upsert_job_run_audit(
+            self.assistant_home,
+            job.id,
+            {
+                "run_id": run_id,
+                "job_id": job.id,
+                "trigger_source": state.last_trigger_source or "schedule",
+                "scheduled_at": scheduled_at_raw,
+                "enqueued_at": state.last_enqueued_at,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "status": "error",
+                "elapsed_seconds": elapsed_seconds,
+                "queue_wait_seconds": 0,
+                "timed_out": False,
+                "prompt_excerpt": self._excerpt(job.task.prompt),
+                "output_excerpt": "",
+                "error": stale_error,
+            },
+        )
+
+        next_state = load_job_runtime_state(self.assistant_home, job.id)
+        scheduled_at = self._parse_timestamp(scheduled_at_raw)
+        should_rerun = (
+            job.enabled
+            and job.schedule.misfire_policy == "once"
+            and state.last_trigger_source in {"schedule", "startup_misfire"}
+            and scheduled_at is not None
+            and scheduled_at <= now
+        )
+        if not should_rerun:
+            return next_state
+
+        result = await self._enqueue_job(
+            job,
+            state=next_state,
+            trigger_source="startup_misfire",
+            scheduled_at=scheduled_at,
+        )
+        if result is None:
+            return load_job_runtime_state(self.assistant_home, job.id)
+        return load_job_runtime_state(self.assistant_home, job.id)
+
     async def start(self) -> None:
         if self._loop_task is not None and not self._loop_task.done():
             return
+        await self._recover_startup_state()
         self._loop_task = asyncio.create_task(self._run_loop(), name="assistant-cron-service")
 
     async def stop(self) -> None:
@@ -213,8 +324,10 @@ class AssistantCronService:
                 "pending_scheduled_at": scheduled_at.isoformat(),
                 "last_scheduled_at": scheduled_at.isoformat(),
                 "last_enqueued_at": request.enqueued_at or "",
+                "last_started_at": "",
                 "last_trigger_source": trigger_source,
                 "last_status": result["status"],
+                "last_error": "",
             }
         )
         save_job_runtime_state(self.assistant_home, job.id, next_state)
@@ -239,12 +352,7 @@ class AssistantCronService:
             },
         )
 
-        task = asyncio.create_task(
-            self._watch_run(job.id, request.run_id, trigger_source),
-            name=f"assistant-cron-watch-{job.id}",
-        )
-        self._watch_tasks.add(task)
-        task.add_done_callback(self._watch_tasks.discard)
+        self._schedule_watch_task(job.id, request.run_id, trigger_source)
         return {
             **result,
             "task_mode": job.task.mode,

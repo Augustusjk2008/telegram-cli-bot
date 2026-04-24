@@ -98,7 +98,7 @@ function ancestorPathsForPath(path: string) {
 }
 
 export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean }): UseFileTreeResult {
-  const structureOnly = options?.structureOnly === true;
+  void options;
   const [rootPath, setRootPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -163,11 +163,8 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     setLoading(true);
     setError("");
     try {
-      const nextRootPath = await client.getCurrentPath(botAlias);
-      if (!structureOnly) {
-        await client.changeDirectory(botAlias, nextRootPath);
-      }
-      const listing = await client.listFiles(botAlias, nextRootPath);
+      const listing = await client.listFiles(botAlias);
+      const nextRootPath = listing.workingDir;
       const nextExpandedPaths = preserveExpandedPaths ? expandedPathsRef.current : [];
       const normalizedExpandedPaths = uniqueExpandedPaths(nextExpandedPaths);
 
@@ -191,7 +188,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     } finally {
       setLoading(false);
     }
-  }, [botAlias, client, loadExpandedPathsForRoot, structureOnly]);
+  }, [botAlias, client, loadExpandedPathsForRoot]);
 
   useEffect(() => {
     void refreshRoot();
@@ -240,10 +237,31 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     if (!rootPath) {
       return;
     }
-    const nextExpandedPaths = uniqueExpandedPaths([...expandedPathsRef.current, ...ancestorPathsForPath(path)]);
+    const result = await client.revealFileTreePath(botAlias, path);
+    const nextBranches = Object.fromEntries(
+      Object.entries(result.branches).map(([branchPath, entries]) => [
+        branchPath,
+        {
+          entries: mapBranchEntries(branchPath, entries),
+          loading: false,
+          loaded: true,
+          error: "",
+        },
+      ]),
+    );
+    const nextExpandedPaths = uniqueExpandedPaths([
+      ...expandedPathsRef.current,
+      ...result.expandedPaths,
+      ...ancestorPathsForPath(result.highlightPath || path),
+    ]);
+    expandedPathsRef.current = nextExpandedPaths;
+    setRootPath(result.rootPath || rootPath);
     setExpandedPaths(nextExpandedPaths);
-    await loadExpandedPathsForRoot(rootPath, nextExpandedPaths);
-    highlightPath(path);
+    setBranches((current) => ({
+      ...current,
+      ...nextBranches,
+    }));
+    highlightPath(result.highlightPath || path);
   }
 
   async function toggleDirectory(path: string) {
@@ -302,10 +320,14 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   async function moveFile(path: string, targetParentPath: string) {
     const result = await client.movePath(botAlias, path, targetParentPath);
     const sourceParentPath = parentTreePath(path);
+    const targetExpandedPaths = uniqueExpandedPaths([...expandedPathsRef.current, ...ancestorPathsForPath(result.path)]);
+    expandedPathsRef.current = targetExpandedPaths;
+    setExpandedPaths(targetExpandedPaths);
     if (sourceParentPath !== targetParentPath) {
       await refreshBranch(sourceParentPath);
     }
-    await revealPath(result.path);
+    await refreshBranch(targetParentPath);
+    highlightPath(result.path);
     return result;
   }
 

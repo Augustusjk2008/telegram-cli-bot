@@ -92,6 +92,9 @@ class AssistantRuntimeCoordinator:
             raise KeyError(f"unknown run_id: {run_id}")
         return await run.future
 
+    def has_run(self, run_id: str) -> bool:
+        return run_id in self._runs
+
     def _enqueue(self, request: AssistantRunRequest, *, mode: Literal["result", "stream", "background"]) -> _QueuedRun:
         if self._worker_task is None or self._worker_task.done():
             raise RuntimeError("assistant runtime coordinator is not started")

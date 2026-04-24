@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import type { PluginAction, PluginRenderResult, TreeNode, TreeViewSummary, TreeWindowPayload } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
+import { VirtualList } from "../virtual/VirtualList";
 import { PluginActionBar } from "./PluginActionBar";
 
 type Props = {
@@ -330,6 +331,97 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
     ? (searchError || summary.emptySearchText || "未找到匹配目录、文件、符号")
     : "无结果";
 
+  function renderVisibleRow(row: VisibleRow) {
+    if (row.type === "status") {
+      return (
+        <div className="flex h-full items-center border-b border-[var(--border)]/70 px-3 text-sm text-[var(--muted)]">
+          <div style={{ paddingLeft: row.depth * 16 + 28 }}>
+            {row.loading ? `正在展开 ${row.node.label}...` : (
+              <div className="flex items-center gap-2">
+                <span>{row.error || "加载失败"}</span>
+                <button
+                  type="button"
+                  onClick={() => void loadChildren(row.node)}
+                  className="rounded border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const { node, depth } = row;
+    const isExpanded = !!expanded[node.id] || (queryActive && !!node.children?.length);
+    const canExpand = nodeHasChildren(node);
+    const marker = kindMarker(node.kind);
+    const primaryAction = getPrimaryAction(node);
+    const secondary = nodeSecondaryText(node);
+    const badges = nodeBadges(node);
+
+    return (
+      <div className="group flex h-full items-center border-b border-[var(--border)]/70 px-3 text-sm">
+        <div className="flex w-full items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-start gap-2" style={{ paddingLeft: depth * 16 }}>
+            <button
+              type="button"
+              onClick={() => void toggleNode(node)}
+              className="mt-0.5 h-6 w-6 shrink-0 rounded border border-[var(--border)] text-xs text-[var(--muted)] disabled:opacity-50"
+              disabled={!canExpand}
+              aria-label={isExpanded ? `折叠 ${node.label}` : `展开 ${node.label}`}
+            >
+              {canExpand ? (isExpanded ? "−" : "+") : "·"}
+            </button>
+            <span className={`mt-0.5 inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded border px-1.5 text-[10px] font-semibold uppercase ${marker.className}`}>
+              {marker.text}
+            </span>
+            <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={() => handleNodeLabelClick(node)}
+                className="min-w-0 max-w-full text-left text-[var(--text)] hover:text-[var(--accent)]"
+                aria-label={primaryAction ? `${primaryAction.label} ${node.label}` : node.label}
+              >
+                <span className="truncate">{node.label}</span>
+              </button>
+              {secondary ? <div className="truncate text-xs text-[var(--muted)]">{secondary}</div> : null}
+              {badges.length > 0 ? (
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  {badges.map((badge) => (
+                    <span
+                      key={`${node.id}-${badge.text}`}
+                      className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-[11px] text-[var(--muted)]"
+                    >
+                      {badge.text}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          {(node.actions || []).length > 0 ? (
+            <div className="flex shrink-0 items-center gap-1">
+              {(node.actions || []).map((action) => (
+                <button
+                  key={`${node.id}-${action.id}`}
+                  type="button"
+                  disabled={action.disabled}
+                  onClick={() => void runNodeAction(action, node)}
+                  className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  aria-label={action.label}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PluginActionBar actions={summary.actions} onRunAction={handleToolbarAction} />
@@ -351,97 +443,17 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
           {expandingText ? <div className="text-xs text-[var(--muted)]">{expandingText}</div> : null}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">
-        {visibleRows.length > 0 ? visibleRows.map((row) => {
-          if (row.type === "status") {
-            return (
-              <div key={`${row.node.id}-status`} className="border-b border-[var(--border)]/70 px-3 py-2 text-sm text-[var(--muted)]">
-                <div style={{ paddingLeft: row.depth * 16 + 28 }}>
-                  {row.loading ? `正在展开 ${row.node.label}...` : (
-                    <div className="flex items-center gap-2">
-                      <span>{row.error || "加载失败"}</span>
-                      <button
-                        type="button"
-                        onClick={() => void loadChildren(row.node)}
-                        className="rounded border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)]"
-                      >
-                        重试
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          }
-
-          const { node, depth } = row;
-          const isExpanded = !!expanded[node.id] || (queryActive && !!node.children?.length);
-          const canExpand = nodeHasChildren(node);
-          const marker = kindMarker(node.kind);
-          const primaryAction = getPrimaryAction(node);
-          const secondary = nodeSecondaryText(node);
-          const badges = nodeBadges(node);
-
-          return (
-            <div key={node.id} className="group border-b border-[var(--border)]/70 px-3 py-2 text-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 flex-1 items-start gap-2" style={{ paddingLeft: depth * 16 }}>
-                  <button
-                    type="button"
-                    onClick={() => void toggleNode(node)}
-                    className="mt-0.5 h-6 w-6 shrink-0 rounded border border-[var(--border)] text-xs text-[var(--muted)] disabled:opacity-50"
-                    disabled={!canExpand}
-                    aria-label={isExpanded ? `折叠 ${node.label}` : `展开 ${node.label}`}
-                  >
-                    {canExpand ? (isExpanded ? "−" : "+") : "·"}
-                  </button>
-                  <span className={`mt-0.5 inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded border px-1.5 text-[10px] font-semibold uppercase ${marker.className}`}>
-                    {marker.text}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <button
-                      type="button"
-                      onClick={() => handleNodeLabelClick(node)}
-                      className="min-w-0 max-w-full text-left text-[var(--text)] hover:text-[var(--accent)]"
-                      aria-label={primaryAction ? `${primaryAction.label} ${node.label}` : node.label}
-                    >
-                      <span className="truncate">{node.label}</span>
-                    </button>
-                    {secondary ? <div className="truncate text-xs text-[var(--muted)]">{secondary}</div> : null}
-                    {badges.length > 0 ? (
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {badges.map((badge) => (
-                          <span
-                            key={`${node.id}-${badge.text}`}
-                            className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-[11px] text-[var(--muted)]"
-                          >
-                            {badge.text}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                {(node.actions || []).length > 0 ? (
-                  <div className="flex shrink-0 items-center gap-1">
-                    {(node.actions || []).map((action) => (
-                      <button
-                        key={`${node.id}-${action.id}`}
-                        type="button"
-                        disabled={action.disabled}
-                        onClick={() => void runNodeAction(action, node)}
-                        className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                        aria-label={action.label}
-                      >
-                        {action.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          );
-        }) : (
+      <div className="min-h-0 flex-1">
+        {visibleRows.length > 0 ? (
+          <VirtualList
+            items={visibleRows}
+            rowHeight={72}
+            className="h-full"
+            dataTestId="plugin-tree-virtual-list"
+            getKey={(row) => row.type === "status" ? `${row.node.id}-status` : row.node.id}
+            renderRow={(row) => renderVisibleRow(row)}
+          />
+        ) : (
           <div className="px-3 py-8 text-center text-sm text-[var(--muted)]">{emptyText}</div>
         )}
       </div>

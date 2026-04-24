@@ -36,6 +36,7 @@ import type {
   DirectoryListing,
   AvatarAsset,
   FileOpenTarget,
+  FileTreeRevealResult,
   FileCopyResult,
   FileCreateResult,
   FileEntry,
@@ -66,6 +67,7 @@ import type {
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
   WorkdirChangeConflict,
+  HistoryDeltaResult,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
@@ -1251,6 +1253,20 @@ export class RealWebBotClient implements WebBotClient {
     return data.items.map((item, index) => mapChatMessage(item, index));
   }
 
+  async listMessageDelta(botAlias: string, afterId: string, limit = 50): Promise<HistoryDeltaResult> {
+    const params = new URLSearchParams({
+      after_id: afterId,
+      limit: String(limit),
+    });
+    const data = await this.requestJson<{ items: RawHistoryItem[]; reset: boolean }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/history/delta?${params.toString()}`,
+    );
+    return {
+      items: data.items.map((item, index) => mapChatMessage(item, index)),
+      reset: Boolean(data.reset),
+    };
+  }
+
   async getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails> {
     const data = await this.requestJson<RawChatTraceDetails>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace`,
@@ -1429,6 +1445,32 @@ export class RealWebBotClient implements WebBotClient {
       workingDir: data.working_dir,
       entries: data.entries.map(mapFileEntry),
       ...(data.is_virtual_root ? { isVirtualRoot: true } : {}),
+    };
+  }
+
+  async revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult> {
+    const data = await this.requestJson<{
+      root_path: string;
+      highlight_path: string;
+      expanded_paths?: string[];
+      branches: Record<string, RawFileEntry[]>;
+    }>(`/api/bots/${encodeURIComponent(botAlias)}/files/reveal`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+    return {
+      rootPath: data.root_path,
+      highlightPath: data.highlight_path,
+      expandedPaths: Array.isArray(data.expanded_paths) ? data.expanded_paths.map((item) => String(item)) : [],
+      branches: Object.fromEntries(
+        Object.entries(data.branches || {}).map(([branchPath, entries]) => [
+          branchPath,
+          entries.map(mapFileEntry),
+        ]),
+      ),
     };
   }
 

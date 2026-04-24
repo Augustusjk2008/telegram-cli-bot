@@ -90,6 +90,7 @@ from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_VIEW_PLUGINS, MEMBER_CAPABILITIES
+from bot.web import workspace_index_service
 
 logger = logging.getLogger(__name__)
 EDITOR_MAX_FILE_SIZE_BYTES = 512 * 1024
@@ -1176,6 +1177,10 @@ def _list_directory_entries(working_dir: str) -> dict[str, Any]:
     return _build_directory_listing_response(working_dir, entries)
 
 
+def _list_directory_entry_items(working_dir: str) -> list[dict[str, Any]]:
+    return _list_directory_entries(working_dir)["entries"]
+
+
 def _ensure_path_within_base_dir(base_dir: str, target_dir: str) -> None:
     try:
         base_path = Path(base_dir).resolve()
@@ -1183,6 +1188,19 @@ def _ensure_path_within_base_dir(base_dir: str, target_dir: str) -> None:
         target_path.relative_to(base_path)
     except ValueError:
         _raise(403, "forbidden_path", "当前账号无权访问该目录")
+
+
+def _invalidate_workspace_indexes(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *paths: str | os.PathLike[str] | None,
+) -> None:
+    session = get_session_for_alias(manager, alias, user_id)
+    candidates = [session.working_dir, _get_browser_directory(session), *paths]
+    for candidate in candidates:
+        if candidate:
+            workspace_index_service.invalidate_workspace_index(candidate)
 
 
 def get_directory_listing(
@@ -1211,6 +1229,48 @@ def get_directory_listing(
         _raise(500, "list_dir_failed", str(exc))
 
 
+def reveal_directory_tree(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str,
+) -> dict[str, Any]:
+    session = get_session_for_alias(manager, alias, user_id)
+    root = Path(_require_real_browser_directory(_get_browser_directory(session))).expanduser().resolve()
+    raw_path = Path(str(path or "").strip())
+    if not str(raw_path):
+        _raise(400, "missing_path", "路径不能为空")
+    target = (raw_path if raw_path.is_absolute() else root / raw_path).expanduser().resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        _raise(403, "forbidden_path", "当前账号无权访问该目录")
+    if not target.exists():
+        _raise(404, "path_not_found", "文件或文件夹不存在")
+
+    highlight_path = target.relative_to(root).as_posix()
+    branch_target = target if target.is_dir() else target.parent
+    branch_paths = [""]
+    if branch_target != root:
+        relative_parts = branch_target.relative_to(root).parts
+        branch_paths.extend(
+            "/".join(relative_parts[:index])
+            for index in range(1, len(relative_parts) + 1)
+        )
+
+    branches: dict[str, list[dict[str, Any]]] = {}
+    for branch_path in branch_paths:
+        branch_dir = root / Path(*branch_path.split("/")) if branch_path else root
+        branches[branch_path] = _list_directory_entry_items(str(branch_dir))
+
+    return {
+        "root_path": str(root),
+        "highlight_path": highlight_path,
+        "expanded_paths": [item for item in branch_paths if item],
+        "branches": branches,
+    }
+
+
 def create_directory(
     manager: MultiBotManager,
     alias: str,
@@ -1234,6 +1294,7 @@ def create_directory(
     except Exception as exc:
         _raise(500, "create_directory_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
         "name": directory_name,
         "created_path": target_path,
@@ -1268,6 +1329,7 @@ def create_text_file(
     except Exception as exc:
         _raise(500, "create_file_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
         "path": os.path.relpath(target_path, browser_dir).replace("\\", "/"),
         "file_size_bytes": os.path.getsize(target_path),
@@ -1300,6 +1362,7 @@ def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, n
     except Exception as exc:
         _raise(500, "rename_path_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
     return {
         "old_path": source_rel,
@@ -1339,6 +1402,7 @@ def copy_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> 
     except Exception as exc:
         _raise(500, "copy_path_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
     return {
         "source_path": source_rel,
@@ -1375,6 +1439,7 @@ def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, tar
     except Exception as exc:
         _raise(500, "move_path_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
     return {
         "old_path": source_rel,
@@ -1403,6 +1468,7 @@ def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -
     except Exception as exc:
         _raise(500, "delete_path_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
         "path": path,
         "deleted_type": deleted_type,
@@ -1435,6 +1501,26 @@ def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int =
     session = get_session_for_alias(manager, alias, user_id)
     service = _get_chat_history_service(session)
     return {"items": service.list_history(profile, session, limit=max(1, limit))}
+
+
+def get_history_delta(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    after_id: str,
+    limit: int = 50,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    items = _get_chat_history_service(session).list_history(profile, session, limit=max(1, limit))
+    marker = str(after_id or "")
+    if not marker:
+        return {"items": items, "reset": False}
+
+    ids = [str(item.get("id") or "") for item in items]
+    if marker not in ids:
+        return {"items": items, "reset": True}
+    return {"items": items[ids.index(marker) + 1:], "reset": False}
 
 
 def get_history_trace(manager: MultiBotManager, alias: str, user_id: int, message_id: str) -> dict[str, Any]:
@@ -2760,6 +2846,7 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
     file_path = _resolve_safe_path(browser_dir, filename)
     with open(file_path, "wb") as handle:
         handle.write(data)
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
         "filename": filename,
         "saved_path": file_path,
@@ -2796,6 +2883,7 @@ def write_file_content(
     except Exception as exc:
         _raise(500, "write_file_failed", str(exc))
 
+    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
         "path": path,
         "file_size_bytes": os.path.getsize(file_path),

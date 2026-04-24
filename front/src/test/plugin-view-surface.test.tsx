@@ -719,6 +719,33 @@ test("plugin view surface runs file and symbol primary actions", async () => {
   expect(applyHostEffects).toHaveBeenNthCalledWith(2, [{ type: "open_file", path: "bot/web/api_service.py", line: 184 }]);
 });
 
+test("plugin tree view renders only visible rows for large trees", () => {
+  const client = new MockWebBotClient();
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "repo-outline",
+        viewId: "repo-tree",
+        title: "仓库大纲",
+        renderer: "tree",
+        mode: "snapshot",
+        payload: {
+          roots: Array.from({ length: 500 }, (_, index) => ({
+            id: `node-${index}`,
+            label: `node-${index}`,
+            kind: "file",
+          })),
+        },
+      }}
+    />,
+  );
+
+  expect(screen.getAllByRole("button", { name: /^node-/ }).length).toBeLessThanOrEqual(100);
+});
+
 test("runPluginAction closes session before refreshing", async () => {
   const client = new MockWebBotClient();
   const closeSession = vi.fn();

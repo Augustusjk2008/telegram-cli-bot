@@ -321,6 +321,57 @@ for line in sys.stdin:
     (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_unicode_plugin(root: Path) -> None:
+    plugin_dir = root / "unicode-tree"
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "plugin.initialize":
+        result = {"ok": True}
+    elif method == "plugin.render_view":
+        result = {
+            "renderer": "table",
+            "title": "文件夹大纲",
+            "payload": {
+                "columns": [{"id": "label", "title": "标签"}],
+                "rows": [{"id": "row-1", "cells": {"label": "中文节点"}}],
+            },
+        }
+    elif method == "plugin.shutdown":
+        result = {"ok": True}
+    else:
+        result = {"ok": True}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}, ensure_ascii=False) + "\\n")
+    sys.stdout.flush()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "schemaVersion": 2,
+        "id": "unicode-tree",
+        "name": "Unicode Tree",
+        "version": "0.1.0",
+        "description": "unicode runtime test",
+        "runtime": {
+            "type": "python",
+            "entry": "backend/main.py",
+            "protocol": "jsonrpc-stdio",
+            "permissions": {},
+        },
+        "views": [{"id": "tree", "title": "树", "renderer": "table"}],
+        "fileHandlers": [],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @pytest.mark.asyncio
 async def test_plugin_runtime_initializes_renders_and_shuts_down(tmp_path: Path) -> None:
     plugins_root = tmp_path / "plugins"
@@ -434,4 +485,23 @@ async def test_plugin_runtime_scopes_processes_by_bot_alias(tmp_path: Path) -> N
 
     assert ("main", "echo-wave") in runtime._processes
     assert ("lab", "echo-wave") in runtime._processes
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_runtime_forces_utf8_stdio_for_child_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_unicode_plugin(plugins_root)
+    manifest = PluginRegistry(plugins_root).discover()["unicode-tree"]
+    monkeypatch.setenv("PYTHONIOENCODING", "gbk")
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+
+    runtime = PluginRuntime(workspace_root_for=lambda _alias: tmp_path)
+    result = await runtime.render_view("main", manifest, "tree", {"path": "demo"})
+
+    assert result["title"] == "文件夹大纲"
+    assert result["payload"]["rows"][0]["cells"]["label"] == "中文节点"
     await runtime.shutdown()

@@ -150,6 +150,11 @@ export type ChatMessage = {
   meta?: ChatMessageMetaInfo;
 };
 
+export type HistoryDeltaResult = {
+  items: ChatMessage[];
+  reset: boolean;
+};
+
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;
@@ -745,6 +750,13 @@ export type DirectoryListing = {
   workingDir: string;
   entries: FileEntry[];
   isVirtualRoot?: boolean;
+};
+
+export type FileTreeRevealResult = {
+  rootPath: string;
+  highlightPath: string;
+  expandedPaths: string[];
+  branches: Record<string, FileEntry[]>;
 };
 
 export type CliParamField = {

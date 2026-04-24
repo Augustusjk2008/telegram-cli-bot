@@ -223,3 +223,78 @@ test("tree can hand a directory off to embedded settings as the next workdir tar
 
   expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
 });
+
+test("workspace open reveals file tree through one backend request", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "src", isDir: true }],
+  });
+  vi.spyOn(client, "quickOpenWorkspace").mockResolvedValue({
+    items: [{ path: "src/nested/api.py", score: 1000 }],
+  });
+  const revealFileTreePath = vi.fn(async () => ({
+    rootPath: "/workspace",
+    highlightPath: "src/nested/api.py",
+    expandedPaths: ["src", "src/nested"],
+    branches: {
+      "": [{ name: "src", isDir: true }],
+      src: [{ name: "nested", isDir: true }],
+      "src/nested": [{ name: "api.py", isDir: false, size: 12 }],
+    },
+  }));
+  Object.assign(client, { revealFileTreePath });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "展开 src" });
+  fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+  await user.type(await screen.findByRole("textbox", { name: "快速打开文件" }), "api");
+  await user.click(await screen.findByRole("button", { name: "打开 src/nested/api.py" }));
+
+  await waitFor(() => {
+    expect(revealFileTreePath).toHaveBeenCalledTimes(1);
+  });
+  expect(revealFileTreePath).toHaveBeenCalledWith("main", "src/nested/api.py");
+});
+
+test("large file tree renders only visible rows", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: Array.from({ length: 500 }, (_, index) => ({
+      name: `file-${String(index).padStart(3, "0")}.ts`,
+      isDir: false,
+      size: 12,
+    })),
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 file-000.ts" });
+
+  expect(screen.getAllByRole("button", { name: /^打开 file-/ }).length).toBeLessThanOrEqual(80);
+});

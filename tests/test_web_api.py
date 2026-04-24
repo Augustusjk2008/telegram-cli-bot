@@ -125,6 +125,28 @@ def isolated_web_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
     return store
 
+
+def _seed_chat_turn(
+    web_manager: MultiBotManager,
+    workspace: Path,
+    *,
+    user_text: str,
+    assistant_text: str,
+    user_id: int = 1001,
+) -> None:
+    web_manager.main_profile.working_dir = str(workspace)
+    session = get_session_for_alias(web_manager, "main", user_id)
+    session.working_dir = str(workspace)
+    session.session_epoch = 1
+    service = ChatHistoryService(ChatStore(workspace))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text=user_text,
+        native_provider=web_manager.main_profile.cli_type,
+    )
+    service.complete_turn(handle, content=assistant_text, completion_state="completed")
+
 def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_dir: Path):
     import bot.session_store as session_store
 
@@ -2284,6 +2306,130 @@ async def test_workspace_search_routes_use_current_working_directory(
                 {"name": "App", "kind": "class", "line": 1},
                 {"name": "run", "kind": "function", "line": 2},
             ]
+
+
+@pytest.mark.asyncio
+async def test_history_delta_route_returns_items_after_last_id(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            history_resp = await client.get("/api/bots/main/history?limit=10")
+            assert history_resp.status == 200
+            history_payload = await history_resp.json()
+            last_id = history_payload["data"]["items"][-1]["id"]
+
+            _seed_chat_turn(web_manager, workspace, user_text="第二问", assistant_text="增量回复")
+
+            delta_resp = await client.get(f"/api/bots/main/history/delta?after_id={last_id}&limit=10")
+            assert delta_resp.status == 200
+            delta_payload = await delta_resp.json()
+
+    assert delta_payload["data"]["reset"] is False
+    assert [item["content"] for item in delta_payload["data"]["items"]] == ["第二问", "增量回复"]
+
+
+@pytest.mark.asyncio
+async def test_history_delta_route_resets_when_after_id_missing(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答")
+    _seed_chat_turn(web_manager, workspace, user_text="第二问", assistant_text="最新回复")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            delta_resp = await client.get("/api/bots/main/history/delta?after_id=missing-id&limit=10")
+            assert delta_resp.status == 200
+            delta_payload = await delta_resp.json()
+
+    assert delta_payload["data"]["reset"] is True
+    assert delta_payload["data"]["items"][-1]["content"] == "最新回复"
+
+
+@pytest.mark.asyncio
+async def test_files_reveal_route_returns_root_and_ancestor_branches(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    nested = workspace / "src" / "nested"
+    nested.mkdir(parents=True)
+    (workspace / "README.md").write_text("# demo\n", encoding="utf-8")
+    (nested / "api.py").write_text("print('ok')\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post(
+                "/api/bots/main/files/reveal",
+                json={"path": str(nested / "api.py")},
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["root_path"] == str(workspace)
+    assert payload["data"]["highlight_path"] == "src/nested/api.py"
+    assert [item["name"] for item in payload["data"]["branches"][""]] == ["src", "README.md"]
+    assert [item["name"] for item in payload["data"]["branches"]["src"]] == ["nested"]
+    assert [item["name"] for item in payload["data"]["branches"]["src/nested"]] == ["api.py"]
+
+
+@pytest.mark.asyncio
+async def test_create_text_file_route_invalidates_workspace_indexes(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    invalidations: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fake_invalidate(*args: object, **kwargs: object) -> None:
+        invalidations.append((args, kwargs))
+
+    monkeypatch.setattr(api_service, "_invalidate_workspace_indexes", fake_invalidate, raising=False)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/create", json={"filename": "notes.md", "content": "# hello\n"})
+            assert resp.status == 200
+
+    assert invalidations
 
 @pytest.mark.asyncio
 async def test_write_file_route_updates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):

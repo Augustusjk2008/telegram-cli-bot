@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import workspace_index_service
+
 DEFAULT_EXCLUDES = [".git", "node_modules", "venv", ".venv", "dist", "build", "__pycache__"]
 
 _SOURCE_ROOTS = {"src", "bot", "front", "tests", "scripts"}
@@ -146,7 +148,7 @@ def quick_open_files(workspace: Path | str, query: str, *, limit: int = 50) -> d
     safe_limit = max(1, min(int(limit or 50), 200))
     items: list[tuple[int, int, str]] = []
 
-    for index, path in enumerate(_list_workspace_files(root)):
+    for index, path in enumerate(workspace_index_service.get_workspace_files(root, _list_workspace_files)):
         normalized = path.replace("\\", "/")
         if q and q.lower() not in normalized.lower():
             continue

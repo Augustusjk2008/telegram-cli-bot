@@ -1440,15 +1440,111 @@ test("hidden assistant chat does not start idle polling on mount", async () => {
     await Promise.resolve();
   });
 
-  expect(getBotOverview).toHaveBeenCalledTimes(1);
-  expect(listMessages).toHaveBeenCalledTimes(1);
+  expect(getBotOverview).not.toHaveBeenCalled();
+  expect(listMessages).not.toHaveBeenCalled();
 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1100);
   });
 
-  expect(getBotOverview).toHaveBeenCalledTimes(1);
+  expect(getBotOverview).not.toHaveBeenCalled();
+  expect(listMessages).not.toHaveBeenCalled();
+});
+
+test("hidden assistant chat activates when it becomes visible", async () => {
+  const getBotOverview = vi.fn(async () => ({
+    alias: "assistant1",
+    cliType: "codex" as const,
+    status: "running" as const,
+    workingDir: "C:\\workspace",
+    botMode: "assistant",
+    isProcessing: false,
+    historyCount: 0,
+  }));
+  const listMessages = vi.fn(async (): Promise<ChatMessage[]> => []);
+  const client = createClient({
+    getBotOverview,
+    listMessages: listMessages as never,
+  });
+
+  const { rerender } = render(<ChatScreen botAlias="assistant1" client={client} isVisible={false} />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(getBotOverview).not.toHaveBeenCalled();
+
+  rerender(<ChatScreen botAlias="assistant1" client={client} isVisible />);
+
+  await waitFor(() => {
+    expect(getBotOverview).toHaveBeenCalledTimes(1);
+    expect(listMessages).toHaveBeenCalledTimes(1);
+  });
+});
+
+test("assistant idle polling requests history delta when history count changes", async () => {
+  vi.useFakeTimers();
+  const initialMessages: ChatMessage[] = [
+    {
+      id: "user-1",
+      role: "user",
+      text: "第一问",
+      createdAt: "2026-04-16T18:00:00",
+      state: "done",
+    },
+  ];
+  const deltaMessages: ChatMessage[] = [
+    {
+      id: "assistant-2",
+      role: "assistant",
+      text: "增量回复",
+      createdAt: "2026-04-16T18:00:02",
+      state: "done",
+    },
+  ];
+  let overviewCalls = 0;
+  const getBotOverview = vi.fn(async () => {
+    overviewCalls += 1;
+    return {
+      alias: "assistant1",
+      cliType: "codex" as const,
+      status: "running" as const,
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+      historyCount: overviewCalls === 1 ? 1 : 2,
+    };
+  });
+  const listMessages = vi.fn(async () => initialMessages);
+  const listMessageDelta = vi.fn(async () => ({
+    items: deltaMessages,
+    reset: false,
+  }));
+  const client = createClient({
+    getBotOverview,
+    listMessages: listMessages as never,
+  }) as WebBotClient & {
+    listMessageDelta: typeof listMessageDelta;
+  };
+  client.listMessageDelta = listMessageDelta;
+
+  render(<ChatScreen botAlias="assistant1" client={client} isVisible />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   expect(listMessages).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5100);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(listMessageDelta).toHaveBeenCalledWith("assistant1", "user-1", 50);
+  expect(screen.getByText("增量回复")).toBeInTheDocument();
 });
 
 test("assistant chat immediately shows manual cron prompts after the settings handoff event", async () => {

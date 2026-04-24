@@ -2,6 +2,7 @@ import { clsx } from "clsx";
 import { FilePlus, FolderPlus, RefreshCw, Upload } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { FileNameDialog } from "../components/FileNameDialog";
+import { VirtualList } from "../components/virtual/VirtualList";
 import type { GitTreeDecorationKind } from "../services/types";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
@@ -28,6 +29,10 @@ type TreeContextMenuState = {
   x: number;
   y: number;
 };
+
+type FileTreeVisibleRow =
+  | { type: "entry"; entry: FileTreeNode; depth: number }
+  | { type: "status"; branchPath: string; depth: number; text: string; tone: "muted" | "error" };
 
 const TREE_CONTEXT_MENU_WIDTH_PX = 152;
 const TREE_CONTEXT_MENU_PADDING_PX = 8;
@@ -1081,98 +1086,108 @@ export function FileTreePane({
     await onRefreshGitDecorations();
   }
 
-  function renderBranch(entries: FileTreeNode[], depth: number) {
+  function flattenBranch(entries: FileTreeNode[], depth: number): FileTreeVisibleRow[] {
+    const rows: FileTreeVisibleRow[] = [];
+    for (const entry of entries) {
+      rows.push({ type: "entry", entry, depth });
+      if (!entry.isDir || !tree.isExpanded(entry.path)) {
+        continue;
+      }
+      const branch = tree.branches[entry.path];
+      if (branch?.loading) {
+        rows.push({ type: "status", branchPath: entry.path, depth: depth + 1, text: "加载中...", tone: "muted" });
+      }
+      if (branch?.error) {
+        rows.push({ type: "status", branchPath: entry.path, depth: depth + 1, text: branch.error, tone: "error" });
+      }
+      if (branch?.entries?.length) {
+        rows.push(...flattenBranch(branch.entries, depth + 1));
+      }
+    }
+    return rows;
+  }
+
+  function renderTreeRow(row: FileTreeVisibleRow) {
+    if (row.type === "status") {
+      return (
+        <div
+          className={clsx("flex h-full items-center px-2 text-[11px]", row.tone === "error" ? "text-red-700" : "text-[var(--muted)]")}
+          style={{ paddingLeft: `${row.depth * 12 + 24}px` }}
+        >
+          {row.text}
+        </div>
+      );
+    }
+
+    const { entry, depth } = row;
+    const expanded = tree.isExpanded(entry.path);
+    const dirLabel = branchLabel(entry.path);
+    const absolutePath = joinAbsoluteTreePath(tree.rootPath, entry.path);
+    const iconKind = entry.isDir
+      ? (expanded ? "folder-open" : "folder-closed")
+      : getFileIconKind(entry.name);
+    const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations);
+    const isIgnored = gitDecoration === "ignored";
+    const itemToneClass = treeItemToneClass(gitDecoration);
+
     return (
-      <ul className="space-y-0.5">
-        {entries.map((entry) => {
-          const expanded = tree.isExpanded(entry.path);
-          const branch = tree.branches[entry.path];
-          const dirLabel = branchLabel(entry.path);
-          const absolutePath = joinAbsoluteTreePath(tree.rootPath, entry.path);
-          const iconKind = entry.isDir
-            ? (expanded ? "folder-open" : "folder-closed")
-            : getFileIconKind(entry.name);
-          const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations);
-          const isIgnored = gitDecoration === "ignored";
-          const itemToneClass = treeItemToneClass(gitDecoration);
-
-          return (
-            <li key={entry.path}>
-              <div
-                className="group flex min-w-0 items-center rounded-md text-[12px]"
-                data-tree-path={entry.path}
-                data-git-state={gitDecoration || "clean"}
-                data-git-ignored={isIgnored ? "true" : "false"}
-                data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
-                data-drop-target={dropTargetPath === entry.path ? "true" : "false"}
-                style={{ paddingLeft: `${depth * 12}px` }}
-              >
-                {entry.isDir ? (
-                  <button
-                    type="button"
-                    aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
-                    onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
-                    onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
-                    onDragOver={(event) => handleDirectoryDragOver(event, entry)}
-                    onDragLeave={(event) => handleDirectoryDragLeave(event, entry)}
-                    onDrop={(event) => handleDirectoryDrop(event, entry)}
-                    onClick={() => void tree.toggleDirectory(entry.path)}
-                    className={clsx(
-                      "min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]",
-                      dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
-                      itemToneClass,
-                    )}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <TreeNodeIcon kind={iconKind} />
-                      <span className="truncate">{dirLabel}</span>
-                    </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    draggable={!structureOnly}
-                    aria-label={`打开 ${entry.path}`}
-                    onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
-                    onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
-                    onDragStart={(event) => handleFileDragStart(event, entry)}
-                    onDragEnd={resetInternalDrag}
-                    onClick={() => {
-                      if (!structureOnly) {
-                        onOpenFile(entry.path);
-                      }
-                    }}
-                    className={clsx("min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <TreeNodeIcon kind={iconKind} />
-                      <span className="truncate">{entry.name}</span>
-                    </span>
-                  </button>
-                )}
-              </div>
-
-              {entry.isDir && expanded ? (
-                <div className="space-y-0.5">
-                  {branch?.loading ? (
-                    <div className="px-2 py-0.5 text-[11px] text-[var(--muted)]" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
-                      加载中...
-                    </div>
-                  ) : null}
-                  {branch?.error ? (
-                    <div className="px-2 py-0.5 text-[11px] text-red-700" style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
-                      {branch.error}
-                    </div>
-                  ) : null}
-                  {branch?.entries?.length ? renderBranch(branch.entries, depth + 1) : null}
-                </div>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      <div
+        className="group flex h-full min-w-0 items-center rounded-md text-[12px]"
+        data-tree-path={entry.path}
+        data-git-state={gitDecoration || "clean"}
+        data-git-ignored={isIgnored ? "true" : "false"}
+        data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
+        data-drop-target={dropTargetPath === entry.path ? "true" : "false"}
+        style={{ paddingLeft: `${depth * 12}px` }}
+      >
+        {entry.isDir ? (
+          <button
+            type="button"
+            aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
+            onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
+            onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
+            onDragOver={(event) => handleDirectoryDragOver(event, entry)}
+            onDragLeave={(event) => handleDirectoryDragLeave(event, entry)}
+            onDrop={(event) => handleDirectoryDrop(event, entry)}
+            onClick={() => void tree.toggleDirectory(entry.path)}
+            className={clsx(
+              "min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]",
+              dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
+              itemToneClass,
+            )}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <TreeNodeIcon kind={iconKind} />
+              <span className="truncate">{dirLabel}</span>
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            draggable={!structureOnly}
+            aria-label={`打开 ${entry.path}`}
+            onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
+            onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
+            onDragStart={(event) => handleFileDragStart(event, entry)}
+            onDragEnd={resetInternalDrag}
+            onClick={() => {
+              if (!structureOnly) {
+                onOpenFile(entry.path);
+              }
+            }}
+            className={clsx("min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <TreeNodeIcon kind={iconKind} />
+              <span className="truncate">{entry.name}</span>
+            </span>
+          </button>
+        )}
+      </div>
     );
   }
+
+  const visibleTreeRows = !tree.loading && !tree.error ? flattenBranch(tree.rootEntries, 0) : [];
 
   return (
     <div
@@ -1292,7 +1307,7 @@ export function FileTreePane({
         </div>
       </div>
 
-      <div data-testid="desktop-file-tree-scroll" className="flex-1 overflow-y-auto px-2 py-2">
+      <div data-testid="desktop-file-tree-scroll" className="flex min-h-0 flex-1 flex-col px-2 py-2">
         {actionError ? (
           <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[12px] text-red-700">
             {actionError}
@@ -1304,7 +1319,16 @@ export function FileTreePane({
         {!tree.loading && tree.error ? (
           <div className="px-2 py-2 text-[12px] text-red-700">{tree.error}</div>
         ) : null}
-        {!tree.loading && !tree.error ? renderBranch(tree.rootEntries, 0) : null}
+        {!tree.loading && !tree.error ? (
+          <VirtualList
+            items={visibleTreeRows}
+            rowHeight={28}
+            className="flex-1"
+            dataTestId="desktop-file-tree-virtual-list"
+            getKey={(row) => row.type === "entry" ? row.entry.path : `${row.branchPath}-${row.tone}`}
+            renderRow={(row) => renderTreeRow(row)}
+          />
+        ) : null}
       </div>
 
       {contextMenu ? (

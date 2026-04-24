@@ -92,6 +92,7 @@ from .api_service import (
     get_directory_listing,
     get_file_metadata,
     get_history,
+    get_history_delta,
     get_history_trace,
     get_overview,
     list_avatar_assets,
@@ -118,6 +119,7 @@ from .api_service import (
     render_plugin_view,
     run_system_script,
     resolve_plugin_file_target,
+    reveal_directory_tree,
     save_chat_attachment,
     save_uploaded_file,
     start_managed_bot,
@@ -1176,6 +1178,13 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit)})
 
+    async def get_history_delta_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        limit = int(request.query.get("limit", "50"))
+        after_id = request.query.get("after_id", "")
+        return _json({"ok": True, "data": get_history_delta(self.manager, alias, auth.user_id, after_id, limit=limit)})
+
     async def get_debug_profile(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = self._manager_alias(request)
@@ -1425,6 +1434,12 @@ class WebApiServer:
             parent_path=body.get("parent_path"),
         )
         return _json({"ok": True, "data": data})
+
+    async def post_files_reveal(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": reveal_directory_tree(self.manager, alias, auth.user_id, str(body.get("path", "")))})
 
     async def write_file_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
@@ -1934,6 +1949,7 @@ class WebApiServer:
         app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
         app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
+        app.router.add_get("/api/bots/{alias}/history/delta", self.get_history_delta_view)
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)
         app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
         app.router.add_get("/api/bots/{alias}/git/tree-status", self.get_git_tree_status_view)
@@ -1953,6 +1969,7 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/chat/attachments", self.upload_chat_attachment)
         app.router.add_post("/api/bots/{alias}/chat/attachments/delete", self.delete_chat_attachment_view)
         app.router.add_post("/api/bots/{alias}/files/mkdir", self.create_directory_view)
+        app.router.add_post("/api/bots/{alias}/files/reveal", self.post_files_reveal)
         app.router.add_post("/api/bots/{alias}/files/write", self.write_file_view)
         app.router.add_post("/api/bots/{alias}/files/create", self.create_text_file_view)
         app.router.add_post("/api/bots/{alias}/files/rename", self.rename_path_view)

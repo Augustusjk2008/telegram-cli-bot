@@ -16,6 +16,7 @@ import type {
   DebugState,
   DirectoryListing,
   FileOpenTarget,
+  FileTreeRevealResult,
   FileCopyResult,
   FileCreateResult,
   FileMoveResult,
@@ -32,6 +33,7 @@ import type {
   GitTreeStatus,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
+  HistoryDeltaResult,
   PublicHostInfo,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
@@ -69,6 +71,7 @@ export interface WebBotClient {
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
+  listMessageDelta(botAlias: string, afterId: string, limit?: number): Promise<HistoryDeltaResult>;
   getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails>;
   sendMessage(
     botAlias: string,
@@ -81,6 +84,7 @@ export interface WebBotClient {
   getDebugState(botAlias: string): Promise<DebugState>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
+  revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult>;
   changeDirectory(botAlias: string, path: string): Promise<string>;
   createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void>;
   deletePath(botAlias: string, path: string): Promise<void>;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -200,6 +201,10 @@ class PluginRuntime:
             raise ValueError(f"unsupported protocol: {manifest.runtime.protocol}")
 
         entry = str((manifest.root / manifest.runtime.entry).resolve())
+        env = dict(os.environ)
+        # Plugins speak JSON-RPC over stdio and the protocol decoder is UTF-8-only.
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             entry,
@@ -207,6 +212,7 @@ class PluginRuntime:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(manifest.root),
+            env=env,
             limit=PLUGIN_STDIO_LIMIT,
         )
         key = (bot_alias, manifest.plugin_id)
