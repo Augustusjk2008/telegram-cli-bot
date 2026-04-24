@@ -12,6 +12,8 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
   render(<PluginsScreen client={client} botAlias="main" />);
 
   expect(await screen.findByText("Vivado Waveform")).toBeInTheDocument();
+  expect(screen.queryByLabelText("默认页大小")).not.toBeInTheDocument();
+
   await user.click(screen.getByRole("button", { name: "禁用 Vivado Waveform" }));
 
   await waitFor(() => {
@@ -19,6 +21,7 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
   });
   expect(await screen.findByText(/已禁用/)).toBeInTheDocument();
 
+  await user.click(screen.getByRole("button", { name: "展开 Timing Report" }));
   const timingPageSize = screen.getByLabelText("默认页大小");
   await user.clear(timingPageSize);
   await user.type(timingPageSize, "200");
@@ -36,6 +39,8 @@ test("plugins screen lets repo outline pick a folder before opening", async () =
 
   render(<PluginsScreen client={client} botAlias="main" />);
 
+  expect(screen.queryByRole("button", { name: "选择文件夹大纲" })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "展开 Repo Outline" }));
   await user.click(await screen.findByRole("button", { name: "选择文件夹大纲" }));
   expect(await screen.findByRole("dialog", { name: "选择要生成大纲的文件夹" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "使用当前目录" }));

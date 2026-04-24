@@ -89,6 +89,15 @@ export function PluginCatalog({
 }: Props) {
   const [actionError, setActionError] = useState("");
   const [folderAction, setFolderAction] = useState<{ plugin: PluginSummary; action: PluginAction } | null>(null);
+  const [expandedPluginIds, setExpandedPluginIds] = useState<string[]>([]);
+
+  function togglePluginExpanded(pluginId: string) {
+    setExpandedPluginIds((current) => (
+      current.includes(pluginId)
+        ? current.filter((id) => id !== pluginId)
+        : [...current, pluginId]
+    ));
+  }
 
   function openCatalogPluginView(action: PluginAction, inputOverride?: Record<string, unknown>) {
     const openViewAction = getOpenPluginViewAction(action);
@@ -178,84 +187,99 @@ export function PluginCatalog({
               ? (plugin.catalogActions || []).filter((action) => action.id !== primaryAction.id)
               : (plugin.catalogActions || []);
             const pluginEnabled = plugin.enabled !== false;
+            const expanded = expandedPluginIds.includes(plugin.id);
             const statusClassName = pluginEnabled ? "text-emerald-600" : "text-red-600";
             const toggleButtonClassName = pluginEnabled
               ? "rounded-lg border border-red-500 px-3 py-1.5 text-sm text-red-600 hover:bg-[var(--surface-strong)] disabled:opacity-60"
               : "rounded-lg border border-emerald-500 px-3 py-1.5 text-sm text-emerald-600 hover:bg-[var(--surface-strong)] disabled:opacity-60";
+            const expandButtonClassName = "rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--surface-strong)]";
 
             return (
               <>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="font-medium text-[var(--text)]">{plugin.name}</div>
-              {onUpdatePlugin ? (
-                <div className="mt-1 text-xs text-[var(--muted)]">
-                  <span className={statusClassName}>{pluginEnabled ? "已启用" : "已禁用"}</span> · v{plugin.version}
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-[var(--text)]">{plugin.name}</div>
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      <span className={statusClassName}>{pluginEnabled ? "已启用" : "已禁用"}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {onUpdatePlugin ? (
+                      <button
+                        type="button"
+                        disabled={updatingPluginId === plugin.id}
+                        onClick={() => onUpdatePlugin(plugin.id, { enabled: plugin.enabled === false })}
+                        className={toggleButtonClassName}
+                        aria-label={`${plugin.enabled === false ? "启用" : "禁用"} ${plugin.name}`}
+                      >
+                        {plugin.enabled === false ? "启用" : "禁用"}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      aria-label={`${expanded ? "收起" : "展开"} ${plugin.name}`}
+                      onClick={() => togglePluginExpanded(plugin.id)}
+                      className={expandButtonClassName}
+                    >
+                      {expanded ? "收起" : "展开"}
+                    </button>
+                  </div>
                 </div>
-              ) : null}
-            </div>
-            {onUpdatePlugin ? (
-              <button
-                type="button"
-                disabled={updatingPluginId === plugin.id}
-                onClick={() => onUpdatePlugin(plugin.id, { enabled: plugin.enabled === false })}
-                className={toggleButtonClassName}
-                aria-label={`${plugin.enabled === false ? "启用" : "禁用"} ${plugin.name}`}
-              >
-                {plugin.enabled === false ? "启用" : "禁用"}
-              </button>
-            ) : (
-              <div className="text-xs text-[var(--muted)]">v{plugin.version}</div>
-            )}
-          </div>
-          <p className="mt-1 text-sm text-[var(--muted)]">{plugin.description}</p>
 
-          {client && botAlias && primaryAction ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => runCatalogAction(plugin, primaryAction)}
-                className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm text-white hover:opacity-90"
-              >
-                {primaryAction.label}
-              </button>
-              {extraActions.length > 0 ? <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} /> : null}
-            </div>
-          ) : null}
+                {expanded ? (
+                  <>
+                    <div className="mt-3 text-xs text-[var(--muted)]">v{plugin.version}</div>
+                    <p className="mt-1 text-sm text-[var(--muted)]">{plugin.description}</p>
 
-          {client && botAlias && !primaryAction && extraActions.length > 0 ? (
-            <div className="mt-3">
-              <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} />
-            </div>
-          ) : null}
+                    {client && botAlias && primaryAction ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => runCatalogAction(plugin, primaryAction)}
+                          className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm text-white hover:opacity-90"
+                        >
+                          {primaryAction.label}
+                        </button>
+                        {extraActions.length > 0 ? <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} /> : null}
+                      </div>
+                    ) : null}
 
-          {onUpdatePlugin ? (
-            <PluginConfigForm
-              plugin={plugin}
-              disabled={updatingPluginId === plugin.id}
-              onSubmit={(input) => onUpdatePlugin(plugin.id, input)}
-            />
-          ) : null}
+                    {client && botAlias && !primaryAction && extraActions.length > 0 ? (
+                      <div className="mt-3">
+                        <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} />
+                      </div>
+                    ) : null}
 
-          {plugin.views.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-              {plugin.views.map((view) => (
-                <span key={view.id} className="rounded-full bg-[var(--surface-strong)] px-2 py-1">
-                  视图 {view.title}
-                </span>
-              ))}
-            </div>
-          ) : null}
+                    {onUpdatePlugin ? (
+                      <PluginConfigForm
+                        plugin={plugin}
+                        disabled={updatingPluginId === plugin.id}
+                        onSubmit={(input) => onUpdatePlugin(plugin.id, input)}
+                      />
+                    ) : null}
 
-          {plugin.fileHandlers.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-              {plugin.fileHandlers.map((handler) => (
-                <span key={handler.id} className="rounded-full bg-[var(--surface-strong)] px-2 py-1">
-                  支持 {handler.extensions.join(", ")}
-                </span>
-              ))}
-            </div>
-          ) : null}
+                    {plugin.views.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+                        {plugin.views.map((view) => (
+                          <span key={view.id} className="rounded-full bg-[var(--surface-strong)] px-2 py-1">
+                            视图 {view.title}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {plugin.fileHandlers.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+                        {plugin.fileHandlers.map((handler) => (
+                          <span key={handler.id} className="rounded-full bg-[var(--surface-strong)] px-2 py-1">
+                            支持 {handler.extensions.join(", ")}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
               </>
             );
           })()}

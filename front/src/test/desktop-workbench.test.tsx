@@ -273,6 +273,7 @@ test("desktop plugin catalog actions can open another plugin view", async () => 
   );
 
   await user.click(screen.getByRole("button", { name: "插件" }));
+  await user.click(await screen.findByRole("button", { name: "展开 RTL Hierarchy" }));
   await user.click(await screen.findByRole("button", { name: "打开 Timing" }));
 
   expect(await screen.findByRole("tab", { name: "timing.rpt" })).toBeInTheDocument();
@@ -298,6 +299,7 @@ test("desktop workbench opens repo outline from plugin catalog CTA", async () =>
   );
 
   await user.click(screen.getByRole("button", { name: "插件" }));
+  await user.click(await screen.findByRole("button", { name: "展开 Repo Outline" }));
   await user.click(await screen.findByRole("button", { name: "选择文件夹大纲" }));
   await user.click(await screen.findByRole("button", { name: "使用当前目录" }));
 
