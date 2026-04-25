@@ -6,7 +6,9 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ChatMessage, ChatTraceDetails, CliParamsPayload, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
-function modelCliParams(model: string): CliParamsPayload {
+const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
+
+function modelCliParams(model: string | null): CliParamsPayload {
   return {
     cliType: "codex",
     params: { model },
@@ -15,7 +17,8 @@ function modelCliParams(model: string): CliParamsPayload {
       model: {
         type: "string",
         description: "模型选择",
-        enum: ["gpt-5.5", "gpt-5.4"],
+        nullable: true,
+        enum: MODEL_OPTIONS,
       },
     },
   };
@@ -243,6 +246,29 @@ test("shows model selector in chat action bar and saves selected model", async (
 
   expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.4", "codex");
   expect(selector).toHaveValue("gpt-5.4");
+});
+
+test("shows none for null model and disables model param with none", async () => {
+  const updateCliParam = vi.fn(async (_botAlias: string, _key: string, value: unknown) => (
+    modelCliParams(value === "none" ? null : String(value))
+  ));
+  const user = userEvent.setup();
+  const client = createClient({
+    getCliParams: async () => modelCliParams(null),
+    updateCliParam,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const selector = await screen.findByLabelText("模型");
+  expect(selector).toHaveValue("none");
+
+  await user.selectOptions(selector, "gpt-5.4");
+  expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.4", "codex");
+
+  await user.selectOptions(selector, "none");
+  expect(updateCliParam).toHaveBeenLastCalledWith("main", "model", "none", "codex");
+  expect(selector).toHaveValue("none");
 });
 
 test("shows a user message after sending text", async () => {

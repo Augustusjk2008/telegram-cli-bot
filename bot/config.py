@@ -7,6 +7,8 @@ import re
 import sys
 from typing import List, Optional, Set
 
+from bot.cli_params import normalize_cli_model_options
+
 # 加载 .env 文件中的环境变量
 try:
     from dotenv import dotenv_values, load_dotenv
@@ -50,7 +52,7 @@ for uid in _allowed_raw.split(","):
 
 CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
 CLI_PATH = _get_project_config("CLI_PATH", "codex")
-CLI_MODEL_OPTIONS = _split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", ""))
+CLI_MODEL_OPTIONS = normalize_cli_model_options(_split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", "")))
 WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))
 CLAUDE_DONE_DETECTOR_ENABLED = os.environ.get("CLAUDE_DONE_DETECTOR_ENABLED", "false").lower() == "true"
 CLAUDE_DONE_QUIET_SECONDS = float(os.environ.get("CLAUDE_DONE_QUIET_SECONDS", "2"))

@@ -84,4 +84,20 @@ describe("parseToolResultStatus", () => {
       tone: "error",
     });
   });
+
+  test("finds exit code when not at the start of the text", () => {
+    expect(parseToolResultStatus("Output:\npartial log\nExit code: 23\nmore text")).toMatchObject({
+      exitCode: 23,
+      tone: "error",
+    });
+  });
+
+  test("finds exit code inside json payload", () => {
+    expect(
+      parseToolResultStatus('{"output":"Success","metadata":{"exit_code":0,"duration_seconds":0.1}}'),
+    ).toMatchObject({
+      exitCode: 0,
+      tone: "success",
+    });
+  });
 });

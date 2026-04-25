@@ -56,7 +56,7 @@ from bot.assistant_state import (
     record_assistant_capture,
     restore_assistant_runtime_state,
 )
-from bot.cli_params import get_default_params, get_params_schema
+from bot.cli_params import get_default_params, get_params_schema, normalize_cli_model_options
 from bot.config import CLI_MODEL_OPTIONS
 from bot.cli import (
     build_cli_command,
@@ -964,8 +964,9 @@ def list_assistant_cron_runs(
 def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
     next_schema = copy.deepcopy(schema)
     model_field = next_schema.get("model")
-    if isinstance(model_field, dict) and CLI_MODEL_OPTIONS:
-        model_field["enum"] = list(CLI_MODEL_OPTIONS)
+    model_options = normalize_cli_model_options(CLI_MODEL_OPTIONS)
+    if isinstance(model_field, dict) and model_options:
+        model_field["enum"] = model_options
     return next_schema
 
 

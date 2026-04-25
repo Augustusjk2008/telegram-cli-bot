@@ -5,6 +5,8 @@ import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { AppUpdateStatus, CliParamsPayload, CreateAssistantCronJobInput, DirectoryListing } from "../services/types";
 
+const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
+
 class StreamingUpdateClient extends MockWebBotClient {
   releaseDownload: (() => void) | null = null;
 
@@ -93,7 +95,8 @@ function cliParamsWithModel(params: Partial<Record<string, unknown>> = {}): CliP
       model: {
         type: "string",
         description: "模型选择",
-        enum: ["gpt-5.5", "gpt-5.4"],
+        nullable: true,
+        enum: MODEL_OPTIONS,
       },
       reasoning_effort: {
         type: "string",
@@ -254,6 +257,26 @@ test("settings CLI reset preserves chat selected model", async () => {
 
   await waitFor(() => {
     expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.5", "codex");
+  });
+});
+
+test("settings CLI reset preserves none model", async () => {
+  const user = userEvent.setup();
+  const resetCliParams = vi.fn(async () => cliParamsWithModel({ model: "gpt-5.4" }));
+  const updateCliParam = vi.fn(async (_botAlias: string, _key: string, value: unknown) => (
+    cliParamsWithModel({ model: value === "none" ? null : value })
+  ));
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCliParams").mockResolvedValue(cliParamsWithModel({ model: null }));
+  vi.spyOn(client, "resetCliParams").mockImplementation(resetCliParams);
+  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.click(await screen.findByRole("button", { name: "恢复默认参数" }));
+
+  await waitFor(() => {
+    expect(updateCliParam).toHaveBeenCalledWith("main", "model", "none", "codex");
   });
 });
 

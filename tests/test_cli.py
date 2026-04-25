@@ -173,6 +173,21 @@ class TestBuildCliCommand:
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
 
+    def test_codex_omits_model_flag_when_model_is_none(self):
+        env = {}
+        params_config = CliParamsConfig()
+        params_config.codex["model"] = None
+
+        cmd, use_stdin = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env=env,
+            params_config=params_config,
+        )
+
+        assert "--model" not in cmd
+
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""
 

@@ -112,6 +112,17 @@ const GUEST_CAPABILITIES: Capability[] = [
 const MOCK_GIT_IGNORED_ITEMS: Record<string, string[]> = {
   main: ["dist"],
 };
+const MOCK_CLI_MODEL_OPTIONS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3",
+  "gpt-5.3-codex",
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "none",
+];
 
 function resolveMemberCapabilities(username: string) {
   return username.trim() === "127.0.0.1"
@@ -2882,6 +2893,8 @@ export class MockWebBotClient implements WebBotClient {
         model: {
           type: "string",
           description: "模型选择",
+          nullable: true,
+          enum: MOCK_CLI_MODEL_OPTIONS,
         },
         skip_git_check: {
           type: "boolean",
@@ -2905,11 +2918,12 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {
     const payload = await this.getCliParams(botAlias);
+    const nextValue = key === "model" && value === "none" ? null : value;
     return {
       ...payload,
       params: {
         ...payload.params,
-        [key]: value,
+        [key]: nextValue,
       },
     };
   }

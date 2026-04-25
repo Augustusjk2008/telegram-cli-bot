@@ -23,11 +23,36 @@ export type ParsedToolResultStatus = {
   tone: "neutral" | "success" | "error";
 };
 
+function parseNumber(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function extractExitCode(text: string) {
+  const patterns = [
+    /(?:^|\n)\s*Exit code:\s*(-?\d+)/i,
+    /\bExit code:\s*(-?\d+)/i,
+    /["']?exit[_\s-]*code["']?\s*[:=]\s*(-?\d+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const matched = text.match(pattern);
+    const parsed = parseNumber(matched?.[1]);
+    if (typeof parsed === "number") {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
 export function parseToolResultStatus(text: string): ParsedToolResultStatus {
   const normalized = String(text || "");
-  const exitMatch = normalized.match(/(?:^|\n)Exit code:\s*(-?\d+)/i);
+  const exitCode = extractExitCode(normalized);
   const wallTimeMatch = normalized.match(/(?:^|\n)Wall time:\s*([^\n]+)/i);
-  const exitCode = exitMatch ? Number.parseInt(exitMatch[1] || "", 10) : undefined;
 
   return {
     exitCode,

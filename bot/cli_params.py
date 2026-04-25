@@ -11,6 +11,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+MODEL_OPTION_NONE = "none"
+REMOVED_CLI_MODEL_OPTIONS = {"gpt-5.2"}
+REQUIRED_CLI_MODEL_OPTIONS = [
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    MODEL_OPTION_NONE,
+]
+
 # ============ 各 CLI 的默认参数配置 ============
 
 DEFAULT_CLAUDE_PARAMS = {
@@ -70,7 +79,7 @@ PARAM_SCHEMA_MAP = {
             "enum": ["xhigh", "high", "medium", "low"],
         },
         "json_output": {"type": "boolean", "description": "JSON 格式输出"},
-        "model": {"type": "string", "description": "模型选择"},
+        "model": {"type": "string", "description": "模型选择", "nullable": True},
         "extra_args": {"type": "string_list", "description": "额外参数"},
     },
 }
@@ -153,6 +162,26 @@ def get_params_schema(cli_type: str) -> Dict[str, Dict[str, Any]]:
     return copy.deepcopy(PARAM_SCHEMA_MAP[cli_type])
 
 
+def normalize_cli_model_options(options: Optional[List[str]]) -> List[str]:
+    """标准化模型选项列表。"""
+    normalized: List[str] = []
+    seen: set[str] = set()
+
+    def add_option(value: Any) -> None:
+        candidate = str(value or "").strip()
+        if not candidate or candidate in REMOVED_CLI_MODEL_OPTIONS or candidate in seen:
+            return
+        seen.add(candidate)
+        normalized.append(candidate)
+
+    for option in options or []:
+        add_option(option)
+    for option in REQUIRED_CLI_MODEL_OPTIONS:
+        add_option(option)
+
+    return normalized
+
+
 def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
     """根据 schema 将外部输入转换为内部参数值。"""
     cli_type = cli_type.lower().strip()
@@ -163,6 +192,9 @@ def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
     field = schema[key]
     field_type = field["type"]
     nullable = bool(field.get("nullable", False))
+
+    if key == "model" and isinstance(value, str) and value.strip().lower() == MODEL_OPTION_NONE:
+        value = None
 
     if nullable and (value is None or (isinstance(value, str) and not value.strip())):
         return None
@@ -217,7 +249,7 @@ def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
             coerced = None
 
     enum_values = field.get("enum")
-    if enum_values and coerced not in enum_values:
+    if enum_values and coerced is not None and coerced not in enum_values:
         raise ValueError(f"参数 {key} 的可选值为: {', '.join(enum_values)}")
 
     return coerced

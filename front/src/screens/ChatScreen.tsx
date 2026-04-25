@@ -64,6 +64,7 @@ const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
 const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
+const MODEL_OPTION_NONE = "none";
 
 function getCompactScriptTitle(script: SystemScript) {
   const source = (script.displayName || script.description || script.scriptName).trim();
@@ -76,6 +77,13 @@ function getCompactScriptTitle(script: SystemScript) {
 
 function pendingCronUserId(runId: string) {
   return `assistant-cron-user-${runId}`;
+}
+
+function toModelOptionValue(value: unknown, options: string[]) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
 }
 
 function pendingCronAssistantId(runId: string) {
@@ -1406,7 +1414,7 @@ export function ChatScreen({
     }
   }
   async function handleModelChange(nextModel: string) {
-    if (!cliParams || !nextModel || nextModel === cliParams.params.model) {
+    if (!cliParams || !nextModel || nextModel === selectedModel) {
       return;
     }
 
@@ -1464,7 +1472,7 @@ export function ChatScreen({
   const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const modelOptions = cliParams?.schema.model?.enum ?? [];
-  const selectedModel = typeof cliParams?.params.model === "string" ? cliParams.params.model : "";
+  const selectedModel = toModelOptionValue(cliParams?.params.model, modelOptions);
   const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
     ? [selectedModel, ...modelOptions]
     : modelOptions;

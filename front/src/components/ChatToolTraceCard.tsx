@@ -200,7 +200,7 @@ export function ChatToolTraceCard({ entry }: Props) {
       </div>
 
       {entry.call ? (
-        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-3">
+        <div className="mt-3 rounded-xl border border-b-0 border-slate-200 bg-slate-50/70 px-3 py-3">
           <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">调用</div>
           <div className="mt-2 whitespace-pre-wrap break-all text-sm text-slate-900">{callSummary}</div>
           {showCallRawPayload ? (

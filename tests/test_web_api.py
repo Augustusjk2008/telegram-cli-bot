@@ -3174,6 +3174,7 @@ async def test_admin_update_avatar_route_rejects_invalid_filename(
 @pytest.mark.asyncio
 async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     web_manager.main_profile.cli_type = "codex"
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", ["gpt-5.5", "gpt-5.4", "gpt-5.2"])
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
@@ -3188,6 +3189,15 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
             assert payload["data"]["params"]["reasoning_effort"] == "xhigh"
             assert payload["data"]["schema"]["reasoning_effort"]["type"] == "string"
             assert payload["data"]["schema"]["reasoning_effort"]["enum"] == ["xhigh", "high", "medium", "low"]
+            assert payload["data"]["schema"]["model"]["nullable"] is True
+            assert payload["data"]["schema"]["model"]["enum"] == [
+                "gpt-5.5",
+                "gpt-5.4",
+                "claude-opus-4-7",
+                "claude-opus-4-6",
+                "claude-sonnet-4-6",
+                "none",
+            ]
 
             resp = await client.patch(
                 "/api/bots/main/cli-params",
@@ -3197,6 +3207,14 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
             payload = await resp.json()
             assert payload["data"]["params"]["reasoning_effort"] == "high"
 
+            resp = await client.patch(
+                "/api/bots/main/cli-params",
+                json={"key": "model", "value": "none"},
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["params"]["model"] is None
+
             resp = await client.post("/api/bots/main/cli-params/reset")
             assert resp.status == 200
             payload = await resp.json()
@@ -3204,11 +3222,18 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
 
 def test_cli_params_model_schema_uses_env_model_options(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     web_manager.main_profile.cli_type = "codex"
-    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", ["gpt-5.5", "gpt-5.4-mini"])
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", ["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"])
 
     payload = api_service.get_cli_params_payload(web_manager, "main")
 
-    assert payload["schema"]["model"]["enum"] == ["gpt-5.5", "gpt-5.4-mini"]
+    assert payload["schema"]["model"]["enum"] == [
+        "gpt-5.5",
+        "gpt-5.4-mini",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "none",
+    ]
 
 
 @pytest.mark.asyncio

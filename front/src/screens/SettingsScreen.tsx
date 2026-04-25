@@ -70,6 +70,7 @@ type Props = {
 type DraftValues = Record<string, string | boolean>;
 type BuildLogStatus = "idle" | "running" | "success" | "error";
 const CHAT_CONTROLLED_CLI_PARAM_KEYS = new Set(["model"]);
+const MODEL_OPTION_NONE = "none";
 
 function fieldLabel(key: string, field: CliParamField) {
   return field.description || key;
@@ -111,6 +112,13 @@ function toRequestValue(field: CliParamField, value: string | boolean) {
 
 function hasDraftValueChanged(previousValue: string | boolean, nextValue: string | boolean) {
   return previousValue !== nextValue;
+}
+
+function toModelOptionValue(value: unknown, options: string[]) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
 }
 
 function tunnelStatusText(status: TunnelSnapshot["status"]) {
@@ -580,9 +588,13 @@ export function SettingsScreen({
     setError("");
     setNotice("");
     try {
-      const currentModel = cliParams?.params.model;
+      const currentModel = toModelOptionValue(
+        cliParams?.params.model,
+        cliParams?.schema.model?.enum ?? [],
+      );
       let next = await client.resetCliParams(botAlias);
-      if (typeof currentModel === "string" && currentModel && next.params.model !== currentModel) {
+      const nextModel = toModelOptionValue(next.params.model, next.schema.model?.enum ?? []);
+      if (currentModel && nextModel !== currentModel) {
         next = await client.updateCliParam(botAlias, "model", currentModel, next.cliType);
       }
       syncCliParams(next);
