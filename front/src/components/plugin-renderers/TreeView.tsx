@@ -154,7 +154,10 @@ export function TreeView({ botAlias, client, view, onRunAction }: Props) {
     : {
         roots: view.payload.roots,
         actions: view.payload.actions,
-        searchable: true,
+        searchable: view.payload.searchable ?? true,
+        searchPlaceholder: view.payload.searchPlaceholder,
+        statsText: view.payload.statsText,
+        emptySearchText: view.payload.emptySearchText,
       };
   const initialRoots = view.mode === "session"
     ? getWindowNodes(view.initialWindow, summary.roots || [])

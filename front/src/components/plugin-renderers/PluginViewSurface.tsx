@@ -9,6 +9,7 @@ import type {
 } from "../../services/types";
 import { runPluginAction } from "../plugins/pluginActions";
 import { DocumentView } from "./DocumentView";
+import { HexView } from "./HexView";
 import { TableView } from "./TableView";
 import { TreeView } from "./TreeView";
 import { WaveformView } from "./WaveformView";
@@ -124,6 +125,10 @@ export function PluginViewSurface({
 
   if (view.renderer === "document") {
     return <DocumentView view={view} />;
+  }
+
+  if (view.renderer === "hex") {
+    return <HexView title={view.title} payload={view.payload} />;
   }
 
   return (

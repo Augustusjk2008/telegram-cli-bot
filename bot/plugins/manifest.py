@@ -191,7 +191,7 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
 
     views: list[PluginViewSpec] = []
     seen_view_ids: set[str] = set()
-    allowed_renderers = {"waveform"} if schema_version == 1 else {"waveform", "table", "tree", "document"}
+    allowed_renderers = {"waveform"} if schema_version == 1 else {"waveform", "table", "tree", "document", "hex"}
     for item in views_raw:
         current = _expect_mapping(item, "view")
         view_id = str(current.get("id") or "").strip()

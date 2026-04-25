@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "id": "zip-preview",
+  "name": "ZIP Preview",
+  "version": "0.1.0",
+  "description": "不解压快速浏览 ZIP 压缩包目录结构。",
+  "enabled": true,
+  "config": {
+    "maxEntries": 2000
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "archive-tree",
+      "title": "压缩包结构",
+      "renderer": "tree",
+      "viewMode": "snapshot",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "zip-file",
+      "label": "ZIP 结构预览",
+      "extensions": [
+        ".zip"
+      ],
+      "viewId": "archive-tree"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bot.assistant_home import AssistantHome
+from bot.assistant_memory_writer import DreamMemoryInput, write_dream_memories
 from bot.assistant_proposals import create_proposal
 from bot.models import BotProfile, UserSession
 
@@ -28,6 +29,7 @@ _DREAM_BLOCK_TAGS = {
     "DREAM_SUMMARY",
     *list(_DREAM_WORKING_MEMORY_BLOCKS.keys()),
     "DREAM_KNOWLEDGE",
+    "DREAM_MEMORY",
     "DREAM_PROPOSAL",
 }
 _DREAM_ANY_BLOCK_RE = re.compile(
@@ -201,6 +203,7 @@ def prepare_dream_prompt(
             ),
             (
                 "可选块可以省略；<DREAM_KNOWLEDGE> 可重复，前面可写 bucket: / title:；"
+                "<DREAM_MEMORY> 可重复，前面可写 kind/scope/title/summary/tags/entity_keys/importance/confidence/freshness；"
                 "<DREAM_PROPOSAL> 前面可写 kind: / title:；其余正文尽量用 Markdown 列表。"
             ),
             "输出模板如下：",
@@ -215,6 +218,9 @@ def prepare_dream_prompt(
                 "title: 简短标题\n"
                 "- 知识条目正文\n"
                 "</DREAM_KNOWLEDGE>\n\n"
+                "<DREAM_MEMORY>\n"
+                "title:\nsummary:\nkind: episodic\nscope: project\ntags:\nentity_keys:\n\n"
+                "</DREAM_MEMORY>\n\n"
                 "<DREAM_PROPOSAL>\n"
                 "kind: rule\n"
                 "title: 提案标题\n"
@@ -324,6 +330,17 @@ def _parse_dream_knowledge_block(block: str) -> dict[str, Any]:
     return payload
 
 
+def _parse_dream_memory_block(block: str) -> dict[str, Any]:
+    fields, body = _parse_dream_detail_block(
+        block,
+        allowed_fields={"kind", "scope", "title", "summary", "tags", "entity_keys", "importance", "confidence", "freshness"},
+    )
+    payload: dict[str, Any] = {key: value for key, value in fields.items() if value}
+    if body:
+        payload["body"] = body
+    return payload
+
+
 def _parse_dream_proposal_block(block: str) -> dict[str, Any]:
     fields, body = _parse_dream_detail_block(
         block,
@@ -360,6 +377,10 @@ def _extract_dream_block_payload(text: str) -> tuple[dict[str, Any], str]:
         "knowledge_entries": [
             _parse_dream_knowledge_block(block)
             for block in _extract_dream_block_contents(text, "DREAM_KNOWLEDGE")
+        ],
+        "memory_entries": [
+            _parse_dream_memory_block(block)
+            for block in _extract_dream_block_contents(text, "DREAM_MEMORY")
         ],
         "proposal": _parse_dream_proposal_block(proposal_blocks[0]) if proposal_blocks else None,
     }
@@ -434,6 +455,45 @@ def _normalize_knowledge_entries(payload: Any) -> list[tuple[str, str, str]]:
         body = _render_markdown_list(body_items)
         entries.append((bucket, title, body))
     return entries
+
+
+def _split_csv_field(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,，\s]+", str(value or "")) if item.strip()]
+
+
+def _normalize_memory_entries(payload: Any) -> list[DreamMemoryInput]:
+    if payload is None:
+        return []
+    if not isinstance(payload, list):
+        raise ValueError("dream memory_entries 必须是数组")
+    entries: list[DreamMemoryInput] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("dream memory entry 必须是对象")
+        title = _clip_text(str(item.get("title") or "").strip(), limit=80)
+        summary = _clip_text(str(item.get("summary") or "").strip(), limit=180)
+        body = str(item.get("body") or summary).strip()
+        if not title or not summary or not body:
+            continue
+        try:
+            importance = float(item.get("importance", 0.7) or 0.7)
+            confidence = float(item.get("confidence", 0.8) or 0.8)
+            freshness = float(item.get("freshness", 0.8) or 0.8)
+        except (TypeError, ValueError):
+            importance, confidence, freshness = 0.7, 0.8, 0.8
+        entries.append(DreamMemoryInput(
+            title=title,
+            summary=summary,
+            body=body,
+            kind=str(item.get("kind") or "episodic").strip() or "episodic",
+            scope=str(item.get("scope") or "project").strip() or "project",
+            tags=_split_csv_field(str(item.get("tags") or "")),
+            entity_keys=_split_csv_field(str(item.get("entity_keys") or "")),
+            importance=max(0.0, min(1.0, importance)),
+            confidence=max(0.0, min(1.0, confidence)),
+            freshness=max(0.0, min(1.0, freshness)),
+        ))
+    return entries[:20]
 
 
 def _normalize_proposal(payload: Any) -> dict[str, str] | None:
@@ -536,6 +596,7 @@ def apply_dream_result(
         payload, summary = _extract_dream_payload(raw_output)
         working_memory = _validate_working_memory(payload.get("working_memory"))
         knowledge_entries = _normalize_knowledge_entries(payload.get("knowledge_entries"))
+        memory_entries = _normalize_memory_entries(payload.get("memory_entries"))
         proposal_payload = _normalize_proposal(payload.get("proposal"))
         summary = _clip_text(summary or "dream 已完成", limit=240)
 
@@ -553,6 +614,14 @@ def apply_dream_result(
             content = f"# {title}\n\n{body}\n" if title else body + "\n"
             path.write_text(content, encoding="utf-8")
             applied_paths.append(str(path))
+
+        memory_ids = write_dream_memories(
+            home,
+            user_id=context_user_id if context_user_id is not None else synthetic_user_id,
+            source_ref=run_id,
+            memories=memory_entries,
+        )
+        applied_paths.extend(f"memory:{memory_id}" for memory_id in memory_ids)
 
         if proposal_payload is not None:
             proposal = create_proposal(

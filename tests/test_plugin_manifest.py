@@ -237,6 +237,46 @@ def test_load_plugin_manifest_accepts_schema_v2_document_renderer(tmp_path: Path
     assert manifest.file_handlers[0].extensions == (".docx",)
 
 
+def test_load_plugin_manifest_accepts_schema_v2_hex_renderer(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_plugin(
+        plugins_root,
+        "hex-preview",
+        payload_overrides={
+            "schemaVersion": 2,
+            "runtime": {
+                "type": "python",
+                "entry": "backend/main.py",
+                "protocol": "jsonrpc-stdio",
+                "permissions": {"workspaceRead": True},
+            },
+            "views": [
+                {
+                    "id": "hex",
+                    "title": "Hex Preview",
+                    "renderer": "hex",
+                    "viewMode": "snapshot",
+                    "dataProfile": "light",
+                }
+            ],
+            "fileHandlers": [
+                {
+                    "id": "binary-file",
+                    "label": "Hex 预览",
+                    "extensions": [".bin"],
+                    "viewId": "hex",
+                }
+            ],
+        },
+    )
+
+    manifest = PluginRegistry(plugins_root).discover()["hex-preview"]
+
+    assert manifest.schema_version == 2
+    assert manifest.views[0].renderer == "hex"
+    assert manifest.file_handlers[0].extensions == (".bin",)
+
+
 def test_load_plugin_manifest_rejects_v1_table_renderer(tmp_path: Path) -> None:
     plugins_root = tmp_path / "plugins"
     _write_plugin(

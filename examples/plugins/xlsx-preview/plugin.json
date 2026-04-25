@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "id": "xlsx-preview",
+  "name": "XLSX Preview",
+  "version": "0.1.0",
+  "description": "快速浏览 Excel 工作簿内容。",
+  "enabled": true,
+  "config": {},
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "document",
+      "title": "工作簿预览",
+      "renderer": "document",
+      "viewMode": "snapshot",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "xlsx-file",
+      "label": "Excel 预览",
+      "extensions": [
+        ".xlsx"
+      ],
+      "viewId": "document"
+    }
+  ]
+}

@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import type { ChatTraceEvent } from "../services/types";
+import { type ToolGroupChatTraceEntry, parseToolResultStatus } from "../utils/chatTraceGrouping";
 import { CHAT_TRACE_PREVIEW_CONFIG } from "../utils/chatTracePreview";
 
 type Props = {
-  event: ChatTraceEvent;
-  index: number;
+  entry: ToolGroupChatTraceEntry;
 };
 
 const EMPTY_RENDERED_VALUES = new Set(["", "{}", "[]", "\"\"", "null", "undefined"]);
@@ -88,33 +88,58 @@ function collapseText(value: string, maxLines = MAX_PREVIEW_LINES, maxChars = MA
   return { text: `${preview}...`, truncated: true };
 }
 
-export function ChatToolTraceCard({ event, index }: Props) {
-  const [expanded, setExpanded] = useState(false);
+function toneClasses(tone: "neutral" | "success" | "error") {
+  if (tone === "success") {
+    return {
+      container: "border-emerald-200 bg-emerald-50/80",
+      badge: "border-emerald-200 bg-emerald-100 text-emerald-700",
+      text: "text-emerald-900",
+    };
+  }
+  if (tone === "error") {
+    return {
+      container: "border-red-200 bg-red-50/80",
+      badge: "border-red-200 bg-red-100 text-red-700",
+      text: "text-red-900",
+    };
+  }
+  return {
+    container: "border-slate-200 bg-slate-50/80",
+    badge: "border-slate-200 bg-white text-slate-700",
+    text: "text-slate-900",
+  };
+}
+
+function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; index: number; total: number }) {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [rawExpanded, setRawExpanded] = useState(false);
   const payloadText = useMemo(() => renderPayload(event.payload), [event.payload]);
   const summary = useMemo(() => resolveSummary(event, payloadText), [event, payloadText]);
   const collapsedSummary = useMemo(() => collapseText(summary), [summary]);
-  const showPayload = isMeaningfulRenderedValue(payloadText) && payloadText.trim() !== summary.trim();
-  const label = event.kind === "tool_call" ? `工具调用 ${index}` : "工具返回";
-  const buttonLabel = `${expanded ? "收起" : "展开"}${label}原始内容`;
   const renderedSummary = summaryExpanded || !collapsedSummary.truncated ? summary : collapsedSummary.text;
+  const showRawPayload = isMeaningfulRenderedValue(payloadText) && payloadText.trim() !== summary.trim();
+  const parsedStatus = useMemo(() => parseToolResultStatus(`${summary}\n${payloadText}`), [payloadText, summary]);
+  const tones = toneClasses(parsedStatus.tone);
+  const label = total > 1 ? `返回 ${index + 1}` : "返回";
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
-            <Wrench className="h-3.5 w-3.5" />
-            <span>{label}</span>
-          </div>
+    <div className={`rounded-xl border px-3 py-3 ${tones.container}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          {typeof parsedStatus.exitCode === "number" ? (
+            <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tones.badge}`}>
+              Exit {parsedStatus.exitCode}
+            </span>
+          ) : null}
+          {parsedStatus.wallTime ? (
+            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+              {parsedStatus.wallTime}
+            </span>
+          ) : null}
         </div>
-        {event.toolName ? (
-          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
-            {event.toolName}
-          </span>
-        ) : null}
       </div>
-      <div className="mt-2 whitespace-pre-wrap break-all text-sm text-slate-800">
+      <div className={`mt-2 whitespace-pre-wrap break-all text-sm ${tones.text}`}>
         {renderedSummary}
       </div>
       {collapsedSummary.truncated ? (
@@ -127,25 +152,97 @@ export function ChatToolTraceCard({ event, index }: Props) {
           <span>{summaryExpanded ? "收起完整内容" : "展开完整内容"}</span>
         </button>
       ) : null}
-      {showPayload ? (
+      {showRawPayload ? (
         <div className="mt-3">
           <button
             type="button"
-            aria-label={buttonLabel}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((prev) => !prev)}
+            aria-label={`${rawExpanded ? "收起" : "展开"}${label}原始内容`}
+            aria-expanded={rawExpanded}
+            onClick={() => setRawExpanded((prev) => !prev)}
             className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
           >
-            {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            <span>{expanded ? "收起原始内容" : "展开原始内容"}</span>
+            {rawExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <span>{rawExpanded ? "收起原始内容" : "展开原始内容"}</span>
           </button>
-          {expanded ? (
+          {rawExpanded ? (
             <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100">
               {payloadText}
             </pre>
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export function ChatToolTraceCard({ entry }: Props) {
+  const [callRawExpanded, setCallRawExpanded] = useState(false);
+  const callPayloadText = useMemo(() => (entry.call ? renderPayload(entry.call.payload) : ""), [entry.call]);
+  const callSummary = useMemo(() => (entry.call ? resolveSummary(entry.call, callPayloadText) : ""), [callPayloadText, entry.call]);
+  const showCallRawPayload = Boolean(entry.call) && isMeaningfulRenderedValue(callPayloadText) && callPayloadText.trim() !== callSummary.trim();
+  const toolName = entry.call?.toolName || entry.call?.title || entry.results[0]?.toolName || entry.results[0]?.title || "";
+  const label = entry.call ? `工具调用 ${entry.toolIndex}` : "工具返回（未匹配）";
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+            <Wrench className="h-3.5 w-3.5" />
+            <span>{label}</span>
+          </div>
+        </div>
+        {toolName ? (
+          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+            {toolName}
+          </span>
+        ) : null}
+      </div>
+
+      {entry.call ? (
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-3">
+          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">调用</div>
+          <div className="mt-2 whitespace-pre-wrap break-all text-sm text-slate-900">{callSummary}</div>
+          {showCallRawPayload ? (
+            <div className="mt-3">
+              <button
+                type="button"
+                aria-label={`${callRawExpanded ? "收起" : "展开"}调用原始内容`}
+                aria-expanded={callRawExpanded}
+                onClick={() => setCallRawExpanded((prev) => !prev)}
+                className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+              >
+                {callRawExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                <span>{callRawExpanded ? "收起原始内容" : "展开原始内容"}</span>
+              </button>
+              {callRawExpanded ? (
+                <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100">
+                  {callPayloadText}
+                </pre>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-4 space-y-3">
+        {entry.results.length > 0 ? (
+          entry.results.map((result, index) => (
+            <ToolResultSection
+              key={`${result.callId || "result"}-${index}-${result.summary}`}
+              event={result}
+              index={index}
+              total={entry.results.length}
+            />
+          ))
+        ) : (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-3 text-sm text-amber-800">
+            <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700">返回</div>
+            <div className="mt-2 font-medium">等待返回</div>
+            <div className="mt-1">尚无返回；若工具未完成、会话被终止，或原始 trace 缺失，此处保持 pending。</div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

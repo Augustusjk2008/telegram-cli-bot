@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "id": "hex-preview",
+  "name": "Hex Preview",
+  "version": "0.1.0",
+  "description": "以十六进制、ASCII 和熵条带快速查看二进制文件。",
+  "enabled": true,
+  "config": {
+    "maxPreviewBytes": 16384,
+    "bytesPerRow": 16,
+    "entropyBuckets": 48
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "hex",
+      "title": "Hex 预览",
+      "renderer": "hex",
+      "viewMode": "snapshot",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "binary-file",
+      "label": "Hex 预览",
+      "extensions": [
+        ".bin",
+        ".dat",
+        ".exe",
+        ".dll",
+        ".so",
+        ".wasm",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif"
+      ],
+      "viewId": "hex"
+    }
+  ]
+}

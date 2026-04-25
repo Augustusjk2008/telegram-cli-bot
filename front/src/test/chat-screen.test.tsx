@@ -545,7 +545,7 @@ test("renders empty tool call payloads with readable fallback instead of raw emp
   expect(screen.queryByText("{}")).not.toBeInTheDocument();
 });
 
-test("lazy-loads trace details only after expanding a history message and keeps event order", async () => {
+test("lazy-loads trace details and groups tool call/result into one trace card", async () => {
   const user = userEvent.setup();
   const getMessageTrace = vi.fn(async () => ({
     trace: [
@@ -558,19 +558,19 @@ test("lazy-loads trace details only after expanding a history message and keeps 
         title: "shell_command",
         toolName: "shell_command",
         callId: "call_1",
-        summary: "Get-ChildItem -Force",
+        summary: "Get-Content -Path todo.txt",
         payload: {
           arguments: {
-            command: "Get-ChildItem -Force",
+            command: "Get-Content -Path todo.txt",
           },
         },
       },
       {
         kind: "tool_result",
         callId: "call_1",
-        summary: "README.md\nbot\nfront",
+        summary: "Exit code: 1\nWall time: 1.3 seconds\nOutput:\nboom",
         payload: {
-          output: "README.md\nbot\nfront",
+          output: "Exit code: 1\nWall time: 1.3 seconds\nOutput:\nboom",
         },
       },
       {
@@ -616,16 +616,75 @@ test("lazy-loads trace details only after expanding a history message and keeps 
 
   expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1");
   expect(await screen.findByText("我先检查目录结构。")).toBeInTheDocument();
-  expect(screen.getByText("Get-ChildItem -Force")).toBeInTheDocument();
-  expect(screen.getByText((content) => content.includes("README.md") && content.includes("bot") && content.includes("front"))).toBeInTheDocument();
+  expect(screen.getByText("工具调用 1")).toBeInTheDocument();
+  expect(screen.getByText("Get-Content -Path todo.txt")).toBeInTheDocument();
+  expect(screen.getByText("返回")).toBeInTheDocument();
+  expect(screen.getByText("Exit 1")).toBeInTheDocument();
+  expect(screen.getByText((content) => content.includes("Wall time: 1.3 seconds") && content.includes("Output:"))).toBeInTheDocument();
 
   const panel = screen.getByTestId("chat-trace-panel-assistant-1");
   const traceItems = Array.from(panel.querySelectorAll("[data-trace-seq]"));
-  expect(traceItems).toHaveLength(4);
+  expect(traceItems).toHaveLength(3);
   expect(traceItems[0]?.textContent).toContain("我先检查目录结构。");
-  expect(traceItems[1]?.textContent).toContain("Get-ChildItem -Force");
-  expect(traceItems[2]?.textContent).toContain("README.md");
-  expect(traceItems[3]?.textContent).toContain("目录已读取完成。");
+  expect(traceItems[1]?.textContent).toContain("工具调用 1");
+  expect(traceItems[1]?.textContent).toContain("Exit 1");
+  expect(traceItems[2]?.textContent).toContain("目录已读取完成。");
+});
+
+test("shows pending tool state when tool call has no matching result", async () => {
+  const user = userEvent.setup();
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      {
+        kind: "tool_call",
+        title: "shell_command",
+        toolName: "shell_command",
+        callId: "call_pending",
+        summary: "Get-ChildItem -Force",
+        payload: {
+          arguments: {
+            command: "Get-ChildItem -Force",
+          },
+        },
+      },
+    ],
+    traceCount: 1,
+    toolCallCount: 1,
+    processCount: 0,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "列出当前目录",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "目录已读取完成。",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          traceCount: 1,
+          toolCallCount: 1,
+          processCount: 0,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "展开过程详情" }));
+
+  expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1");
+  expect(await screen.findByText("等待返回")).toBeInTheDocument();
+  expect(screen.getByText(/尚无返回/)).toBeInTheDocument();
+  expect(screen.getByText("Get-ChildItem -Force")).toBeInTheDocument();
 });
 
 test("shows a streaming placeholder before the first assistant chunk arrives", async () => {

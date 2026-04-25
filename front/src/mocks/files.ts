@@ -25,6 +25,8 @@ export const mockFiles: Record<string, Record<string, FileEntry[]>> = {
       entry("plugin-plan.md", false, 2048),
       entry("roadmap.docx", false, 40960),
       entry("roadmap.pdf", false, 24576),
+      entry("roadmap.xlsx", false, 32768),
+      entry("sample.zip", false, 8192),
     ],
     [`${DEMO_MAIN_WORKDIR}/src`]: [
       entry("index.ts", false, 512),
@@ -33,6 +35,7 @@ export const mockFiles: Record<string, Record<string, FileEntry[]>> = {
     [`${DEMO_MAIN_WORKDIR}/reports`]: [
       entry("timing.rpt", false, 768),
       entry("design.hier", false, 512),
+      entry("firmware.bin", false, 4096),
     ],
     [`${DEMO_MAIN_WORKDIR}/waves`]: [
       entry("simple_counter.vcd", false, 1024),

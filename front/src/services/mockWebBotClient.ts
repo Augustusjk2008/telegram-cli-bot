@@ -59,6 +59,7 @@ import type {
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
   DocumentViewPayload,
+  HexViewPayload,
   TableColumn,
   TableRow,
   TableViewSummary,
@@ -377,6 +378,52 @@ function buildMockPdfDocumentPayload(sourcePath: string): DocumentViewPayload {
   };
 }
 
+function buildMockXlsxDocumentPayload(sourcePath: string): DocumentViewPayload {
+  return {
+    path: sourcePath,
+    title: "roadmap.xlsx",
+    statsText: "2 工作表 · 5 行预览",
+    blocks: [
+      { type: "heading", level: 2, runs: [{ text: "Summary" }] },
+      {
+        type: "table",
+        rows: [
+          { cells: [{ runs: [{ text: "Milestone" }] }, { runs: [{ text: "Status" }] }] },
+          { cells: [{ runs: [{ text: "Renderer" }] }, { runs: [{ text: "Done" }] }] },
+          { cells: [{ runs: [{ text: "Plugin" }] }, { runs: [{ text: "In Progress" }] }] },
+        ],
+      },
+      { type: "heading", level: 2, runs: [{ text: "Owners" }] },
+      {
+        type: "table",
+        rows: [
+          { cells: [{ runs: [{ text: "Area" }] }, { runs: [{ text: "Owner" }] }] },
+          { cells: [{ runs: [{ text: "Frontend" }] }, { runs: [{ text: "Kai" }] }] },
+        ],
+      },
+    ],
+  };
+}
+
+function buildMockHexPayload(sourcePath: string): HexViewPayload {
+  return {
+    path: sourcePath,
+    fileSizeBytes: 20,
+    previewBytes: 16,
+    bytesPerRow: 8,
+    truncated: true,
+    statsText: "20 B · preview 16 B",
+    entropyBuckets: [
+      { index: 0, startOffset: 0, endOffset: 8, entropy: 0.1 },
+      { index: 1, startOffset: 8, endOffset: 16, entropy: 0.9 },
+    ],
+    rows: [
+      { offset: 0, hex: ["00", "41", "42", "7F", "80", "FF", "20", "2E"], ascii: ".AB... ." },
+      { offset: 8, hex: ["48", "65", "78", "21"], ascii: "Hex!" },
+    ],
+  };
+}
+
 function buildRepoOutlineFileNode(path: string, symbolCount?: number): TreeNode {
   const parts = path.split("/");
   const label = parts[parts.length - 1] || path;
@@ -545,6 +592,49 @@ function buildRepoOutlineSummary(rootPath = ""): TreeViewSummary {
       { id: "refresh-tree", label: "刷新", target: "plugin", location: "toolbar" },
       { id: "collapse-all", label: "折叠全部", target: "plugin", location: "toolbar" },
     ],
+  };
+}
+
+function buildMockZipTreePayload(sourcePath: string): TreeViewPayload {
+  return {
+    roots: [
+      {
+        id: "dir:docs",
+        label: "docs",
+        kind: "folder",
+        hasChildren: true,
+        expandable: true,
+        children: [
+          {
+            id: "file:docs/readme.txt",
+            label: "readme.txt",
+            kind: "file",
+            secondaryText: "docs",
+            badges: [{ text: "5 B", tone: "info" }],
+            payload: { path: "docs/readme.txt" },
+          },
+        ],
+      },
+      {
+        id: "dir:src",
+        label: "src",
+        kind: "folder",
+        hasChildren: true,
+        expandable: true,
+        children: [
+          {
+            id: "file:src/main.py",
+            label: "main.py",
+            kind: "file",
+            secondaryText: "src",
+            badges: [{ text: "12 B", tone: "info" }],
+            payload: { path: "src/main.py" },
+          },
+        ],
+      },
+    ],
+    searchable: false,
+    statsText: `2 文件 · 2 文件夹 · ${sourcePath.split(/[\\/]/).pop() || "sample.zip"}`,
   };
 }
 
@@ -1416,6 +1506,33 @@ export class MockWebBotClient implements WebBotClient {
         input: { path },
       };
     }
+    if (lower.endsWith(".zip")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "zip-preview",
+        viewId: "archive-tree",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
+    if (lower.endsWith(".bin")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "hex-preview",
+        viewId: "hex",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
+    if (lower.endsWith(".xlsx")) {
+      return {
+        kind: "plugin_view",
+        pluginId: "xlsx-preview",
+        viewId: "document",
+        title: path.split(/[\\/]/).pop() || path,
+        input: { path },
+      };
+    }
     return { kind: "file" };
   }
 
@@ -1585,6 +1702,39 @@ export class MockWebBotClient implements WebBotClient {
         renderer: "document",
         mode: "snapshot",
         payload: buildMockPdfDocumentPayload(sourcePath),
+      };
+    }
+    if (pluginId === "zip-preview") {
+      const sourcePath = typeof input.path === "string" ? input.path : "docs/sample.zip";
+      return {
+        pluginId,
+        viewId,
+        title: sourcePath.split(/[\\/]/).pop() || "sample.zip",
+        renderer: "tree",
+        mode: "snapshot",
+        payload: buildMockZipTreePayload(sourcePath),
+      };
+    }
+    if (pluginId === "hex-preview") {
+      const sourcePath = typeof input.path === "string" ? input.path : "reports/firmware.bin";
+      return {
+        pluginId,
+        viewId,
+        title: sourcePath.split(/[\\/]/).pop() || "firmware.bin",
+        renderer: "hex",
+        mode: "snapshot",
+        payload: buildMockHexPayload(sourcePath),
+      };
+    }
+    if (pluginId === "xlsx-preview") {
+      const sourcePath = typeof input.path === "string" ? input.path : "docs/roadmap.xlsx";
+      return {
+        pluginId,
+        viewId,
+        title: sourcePath.split(/[\\/]/).pop() || "roadmap.xlsx",
+        renderer: "document",
+        mode: "snapshot",
+        payload: buildMockXlsxDocumentPayload(sourcePath),
       };
     }
     if (pluginId === "timing-report") {

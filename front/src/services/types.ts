@@ -197,7 +197,7 @@ export type FileWriteResult = {
   lastModifiedNs: string;
 };
 
-export type PluginViewRenderer = "waveform" | "table" | "tree" | "document";
+export type PluginViewRenderer = "waveform" | "table" | "tree" | "document" | "hex";
 export type PluginViewMode = "snapshot" | "session";
 export type PluginViewDataProfile = "light" | "heavy";
 
@@ -487,6 +487,10 @@ export type TreeNode = {
 export type TreeViewPayload = {
   roots: TreeNode[];
   actions?: PluginAction[];
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  statsText?: string;
+  emptySearchText?: string;
 };
 
 export type TreeViewSummary = {
@@ -554,6 +558,30 @@ export type DocumentViewPayload = {
   blocks: DocumentBlock[];
 };
 
+export type HexEntropyBucket = {
+  index: number;
+  startOffset: number;
+  endOffset: number;
+  entropy: number;
+};
+
+export type HexRow = {
+  offset: number;
+  hex: string[];
+  ascii: string;
+};
+
+export type HexViewPayload = {
+  path: string;
+  fileSizeBytes: number;
+  previewBytes: number;
+  bytesPerRow: number;
+  truncated?: boolean;
+  statsText?: string;
+  entropyBuckets: HexEntropyBucket[];
+  rows: HexRow[];
+};
+
 export type PluginViewWindowRequest = Record<string, unknown>;
 export type PluginViewWindowPayload = Record<string, unknown>;
 
@@ -593,6 +621,15 @@ export type DocumentSnapshotRenderResult = {
   payload: DocumentViewPayload;
 };
 
+export type HexSnapshotRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "hex";
+  mode: "snapshot";
+  payload: HexViewPayload;
+};
+
 export type WaveformSessionRenderResult = {
   pluginId: string;
   viewId: string;
@@ -630,7 +667,8 @@ export type PluginSnapshotRenderResult =
   | WaveformSnapshotRenderResult
   | TableSnapshotRenderResult
   | TreeSnapshotRenderResult
-  | DocumentSnapshotRenderResult;
+  | DocumentSnapshotRenderResult
+  | HexSnapshotRenderResult;
 
 export type PluginSessionRenderResult =
   | WaveformSessionRenderResult

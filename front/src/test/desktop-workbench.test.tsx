@@ -243,6 +243,82 @@ test("desktop workbench opens .pdf files as document plugin tabs", async () => {
   expect(screen.getByText("Current status: in progress.")).toBeInTheDocument();
 });
 
+test("desktop workbench opens .xlsx files as document plugin tabs", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "打开 docs/roadmap.xlsx" }));
+
+  expect(await screen.findByRole("tab", { name: "roadmap.xlsx" })).toBeInTheDocument();
+  expect(screen.getByTestId("document-view")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 2, name: "Summary" })).toBeInTheDocument();
+  expect(screen.getByText("Milestone")).toBeInTheDocument();
+  expect(screen.getByText("Plugin")).toBeInTheDocument();
+});
+
+test("desktop workbench opens .bin files as hex plugin tabs", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 reports" }));
+  await user.click(await screen.findByRole("button", { name: "打开 reports/firmware.bin" }));
+
+  expect(await screen.findByRole("tab", { name: "firmware.bin" })).toBeInTheDocument();
+  expect(screen.getByTestId("hex-view")).toBeInTheDocument();
+  expect(screen.getByText("00000000")).toBeInTheDocument();
+});
+
+test("desktop workbench opens .zip files as archive tree plugin tabs", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "打开 docs/sample.zip" }));
+
+  expect(await screen.findByRole("tab", { name: "sample.zip" })).toBeInTheDocument();
+  expect(screen.getByText("2 文件 · 2 文件夹 · sample.zip")).toBeInTheDocument();
+});
+
 test("desktop workbench opens .rpt files as table plugin tabs and downloads artifacts", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

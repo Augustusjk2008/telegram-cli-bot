@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo } from "react";
 import { ChevronDown, ChevronRight, ListTree, LoaderCircle } from "lucide-react";
 import type { ChatTraceEvent } from "../services/types";
+import { groupChatTraceEntries } from "../utils/chatTraceGrouping";
 import { ChatToolTraceCard } from "./ChatToolTraceCard";
 
 type Props = {
@@ -47,6 +48,7 @@ function ChatTracePanelInner({
     toolCallCount: typeof toolCallCount === "number" ? toolCallCount : events.filter((item) => item.kind === "tool_call").length,
     processCount: typeof processCount === "number" ? processCount : events.filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
   }), [events, processCount, toolCallCount, traceCount]);
+  const groupedEntries = useMemo(() => groupChatTraceEntries(events), [events]);
 
   useEffect(() => {
     if (!expanded || events.length > 0 || summary.traceCount <= 0 || isLoading || Boolean(loadError) || !onLoadTrace) {
@@ -60,7 +62,6 @@ function ChatTracePanelInner({
   }
 
   const buttonLabel = `${expanded ? "收起" : "展开"}过程详情`;
-  let toolIndex = 0;
 
   return (
     <section
@@ -106,21 +107,19 @@ function ChatTracePanelInner({
               ) : null}
             </div>
           ) : null}
-          {events.map((event, index) => {
-            if (event.kind === "tool_call" || event.kind === "tool_result") {
-              if (event.kind === "tool_call") {
-                toolIndex += 1;
-              }
+          {groupedEntries.map((entry, index) => {
+            if (entry.kind === "tool_group") {
               return (
-                <div key={`${event.kind}-${event.callId || "tool"}-${index}`} data-trace-seq={index}>
-                  <ChatToolTraceCard
-                    event={event}
-                    index={toolIndex}
-                  />
+                <div
+                  key={`tool-group-${entry.call?.callId || entry.results[0]?.callId || `orphan-${index}`}`}
+                  data-trace-seq={index}
+                >
+                  <ChatToolTraceCard entry={entry} />
                 </div>
               );
             }
 
+            const event = entry.event;
             return (
               <div
                 key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}

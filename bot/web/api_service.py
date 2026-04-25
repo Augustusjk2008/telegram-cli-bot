@@ -42,6 +42,8 @@ from bot.assistant_compaction import (
     snapshot_managed_surface,
 )
 from bot.assistant_context import compile_assistant_prompt
+from bot.assistant_memory_recall import recall_assistant_memories
+from bot.assistant_memory_writer import write_hot_path_memories
 from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
@@ -1630,8 +1632,15 @@ def _prepare_assistant_prompt(
     assistant_pre_surface = snapshot_managed_surface(assistant_home)
     compaction_prompt_active = is_compaction_prompt_active(assistant_home)
     sync_result = sync_managed_prompt_files(assistant_home)
+    prompt_source_text = user_text
+    try:
+        recall = recall_assistant_memories(assistant_home, user_id=user_id, user_text=user_text)
+        if recall.prompt_block:
+            prompt_source_text = f"{recall.prompt_block}\n\n{user_text}"
+    except Exception as exc:
+        logger.warning("assistant memory recall failed user=%s error=%s", user_id, exc)
     compiled_prompt = compile_assistant_prompt(
-        user_text,
+        prompt_source_text,
         managed_prompt_hash=sync_result.managed_prompt_hash,
         seen_managed_prompt_hash=session.managed_prompt_hash_seen,
     )
@@ -1717,6 +1726,16 @@ def _finalize_assistant_chat_turn(
     compaction_prompt_active: bool,
 ) -> None:
     capture = record_assistant_capture(assistant_home, user_id, user_text, response)
+    try:
+        write_hot_path_memories(
+            assistant_home,
+            user_id=user_id,
+            user_text=user_text,
+            assistant_text=response,
+            source_ref=str(capture.get("id") or "chat"),
+        )
+    except Exception as exc:
+        logger.warning("assistant memory hot-path write failed user=%s error=%s", user_id, exc)
     refresh_compaction_state(assistant_home, latest_capture=capture)
     consumed_capture_ids = list_pending_capture_ids(assistant_home) or [capture["id"]]
     sync_managed_prompt_files(assistant_home)

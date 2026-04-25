@@ -236,6 +236,45 @@ test("plugin view surface renders document snapshot blocks", () => {
   expect(screen.getByRole("table")).toBeInTheDocument();
 });
 
+test("plugin view surface renders hex snapshot views", () => {
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={new MockWebBotClient()}
+      view={{
+        pluginId: "hex-preview",
+        viewId: "hex",
+        title: "firmware.bin",
+        renderer: "hex",
+        mode: "snapshot",
+        payload: {
+          path: "bin/firmware.bin",
+          fileSizeBytes: 20,
+          previewBytes: 16,
+          bytesPerRow: 8,
+          truncated: true,
+          statsText: "20 B · preview 16 B",
+          entropyBuckets: [
+            { index: 0, startOffset: 0, endOffset: 8, entropy: 0.1 },
+            { index: 1, startOffset: 8, endOffset: 16, entropy: 0.9 },
+          ],
+          rows: [
+            { offset: 0, hex: ["00", "41", "42", "7F", "80", "FF", "20", "2E"], ascii: ".AB... ." },
+            { offset: 8, hex: ["48", "65", "78", "21"], ascii: "Hex!" },
+          ],
+        },
+      }}
+    />,
+  );
+
+  expect(screen.getByTestId("hex-view")).toBeInTheDocument();
+  expect(screen.getByText("00000000")).toBeInTheDocument();
+  expect(screen.getByText("00 41 42 7F 80 FF 20 2E")).toBeInTheDocument();
+  expect(screen.getByText(".AB... .")).toBeInTheDocument();
+  expect(screen.getAllByTestId("hex-entropy-bucket")).toHaveLength(2);
+  expect(screen.getByText("已截断")).toBeInTheDocument();
+});
+
 test("plugin view surface uses the full summary range for session waveform timelines", () => {
   const client = new MockWebBotClient();
   render(
