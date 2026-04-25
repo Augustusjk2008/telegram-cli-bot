@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,13 +35,55 @@ def build_source_fingerprint(input_payload: dict[str, Any]) -> str:
     if path_value is None:
         return _stable_json({"input": payload})
     path = Path(str(path_value)).resolve()
-    stat = path.stat()
+    try:
+        stat = path.stat()
+    except OSError:
+        return _stable_json(
+            {
+                "path": str(path),
+                "exists": False,
+                "options": payload,
+            }
+        )
+    content_hash = ""
+    if path.is_file():
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        content_hash = digest.hexdigest()
     return _stable_json(
         {
             "path": str(path),
+            "is_dir": path.is_dir(),
             "mtime_ns": stat.st_mtime_ns,
             "size": stat.st_size,
+            "sha256": content_hash,
             "options": payload,
+        }
+    )
+
+
+def build_snapshot_cache_key(
+    *,
+    bot_alias: str,
+    plugin_id: str,
+    view_id: str,
+    source_fingerprint: str,
+    config_fingerprint: str,
+    manifest_fingerprint: str,
+) -> str:
+    return _stable_json(
+        {
+            "botAlias": bot_alias,
+            "pluginId": plugin_id,
+            "viewId": view_id,
+            "sourceFingerprint": source_fingerprint,
+            "configFingerprint": config_fingerprint,
+            "manifestFingerprint": manifest_fingerprint,
         }
     )
 

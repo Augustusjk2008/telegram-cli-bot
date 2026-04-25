@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -504,4 +505,22 @@ async def test_plugin_runtime_forces_utf8_stdio_for_child_processes(
 
     assert result["title"] == "文件夹大纲"
     assert result["payload"]["rows"][0]["cells"]["label"] == "中文节点"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_runtime_stops_idle_plugin_processes(tmp_path: Path) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_echo_plugin(plugins_root)
+    manifest = PluginRegistry(plugins_root).discover()["echo-wave"]
+    runtime = PluginRuntime(call_timeout_seconds=2.0, idle_timeout_seconds=0.01)
+
+    await runtime.render_view("main", manifest, "waveform", {"path": "demo.txt"})
+    assert runtime.active_process_count() == 1
+
+    await asyncio.sleep(0.03)
+    stopped = await runtime.evict_idle_processes()
+
+    assert stopped == 1
+    assert runtime.active_process_count() == 0
     await runtime.shutdown()

@@ -38,6 +38,8 @@ class _PluginProcess:
     pending: dict[int, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
     stderr_task: asyncio.Task[None] | None = None
     reader_task: asyncio.Task[None] | None = None
+    last_used_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
+    active_calls: int = 0
 
 
 class PluginRuntime:
@@ -48,13 +50,18 @@ class PluginRuntime:
         host_api: PluginHostApi | None = None,
         audit_hook: Callable[[dict[str, Any]], None] | None = None,
         call_timeout_seconds: float = PLUGIN_CALL_TIMEOUT_SECONDS,
+        idle_timeout_seconds: float = 10 * 60,
     ) -> None:
         self._workspace_root_for = workspace_root_for or (lambda _alias: Path.cwd())
         self._host_api = host_api or PluginHostApi(ArtifactStore(Path.cwd()))
         self._audit_hook = audit_hook
         self._call_timeout_seconds = call_timeout_seconds
+        self._idle_timeout_seconds = idle_timeout_seconds
         self._processes: dict[tuple[str, str], _PluginProcess] = {}
         self._manifests: dict[tuple[str, str], PluginManifest] = {}
+
+    def active_process_count(self) -> int:
+        return sum(1 for wrapped in self._processes.values() if wrapped.process.returncode is None)
 
     def _context_payload(self, bot_alias: str, manifest: PluginManifest) -> dict[str, Any]:
         workspace_root = self._workspace_root_for(bot_alias).expanduser().resolve()
@@ -274,11 +281,15 @@ class PluginRuntime:
 
     async def _call(self, bot_alias: str, manifest: PluginManifest, method: str, params: dict[str, Any]) -> dict[str, Any]:
         wrapped = await self._ensure_process(bot_alias, manifest)
+        wrapped.active_calls += 1
         try:
             return await asyncio.wait_for(self._invoke(wrapped, method, params), timeout=self._call_timeout_seconds)
         except asyncio.TimeoutError as exc:
             await self.stop_plugin(bot_alias, manifest.plugin_id)
             raise RuntimeError(f"插件响应超时: {manifest.plugin_id}") from exc
+        finally:
+            wrapped.active_calls = max(0, wrapped.active_calls - 1)
+            wrapped.last_used_at = asyncio.get_running_loop().time()
 
     async def render_view(self, bot_alias: str, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call(
@@ -395,6 +406,24 @@ class PluginRuntime:
             self._manifests.pop(key, None)
             if wrapped is not None:
                 await self._stop_process(key, wrapped)
+
+    async def evict_idle_processes(self) -> int:
+        now = asyncio.get_running_loop().time()
+        stopped = 0
+        for key, wrapped in list(self._processes.items()):
+            if wrapped.process.returncode is not None:
+                self._processes.pop(key, None)
+                self._manifests.pop(key, None)
+                continue
+            if wrapped.active_calls > 0:
+                continue
+            if now - wrapped.last_used_at < self._idle_timeout_seconds:
+                continue
+            await self._stop_process(key, wrapped)
+            self._processes.pop(key, None)
+            self._manifests.pop(key, None)
+            stopped += 1
+        return stopped
 
     async def shutdown(self) -> None:
         processes = list(self._processes.items())

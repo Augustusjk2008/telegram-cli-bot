@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -626,3 +627,195 @@ async def test_plugin_service_lists_installable_plugins_and_installs_folder(tmp_
     assert not (plugins_root / "fresh-plugin" / "__pycache__").exists()
     assert service.list_installable_plugins()[0]["installed"] is True
     await service.shutdown()
+
+
+def _write_document_plugin(root: Path, *, plugin_id: str) -> None:
+    plugin_dir = root
+    backend_dir = plugin_dir / "backend"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "main.py").write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "plugin.initialize":
+        result = {"ok": True}
+    elif method == "plugin.render_view":
+        result = {
+            "renderer": "document",
+            "title": "demo.txt",
+            "payload": {
+                "path": request["params"]["input"]["path"],
+                "blocks": [],
+            },
+        }
+    elif method == "plugin.shutdown":
+        result = {"ok": True}
+    else:
+        result = {"ok": True}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\\n")
+    sys.stdout.flush()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "schemaVersion": 2,
+        "id": plugin_id,
+        "name": plugin_id,
+        "version": "0.1.0",
+        "description": "document plugin",
+        "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+        "views": [{"id": "document", "title": "文档", "renderer": "document"}],
+        "fileHandlers": [],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_reload_plugins_stops_only_changed_plugin_instances(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "plugins"
+    unchanged_dir = plugins_root / "unchanged"
+    changed_dir = plugins_root / "changed"
+    _write_document_plugin(unchanged_dir, plugin_id="unchanged")
+    _write_document_plugin(changed_dir, plugin_id="changed")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    service.list_plugins(refresh=True)
+
+    stopped: list[str] = []
+
+    async def fake_stop_instances(plugin_id: str) -> None:
+        stopped.append(plugin_id)
+
+    async def fail_shutdown() -> None:
+        raise AssertionError("reload_plugins must not shutdown every runtime")
+
+    monkeypatch.setattr(service.runtime, "stop_plugin_instances", fake_stop_instances)
+    monkeypatch.setattr(service.runtime, "shutdown", fail_shutdown)
+
+    raw = json.loads((changed_dir / "plugin.json").read_text(encoding="utf-8"))
+    raw["version"] = "0.2.0"
+    (changed_dir / "plugin.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    await service.reload_plugins()
+
+    assert stopped == ["changed"]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_render_view_uses_fingerprint_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    target = repo_root / "demo.txt"
+    target.write_text("v1", encoding="utf-8")
+    plugins_root = tmp_path / "plugins"
+    plugin_dir = plugins_root / "doc-plugin"
+    _write_document_plugin(plugin_dir, plugin_id="doc-plugin")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    service.list_plugins(refresh=True)
+
+    calls = 0
+
+    async def fake_render_view(bot_alias, manifest, view_id, input_payload):
+        nonlocal calls
+        calls += 1
+        return {
+            "renderer": "document",
+            "title": "Demo",
+            "payload": {"path": input_payload["path"], "blocks": [{"type": "paragraph", "runs": [{"text": f"call {calls}"}]}]},
+        }
+
+    monkeypatch.setattr(service.runtime, "render_view", fake_render_view)
+
+    first = await service.render_view(
+        bot_alias="main",
+        plugin_id="doc-plugin",
+        view_id="document",
+        input_payload={"path": "demo.txt"},
+        audit_context={"account_id": "u1", "bot_alias": "main"},
+    )
+    second = await service.render_view(
+        bot_alias="main",
+        plugin_id="doc-plugin",
+        view_id="document",
+        input_payload={"path": "demo.txt"},
+        audit_context={"account_id": "u1", "bot_alias": "main"},
+    )
+
+    assert calls == 1
+    assert second == first
+
+    target.write_text("v2", encoding="utf-8")
+    third = await service.render_view(
+        bot_alias="main",
+        plugin_id="doc-plugin",
+        view_id="document",
+        input_payload={"path": "demo.txt"},
+        audit_context={"account_id": "u1", "bot_alias": "main"},
+    )
+
+    assert calls == 2
+    assert third != first
+
+
+@pytest.mark.asyncio
+async def test_snapshot_render_view_limits_concurrent_runtime_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "a.txt").write_text("a", encoding="utf-8")
+    (repo_root / "b.txt").write_text("b", encoding="utf-8")
+    (repo_root / "c.txt").write_text("c", encoding="utf-8")
+    plugins_root = tmp_path / "plugins"
+    _write_document_plugin(plugins_root / "doc-plugin", plugin_id="doc-plugin")
+
+    service = PluginService(repo_root, plugins_root=plugins_root, render_concurrency=1)
+    service.list_plugins(refresh=True)
+    active = 0
+    peak = 0
+
+    async def fake_render_view(bot_alias, manifest, view_id, input_payload):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return {
+            "renderer": "document",
+            "title": "Demo",
+            "payload": {"path": input_payload["path"], "blocks": []},
+        }
+
+    monkeypatch.setattr(service.runtime, "render_view", fake_render_view)
+
+    await asyncio.gather(
+        service.render_view(
+            bot_alias="main",
+            plugin_id="doc-plugin",
+            view_id="document",
+            input_payload={"path": "a.txt"},
+            audit_context={"account_id": "u1", "bot_alias": "main"},
+        ),
+        service.render_view(
+            bot_alias="main",
+            plugin_id="doc-plugin",
+            view_id="document",
+            input_payload={"path": "b.txt"},
+            audit_context={"account_id": "u1", "bot_alias": "main"},
+        ),
+        service.render_view(
+            bot_alias="main",
+            plugin_id="doc-plugin",
+            view_id="document",
+            input_payload={"path": "c.txt"},
+            audit_context={"account_id": "u1", "bot_alias": "main"},
+        ),
+    )
+
+    assert peak == 1

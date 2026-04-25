@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import shutil
 from collections.abc import Callable
@@ -9,6 +11,7 @@ from typing import Any
 from .artifacts import ArtifactRecord, ArtifactStore
 from .audit import append_plugin_audit_event
 from .host_api import PluginHostApi
+from .host_api import resolve_workspace_path
 from .manifest import load_plugin_manifest
 from .paths import default_plugins_root
 from .registry import PluginRegistry
@@ -16,6 +19,7 @@ from .runtime import PluginRuntime
 from .view_sessions import (
     PluginViewSessionRecord,
     PluginViewSessionStore,
+    build_snapshot_cache_key,
     build_source_fingerprint,
     build_source_identity,
 )
@@ -43,6 +47,7 @@ class PluginService:
         source_plugins_root: Path | str | None = None,
         *,
         workspace_root_for: Callable[[str], Path] | None = None,
+        render_concurrency: int = 2,
     ):
         self.repo_root = Path(repo_root)
         self.plugins_root = Path(plugins_root) if plugins_root is not None else default_plugins_root()
@@ -51,14 +56,18 @@ class PluginService:
             if source_plugins_root is not None
             else self.repo_root / "examples" / "plugins"
         )
+        self._workspace_root_for = workspace_root_for or (lambda _alias: self.repo_root)
         self.registry = PluginRegistry(self.plugins_root)
         self.artifacts = ArtifactStore(self.repo_root)
         self.runtime = PluginRuntime(
-            workspace_root_for=workspace_root_for or (lambda _alias: self.repo_root),
+            workspace_root_for=self._workspace_root_for,
             host_api=PluginHostApi(self.artifacts),
             audit_hook=self._record_runtime_audit,
         )
         self.sessions = PluginViewSessionStore()
+        self._snapshot_cache: dict[str, dict[str, Any]] = {}
+        self._snapshot_cache_plugins: dict[str, set[str]] = {}
+        self._render_semaphore = asyncio.Semaphore(max(1, int(render_concurrency)))
 
     def _get_view_spec(self, plugin_id: str, view_id: str):
         manifest = self.registry.get_manifest(plugin_id)
@@ -145,6 +154,70 @@ class PluginService:
         if view_id is not None and record.view_id != view_id:
             raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
         return record
+
+    def _manifest_signature(self, manifest) -> str:
+        manifest_path = manifest.root / "plugin.json"
+        try:
+            stat = manifest_path.stat()
+        except OSError:
+            return "missing"
+        return json.dumps(
+            {
+                "root": str(manifest.root),
+                "mtime_ns": stat.st_mtime_ns,
+                "size": stat.st_size,
+                "schema_version": manifest.schema_version,
+                "name": manifest.name,
+                "version": manifest.version,
+                "description": manifest.description,
+                "enabled": manifest.enabled,
+                "config": dict(manifest.config),
+                "runtime": {
+                    "type": manifest.runtime.runtime_type,
+                    "entry": manifest.runtime.entry,
+                    "protocol": manifest.runtime.protocol,
+                    "permissions": {
+                        "workspaceRead": manifest.runtime.permissions.workspace_read,
+                        "workspaceList": manifest.runtime.permissions.workspace_list,
+                        "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
+                    },
+                },
+                "views": [(view.id, view.renderer, view.view_mode, view.data_profile) for view in manifest.views],
+                "handlers": [(handler.id, handler.extensions, handler.view_id) for handler in manifest.file_handlers],
+                "config_schema": self._serialize_config_schema(manifest),
+                "catalog_actions": [self._serialize_action(action) for action in manifest.catalog_actions],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    def _stable_config_fingerprint(self, manifest) -> str:
+        return json.dumps(dict(manifest.config), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _snapshot_cache_remember(self, plugin_id: str, cache_key: str, payload: dict[str, Any]) -> None:
+        self._snapshot_cache[cache_key] = copy.deepcopy(payload)
+        self._snapshot_cache_plugins.setdefault(plugin_id, set()).add(cache_key)
+
+    def _snapshot_cache_get(self, cache_key: str) -> dict[str, Any] | None:
+        cached = self._snapshot_cache.get(cache_key)
+        return copy.deepcopy(cached) if cached is not None else None
+
+    def _snapshot_cache_clear_plugin(self, plugin_id: str) -> None:
+        keys = self._snapshot_cache_plugins.pop(plugin_id, set())
+        for key in keys:
+            self._snapshot_cache.pop(key, None)
+
+    def _resolve_input_payload(self, bot_alias: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        resolved_input = dict(input_payload or {})
+        path_value = resolved_input.get("path")
+        if path_value is None:
+            return resolved_input
+        raw_path = Path(str(path_value))
+        if raw_path.is_absolute():
+            resolved_input["path"] = str(raw_path.expanduser().resolve())
+            return resolved_input
+        resolved_input["path"] = str(resolve_workspace_path(self._workspace_root_for(bot_alias), str(path_value)))
+        return resolved_input
 
     def _manifest_payload(self, manifest) -> dict[str, Any]:
         payload = {
@@ -343,10 +416,26 @@ class PluginService:
         return [self._manifest_payload(manifest) for manifest in manifests]
 
     async def reload_plugins(self) -> list[dict[str, Any]]:
-        self.sessions = PluginViewSessionStore()
-        self.artifacts.clear_all()
-        await self.runtime.shutdown()
-        return self.list_plugins(refresh=True)
+        before = {
+            manifest.plugin_id: self._manifest_signature(manifest)
+            for manifest in self.registry.list_manifests()
+        }
+        manifests = self.registry.discover()
+        after = {
+            plugin_id: self._manifest_signature(manifest)
+            for plugin_id, manifest in manifests.items()
+        }
+        affected = sorted(
+            plugin_id
+            for plugin_id in set(before) | set(after)
+            if before.get(plugin_id) != after.get(plugin_id)
+        )
+        for plugin_id in affected:
+            self.sessions.clear_plugin(plugin_id)
+            self.artifacts.clear_plugin(plugin_id)
+            self._snapshot_cache_clear_plugin(plugin_id)
+            await self.runtime.stop_plugin_instances(plugin_id)
+        return [self._manifest_payload(manifest) for manifest in manifests.values()]
 
     async def install_plugin(
         self,
@@ -409,6 +498,7 @@ class PluginService:
             except Exception:
                 pass
         self.artifacts.clear_plugin(plugin_id)
+        self._snapshot_cache_clear_plugin(plugin_id)
         await self.runtime.stop_plugin_instances(plugin_id)
         return self._manifest_payload(self.registry.get_manifest(plugin_id))
 
@@ -442,8 +532,31 @@ class PluginService:
                 input_payload=input_payload,
                 audit_context=audit_context,
             )
-        result = await self.runtime.render_view(bot_alias, manifest, view_id, input_payload)
+        resolved_input = self._resolve_input_payload(bot_alias, input_payload)
+        source_fingerprint = build_source_fingerprint(resolved_input)
+        cache_key = build_snapshot_cache_key(
+            bot_alias=bot_alias,
+            plugin_id=plugin_id,
+            view_id=view_id,
+            source_fingerprint=source_fingerprint,
+            config_fingerprint=self._stable_config_fingerprint(manifest),
+            manifest_fingerprint=self._manifest_signature(manifest),
+        )
+        cached = self._snapshot_cache_get(cache_key)
+        if cached is not None:
+            self._record_audit(
+                event="render_view_cache_hit",
+                plugin_id=plugin_id,
+                view_id=view_id,
+                payload=dict(cached.get("payload") or {}),
+                audit_context=audit_context,
+            )
+            await self.evict_idle_runtimes()
+            return cached
+        async with self._render_semaphore:
+            result = await self.runtime.render_view(bot_alias, manifest, view_id, resolved_input)
         payload = self._validate_render_result(plugin_id, view, result, expect_session=False)
+        self._snapshot_cache_remember(plugin_id, cache_key, payload)
         self._record_audit(
             event="render_view",
             plugin_id=plugin_id,
@@ -451,6 +564,7 @@ class PluginService:
             payload=payload,
             audit_context=audit_context,
         )
+        await self.evict_idle_runtimes()
         return payload
 
     async def open_view(
@@ -471,12 +585,13 @@ class PluginService:
                 input_payload=input_payload,
                 audit_context=audit_context,
             )
-        resolved_input = dict(input_payload or {})
+        resolved_input = self._resolve_input_payload(bot_alias, input_payload)
         source_identity = build_source_identity(resolved_input)
         source_fingerprint = build_source_fingerprint(resolved_input)
         cache_key = self.sessions.build_cache_key(bot_alias, plugin_id, view_id, source_fingerprint)
         cached = self.sessions.get_cached(cache_key)
         if cached is not None:
+            await self.evict_idle_runtimes()
             return dict(cached.opened_payload)
 
         result = await self.runtime.open_view(bot_alias, manifest, view_id, resolved_input)
@@ -509,6 +624,7 @@ class PluginService:
             audit_context=audit_context,
             session_id=payload["sessionId"],
         )
+        await self.evict_idle_runtimes()
         return payload
 
     async def get_view_window(
@@ -538,6 +654,7 @@ class PluginService:
             audit_context=audit_context,
             session_id=session_id,
         )
+        await self.evict_idle_runtimes()
         return payload
 
     async def invoke_action(
@@ -580,6 +697,7 @@ class PluginService:
                 "action_target": "plugin",
             },
         )
+        await self.evict_idle_runtimes()
         return normalized
 
     async def dispose_view(
@@ -603,10 +721,14 @@ class PluginService:
             audit_context=audit_context or {},
             session_id=session_id,
         )
+        await self.evict_idle_runtimes()
         return payload
 
     def get_artifact(self, *, bot_alias: str, artifact_id: str) -> ArtifactRecord:
         return self.artifacts.get(bot_alias=bot_alias, artifact_id=artifact_id)
+
+    async def evict_idle_runtimes(self) -> int:
+        return await self.runtime.evict_idle_processes()
 
     async def shutdown(self) -> None:
         records = self.sessions.records()
@@ -618,4 +740,6 @@ class PluginService:
                 pass
         self.sessions = PluginViewSessionStore()
         self.artifacts.clear_all()
+        self._snapshot_cache.clear()
+        self._snapshot_cache_plugins.clear()
         await self.runtime.shutdown()
