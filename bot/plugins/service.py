@@ -587,7 +587,10 @@ class PluginService:
             )
         resolved_input = self._resolve_input_payload(bot_alias, input_payload)
         source_identity = build_source_identity(resolved_input)
-        source_fingerprint = build_source_fingerprint(resolved_input)
+        source_fingerprint = build_source_fingerprint(
+            resolved_input,
+            hash_file_contents=view.data_profile != "heavy",
+        )
         cache_key = self.sessions.build_cache_key(bot_alias, plugin_id, view_id, source_fingerprint)
         cached = self.sessions.get_cached(cache_key)
         if cached is not None:

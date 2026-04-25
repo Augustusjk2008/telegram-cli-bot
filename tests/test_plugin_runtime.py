@@ -10,6 +10,12 @@ from bot.plugins.registry import PluginRegistry
 from bot.plugins.runtime import PluginRuntime
 
 
+def test_plugin_runtime_default_idle_timeout_is_shorter():
+    runtime = PluginRuntime()
+
+    assert runtime._idle_timeout_seconds == 120
+
+
 def _write_echo_plugin(root: Path) -> None:
     plugin_dir = root / "echo-wave"
     backend_dir = plugin_dir / "backend"

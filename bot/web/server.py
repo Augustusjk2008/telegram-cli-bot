@@ -402,7 +402,7 @@ def _build_public_host_info() -> dict[str, str]:
 class _TerminalOutputPump:
     """用 daemon 线程读取终端输出，避免阻塞读把主进程退出卡住。"""
 
-    def __init__(self, process: Any, *, flush_interval_ms: int = 8, max_chunk_bytes: int = 65536):
+    def __init__(self, process: Any, *, flush_interval_ms: int = 40, max_chunk_bytes: int = 65536):
         self._process = process
         self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None

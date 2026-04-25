@@ -1255,6 +1255,36 @@ def test_move_path_moves_file_into_target_directory(web_manager: MultiBotManager
     assert not source.exists()
     assert (target / "notes.md").read_text(encoding="utf-8") == "# hello\n"
 
+
+def test_move_path_moves_directory_into_target_directory(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    source = workspace / "src"
+    target = workspace / "docs"
+    source.mkdir(parents=True)
+    target.mkdir()
+    (source / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = move_path(web_manager, "main", 1001, "src", "docs")
+
+    assert result["old_path"] == "src"
+    assert result["path"] == "docs/src"
+    assert not source.exists()
+    assert (target / "src" / "main.py").read_text(encoding="utf-8") == "print('hi')\n"
+
+
+def test_move_path_rejects_directory_into_own_descendant(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    nested = workspace / "src" / "nested"
+    nested.mkdir(parents=True)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        move_path(web_manager, "main", 1001, "src", "src/nested")
+
+    assert exc_info.value.code == "invalid_move_target"
+
+
 def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     nested = workspace / "docs" / "guides"
@@ -3234,6 +3264,31 @@ def test_cli_params_model_schema_uses_env_model_options(web_manager: MultiBotMan
         "claude-sonnet-4-6",
         "none",
     ]
+
+
+def test_stream_preview_state_caps_buffer_and_keeps_latest_codex_text():
+    state = api_service._StreamPreviewState("codex", max_raw_chars=80)
+    for index in range(20):
+        state.consume(
+            '{"type":"item.delta","item":{"type":"agent_message","delta":"chunk-%02d "}}\n'
+            % index
+        )
+
+    event = state.status_event(elapsed_seconds=3)
+
+    assert event["type"] == "status"
+    assert event["elapsed_seconds"] == 3
+    assert "chunk-19" in event["preview_text"]
+    assert len(state.raw_output_for_parse()) <= 80
+
+
+def test_stream_preview_state_caps_buffer_for_plain_output():
+    state = api_service._StreamPreviewState("codex", max_raw_chars=12)
+
+    state.consume("abcdef")
+    state.consume("ghijklmnop")
+
+    assert state.raw_output_for_parse() == "efghijklmnop"
 
 
 @pytest.mark.asyncio

@@ -80,12 +80,18 @@ function dataTransferTypes(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer?.types || []);
 }
 
-function hasInternalFileDrag(event: DragEvent<HTMLElement>) {
+function hasInternalTreeEntryDrag(event: DragEvent<HTMLElement>) {
   return dataTransferTypes(event).includes(INTERNAL_FILE_DRAG_TYPE);
 }
 
-function canMoveFileToDirectory(sourcePath: string, targetDirectoryPath: string) {
-  return Boolean(sourcePath) && parentTreePath(sourcePath) !== targetDirectoryPath;
+function canMoveTreeEntryToDirectory(sourcePath: string, targetDirectoryPath: string) {
+  if (!sourcePath || parentTreePath(sourcePath) === targetDirectoryPath) {
+    return false;
+  }
+  if (sourcePath === targetDirectoryPath || targetDirectoryPath.startsWith(`${sourcePath}/`)) {
+    return false;
+  }
+  return true;
 }
 
 function resolveGitDecoration(
@@ -874,7 +880,7 @@ export function FileTreePane({
   const [renameError, setRenameError] = useState("");
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [dragDepth, setDragDepth] = useState(0);
-  const [draggedFilePath, setDraggedFilePath] = useState("");
+  const [draggedEntryPath, setDraggedEntryPath] = useState("");
   const [dropTargetPath, setDropTargetPath] = useState("");
   const [actionError, setActionError] = useState("");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -887,7 +893,7 @@ export function FileTreePane({
   }
 
   function resetInternalDrag() {
-    setDraggedFilePath("");
+    setDraggedEntryPath("");
     setDropTargetPath("");
   }
 
@@ -1009,7 +1015,7 @@ export function FileTreePane({
   }
 
   async function handleMoveFile(path: string, targetParentPath: string) {
-    if (!canMoveFileToDirectory(path, targetParentPath)) {
+    if (!canMoveTreeEntryToDirectory(path, targetParentPath)) {
       return;
     }
     setActionError("");
@@ -1024,23 +1030,23 @@ export function FileTreePane({
     }
   }
 
-  function handleFileDragStart(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (structureOnly || entry.isDir) {
+  function handleEntryDragStart(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
+    if (structureOnly) {
       event.preventDefault();
       return;
     }
-    setDraggedFilePath(entry.path);
+    setDraggedEntryPath(entry.path);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData(INTERNAL_FILE_DRAG_TYPE, entry.path);
     event.dataTransfer.setData("text/plain", entry.path);
   }
 
   function handleDirectoryDragOver(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (structureOnly || !entry.isDir || !hasInternalFileDrag(event)) {
+    if (structureOnly || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
       return;
     }
-    const sourcePath = draggedFilePath || event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
-    if (!canMoveFileToDirectory(sourcePath, entry.path)) {
+    const sourcePath = draggedEntryPath || event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
+    if (!canMoveTreeEntryToDirectory(sourcePath, entry.path)) {
       return;
     }
     event.preventDefault();
@@ -1050,7 +1056,7 @@ export function FileTreePane({
   }
 
   function handleDirectoryDragLeave(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (!hasInternalFileDrag(event)) {
+    if (!hasInternalTreeEntryDrag(event)) {
       return;
     }
     const relatedTarget = event.relatedTarget;
@@ -1061,7 +1067,7 @@ export function FileTreePane({
   }
 
   function handleDirectoryDrop(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (structureOnly || !entry.isDir || !hasInternalFileDrag(event)) {
+    if (structureOnly || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
       return;
     }
     event.preventDefault();
@@ -1143,12 +1149,15 @@ export function FileTreePane({
         {entry.isDir ? (
           <button
             type="button"
+            draggable={!structureOnly}
             aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
+            onDragStart={(event) => handleEntryDragStart(event, entry)}
             onDragOver={(event) => handleDirectoryDragOver(event, entry)}
             onDragLeave={(event) => handleDirectoryDragLeave(event, entry)}
             onDrop={(event) => handleDirectoryDrop(event, entry)}
+            onDragEnd={resetInternalDrag}
             onClick={() => void tree.toggleDirectory(entry.path)}
             className={clsx(
               "min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]",
@@ -1168,7 +1177,7 @@ export function FileTreePane({
             aria-label={`打开 ${entry.path}`}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
-            onDragStart={(event) => handleFileDragStart(event, entry)}
+            onDragStart={(event) => handleEntryDragStart(event, entry)}
             onDragEnd={resetInternalDrag}
             onClick={() => {
               if (!structureOnly) {
@@ -1193,27 +1202,27 @@ export function FileTreePane({
     <div
       data-testid="desktop-file-tree-dropzone"
       onDragEnter={(event) => {
-        if (hasInternalFileDrag(event)) {
+        if (hasInternalTreeEntryDrag(event)) {
           return;
         }
         event.preventDefault();
         setDragDepth((current) => current + 1);
       }}
       onDragOver={(event) => {
-        if (hasInternalFileDrag(event)) {
+        if (hasInternalTreeEntryDrag(event)) {
           return;
         }
         event.preventDefault();
       }}
       onDragLeave={(event) => {
-        if (hasInternalFileDrag(event)) {
+        if (hasInternalTreeEntryDrag(event)) {
           return;
         }
         event.preventDefault();
         setDragDepth((current) => Math.max(0, current - 1));
       }}
       onDrop={(event) => {
-        if (hasInternalFileDrag(event)) {
+        if (hasInternalTreeEntryDrag(event)) {
           event.preventDefault();
           resetInternalDrag();
           return;

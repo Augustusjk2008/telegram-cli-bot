@@ -101,7 +101,7 @@ def test_vivado_waveform_summary_allows_zooming_out_to_ten_percent(tmp_path: Pat
 
 def test_vivado_waveform_lod_marks_dense_changes_instead_of_hiding_them(tmp_path: Path) -> None:
     lines = [
-        "$timescale 1ns $end",
+        "$timescale 1fs $end",
         "$scope module tb $end",
         "$var wire 1 ! clk $end",
         "$upscope $end",
@@ -164,6 +164,134 @@ def test_vivado_waveform_can_disable_lod_compression(tmp_path: Path) -> None:
     assert all(segment.get("kind") != "dense" for segment in segments)
 
 
+def test_vivado_waveform_exact_window_output_is_stable_for_duplicate_times(tmp_path: Path) -> None:
+    lines = [
+        "$timescale 1fs $end",
+        "$scope module tb $end",
+        "$var wire 1 ! clk $end",
+        "$var wire 4 # data $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+        "#0",
+        "0!",
+        "b0000 #",
+        "#5",
+        "1!",
+        "0!",
+        "b0011 #",
+        "b0101 #",
+        "#10",
+        "1!",
+        "b1111 #",
+    ]
+    wave_file = tmp_path / "stable.vcd"
+    wave_file.write_text("\n".join(lines), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    index = parser.build_vcd_index(wave_file)
+    window = parser.query_waveform_window(
+        index,
+        start_time=0,
+        end_time=10,
+        signal_ids=["tb.clk", "tb.data"],
+        pixel_width=1200,
+        lod_enabled=False,
+    )
+
+    assert window == {
+        "startTime": 0,
+        "endTime": 10,
+        "tracks": [
+            {
+                "signalId": "tb.clk",
+                "label": "tb.clk",
+                "width": 1,
+                "segments": [
+                    {"start": 0, "end": 5, "value": "0"},
+                    {"start": 5, "end": 10, "value": "0"},
+                ],
+            },
+            {
+                "signalId": "tb.data",
+                "label": "tb.data",
+                "width": 4,
+                "segments": [
+                    {"start": 0, "end": 5, "value": "0000"},
+                    {"start": 5, "end": 10, "value": "0101"},
+                ],
+            },
+        ],
+    }
+
+
+def test_vivado_waveform_index_uses_compact_value_ids(tmp_path: Path) -> None:
+    wave_file = tmp_path / "simple_counter.vcd"
+    wave_file.write_text(Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8"), encoding="utf-8")
+
+    parser = _load_vcd_parser()
+    index = parser.build_vcd_index(wave_file)
+    series = index.series_by_signal["tb.counter"]
+
+    assert hasattr(series, "raw_times")
+    assert hasattr(series, "value_ids")
+    assert hasattr(series, "value_table")
+    assert len(series.raw_times) == len(series.value_ids)
+    assert series.value_table
+
+
+def test_vivado_waveform_session_store_uses_mmap_sidecar(tmp_path: Path) -> None:
+    backend_dir = Path("examples/plugins/vivado-waveform/backend")
+    spec = importlib.util.spec_from_file_location("vivado_waveform_session_store", backend_dir / "session_store.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(backend_dir))
+    try:
+        sys.modules.pop("vcd_parser", None)
+        sys.modules.pop("vcd_sidecar", None)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        wave_file = tmp_path / "simple_counter.vcd"
+        wave_file.write_text(Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8"), encoding="utf-8")
+        store = module.WaveformSessionStore()
+        session_id, index = store.open(wave_file)
+        series = index.series_by_signal["tb.counter"]
+
+        assert series.raw_times.__class__.__name__ == "MmapArray"
+        assert store.dispose(session_id) is True
+        assert store.dispose(session_id) is False
+    finally:
+        sys.path.remove(str(backend_dir))
+
+
+def test_vivado_waveform_session_store_clears_window_cache_on_dispose(tmp_path: Path) -> None:
+    backend_dir = Path("examples/plugins/vivado-waveform/backend")
+    spec = importlib.util.spec_from_file_location("vivado_waveform_session_store_cache", backend_dir / "session_store.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(backend_dir))
+    try:
+        sys.modules.pop("vcd_parser", None)
+        sys.modules.pop("vcd_sidecar", None)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        wave_file = tmp_path / "simple_counter.vcd"
+        wave_file.write_text(Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8"), encoding="utf-8")
+        store = module.WaveformSessionStore()
+        session_id, _index = store.open(wave_file)
+        cache_key = (session_id, 0, 120, ("tb.clk",), 1200, True)
+        payload = {"tracks": []}
+
+        store.remember_window_cache(cache_key, payload)
+
+        assert store.get_window_cache(cache_key) == payload
+        assert store.dispose(session_id) is True
+        assert store.get_window_cache(cache_key) is None
+    finally:
+        sys.path.remove(str(backend_dir))
+
+
 @pytest.mark.asyncio
 async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
@@ -178,7 +306,7 @@ async def test_vivado_waveform_plugin_renders_waveform_payload(tmp_path: Path) -
         source_plugin_dir.joinpath("plugin.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    for name in ("main.py", "session_store.py", "vcd_parser.py"):
+    for name in ("main.py", "session_store.py", "vcd_parser.py", "vcd_sidecar.py"):
         (target_plugin_dir / "backend" / name).write_text(
             source_plugin_dir.joinpath("backend", name).read_text(encoding="utf-8"),
             encoding="utf-8",

@@ -24,11 +24,8 @@ from typing import Any, AsyncIterator, Optional
 from xml.etree import ElementTree
 
 from bot.assistant_cron_store import (
-    delete_job_definition,
     delete_job_run_audit,
     delete_job_runtime_state,
-    list_job_definitions,
-    load_job_runtime_state,
     read_job_definition,
     read_job_run_audit,
 )
@@ -882,8 +879,8 @@ async def apply_assistant_upgrade(
 def list_assistant_cron_jobs(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     service = _assistant_cron_service_or_raise(manager, alias)
     items = []
-    for job in list_job_definitions(service.assistant_home):
-        state = load_job_runtime_state(service.assistant_home, job.id)
+    for job in service.list_jobs():
+        state = service.get_job_state(job.id)
         items.append(_build_assistant_cron_job_item(job, state=state))
     return {"items": items}
 
@@ -901,7 +898,7 @@ async def create_assistant_cron_job(manager: MultiBotManager, alias: str, payloa
         saved = await service.save_job(job)
     except ValueError as exc:
         _raise(400, "invalid_cron_job", str(exc))
-    state = load_job_runtime_state(service.assistant_home, saved.id)
+    state = service.get_job_state(saved.id)
     return {"job": _build_assistant_cron_job_item(saved, state=state)}
 
 
@@ -923,13 +920,13 @@ async def update_assistant_cron_job(
         saved = await service.save_job(AssistantCronJob.from_dict(merged))
     except ValueError as exc:
         _raise(400, "invalid_cron_job", str(exc))
-    state = load_job_runtime_state(service.assistant_home, saved.id)
+    state = service.get_job_state(saved.id)
     return {"job": _build_assistant_cron_job_item(saved, state=state)}
 
 
 async def delete_assistant_cron_job(manager: MultiBotManager, alias: str, job_id: str) -> dict[str, Any]:
     service = _assistant_cron_service_or_raise(manager, alias)
-    if not delete_job_definition(service.assistant_home, job_id):
+    if not await service.delete_job(job_id):
         _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
     delete_job_runtime_state(service.assistant_home, job_id)
     delete_job_run_audit(service.assistant_home, job_id)
@@ -1456,14 +1453,22 @@ def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, tar
         _raise(400, "invalid_move_path", "缺少待移动路径")
 
     source_path = _resolve_safe_write_path(browser_dir, source_rel)
-    if not os.path.isfile(source_path):
-        _raise(404, "file_not_found", "文件不存在")
+    if not os.path.exists(source_path):
+        _raise(404, "path_not_found", "路径不存在")
 
     target_dir = _resolve_action_parent_dir(session, target_parent_path)
     target_path = os.path.abspath(os.path.join(target_dir, os.path.basename(source_path)))
+    source_abs = os.path.abspath(source_path)
 
-    if os.path.normcase(os.path.abspath(source_path)) == os.path.normcase(target_path):
-        _raise(400, "same_move_target", "文件已在目标文件夹中")
+    if os.path.isdir(source_abs):
+        try:
+            if os.path.commonpath([source_abs, os.path.abspath(target_dir)]) == source_abs:
+                _raise(400, "invalid_move_target", "不能将文件夹移动到自身或其子文件夹中")
+        except ValueError:
+            _raise(400, "invalid_move_target", "不能将文件夹移动到自身或其子文件夹中")
+
+    if os.path.normcase(source_abs) == os.path.normcase(target_path):
+        _raise(400, "same_move_target", "路径已在目标文件夹中")
     if os.path.exists(target_path):
         _raise(409, "move_target_exists", "目标已存在")
 
@@ -1933,6 +1938,116 @@ def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: 
     return event
 
 
+class _StreamPreviewState:
+    def __init__(self, cli_type: str, *, max_raw_chars: int = 256_000):
+        self.cli_type = cli_type
+        self.max_raw_chars = max(1, int(max_raw_chars))
+        self._raw_parts: list[str] = []
+        self._raw_size = 0
+        self._preview_text = ""
+        self._codex_delta = ""
+
+    def consume(self, chunk: str) -> None:
+        text = str(chunk or "")
+        if not text:
+            return
+        self._append_raw(text)
+        if self.cli_type == "codex":
+            self._consume_codex(text)
+        elif self.cli_type == "claude":
+            self._consume_claude(text)
+
+    def _append_raw(self, text: str) -> None:
+        self._raw_parts.append(text)
+        self._raw_size += len(text)
+        while self._raw_size > self.max_raw_chars and self._raw_parts:
+            extra = self._raw_size - self.max_raw_chars
+            first = self._raw_parts[0]
+            if len(first) <= extra:
+                self._raw_size -= len(first)
+                self._raw_parts.pop(0)
+                continue
+            self._raw_parts[0] = first[extra:]
+            self._raw_size -= extra
+            break
+
+    def _consume_codex(self, text: str) -> None:
+        fallback_parts: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parsed = parse_codex_json_line(stripped)
+            if parsed["error_text"]:
+                fallback_parts.append(parsed["error_text"])
+                continue
+
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                if not stripped.startswith("{"):
+                    fallback_parts.append(stripped)
+                continue
+
+            if not isinstance(event, dict):
+                continue
+
+            event_type = str(event.get("type") or "").strip()
+            item = event.get("item")
+            if isinstance(item, dict) and str(item.get("type") or "").strip() in {"assistant_message", "agent_message"}:
+                delta_value = item.get("delta")
+                text_value = item.get("text")
+                if event_type == "item.delta":
+                    chunk = delta_value if isinstance(delta_value, str) and delta_value else text_value
+                    if isinstance(chunk, str) and chunk:
+                        self._codex_delta += chunk
+                        self._preview_text = self._codex_delta
+                    continue
+                if event_type == "item.completed" and isinstance(text_value, str) and text_value.strip():
+                    self._codex_delta = ""
+                    self._preview_text = text_value.strip()
+                    continue
+
+            if parsed["delta_text"]:
+                self._preview_text = parsed["delta_text"]
+
+        if not self._preview_text and fallback_parts:
+            self._preview_text = "\n".join(part for part in fallback_parts if part).strip()
+
+    def _consume_claude(self, text: str) -> None:
+        preview_parts: list[str] = []
+        fallback_parts: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parsed = parse_claude_stream_json_line(stripped)
+            if parsed["delta_text"]:
+                preview_parts.append(parsed["delta_text"])
+                continue
+            if parsed["completed_text"]:
+                fallback_parts.append(parsed["completed_text"])
+                continue
+            if parsed["error_text"]:
+                fallback_parts.append(parsed["error_text"])
+                continue
+            if not stripped.startswith("{"):
+                fallback_parts.append(stripped)
+        if preview_parts:
+            self._preview_text += "".join(preview_parts)
+        elif not self._preview_text and fallback_parts:
+            self._preview_text = "\n".join(part for part in fallback_parts if part).strip()
+
+    def status_event(self, *, elapsed_seconds: int) -> dict[str, Any]:
+        event: dict[str, Any] = {"type": "status", "elapsed_seconds": elapsed_seconds}
+        if self._preview_text.strip():
+            event["preview_text"] = self._preview_text.strip()[-800:]
+        return event
+
+    def raw_output_for_parse(self) -> str:
+        return "".join(self._raw_parts)
+
+
 def _extract_final_codex_completed_message(raw_output: str) -> Optional[str]:
     last_completed: Optional[str] = None
     for line in raw_output.splitlines():
@@ -2298,7 +2413,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
 
             output_queue: queue.Queue[Any] = queue.Queue()
             reader_done = threading.Event()
-            raw_output_parts: list[str] = []
+            preview_state = _StreamPreviewState(cli_type)
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str]] | None = None
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
@@ -2344,7 +2459,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                             raise item
 
                         text_chunk = str(item)
-                        raw_output_parts.append(text_chunk)
+                        preview_state.consume(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             live_trace_events.append(trace_event)
                             service.append_trace_event(turn_handle, trace_event)
@@ -2398,11 +2513,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         if preview_text:
                             status_event["preview_text"] = preview_text[-800:]
                     else:
-                        status_event = _build_stream_status_event(
-                            cli_type=cli_type,
-                            elapsed_seconds=int(loop.time() - started_at),
-                            raw_output="".join(raw_output_parts),
-                        )
+                        status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
                     status_signature = (
                         int(status_event.get("elapsed_seconds", 0)),
                         status_event.get("preview_text"),
@@ -2430,7 +2541,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 with session._lock:
                     session.process = None
 
-            raw_output = "".join(raw_output_parts)
+            raw_output = preview_state.raw_output_for_parse()
             if cli_type == "codex":
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id

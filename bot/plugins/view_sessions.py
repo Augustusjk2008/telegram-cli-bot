@@ -29,7 +29,7 @@ def build_source_identity(input_payload: dict[str, Any]) -> str:
     return _stable_json({"path": str(Path(str(path_value)).resolve()), "options": payload})
 
 
-def build_source_fingerprint(input_payload: dict[str, Any]) -> str:
+def build_source_fingerprint(input_payload: dict[str, Any], *, hash_file_contents: bool = True) -> str:
     payload = dict(input_payload or {})
     path_value = payload.pop("path", None)
     if path_value is None:
@@ -46,7 +46,7 @@ def build_source_fingerprint(input_payload: dict[str, Any]) -> str:
             }
         )
     content_hash = ""
-    if path.is_file():
+    if hash_file_contents and path.is_file():
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             while True:

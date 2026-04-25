@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from array import array
 from bisect import bisect_right
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,8 +44,48 @@ class VcdSignal:
 @dataclass(frozen=True)
 class VcdSeries:
     signal: VcdSignal
-    times: tuple[int | float, ...]
-    values: tuple[str, ...]
+    raw_times: Sequence[int]
+    value_ids: Sequence[int]
+    value_table: tuple[str, ...]
+    scale_factor: float
+
+    @property
+    def times(self) -> tuple[int | float, ...]:
+        return tuple(_scale_time(int(raw_time), self.scale_factor) for raw_time in self.raw_times)
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        return tuple(self.value_table[int(value_id)] for value_id in self.value_ids)
+
+
+@dataclass
+class _SeriesBuilder:
+    raw_times: array
+    value_ids: array
+    value_to_id: dict[str, int]
+    values: list[str]
+
+    @classmethod
+    def create(cls) -> "_SeriesBuilder":
+        return cls(raw_times=array("Q"), value_ids=array("I"), value_to_id={}, values=[])
+
+    def append(self, current_time: int, value: str) -> None:
+        if self.raw_times and int(self.raw_times[-1]) == current_time:
+            self.value_ids[-1] = self._value_id(value)
+            return
+        if self.value_ids and self.values[int(self.value_ids[-1])] == value:
+            return
+        self.raw_times.append(current_time)
+        self.value_ids.append(self._value_id(value))
+
+    def _value_id(self, value: str) -> int:
+        current = self.value_to_id.get(value)
+        if current is not None:
+            return current
+        value_id = len(self.values)
+        self.value_to_id[value] = value_id
+        self.values.append(value)
+        return value_id
 
 
 @dataclass(frozen=True)
@@ -89,14 +131,9 @@ def _is_visible_scope(scope: list[tuple[str, str]]) -> bool:
     return not any(kind in EXCLUDED_SCOPE_KINDS for kind, _ in scope)
 
 
-def _append_change(changes: dict[str, list[tuple[int, str]]], id_code: str, current_time: int, value: str) -> None:
-    bucket = changes.setdefault(id_code, [])
-    if bucket and bucket[-1][0] == current_time:
-        bucket[-1] = (current_time, value)
-        return
-    if bucket and bucket[-1][1] == value:
-        return
-    bucket.append((current_time, value))
+def _append_change(changes: dict[str, _SeriesBuilder], id_code: str, current_time: int, value: str) -> None:
+    builder = changes.setdefault(id_code, _SeriesBuilder.create())
+    builder.append(current_time, value)
 
 
 def _build_zoom_levels(default_zoom: int | float) -> list[int | float]:
@@ -140,26 +177,31 @@ def _window_segments(
     window_end: int | float,
     overall_end: int | float,
 ) -> list[Segment]:
-    if not series.times:
+    if not series.raw_times:
         return []
-    times = series.times
-    values = series.values
+    raw_times = series.raw_times
+    value_ids = series.value_ids
     start = float(window_start)
     end = float(window_end)
     if end < start:
         start, end = end, start
-    index = max(0, bisect_right(times, start) - 1)
+    raw_start = start / series.scale_factor if series.scale_factor else start
+    index = max(0, bisect_right(raw_times, raw_start) - 1)
     segments: list[Segment] = []
-    while index < len(times):
-        segment_start = max(start, float(times[index]))
-        next_time = float(times[index + 1]) if index + 1 < len(times) else float(overall_end)
+    while index < len(raw_times):
+        segment_start = max(start, float(_scale_time(int(raw_times[index]), series.scale_factor)))
+        next_time = (
+            float(_scale_time(int(raw_times[index + 1]), series.scale_factor))
+            if index + 1 < len(raw_times)
+            else float(overall_end)
+        )
         segment_end = min(end, next_time)
         if segment_end > segment_start:
             segments.append(
                 {
                     "start": _round_time(segment_start),
                     "end": _round_time(segment_end),
-                    "value": values[index],
+                    "value": series.value_table[int(value_ids[index])],
                 }
             )
         if next_time >= end:
@@ -233,7 +275,7 @@ def build_vcd_index(path: Path) -> VcdIndex:
     source_timescale_unit = "ns"
     pending_timescale: list[str] | None = None
     signals_by_code: dict[str, VcdSignal] = {}
-    changes: dict[str, list[tuple[int, str]]] = {}
+    changes: dict[str, _SeriesBuilder] = {}
     current_time = 0
 
     with path.open(encoding="utf-8", errors="replace") as handle:
@@ -282,7 +324,7 @@ def build_vcd_index(path: Path) -> VcdIndex:
                     width=width,
                     kind="bus" if width > 1 else "scalar",
                 )
-                changes.setdefault(id_code, [])
+                changes.setdefault(id_code, _SeriesBuilder.create())
                 continue
             if line.startswith("#"):
                 current_time = int(line[1:] or 0)
@@ -300,7 +342,7 @@ def build_vcd_index(path: Path) -> VcdIndex:
                 if id_code in signals_by_code:
                     _append_change(changes, id_code, current_time, line[0].lower())
 
-    end_time_raw = max((items[-1][0] for items in changes.values() if items), default=0)
+    end_time_raw = max((int(builder.raw_times[-1]) for builder in changes.values() if builder.raw_times), default=0)
     duration_seconds = end_time_raw * source_timescale_amount * UNIT_SECONDS[source_timescale_unit]
     display_unit = _choose_display_unit(duration_seconds, source_timescale_unit)
     scale_factor = source_timescale_amount * UNIT_SECONDS[source_timescale_unit] / UNIT_SECONDS[display_unit]
@@ -311,18 +353,23 @@ def build_vcd_index(path: Path) -> VcdIndex:
     min_scalar_interval: int | float | None = None
 
     for id_code, signal in signals_by_code.items():
-        raw_signal_changes = changes.get(id_code, [])
-        if not raw_signal_changes:
+        builder = changes.get(id_code)
+        if builder is None or not builder.raw_times:
             continue
-        scaled_times = tuple(_scale_time(raw_time, scale_factor) for raw_time, _ in raw_signal_changes)
-        values = tuple(value for _, value in raw_signal_changes)
-        for index, start in enumerate(scaled_times[:-1]):
-            interval = float(scaled_times[index + 1]) - float(start)
+        for index, raw_start in enumerate(builder.raw_times[:-1]):
+            raw_interval = int(builder.raw_times[index + 1]) - int(raw_start)
+            interval = raw_interval * scale_factor
             if signal.width == 1 and interval > 0:
                 if min_scalar_interval is None or interval < float(min_scalar_interval):
-                    min_scalar_interval = interval
+                    min_scalar_interval = _round_time(interval)
         signals.append(signal)
-        series_by_signal[signal.signal_id] = VcdSeries(signal=signal, times=scaled_times, values=values)
+        series_by_signal[signal.signal_id] = VcdSeries(
+            signal=signal,
+            raw_times=builder.raw_times,
+            value_ids=builder.value_ids,
+            value_table=tuple(builder.values),
+            scale_factor=scale_factor,
+        )
 
     return VcdIndex(
         path=path.resolve(),

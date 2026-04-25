@@ -191,6 +191,66 @@ test("dragging a file onto a folder moves it into that folder", async () => {
   expect(screen.queryByRole("button", { name: "打开 README.md" })).not.toBeInTheDocument();
 });
 
+test("dragging a folder onto another folder moves it into that folder", async () => {
+  const client = new MockWebBotClient();
+  let rootEntries = [
+    { name: "docs", isDir: true },
+    { name: "src", isDir: true },
+  ];
+  let docsEntries: Array<{ name: string; isDir: boolean; size?: number }> = [];
+  let srcEntries: Array<{ name: string; isDir: boolean; size?: number }> = [
+    { name: "main.ts", isDir: false, size: 12 },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return { workingDir: "/workspace", entries: rootEntries };
+    }
+    if (path === "/workspace/docs") {
+      return { workingDir: "/workspace/docs", entries: docsEntries };
+    }
+    if (path === "/workspace/docs/src") {
+      return { workingDir: "/workspace/docs/src", entries: srcEntries };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+  const movePath = vi.spyOn(client, "movePath").mockImplementation(async (_botAlias, path, targetParentPath) => {
+    rootEntries = rootEntries.filter((entry) => entry.name !== "src");
+    docsEntries = [{ name: "src", isDir: true }];
+    return {
+      oldPath: path,
+      path: `${targetParentPath}/src`,
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const sourceFolderButton = await screen.findByRole("button", { name: "展开 src" });
+  const targetFolderButton = screen.getByRole("button", { name: "展开 docs" });
+  const dataTransfer = createDragData("src");
+
+  fireEvent.dragStart(sourceFolderButton, { dataTransfer });
+  fireEvent.dragOver(targetFolderButton, { dataTransfer });
+  fireEvent.drop(targetFolderButton, { dataTransfer });
+
+  await waitFor(() => {
+    expect(movePath).toHaveBeenCalledWith("main", "src", "docs");
+  });
+  expect(await screen.findByRole("button", { name: "展开 docs/src" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开 src" })).not.toBeInTheDocument();
+});
+
 test("tree can hand a directory off to embedded settings as the next workdir target", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

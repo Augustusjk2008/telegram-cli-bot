@@ -59,6 +59,48 @@ def _build_assistant_cron_job(job_id: str, prompt: str, *, misfire_policy: str =
 
 
 @pytest.mark.asyncio
+async def test_cron_service_caches_jobs_between_reload_windows(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path)
+    coordinator = _FakeAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+        reload_interval_seconds=30,
+    )
+    job = _build_assistant_cron_job("cached_job", "hello")
+
+    await service.save_job(job)
+    first = service._load_jobs_if_needed(force=True)
+    second = service._load_jobs_if_needed()
+
+    assert first is second
+    assert [item.id for item in second] == ["cached_job"]
+
+
+@pytest.mark.asyncio
+async def test_cron_service_caches_state_between_reload_windows(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path)
+    coordinator = _FakeAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+        reload_interval_seconds=30,
+    )
+    job = _build_assistant_cron_job("state_job", "hello")
+
+    await service.save_job(job)
+    first = service._load_state_if_needed(job.id)
+    save_job_runtime_state(home, job.id, AssistantCronJobState(next_run_at="external-change"))
+    second = service._load_state_if_needed(job.id)
+    forced = service._load_state_if_needed(job.id, force=True)
+
+    assert second.next_run_at == first.next_run_at
+    assert forced.next_run_at == "external-change"
+
+
+@pytest.mark.asyncio
 async def test_startup_recovers_orphaned_pending_run_once_policy(tmp_path: Path):
     home = bootstrap_assistant_home(tmp_path)
     coordinator = _FakeAssistantRuntimeCoordinator()

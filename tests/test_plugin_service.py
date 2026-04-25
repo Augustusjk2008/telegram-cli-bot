@@ -7,6 +7,17 @@ from pathlib import Path
 import pytest
 
 from bot.plugins.service import PluginService
+from bot.plugins.view_sessions import build_source_fingerprint
+
+
+def test_build_source_fingerprint_can_skip_file_content_hash(tmp_path: Path) -> None:
+    target = tmp_path / "large.vcd"
+    target.write_bytes(b"0!" * 1024)
+
+    fingerprint = build_source_fingerprint({"path": str(target)}, hash_file_contents=False)
+
+    assert '"size":2048' in fingerprint
+    assert '"sha256":""' in fingerprint
 
 
 def _write_wave_plugin(root: Path) -> None:

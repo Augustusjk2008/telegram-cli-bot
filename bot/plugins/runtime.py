@@ -50,7 +50,7 @@ class PluginRuntime:
         host_api: PluginHostApi | None = None,
         audit_hook: Callable[[dict[str, Any]], None] | None = None,
         call_timeout_seconds: float = PLUGIN_CALL_TIMEOUT_SECONDS,
-        idle_timeout_seconds: float = 10 * 60,
+        idle_timeout_seconds: float = 2 * 60,
     ) -> None:
         self._workspace_root_for = workspace_root_for or (lambda _alias: Path.cwd())
         self._host_api = host_api or PluginHostApi(ArtifactStore(Path.cwd()))

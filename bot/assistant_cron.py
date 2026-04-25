@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 from bot.config import WEB_DEFAULT_USER_ID
 from bot.assistant_cron_store import (
     append_job_run_audit,
+    delete_job_definition,
     list_job_definitions,
     load_job_runtime_state,
-    read_job_definition,
     save_job_definition,
     upsert_job_run_audit,
     save_job_runtime_state,
@@ -31,15 +31,79 @@ class AssistantCronService:
         coordinator,
         now_func: Callable[[], datetime] | None = None,
         web_user_id: int = WEB_DEFAULT_USER_ID,
+        reload_interval_seconds: float = 30.0,
     ) -> None:
         self.assistant_home = assistant_home
         self.bot_alias = bot_alias
         self.coordinator = coordinator
         self.now_func = now_func or (lambda: datetime.now(tz=ZoneInfo("Asia/Shanghai")))
         self.web_user_id = web_user_id
+        self._reload_interval_seconds = max(1.0, float(reload_interval_seconds))
+        self._cached_jobs: list[AssistantCronJob] = []
+        self._cached_states: dict[str, AssistantCronJobState] = {}
+        self._jobs_loaded_at = 0.0
+        self._states_loaded_at: dict[str, float] = {}
+        self._jobs_dirty = True
+        self._states_dirty: set[str] = set()
         self._watch_tasks: set[asyncio.Task[None]] = set()
         self._loop_task: asyncio.Task[None] | None = None
         self._reload_event = asyncio.Event()
+
+    def _loop_time(self) -> float:
+        try:
+            return asyncio.get_running_loop().time()
+        except RuntimeError:
+            return 0.0
+
+    def _load_jobs_if_needed(self, *, force: bool = False) -> list[AssistantCronJob]:
+        now = self._loop_time()
+        if force or self._jobs_dirty or now - self._jobs_loaded_at >= self._reload_interval_seconds:
+            self._cached_jobs = list_job_definitions(self.assistant_home)
+            self._jobs_loaded_at = now
+            self._jobs_dirty = False
+        return self._cached_jobs
+
+    def _load_state_if_needed(self, job_id: str, *, force: bool = False) -> AssistantCronJobState:
+        now = self._loop_time()
+        loaded_at = self._states_loaded_at.get(job_id, 0.0)
+        if (
+            force
+            or job_id in self._states_dirty
+            or job_id not in self._cached_states
+            or now - loaded_at >= self._reload_interval_seconds
+        ):
+            self._cached_states[job_id] = load_job_runtime_state(self.assistant_home, job_id)
+            self._states_loaded_at[job_id] = now
+            self._states_dirty.discard(job_id)
+        return self._cached_states[job_id]
+
+    def _save_state(self, job_id: str, state: AssistantCronJobState) -> None:
+        save_job_runtime_state(self.assistant_home, job_id, state)
+        self._cached_states[job_id] = state
+        self._states_loaded_at[job_id] = self._loop_time()
+        self._states_dirty.discard(job_id)
+
+    def list_jobs(self) -> list[AssistantCronJob]:
+        return list(self._load_jobs_if_needed())
+
+    def get_job_state(self, job_id: str) -> AssistantCronJobState:
+        return self._load_state_if_needed(job_id)
+
+    def _get_job_or_raise(self, job_id: str) -> AssistantCronJob:
+        for job in self._load_jobs_if_needed():
+            if job.id == job_id:
+                return job
+        raise FileNotFoundError(job_id)
+
+    async def delete_job(self, job_id: str) -> bool:
+        removed = delete_job_definition(self.assistant_home, job_id)
+        if removed:
+            self._jobs_dirty = True
+            self._cached_jobs = [job for job in self._cached_jobs if job.id != job_id]
+            self._cached_states.pop(job_id, None)
+            self._states_loaded_at.pop(job_id, None)
+            self._states_dirty.discard(job_id)
+        return removed
 
     @staticmethod
     def _excerpt(text: str, *, limit: int = 160) -> str:
@@ -90,8 +154,8 @@ class AssistantCronService:
 
     async def _recover_startup_state(self) -> None:
         now = self.now_func()
-        for job in list_job_definitions(self.assistant_home):
-            state = load_job_runtime_state(self.assistant_home, job.id)
+        for job in self._load_jobs_if_needed(force=True):
+            state = self._load_state_if_needed(job.id, force=True)
             await self._recover_orphaned_run(job, state=state, now=now)
 
     async def _recover_orphaned_run(
@@ -115,8 +179,7 @@ class AssistantCronService:
         stale_error = f"检测到孤儿 cron run，已按启动恢复处理: {run_id}"
         scheduled_at_raw = state.pending_scheduled_at or state.last_scheduled_at
 
-        save_job_runtime_state(
-            self.assistant_home,
+        self._save_state(
             job.id,
             AssistantCronJobState.from_dict(
                 {
@@ -152,7 +215,7 @@ class AssistantCronService:
             },
         )
 
-        next_state = load_job_runtime_state(self.assistant_home, job.id)
+        next_state = self._load_state_if_needed(job.id, force=True)
         scheduled_at = self._parse_timestamp(scheduled_at_raw)
         should_rerun = (
             job.enabled
@@ -171,8 +234,8 @@ class AssistantCronService:
             scheduled_at=scheduled_at,
         )
         if result is None:
-            return load_job_runtime_state(self.assistant_home, job.id)
-        return load_job_runtime_state(self.assistant_home, job.id)
+            return self._load_state_if_needed(job.id, force=True)
+        return self._load_state_if_needed(job.id, force=True)
 
     async def start(self) -> None:
         if self._loop_task is not None and not self._loop_task.done():
@@ -195,12 +258,12 @@ class AssistantCronService:
 
     async def save_job(self, job: AssistantCronJob) -> AssistantCronJob:
         save_job_definition(self.assistant_home, job)
-        state = load_job_runtime_state(self.assistant_home, job.id)
+        self._jobs_dirty = True
+        state = self._load_state_if_needed(job.id, force=True)
         if not state.next_run_at:
             now = self.now_func()
             next_run_at = self._compute_initial_next_run(job, now)
-            save_job_runtime_state(
-                self.assistant_home,
+            self._save_state(
                 job.id,
                 AssistantCronJobState.from_dict(
                     {
@@ -209,21 +272,21 @@ class AssistantCronService:
                     }
                 ),
             )
+        self._states_dirty.add(job.id)
         self._reload_event.set()
         return job
 
     async def enqueue_due_jobs(self) -> list[dict[str, str]]:
         results: list[dict[str, str]] = []
         now = self.now_func()
-        for job in list_job_definitions(self.assistant_home):
+        for job in self._load_jobs_if_needed():
             if not job.enabled:
                 continue
-            state = load_job_runtime_state(self.assistant_home, job.id)
+            state = self._load_state_if_needed(job.id)
             next_run_at = self._resolve_next_run_at(job, state, now)
             if next_run_at > now:
                 if next_run_at.isoformat() != state.next_run_at:
-                    save_job_runtime_state(
-                        self.assistant_home,
+                    self._save_state(
                         job.id,
                         AssistantCronJobState.from_dict(
                             {
@@ -235,9 +298,8 @@ class AssistantCronService:
                 continue
             result = await self._enqueue_job(job, state=state, trigger_source="schedule", scheduled_at=next_run_at)
             advanced_next = self._advance_next_run(job, next_run_at, now)
-            next_state = load_job_runtime_state(self.assistant_home, job.id)
-            save_job_runtime_state(
-                self.assistant_home,
+            next_state = self._load_state_if_needed(job.id, force=True)
+            self._save_state(
                 job.id,
                 AssistantCronJobState.from_dict(
                     {
@@ -251,12 +313,12 @@ class AssistantCronService:
         return results
 
     async def run_job_now(self, job_id: str) -> dict[str, str]:
-        job = read_job_definition(self.assistant_home, job_id)
-        state = load_job_runtime_state(self.assistant_home, job.id)
+        job = self._get_job_or_raise(job_id)
+        state = self._load_state_if_needed(job.id)
         scheduled_at = self.now_func()
         result = await self._enqueue_job(job, state=state, trigger_source="manual", scheduled_at=scheduled_at)
         if result is None:
-            updated_state = load_job_runtime_state(self.assistant_home, job.id)
+            updated_state = self._load_state_if_needed(job.id, force=True)
             return {
                 "run_id": updated_state.pending_run_id or updated_state.current_run_id,
                 "status": "queued",
@@ -283,8 +345,7 @@ class AssistantCronService:
         scheduled_at: datetime,
     ) -> dict[str, str] | None:
         if state.pending_run_id or state.current_run_id:
-            save_job_runtime_state(
-                self.assistant_home,
+            self._save_state(
                 job.id,
                 AssistantCronJobState.from_dict(
                     {
@@ -330,7 +391,7 @@ class AssistantCronService:
                 "last_error": "",
             }
         )
-        save_job_runtime_state(self.assistant_home, job.id, next_state)
+        self._save_state(job.id, next_state)
         append_job_run_audit(
             self.assistant_home,
             job.id,
@@ -363,11 +424,10 @@ class AssistantCronService:
         try:
             result = await self.coordinator.wait_for_run(run_id)
             now = self.now_func().isoformat()
-            state = load_job_runtime_state(self.assistant_home, job_id)
+            state = self._load_state_if_needed(job_id, force=True)
             started_at = state.last_started_at or state.last_enqueued_at
             elapsed_seconds = int(result.get("elapsed_seconds") or self._elapsed_seconds(started_at, now))
-            save_job_runtime_state(
-                self.assistant_home,
+            self._save_state(
                 job_id,
                 AssistantCronJobState.from_dict(
                     {
@@ -408,11 +468,10 @@ class AssistantCronService:
             raise
         except Exception as exc:
             now = self.now_func().isoformat()
-            state = load_job_runtime_state(self.assistant_home, job_id)
+            state = self._load_state_if_needed(job_id, force=True)
             started_at = state.last_started_at or state.last_enqueued_at
             elapsed_seconds = self._elapsed_seconds(started_at, now)
-            save_job_runtime_state(
-                self.assistant_home,
+            self._save_state(
                 job_id,
                 AssistantCronJobState.from_dict(
                     {

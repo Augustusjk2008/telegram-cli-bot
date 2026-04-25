@@ -51,6 +51,14 @@ def test_local_release_script_supports_version_bump_and_publish():
     assert "portable-win\\build-portable.ps1" in content
 
 
+def test_portable_build_script_only_copies_tracked_files():
+    content = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert 'ls-files' in content
+    assert '-o --exclude-standard' not in content
+    assert 'Write-Step "复制 tracked 文件"' in content
+
+
 def test_agent_guides_document_the_release_command():
     content = Path("AGENTS.md").read_text(encoding="utf-8")
 

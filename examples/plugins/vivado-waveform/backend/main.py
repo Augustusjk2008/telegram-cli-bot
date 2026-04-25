@@ -78,16 +78,33 @@ def get_view_window(params: dict[str, object]) -> dict[str, object]:
     session_id = str(params.get("sessionId") or "")
     if not session_id:
         raise ValueError("sessionId 不能为空")
-    index = SESSION_STORE.get_index(session_id)
     signal_ids = [str(item) for item in list(params.get("signalIds") or [])]
-    return query_waveform_window(
-        index,
-        start_time=_coerce_time(params.get("startTime")),
-        end_time=_coerce_time(params.get("endTime")),
-        signal_ids=signal_ids,
-        pixel_width=int(params.get("pixelWidth") or INITIAL_PIXEL_WIDTH),
-        lod_enabled=_lod_enabled(),
+    start_time = _coerce_time(params.get("startTime"))
+    end_time = _coerce_time(params.get("endTime"))
+    pixel_width = int(params.get("pixelWidth") or INITIAL_PIXEL_WIDTH)
+    lod_enabled = _lod_enabled()
+    cache_key = (
+        session_id,
+        start_time,
+        end_time,
+        tuple(signal_ids),
+        pixel_width,
+        lod_enabled,
     )
+    cached = SESSION_STORE.get_window_cache(cache_key)
+    if cached is not None:
+        return cached
+    index = SESSION_STORE.get_index(session_id)
+    payload = query_waveform_window(
+        index,
+        start_time=start_time,
+        end_time=end_time,
+        signal_ids=signal_ids,
+        pixel_width=pixel_width,
+        lod_enabled=lod_enabled,
+    )
+    SESSION_STORE.remember_window_cache(cache_key, payload)
+    return payload
 
 
 def dispose_view(params: dict[str, object]) -> dict[str, object]:

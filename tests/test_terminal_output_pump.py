@@ -5,6 +5,15 @@ import pytest
 from bot.web.server import _TERMINAL_OUTPUT_EOF, _TerminalOutputPump
 
 
+def test_terminal_output_pump_default_flush_interval_is_40ms():
+    class FakeProcess:
+        pass
+
+    pump = _TerminalOutputPump(FakeProcess())
+
+    assert pump._flush_interval == 0.04
+
+
 @pytest.mark.asyncio
 async def test_terminal_output_pump_coalesces_bursty_chunks():
     class FakeProcess:
