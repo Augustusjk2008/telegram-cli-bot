@@ -38,7 +38,6 @@ from bot.config import (
 from bot.debug.service import DebugService
 from bot.manager import MultiBotManager
 from bot.platform.runtime import get_default_shell
-from bot.platform.terminal import create_shell_process
 from bot.updater import (
     check_for_updates,
     download_latest_update,
@@ -71,6 +70,7 @@ from .auth_store import (
     WebAuthSession,
     WebAuthStore,
 )
+from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, TerminalSessionManager
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
@@ -166,6 +166,7 @@ from .workspace_search_service import (
 from .workspace_definition_service import resolve_workspace_definition
 
 logger = logging.getLogger(__name__)
+DEFAULT_TERMINAL_OWNER_ID = "default"
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
 _TERMINAL_OUTPUT_EOF = object()
@@ -565,6 +566,7 @@ class WebApiServer:
         self._update_task: asyncio.Task[None] | None = None
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
+        self._terminal_manager = TerminalSessionManager()
         self._debug_service = DebugService(manager)
         self._debug_sockets: set[web.WebSocketResponse] = set()
         self._debug_tasks: set[asyncio.Task[Any]] = set()
@@ -942,8 +944,51 @@ class WebApiServer:
         data = await execute_shell_command(self.manager, alias, auth.user_id, body.get("command", ""))
         return _json({"ok": True, "data": data})
 
+    def _resolve_terminal_owner_id(self, value: object) -> str:
+        owner_id = str(value or "").strip()
+        if owner_id:
+            return owner_id
+        logger.warning("终端请求缺少 owner_id，回退默认 owner=%s", DEFAULT_TERMINAL_OWNER_ID)
+        return DEFAULT_TERMINAL_OWNER_ID
+
+    async def get_terminal_session(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
+        data = await self._terminal_manager.get_snapshot(auth.user_id, owner_id)
+        return _json({"ok": True, "data": data})
+
+    async def post_terminal_rebuild(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        body = await self._parse_json(request)
+        owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
+        default_shell = get_default_shell()
+        shell_type = str(body.get("shell") or default_shell).strip() or default_shell
+        if shell_type == "auto":
+            shell_type = default_shell
+        raw_cwd = str(body.get("cwd") or os.getcwd()).strip() or os.getcwd()
+        cwd = os.path.abspath(os.path.expanduser(raw_cwd))
+        if not os.path.isdir(cwd):
+            cwd = os.getcwd()
+        size = _parse_terminal_size(body)
+        data = await self._terminal_manager.rebuild(
+            auth.user_id,
+            owner_id,
+            cwd=cwd,
+            shell_type=shell_type,
+            cols=size[0] if size else None,
+            rows=size[1] if size else None,
+        )
+        return _json({"ok": True, "data": data})
+
+    async def post_terminal_close(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        body = await self._parse_json(request)
+        owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
+        data = await self._terminal_manager.close(auth.user_id, owner_id)
+        return _json({"ok": True, "data": data})
+
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
-        await self._with_capability(request, CAP_TERMINAL_EXEC)
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
         self._terminal_sockets.add(ws)
@@ -951,8 +996,8 @@ class WebApiServer:
         if current_task is not None:
             self._terminal_tasks.add(current_task)
 
-        process = None
-        output_pump: _TerminalOutputPump | None = None
+        owner_id = ""
+        queue: asyncio.Queue[bytes | object] | None = None
         tasks: list[asyncio.Task[Any]] = []
         try:
             init_message = await ws.receive()
@@ -964,43 +1009,27 @@ class WebApiServer:
                         init_data = parsed
                 except json.JSONDecodeError:
                     init_data = {}
-
-            default_shell = get_default_shell()
-            shell_type = str(init_data.get("shell") or request.query.get("shell") or default_shell).strip() or default_shell
-            if shell_type == "auto":
-                shell_type = default_shell
-            raw_cwd = str(init_data.get("cwd") or request.query.get("cwd") or os.getcwd()).strip() or os.getcwd()
-            cwd = os.path.abspath(os.path.expanduser(raw_cwd))
-            if not os.path.isdir(cwd):
-                cwd = os.getcwd()
-
-            force_no_pty = bool(init_data.get("no_pty", False))
-            initial_size = _parse_terminal_size(init_data)
-            process = create_shell_process(
-                shell_type,
-                cwd,
-                use_pty=not force_no_pty,
-                cols=initial_size[0] if initial_size else None,
-                rows=initial_size[1] if initial_size else None,
-            )
+            owner_id = self._resolve_terminal_owner_id(init_data.get("owner_id") or request.query.get("owner_id"))
+            from_seq = int(init_data.get("from_seq") or request.query.get("from_seq") or 0)
+            queue, snapshot = await self._terminal_manager.attach(auth.user_id, owner_id, from_seq=from_seq)
             try:
-                await ws.send_json({"pty_mode": process.is_pty})
+                await ws.send_json({
+                    "pty_mode": snapshot.get("pty_mode"),
+                    "connection_text": snapshot.get("connection_text"),
+                })
             except _CLIENT_DISCONNECT_ERRORS:
-                logger.info("终端 WebSocket 客户端在初始化完成前断开: cwd=%s shell=%s", cwd, shell_type)
+                logger.info("终端 WebSocket 客户端在初始化完成前断开: owner=%s", owner_id)
                 return ws
-            loop = asyncio.get_running_loop()
-            output_pump = _TerminalOutputPump(process)
-            output_pump.start(loop)
 
             async def forward_output() -> None:
                 while True:
-                    data = await output_pump.read()
-                    if data is _TERMINAL_OUTPUT_EOF:
+                    data = await queue.get()
+                    if data is TERMINAL_CLIENT_EOF:
                         break
                     try:
                         await ws.send_bytes(data)
                     except _CLIENT_DISCONNECT_ERRORS:
-                        logger.info("终端 WebSocket 客户端已断开，停止转发输出: cwd=%s shell=%s", cwd, shell_type)
+                        logger.info("终端 WebSocket 客户端已断开，停止转发输出: owner=%s", owner_id)
                         break
 
             async def forward_input() -> None:
@@ -1010,7 +1039,7 @@ class WebApiServer:
                         break
                     message = await ws.receive()
                     if message.type == WSMsgType.BINARY:
-                        process.write(message.data)
+                        await self._terminal_manager.write_input(auth.user_id, owner_id, message.data)
                         continue
 
                     if message.type == WSMsgType.TEXT:
@@ -1024,12 +1053,11 @@ class WebApiServer:
                                 if payload.get("type") == "ping":
                                     continue
                                 if payload.get("type") == "resize":
-                                    resize = getattr(process, "resize", None)
                                     size = _parse_terminal_size(payload)
-                                    if callable(resize) and size is not None:
-                                        resize(*size)
+                                    if size is not None:
+                                        await self._terminal_manager.resize(auth.user_id, owner_id, *size)
                                     continue
-                        process.write(text.encode("utf-8"))
+                        await self._terminal_manager.write_input(auth.user_id, owner_id, text.encode("utf-8"))
                         await asyncio.sleep(0)
                         continue
 
@@ -1052,6 +1080,12 @@ class WebApiServer:
                 if not output_task.done():
                     output_task.cancel()
                 await asyncio.gather(output_task, return_exceptions=True)
+        except TerminalNotRunningError as exc:
+            if not ws.closed:
+                try:
+                    await ws.send_json({"error": str(exc)})
+                except Exception:
+                    pass
         except Exception as exc:
             logger.exception("终端 WebSocket 处理失败: %s", exc)
             if not ws.closed:
@@ -1063,22 +1097,13 @@ class WebApiServer:
             self._terminal_sockets.discard(ws)
             if current_task is not None:
                 self._terminal_tasks.discard(current_task)
-            if output_pump is not None:
-                output_pump.stop()
             for task in tasks:
                 if not task.done():
                     task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            if process is not None:
-                try:
-                    process.terminate()
-                except Exception:
-                    pass
-                try:
-                    process.close()
-                except Exception:
-                    pass
+            if queue is not None and owner_id:
+                await self._terminal_manager.detach(auth.user_id, owner_id, queue)
 
         return ws
 
@@ -1940,6 +1965,9 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
         app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
+        app.router.add_get("/api/terminal/session", self.get_terminal_session)
+        app.router.add_post("/api/terminal/session/rebuild", self.post_terminal_rebuild)
+        app.router.add_post("/api/terminal/session/close", self.post_terminal_close)
         app.router.add_get("/api/bots/{alias}/debug/profile", self.get_debug_profile)
         app.router.add_patch("/api/bots/{alias}/debug/profile", self.patch_debug_profile_overrides)
         app.router.add_patch("/api/bots/{alias}/debug/profile-overrides", self.patch_debug_profile_overrides)
@@ -2133,6 +2161,7 @@ class WebApiServer:
                 await ws.close(code=WSCloseCode.GOING_AWAY, message=b"server shutdown")
             except Exception:
                 pass
+        await self._terminal_manager.shutdown()
         debug_tasks = list(self._debug_tasks)
         self._debug_tasks.clear()
         for task in debug_tasks:

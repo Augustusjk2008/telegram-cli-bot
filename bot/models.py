@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
 from bot.cli_params import CliParamsConfig
+from bot.platform.processes import terminate_process_tree_sync
 
 if TYPE_CHECKING:
     # 避免循环导入
@@ -180,16 +181,10 @@ class UserSession:
 
     def terminate_process(self):
         with self._lock:
-            if self.process and self.process.poll() is None:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    try:
-                        self.process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        pass
+            process = self.process
+            if process is not None:
+                if process.poll() is None:
+                    terminate_process_tree_sync(process)
                 self.process = None
             self.stop_requested = False
             self.is_processing = False

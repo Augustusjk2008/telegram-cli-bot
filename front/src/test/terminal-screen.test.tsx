@@ -1,7 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TerminalScreen } from "../screens/TerminalScreen";
+import { MockWebBotClient } from "../services/mockWebBotClient";
+import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { getTerminalTheme } from "../theme";
 
 const createTerminalSessionMock = vi.hoisted(() => vi.fn());
@@ -59,6 +62,37 @@ vi.mock("../services/terminalSession", () => ({
   })),
 }));
 
+function buildScreen(
+  client: MockWebBotClient,
+  props: Partial<ComponentProps<typeof TerminalScreen>> = {},
+) {
+  return (
+    <PersistentTerminalProvider client={client}>
+      <TerminalScreen
+        authToken="123"
+        isVisible
+        preferredWorkingDir="C:\\workspace\\demo"
+        {...props}
+      />
+    </PersistentTerminalProvider>
+  );
+}
+
+function renderTerminalScreen(
+  props: Partial<ComponentProps<typeof TerminalScreen>> = {},
+  client = new MockWebBotClient(),
+) {
+  return {
+    client,
+    ...render(buildScreen(client, props)),
+  };
+}
+
+async function rebuildTerminal(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "重建终端" }));
+  await screen.findByTestId("terminal-viewport");
+}
+
 beforeEach(() => {
   createTerminalSessionMock.mockClear();
   terminalEventHandlers.onWriteParsed = undefined;
@@ -71,6 +105,7 @@ beforeEach(() => {
   terminalSessionMock.dispose.mockReset();
   terminalSessionMock.scrollToBottom.mockReset();
   terminalSessionMock.setTheme.mockReset();
+  localStorage.clear();
   vi.stubGlobal(
     "matchMedia",
     vi.fn().mockImplementation((query: string) => ({
@@ -100,36 +135,36 @@ beforeEach(() => {
   );
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  localStorage.clear();
+});
+
+test("初次渲染不自动启动终端", () => {
+  renderTerminalScreen();
+
+  expect(screen.getByText("未启动终端")).toBeInTheDocument();
+  expect(createTerminalSessionMock).not.toHaveBeenCalled();
+});
+
 test("shows mobile terminal controls in the shared terminal screen", async () => {
   const user = userEvent.setup();
-
-  render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-    />,
-  );
+  renderTerminalScreen();
 
   expect(await screen.findByRole("button", { name: "Ctrl+C" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Tab" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Esc" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "键盘" })).toBeInTheDocument();
 
+  await rebuildTerminal(user);
   await user.click(screen.getByRole("button", { name: "Ctrl+C" }));
   expect(terminalSessionMock.sendControl).toHaveBeenCalledWith("\u0003");
 });
 
 test("uses a smaller terminal font and keeps scrolling inside xterm viewport", async () => {
-  render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-    />,
-  );
+  const user = userEvent.setup();
+  renderTerminalScreen();
+  await rebuildTerminal(user);
 
   const viewport = await screen.findByTestId("terminal-viewport");
   const frame = screen.getByTestId("terminal-shell-frame");
@@ -156,8 +191,9 @@ test("uses a smaller terminal font and keeps scrolling inside xterm viewport", a
   expect(createTerminalSessionMock).toHaveBeenCalledWith(
     expect.any(HTMLElement),
     expect.objectContaining({
+      ownerId: expect.any(String),
+      fromSeq: 0,
       fontSize: 12,
-      shell: "auto",
       themeName: "deep-space",
     }),
   );
@@ -171,28 +207,18 @@ test("classic terminal theme uses a light background with dark text", () => {
   expect(theme.cursor).toBe("#0f8c78");
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-test("removes helper copy and lets the user close the terminal session", async () => {
+test("lets the user close the terminal session", async () => {
   const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const closeSpy = vi.spyOn(client, "closeTerminalSession");
 
-  render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-    />,
-  );
-
-  expect(screen.queryByText(/手机优先：看输出为主/)).not.toBeInTheDocument();
-
+  renderTerminalScreen({}, client);
+  await rebuildTerminal(user);
   await user.click(await screen.findByRole("button", { name: "关闭终端" }));
 
+  expect(closeSpy).toHaveBeenCalledTimes(1);
   expect(terminalSessionMock.dispose).toHaveBeenCalledTimes(1);
-  expect(screen.getByText("终端已关闭")).toBeInTheDocument();
+  expect(screen.getAllByText("终端已关闭")).toHaveLength(2);
 });
 
 test("shows a jump-to-latest action after scrolling away from terminal output bottom", async () => {
@@ -200,15 +226,10 @@ test("shows a jump-to-latest action after scrolling away from terminal output bo
     callback(0);
     return 1;
   });
+  const user = userEvent.setup();
 
-  render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-    />,
-  );
+  renderTerminalScreen();
+  await rebuildTerminal(user);
 
   const viewport = await screen.findByTestId("terminal-viewport");
   const scrollTarget = viewport.querySelector(".xterm-viewport") as HTMLDivElement;
@@ -229,16 +250,10 @@ test("coalesces follow-scroll work for bursty terminal output into one animation
     rafCallbacks.push(callback);
     return rafCallbacks.length;
   }));
+  const user = userEvent.setup();
 
-  render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-    />,
-  );
-
+  renderTerminalScreen();
+  await rebuildTerminal(user);
   await screen.findByTestId("terminal-viewport");
 
   terminalSessionMock.scrollToBottom.mockClear();
@@ -264,15 +279,10 @@ test("refits the terminal when the viewport size changes without rebuilding the 
     callback(0);
     return 1;
   });
+  const user = userEvent.setup();
 
-  render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-    />,
-  );
+  renderTerminalScreen();
+  await rebuildTerminal(user);
 
   const viewport = await screen.findByTestId("terminal-viewport");
   terminalSessionMock.fit.mockClear();
@@ -288,29 +298,16 @@ test("refits the terminal when the viewport size changes without rebuilding the 
 });
 
 test("theme change updates terminal without rebuilding the session", async () => {
-  const view = render(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-      themeName="deep-space"
-    />,
-  );
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const view = render(buildScreen(client, { themeName: "deep-space" }));
 
+  await rebuildTerminal(user);
   await screen.findByTestId("terminal-viewport");
   createTerminalSessionMock.mockClear();
   terminalSessionMock.setTheme.mockClear();
 
-  view.rerender(
-    <TerminalScreen
-      authToken="123"
-      botAlias="main"
-      isVisible
-      preferredWorkingDir="C:\\workspace\\demo"
-      themeName="classic"
-    />,
-  );
+  view.rerender(buildScreen(client, { themeName: "classic" }));
 
   await waitFor(() => {
     expect(terminalSessionMock.setTheme).toHaveBeenCalledWith("classic");

@@ -1,4 +1,5 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { MarkdownPreview } from "../components/MarkdownPreview";
 
@@ -50,4 +51,20 @@ test("renders mermaid code fences as svg diagrams", async () => {
   expect(mermaidInitializeMock).toHaveBeenCalledTimes(1);
   expect(mermaidRenderMock).toHaveBeenCalledWith(expect.stringMatching(/^mermaid-/), "graph TD\nA-->B");
   expect(container.querySelector("[data-mermaid-diagram='true']")?.innerHTML).toContain("<svg");
+});
+
+test("routes local file links through onFileLinkClick", async () => {
+  const user = userEvent.setup();
+  const onFileLinkClick = vi.fn();
+
+  render(
+    <MarkdownPreview
+      content="[查看 README](C:/workspace/README.md)"
+      onFileLinkClick={onFileLinkClick}
+    />,
+  );
+
+  await user.click(screen.getByRole("link", { name: "查看 README" }));
+
+  expect(onFileLinkClick).toHaveBeenCalledWith("C:/workspace/README.md");
 });

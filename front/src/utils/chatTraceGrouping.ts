@@ -19,6 +19,7 @@ export type ChatTraceEntry = ProcessChatTraceEntry | ToolGroupChatTraceEntry;
 
 export type ParsedToolResultStatus = {
   exitCode?: number;
+  success?: boolean;
   wallTime?: string;
   tone: "neutral" | "success" | "error";
 };
@@ -49,15 +50,81 @@ function extractExitCode(text: string) {
   return undefined;
 }
 
+function parseBoolean(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  return undefined;
+}
+
+function parseSuccessKeyword(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/^["']+|["']+$/g, "").toLowerCase();
+  if (["true", "success", "succeeded", "ok", "pass", "passed"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "fail", "failed", "error"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function extractSuccess(text: string) {
+  const patterns = [
+    /["']?success["']?\s*[:=]\s*(true|false)/i,
+    /["']?succeeded["']?\s*[:=]\s*(true|false)/i,
+    /["']?(?:status|result|outcome)["']?\s*[:=]\s*["']?(success|succeeded|ok|pass|passed|fail|failed|error)["']?/i,
+    /["']?success["']?\s*[:=]\s*["']?(success|succeeded|ok|pass|passed|fail|failed|error)["']?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const matched = text.match(pattern);
+    const parsed = parseBoolean(matched?.[1]) ?? parseSuccessKeyword(matched?.[1]);
+    if (typeof parsed === "boolean") {
+      return parsed;
+    }
+  }
+
+  const trimmed = text.trim();
+  const exact = parseSuccessKeyword(trimmed);
+  if (typeof exact === "boolean") {
+    return exact;
+  }
+
+  const prefix = trimmed.match(/^(success|succeeded|ok|pass|passed|fail|failed|error)\b/i);
+  const parsedPrefix = parseSuccessKeyword(prefix?.[1]);
+  if (typeof parsedPrefix === "boolean") {
+    return parsedPrefix;
+  }
+
+  return undefined;
+}
+
 export function parseToolResultStatus(text: string): ParsedToolResultStatus {
   const normalized = String(text || "");
   const exitCode = extractExitCode(normalized);
+  const success = extractSuccess(normalized);
   const wallTimeMatch = normalized.match(/(?:^|\n)Wall time:\s*([^\n]+)/i);
+  const tone = typeof exitCode === "number"
+    ? exitCode === 0 ? "success" : "error"
+    : typeof success === "boolean"
+      ? success ? "success" : "error"
+      : "neutral";
 
   return {
     exitCode,
+    success,
     wallTime: wallTimeMatch?.[1]?.trim(),
-    tone: typeof exitCode !== "number" ? "neutral" : exitCode === 0 ? "success" : "error",
+    tone,
   };
 }
 

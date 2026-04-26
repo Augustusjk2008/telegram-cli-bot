@@ -776,6 +776,15 @@ export type SessionState = {
   allowedUserIds?: number[];
 };
 
+export type PersistentTerminalSnapshot = {
+  started: boolean;
+  closed: boolean;
+  cwd: string;
+  ptyMode: boolean | null;
+  connectionText: string;
+  lastSeq: number;
+};
+
 export type DebugProfile = {
   specVersion?: number;
   language?: string;

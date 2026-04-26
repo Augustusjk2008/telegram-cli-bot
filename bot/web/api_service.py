@@ -71,7 +71,7 @@ from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
-from bot.platform.processes import build_hidden_process_kwargs
+from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.scripts import execute_script, get_scripts_dir, list_available_scripts, stream_execute_script
 from bot.runtime_paths import get_chat_attachments_dir
 from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
@@ -2174,29 +2174,66 @@ def _wait_for_process_exit_sync(process: subprocess.Popen, timeout: float) -> Op
 def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0) -> None:
     try:
         if process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=kill_timeout)
-            return
-        except subprocess.TimeoutExpired:
             pass
-        process.kill()
-        try:
-            process.wait(timeout=kill_timeout)
-        except subprocess.TimeoutExpired:
-            pass
+        else:
+            terminate_process_tree_sync(process)
     except Exception:
         pass
 
 
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
-    def run_process() -> tuple[str, int]:
-        stdout, _ = process.communicate()
-        return stdout or "", process.returncode or 0
+    stdout = getattr(process, "stdout", None)
+    if stdout is None or not hasattr(stdout, "readline"):
+        output, _ = process.communicate()
+        return str(output or ""), getattr(process, "returncode", None) or process.wait() or 0
 
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, run_process)
+    output_queue: queue.Queue[Any] = queue.Queue()
+    reader_done = threading.Event()
+    chunks: list[str] = []
+
+    def read_stdout() -> None:
+        try:
+            stdout = process.stdout
+            if stdout is None:
+                return
+            while True:
+                line = stdout.readline()
+                if line:
+                    output_queue.put(line)
+                    continue
+                if process.poll() is not None:
+                    remaining = stdout.read()
+                    if remaining:
+                        output_queue.put(remaining)
+                    break
+                time.sleep(0.05)
+        except Exception as exc:  # pragma: no cover - defensive
+            output_queue.put(exc)
+        finally:
+            reader_done.set()
+
+    threading.Thread(target=read_stdout, daemon=True).start()
+
+    try:
+        while not reader_done.is_set() or not output_queue.empty():
+            drained = False
+            while True:
+                try:
+                    item = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained = True
+                if isinstance(item, Exception):
+                    raise item
+                chunks.append(str(item))
+
+            if not drained:
+                await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        _terminate_process_sync(process)
+        raise
+
+    return "".join(chunks), process.poll() or 0
 
 
 async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Optional[str], int]:

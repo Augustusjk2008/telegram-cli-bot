@@ -84,7 +84,10 @@ export function WorkbenchStatusBar({
         {debugStatus.targetText ? <span className="font-mono">{debugStatus.targetText}</span> : null}
         {debugLocation ? <span className="max-w-[16rem] truncate font-mono">{debugLocation}</span> : null}
         <span>{terminalStatus.connectionText}</span>
-        <span className="max-w-[24rem] truncate font-mono">{terminalStatus.overrideCwd || terminalStatus.currentCwd}</span>
+        <span className="max-w-[24rem] truncate font-mono">{terminalStatus.currentCwd || "未启动"}</span>
+        {terminalStatus.nextRebuildCwd ? (
+          <span className="max-w-[24rem] truncate font-mono">下次重建: {terminalStatus.nextRebuildCwd}</span>
+        ) : null}
         {branchName ? <span className="font-mono">{branchName}</span> : null}
         <span>{chatLabel(chatStatus)}</span>
         <span>{restoreLabel(restoreState)}</span>

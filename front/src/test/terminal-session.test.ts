@@ -116,17 +116,18 @@ test("connect sends initial geometry and fit sends resize payload", () => {
   const container = document.createElement("div");
   const session = createTerminalSession(container, {
     token: "abc",
-    cwd: "C:\\repo",
-    shell: "powershell",
+    ownerId: "owner-1",
+    fromSeq: 12,
   });
 
   session.connect();
   const socket = socketState.instances[0];
+  expect(socket?.url).toContain("/terminal/ws?token=abc&owner_id=owner-1");
   socket.open();
 
   expect(JSON.parse(socket.sent[0] ?? "{}")).toEqual({
-    shell: "powershell",
-    cwd: "C:\\repo",
+    owner_id: "owner-1",
+    from_seq: 12,
     cols: 132,
     rows: 40,
   });
@@ -144,7 +145,7 @@ test("setTheme updates the live xterm theme in place", () => {
   const container = document.createElement("div");
   const session = createTerminalSession(container, {
     token: "abc",
-    cwd: "C:\\repo",
+    ownerId: "owner-1",
     themeName: "deep-space",
   });
 

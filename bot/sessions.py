@@ -238,6 +238,28 @@ def is_bot_processing(bot_id: int) -> bool:
         sessions_lock.release()
 
 
+def terminate_bot_processes(bot_alias: str) -> int:
+    """终止指定 bot 的所有活动会话进程。"""
+    targets: list[UserSession] = []
+    with sessions_lock:
+        for session in sessions.values():
+            with session._lock:
+                has_process = session.process is not None
+                is_processing = session.is_processing
+                alias_matches = session.bot_alias == bot_alias
+            if alias_matches and (has_process or is_processing):
+                targets.append(session)
+
+    terminated = 0
+    for session in targets:
+        try:
+            session.terminate_process()
+            terminated += 1
+        except Exception as exc:
+            logger.warning("终止 bot 会话进程失败 alias=%s user=%s error=%s", bot_alias, session.user_id, exc)
+    return terminated
+
+
 def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
     """更新指定 bot 的所有会话的工作目录
     

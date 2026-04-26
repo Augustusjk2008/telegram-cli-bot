@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useId, useState } from "react";
+import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import rehypeKatex from "rehype-katex";
 import ReactMarkdown from "react-markdown";
@@ -172,11 +172,32 @@ function MarkdownPre({
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
+  const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
     : isDesktopPreview
       ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]"
       : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
+
+  function activateLocalLink(
+    event: { preventDefault: () => void; stopPropagation: () => void },
+    href: string,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onFileLinkClick) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastActivation = lastLocalLinkActivationRef.current;
+    if (lastActivation && lastActivation.href === href && now - lastActivation.at < 400) {
+      return;
+    }
+
+    lastLocalLinkActivationRef.current = { href, at: now };
+    onFileLinkClick(href);
+  }
 
   return (
     <div className={containerClassName}>
@@ -208,15 +229,16 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
             return (
               <a
                 className="break-all font-medium text-[var(--accent)] underline decoration-[var(--accent-outline)] underline-offset-4"
-                href={nextHref || undefined}
+                data-local-file-href={handleFileLink ? nextHref : undefined}
+                href={handleFileLink ? "#" : nextHref || undefined}
                 rel={handleFileLink ? undefined : "noreferrer"}
                 target={handleFileLink ? undefined : "_blank"}
-                onClick={(event) => {
-                  if (handleFileLink) {
-                    event.preventDefault();
-                    onFileLinkClick?.(nextHref);
-                  }
-                }}
+                onMouseDown={handleFileLink ? (event) => {
+                  activateLocalLink(event, nextHref);
+                } : undefined}
+                onClick={handleFileLink ? (event) => {
+                  activateLocalLink(event, nextHref);
+                } : undefined}
               >
                 {children}
               </a>

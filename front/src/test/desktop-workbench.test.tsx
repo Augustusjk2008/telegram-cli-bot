@@ -1,9 +1,19 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
-import { WorkbenchStatusBar } from "../workbench/WorkbenchStatusBar";
+
+function render(ui: ReactElement) {
+  const client = ((ui.props as { client?: MockWebBotClient }).client) || new MockWebBotClient();
+  return rtlRender(
+    <PersistentTerminalProvider client={client}>
+      {ui}
+    </PersistentTerminalProvider>,
+  );
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -769,7 +779,8 @@ test("desktop chat file links reuse the workbench preview window", async () => {
     />,
   );
 
-  fireEvent.click(await screen.findByRole("link", { name: "查看 README" }));
+  const readmeLink = await screen.findByRole("link", { name: "查看 README" });
+  await user.click(readmeLink);
 
   await waitFor(() => {
     expect(readFile).toHaveBeenCalled();
@@ -826,7 +837,8 @@ test("desktop preview keeps full-read enabled for files larger than previous 1MB
     />,
   );
 
-  fireEvent.click(await screen.findByRole("link", { name: "查看 big.log" }));
+  const bigLogLink = await screen.findByRole("link", { name: "查看 big.log" });
+  fireEvent.click(bigLogLink);
 
   await waitFor(() => {
     expect(readFile).toHaveBeenCalled();

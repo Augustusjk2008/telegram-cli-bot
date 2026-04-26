@@ -620,7 +620,7 @@ test("immersive chat mode hides outer chrome but keeps the composer visible", as
   expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
 });
 
-test("terminal tab keeps one shared session alive and rebuilds from the current bot workdir", async () => {
+test("terminal tab does not auto start and keeps one shared session across bot switches", async () => {
   const user = userEvent.setup();
   render(<App />);
 
@@ -631,26 +631,21 @@ test("terminal tab keeps one shared session alive and rebuilds from the current 
   await user.click(screen.getByRole("button", { name: "终端" }));
 
   expect(await screen.findByTestId("terminal-screen-root")).toBeInTheDocument();
-  await waitFor(() => {
-    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
-  });
+  expect(screen.getByText("未启动终端")).toBeInTheDocument();
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("0");
 
   await user.click(screen.getByRole("button", { name: "Git" }));
   await user.click(screen.getByRole("button", { name: "终端" }));
-  await waitFor(() => {
-    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
-  });
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("0");
 
   await user.click(screen.getByRole("button", { name: "main" }));
   await user.click(await screen.findByRole("button", { name: /team2/i }));
   await user.click(screen.getByRole("button", { name: "终端" }));
-  await waitFor(() => {
-    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
-  });
+  expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("0");
 
   await user.click(screen.getByRole("button", { name: "重建终端" }));
   await waitFor(() => {
-    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("2");
+    expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("1");
   });
 });
 

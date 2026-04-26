@@ -26,7 +26,7 @@ export type TerminalWorkbenchStatus = {
   connected: boolean;
   connectionText: string;
   currentCwd: string;
-  overrideCwd?: string;
+  nextRebuildCwd?: string;
 };
 
 export type ChatWorkbenchStatus = {

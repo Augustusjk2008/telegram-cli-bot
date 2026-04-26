@@ -21,7 +21,7 @@ from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKI
 from bot.models import BotProfile
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
-from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_alias, update_bot_working_dir
+from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
 REMOVED_LEGACY_CLI_TYPES = {"ki" "mi"}
@@ -268,14 +268,21 @@ class MultiBotManager:
         self._watchdog_task = None
 
     async def stop_background_services(self) -> None:
-        if self.assistant_cron_service is not None:
-            stop = getattr(self.assistant_cron_service, "stop", None)
-            if callable(stop):
-                await stop()
-            self.assistant_cron_service = None
+        assistant_alias = self.assistant_alias()
+        wait_for_watch_tasks = self.assistant_runtime is not None
+        if assistant_alias is not None:
+            terminate_bot_processes(assistant_alias)
         if self.assistant_runtime is not None:
             await self.assistant_runtime.stop()
             self.assistant_runtime = None
+        if self.assistant_cron_service is not None:
+            stop = getattr(self.assistant_cron_service, "stop", None)
+            if callable(stop):
+                if isinstance(self.assistant_cron_service, AssistantCronService):
+                    await stop(cancel_watch_tasks=not wait_for_watch_tasks)
+                else:
+                    await stop()
+            self.assistant_cron_service = None
 
     async def shutdown_all(self) -> None:
         await self.stop_background_services()

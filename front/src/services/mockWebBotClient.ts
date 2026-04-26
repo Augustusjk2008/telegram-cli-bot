@@ -43,6 +43,7 @@ import type {
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
+  PersistentTerminalSnapshot,
   FileWriteResult,
   HistoryDeltaResult,
   PublicHostInfo,
@@ -51,6 +52,7 @@ import type {
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TreeViewPayload,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
@@ -83,6 +85,7 @@ import {
 import { APP_VERSION } from "../theme";
 
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
+const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
 const MEMBER_CAPABILITIES: Capability[] = [
   "view_bots",
   "view_bot_status",
@@ -123,6 +126,57 @@ const MOCK_CLI_MODEL_OPTIONS = [
   "claude-sonnet-4-6",
   "none",
 ];
+
+function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
+  if (typeof localStorage === "undefined") {
+    return {
+      started: false,
+      closed: false,
+      cwd: "",
+      ptyMode: null,
+      connectionText: "未启动",
+      lastSeq: 0,
+    };
+  }
+  try {
+    const raw = localStorage.getItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY);
+    if (!raw) {
+      return {
+        started: false,
+        closed: false,
+        cwd: "",
+        ptyMode: null,
+        connectionText: "未启动",
+        lastSeq: 0,
+      };
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistentTerminalSnapshot>;
+    return {
+      started: Boolean(parsed.started),
+      closed: Boolean(parsed.closed),
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+      ptyMode: typeof parsed.ptyMode === "boolean" ? parsed.ptyMode : null,
+      connectionText: typeof parsed.connectionText === "string" ? parsed.connectionText : "未启动",
+      lastSeq: typeof parsed.lastSeq === "number" ? parsed.lastSeq : 0,
+    };
+  } catch {
+    return {
+      started: false,
+      closed: false,
+      cwd: "",
+      ptyMode: null,
+      connectionText: "未启动",
+      lastSeq: 0,
+    };
+  }
+}
+
+function writeMockPersistentTerminalSnapshot(snapshot: PersistentTerminalSnapshot) {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+  localStorage.setItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY, JSON.stringify(snapshot));
+}
 
 function resolveMemberCapabilities(username: string) {
   return username.trim() === "127.0.0.1"
@@ -1439,6 +1493,35 @@ export class MockWebBotClient implements WebBotClient {
       scopes: [],
       variables: {},
     };
+  }
+
+  async getTerminalSession(_ownerId: string): Promise<PersistentTerminalSnapshot> {
+    return readMockPersistentTerminalSnapshot();
+  }
+
+  async rebuildTerminalSession(_ownerId: string, cwd: string, _shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    const snapshot: PersistentTerminalSnapshot = {
+      started: true,
+      closed: false,
+      cwd,
+      ptyMode: true,
+      connectionText: "运行中",
+      lastSeq: 0,
+    };
+    writeMockPersistentTerminalSnapshot(snapshot);
+    return snapshot;
+  }
+
+  async closeTerminalSession(_ownerId: string): Promise<PersistentTerminalSnapshot> {
+    const current = readMockPersistentTerminalSnapshot();
+    const snapshot: PersistentTerminalSnapshot = {
+      ...current,
+      started: false,
+      closed: true,
+      connectionText: "终端已关闭",
+    };
+    writeMockPersistentTerminalSnapshot(snapshot);
+    return snapshot;
   }
 
   async sendMessage(

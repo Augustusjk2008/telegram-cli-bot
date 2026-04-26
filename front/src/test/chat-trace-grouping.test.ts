@@ -100,4 +100,44 @@ describe("parseToolResultStatus", () => {
       tone: "success",
     });
   });
+
+  test("marks success true as success even without exit code", () => {
+    expect(parseToolResultStatus('{"success":true,"output":"patched"}')).toMatchObject({
+      exitCode: undefined,
+      success: true,
+      tone: "success",
+    });
+  });
+
+  test("marks success false as error even without exit code", () => {
+    expect(parseToolResultStatus("success: false\nmessage: failed")).toMatchObject({
+      exitCode: undefined,
+      success: false,
+      tone: "error",
+    });
+  });
+
+  test("marks plain success string as success", () => {
+    expect(parseToolResultStatus('"success"')).toMatchObject({
+      exitCode: undefined,
+      success: true,
+      tone: "success",
+    });
+  });
+
+  test("marks plain fail string as error", () => {
+    expect(parseToolResultStatus("fail")).toMatchObject({
+      exitCode: undefined,
+      success: false,
+      tone: "error",
+    });
+  });
+
+  test("marks apply_patch success prefix text as success", () => {
+    expect(parseToolResultStatus("Success. Updated the following files:\nM demo.txt")).toMatchObject({
+      exitCode: undefined,
+      success: true,
+      tone: "success",
+    });
+  });
 });

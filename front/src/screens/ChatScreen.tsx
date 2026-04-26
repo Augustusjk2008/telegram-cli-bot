@@ -410,6 +410,7 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
 
 type ChatMessageRowProps = {
   item: ChatMessage;
+  messageClientStateKey: string;
   assistantName: string;
   assistantAvatarName?: string;
   userAvatarName?: string;
@@ -421,11 +422,12 @@ type ChatMessageRowProps = {
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
   onFileLinkClick: (href: string) => void;
   onLoadTrace: (messageId: string) => void;
-  onToggleTracePanel: () => void;
+  onToggleTracePanel: (messageClientStateKey: string) => void;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
   item,
+  messageClientStateKey,
   assistantName,
   assistantAvatarName,
   userAvatarName,
@@ -552,7 +554,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             toolCallCount={item.meta?.toolCallCount}
             processCount={item.meta?.processCount}
             expanded={tracePanelExpanded}
-            onToggleExpanded={onToggleTracePanel}
+            onToggleExpanded={() => onToggleTracePanel(messageClientStateKey)}
             isLoading={Boolean(traceLoadState?.loading)}
             loadError={traceLoadState?.error}
             onLoadTrace={() => void onLoadTrace(item.id)}
@@ -1133,6 +1135,26 @@ export function ChatScreen({
     void loadPreview(nextPath, "preview");
   }, [embedded, loadPreview, onRequestDesktopPreview]);
 
+  const handleToggleTracePanel = useCallback((messageClientStateKey: string) => {
+    setExpandedTracePanels((prev) => {
+      const nextExpanded = !prev[messageClientStateKey];
+      if (nextExpanded) {
+        return {
+          ...prev,
+          [messageClientStateKey]: true,
+        };
+      }
+
+      if (!prev[messageClientStateKey]) {
+        return prev;
+      }
+
+      const nextState = { ...prev };
+      delete nextState[messageClientStateKey];
+      return nextState;
+    });
+  }, []);
+
   const loadMessageTrace = useCallback(async (messageId: string) => {
     const currentMessage = itemsRef.current.find((item) => item.id === messageId);
     if (!currentMessage || currentMessage.role !== "assistant") {
@@ -1573,43 +1595,28 @@ export function ChatScreen({
               暂无消息，开始聊天吧
             </div>
           ) : null}
-          {items.map((item) => (
-            <ChatMessageRow
-              key={item.id}
-              item={item}
-              assistantName={assistantName}
-              assistantAvatarName={assistantAvatarName}
-              userAvatarName={userAvatarName}
-              allowTrace={allowTrace}
-              deletedAttachmentKeys={deletedAttachmentKeys}
-              deletingAttachmentKeys={deletingAttachmentKeys}
-              tracePanelExpanded={Boolean(expandedTracePanels[getMessageClientStateKey(item)])}
-              traceLoadState={traceLoadState[getMessageClientStateKey(item)]}
-              onDeleteAttachment={handleDeleteAttachment}
-              onFileLinkClick={handleFileLinkClick}
-              onLoadTrace={loadMessageTrace}
-              onToggleTracePanel={() => {
-                const messageClientStateKey = getMessageClientStateKey(item);
-                setExpandedTracePanels((prev) => {
-                  const nextExpanded = !prev[messageClientStateKey];
-                  if (nextExpanded) {
-                    return {
-                      ...prev,
-                      [messageClientStateKey]: true,
-                    };
-                  }
-
-                  if (!prev[messageClientStateKey]) {
-                    return prev;
-                  }
-
-                  const nextState = { ...prev };
-                  delete nextState[messageClientStateKey];
-                  return nextState;
-                });
-              }}
-            />
-          ))}
+          {items.map((item) => {
+            const messageClientStateKey = getMessageClientStateKey(item);
+            return (
+              <ChatMessageRow
+                key={item.id}
+                item={item}
+                messageClientStateKey={messageClientStateKey}
+                assistantName={assistantName}
+                assistantAvatarName={assistantAvatarName}
+                userAvatarName={userAvatarName}
+                allowTrace={allowTrace}
+                deletedAttachmentKeys={deletedAttachmentKeys}
+                deletingAttachmentKeys={deletingAttachmentKeys}
+                tracePanelExpanded={Boolean(expandedTracePanels[messageClientStateKey])}
+                traceLoadState={traceLoadState[messageClientStateKey]}
+                onDeleteAttachment={handleDeleteAttachment}
+                onFileLinkClick={handleFileLinkClick}
+                onLoadTrace={loadMessageTrace}
+                onToggleTracePanel={handleToggleTracePanel}
+              />
+            );
+          })}
           <div ref={bottomAnchorRef} aria-hidden="true" />
         </div>
       </section>

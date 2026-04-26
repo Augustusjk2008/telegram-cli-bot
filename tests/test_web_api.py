@@ -11,6 +11,7 @@ import time
 import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -35,7 +36,7 @@ from bot.models import BotProfile, UserSession
 from bot.plugins.service import PluginService
 from bot.session_store import load_session, save_session
 from bot.web.auth_store import WebAuthStore
-from bot.web.server import WebApiServer, _TERMINAL_OUTPUT_EOF
+from bot.web.server import WebApiServer
 from bot.web.api_service import (
     AuthContext,
     _stream_cli_chat,
@@ -2751,17 +2752,23 @@ async def test_terminal_websocket_requires_token(web_manager: MultiBotManager, m
                 await client.ws_connect("/terminal/ws")
 
 @pytest.mark.asyncio
-async def test_terminal_websocket_forwards_process_output_and_input(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+async def test_terminal_session_routes_and_websocket_attach(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
 
-    started: dict[str, object] = {"writes": []}
+    state: dict[str, object] = {"writes": []}
 
     class FakeProcess:
         is_pty = False
         pid = 4321
-        reads = [b"PS C:\\demo> ", b"output\r\n"]
+
+        def __init__(self) -> None:
+            self.reads = [b"PS C:\\demo> ", b"output\r\n"]
 
         def read(self, timeout: int = 1000) -> bytes:
             if self.reads:
@@ -2769,16 +2776,16 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
             return b""
 
         def write(self, data: bytes) -> None:
-            started["writes"].append(data)
+            cast(list[bytes], state["writes"]).append(data)
 
         def isalive(self) -> bool:
-            return bool(self.reads)
+            return True
 
         def terminate(self) -> None:
-            started["terminated"] = True
+            state["terminated"] = True
 
         def close(self) -> None:
-            started["closed"] = True
+            state["closed"] = True
 
     def fake_create_shell_process(
         shell_type: str,
@@ -2787,37 +2794,141 @@ async def test_terminal_websocket_forwards_process_output_and_input(web_manager:
         cols: int | None = None,
         rows: int | None = None,
     ):
-        started["shell_type"] = shell_type
-        started["cwd"] = cwd
-        started["use_pty"] = use_pty
-        started["initial_size"] = (cols, rows)
+        state["shell_type"] = shell_type
+        state["cwd"] = cwd
+        state["use_pty"] = use_pty
+        state["initial_size"] = (cols, rows)
         return FakeProcess()
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            with patch("bot.web.server.create_shell_process", side_effect=fake_create_shell_process):
-                with patch("bot.web.server.get_default_shell", return_value="bash"):
-                    ws = await client.ws_connect("/terminal/ws?token=secret")
-                    await ws.send_json({"cwd": str(temp_dir)})
-                    first_message = await ws.receive_json()
-                    assert first_message == {"pty_mode": False}
-                    output_message = await ws.receive()
-                    assert output_message.data.startswith(b"PS C:\\demo> ")
-                    await ws.send_str("pwd\r")
-                    for _ in range(20):
-                        if started["writes"]:
-                            break
-                        await asyncio.sleep(0.01)
-                    assert started["cwd"] == str(temp_dir)
-                    assert started["shell_type"] == "bash"
-                    assert started["use_pty"] is True
-                    assert started["initial_size"] == (None, None)
-                    assert started["writes"] == [b"pwd\r"]
-                    await ws.close()
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                owner_id = "shared-terminal"
+                resp = await client.get(f"/api/terminal/session?token=secret&owner_id={owner_id}")
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["data"]["started"] is False
+                assert payload["data"]["connection_text"] == "未启动"
+
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "bash"},
+                )
+                assert rebuild_resp.status == 200
+                rebuild_payload = await rebuild_resp.json()
+                assert rebuild_payload["data"]["started"] is True
+                assert rebuild_payload["data"]["connection_text"] == "运行中"
+
+                ws = await client.ws_connect("/terminal/ws?token=secret")
+                await ws.send_json({"owner_id": owner_id})
+                first_message = await ws.receive_json()
+                assert first_message == {"pty_mode": False, "connection_text": "运行中"}
+
+                output_message = await ws.receive()
+                assert output_message.data.startswith(b"PS C:\\demo> ")
+
+                await ws.send_str("pwd\r")
+                for _ in range(20):
+                    if state["writes"]:
+                        break
+                    await asyncio.sleep(0.01)
+
+                assert state["cwd"] == str(temp_dir)
+                assert state["shell_type"] == "bash"
+                assert state["use_pty"] is True
+                assert state["initial_size"] == (None, None)
+                assert state["writes"] == [b"pwd\r"]
+                assert state.get("terminated") is not True
+                assert state.get("closed") is not True
+                await ws.close()
 
 @pytest.mark.asyncio
-async def test_terminal_websocket_applies_resize_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+async def test_terminal_session_routes_accept_missing_owner_id(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    state: dict[str, object] = {}
+
+    class FakeProcess:
+        is_pty = False
+        pid = 2468
+
+        def __init__(self) -> None:
+            self.reads = [b"default-owner\r\n"]
+
+        def read(self, timeout: int = 1000) -> bytes:
+            if self.reads:
+                return self.reads.pop(0)
+            return b""
+
+        def write(self, data: bytes) -> None:
+            state["last_write"] = data
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            state["terminated"] = True
+
+        def close(self) -> None:
+            state["closed"] = True
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        state["shell_type"] = shell_type
+        state["cwd"] = cwd
+        state["use_pty"] = use_pty
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                resp = await client.get("/api/terminal/session?token=secret")
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["data"]["started"] is False
+
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"cwd": str(temp_dir), "shell": "bash"},
+                )
+                assert rebuild_resp.status == 200
+                rebuild_payload = await rebuild_resp.json()
+                assert rebuild_payload["data"]["started"] is True
+
+                snapshot_resp = await client.get("/api/terminal/session?token=secret")
+                assert snapshot_resp.status == 200
+                snapshot_payload = await snapshot_resp.json()
+                assert snapshot_payload["data"]["started"] is True
+                assert snapshot_payload["data"]["cwd"] == str(temp_dir)
+
+                ws = await client.ws_connect("/terminal/ws?token=secret")
+                await ws.send_json({})
+                assert await ws.receive_json() == {"pty_mode": False, "connection_text": "运行中"}
+                output_message = await ws.receive()
+                assert output_message.data == b"default-owner\r\n"
+                await ws.close()
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_applies_resize_payload(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
@@ -2835,7 +2946,7 @@ async def test_terminal_websocket_applies_resize_payload(web_manager: MultiBotMa
             state["last_write"] = data
 
         def resize(self, cols: int, rows: int) -> bool:
-            state["resize_calls"].append((cols, rows))
+            cast(list[tuple[int, int]], state["resize_calls"]).append((cols, rows))
             return True
 
         def isalive(self) -> bool:
@@ -2863,29 +2974,40 @@ async def test_terminal_websocket_applies_resize_payload(web_manager: MultiBotMa
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            with patch("bot.web.server.create_shell_process", side_effect=fake_create_shell_process):
-                with patch("bot.web.server.get_default_shell", return_value="powershell"):
-                    ws = await client.ws_connect("/terminal/ws?token=secret")
-                    await ws.send_json({"cwd": str(temp_dir), "cols": 100, "rows": 30})
-                    assert await ws.receive_json() == {"pty_mode": True}
-                    await ws.send_json({"type": "resize", "cols": 140, "rows": 45})
-                    for _ in range(20):
-                        if state["resize_calls"]:
-                            break
-                        await asyncio.sleep(0.01)
-                    assert state["cwd"] == str(temp_dir)
-                    assert state["shell_type"] == "powershell"
-                    assert state["use_pty"] is True
-                    assert state["initial_size"] == (100, 30)
-                    assert state["resize_calls"] == [(140, 45)]
-                    await ws.close()
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="powershell"):
+                owner_id = "resizable-terminal"
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "powershell", "cols": 100, "rows": 30},
+                )
+                assert rebuild_resp.status == 200
+
+                ws = await client.ws_connect("/terminal/ws?token=secret")
+                await ws.send_json({"owner_id": owner_id})
+                assert await ws.receive_json() == {"pty_mode": True, "connection_text": "运行中"}
+                await ws.send_json({"type": "resize", "cols": 140, "rows": 45})
+                for _ in range(20):
+                    if state["resize_calls"]:
+                        break
+                    await asyncio.sleep(0.01)
+
+                assert state["cwd"] == str(temp_dir)
+                assert state["shell_type"] == "powershell"
+                assert state["use_pty"] is True
+                assert state["initial_size"] == (100, 30)
+                assert state["resize_calls"] == [(140, 45)]
+                await ws.close()
 
 @pytest.mark.asyncio
-async def test_terminal_websocket_ignores_disconnect_while_forwarding_output(web_manager: MultiBotManager):
-    server = WebApiServer(web_manager)
-    request = MagicMock()
-    request.query = {}
-    request.transport = None
+async def test_terminal_websocket_disconnect_does_not_stop_process(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
 
     state: dict[str, object] = {}
 
@@ -2893,63 +3015,53 @@ async def test_terminal_websocket_ignores_disconnect_while_forwarding_output(web
         is_pty = False
         pid = 9876
 
+        def __init__(self) -> None:
+            self.reads = [b"hello"]
+
+        def read(self, timeout: int = 1000) -> bytes:
+            if self.reads:
+                return self.reads.pop(0)
+            return b""
+
+        def write(self, data: bytes) -> None:
+            state["last_write"] = data
+
+        def isalive(self) -> bool:
+            return True
+
         def terminate(self) -> None:
             state["terminated"] = True
 
         def close(self) -> None:
             state["closed"] = True
 
-    class FakeOutputPump:
-        def __init__(self, process):
-            self._reads = [b"hello", _TERMINAL_OUTPUT_EOF]
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", return_value=FakeProcess()), \
+                 patch("bot.web.server.get_default_shell", return_value="powershell"):
+                owner_id = "persistent-terminal"
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "powershell"},
+                )
+                assert rebuild_resp.status == 200
 
-        def start(self, loop) -> None:
-            state["pump_started"] = True
+                ws = await client.ws_connect("/terminal/ws?token=secret")
+                await ws.send_json({"owner_id": owner_id})
+                assert await ws.receive_json() == {"pty_mode": False, "connection_text": "运行中"}
+                output_message = await ws.receive()
+                assert output_message.data == b"hello"
+                await ws.close()
+                await asyncio.sleep(0.05)
 
-        def stop(self) -> None:
-            state["pump_stopped"] = True
-
-        async def read(self):
-            return self._reads.pop(0)
-
-    class FakeWebSocket:
-        closed = True
-
-        def __init__(self):
-            self.binary_writes = 0
-
-        async def prepare(self, req):
-            return self
-
-        async def receive(self):
-            return MagicMock(type=WSMsgType.TEXT, data="{}")
-
-        async def send_json(self, payload):
-            state["pty_payload"] = payload
-
-        async def send_bytes(self, data):
-            self.binary_writes += 1
-            raise ClientConnectionResetError("Cannot write to closing transport")
-
-    fake_ws = FakeWebSocket()
-    fake_process = FakeProcess()
-
-    with patch.object(server, "_with_auth", AsyncMock(return_value=AuthContext(user_id=1001, token_used=False))), \
-         patch("bot.web.server.get_default_shell", return_value="powershell"), \
-         patch("bot.web.server.create_shell_process", return_value=fake_process), \
-         patch("bot.web.server._TerminalOutputPump", FakeOutputPump), \
-         patch("bot.web.server.web.WebSocketResponse", return_value=fake_ws), \
-         patch("bot.web.server.logger.exception") as exception_log:
-        response = await server.terminal_ws(request)
-
-    assert response is fake_ws
-    assert state["pty_payload"] == {"pty_mode": False}
-    assert state["pump_started"] is True
-    assert state["pump_stopped"] is True
-    assert state["terminated"] is True
-    assert state["closed"] is True
-    assert fake_ws.binary_writes == 1
-    exception_log.assert_not_called()
+                snapshot_resp = await client.get(f"/api/terminal/session?token=secret&owner_id={owner_id}")
+                assert snapshot_resp.status == 200
+                snapshot_payload = await snapshot_resp.json()
+                assert snapshot_payload["data"]["started"] is True
+                assert snapshot_payload["data"]["closed"] is False
+                assert state.get("terminated") is not True
+                assert state.get("closed") is not True
 
 @pytest.mark.asyncio
 async def test_run_system_script_executes_full_filename_from_bot_scripts_dir(

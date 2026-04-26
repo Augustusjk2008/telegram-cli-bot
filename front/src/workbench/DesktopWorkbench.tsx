@@ -142,7 +142,7 @@ export function DesktopWorkbench({
   });
   const [terminalStatus, setTerminalStatus] = useState<TerminalWorkbenchStatus>({
     connected: false,
-    connectionText: "准备启动",
+    connectionText: "未启动",
     currentCwd: "",
   });
   const [gitBranchName, setGitBranchName] = useState("");
@@ -411,7 +411,7 @@ export function DesktopWorkbench({
     setPreviewResult(null);
   }
 
-  async function loadPreview(path: string, mode: "preview" | "full") {
+  const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     try {
       const result = mode === "full"
@@ -424,13 +424,15 @@ export function DesktopWorkbench({
     } finally {
       setPreviewLoading(false);
     }
-  }
+  }, [botAlias, client]);
+
+  const handleRequestPreview = useCallback((path: string) => {
+    void loadPreview(path, "preview");
+  }, [loadPreview]);
 
   const resolvedChatPaneContent = typeof chatPaneContent === "function"
     ? chatPaneContent({
-        requestPreview: (path) => {
-          void loadPreview(path, "preview");
-        },
+        requestPreview: handleRequestPreview,
       })
     : chatPaneContent;
 
@@ -880,8 +882,6 @@ export function DesktopWorkbench({
               >
                 <TerminalPane
                   authToken={authToken}
-                  botAlias={botAlias}
-                  client={client}
                   preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
                   pendingWorkingDir={pendingTerminalOverride?.cwd}
                   themeName={themeName}
@@ -939,9 +939,7 @@ export function DesktopWorkbench({
                 onToggleFocus={() => toggleFocusedPane("chat")}
                 onUnreadResult={onUnreadResult}
                 onWorkbenchStatusChange={setLocalChatStatus}
-                onRequestDesktopPreview={(path) => {
-                  void loadPreview(path, "preview");
-                }}
+                onRequestDesktopPreview={handleRequestPreview}
               />
             )}
           </section>

@@ -18,10 +18,12 @@ def _prevent_real_browser_open(monkeypatch):
     monkeypatch.setattr(main_module.webbrowser, "open", lambda *args, **kwargs: True)
 
 def test_web_server_uses_platform_terminal_module():
-    source = Path("bot/web/server.py").read_text(encoding="utf-8")
+    server_source = Path("bot/web/server.py").read_text(encoding="utf-8")
+    manager_source = Path("bot/web/terminal_manager.py").read_text(encoding="utf-8")
 
-    assert "from bot.platform.terminal import create_shell_process" in source
-    assert ("from bot." + "handlers.tui_server import create_shell_process") not in source
+    assert "from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, TerminalSessionManager" in server_source
+    assert "from bot.platform.terminal import PtyWrapper, create_shell_process" in manager_source
+    assert ("from bot." + "handlers.tui_server import create_shell_process") not in server_source
 
 @pytest.mark.asyncio
 async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
@@ -418,12 +420,19 @@ async def test_supervised_web_restart_exits_with_terminal_connection():
     try:
         await wait_for_server()
         base_url = f"http://127.0.0.1:{port}"
+        owner_id = "restart-test-owner"
 
         async with ClientSession(headers={"Authorization": f"Bearer {token}"}) as session:
+            async with session.post(
+                f"{base_url}/api/terminal/session/rebuild",
+                json={"owner_id": owner_id, "cwd": str(repo_root), "shell": "powershell"},
+            ) as resp:
+                assert resp.status == 200
             ws = await session.ws_connect(f"ws://127.0.0.1:{port}/terminal/ws?token={token}")
-            await ws.send_json({"shell": "powershell", "cwd": str(repo_root)})
+            await ws.send_json({"owner_id": owner_id})
             first_message = await ws.receive_json(timeout=5)
-            assert first_message == {"pty_mode": True}
+            assert first_message["pty_mode"] is True
+            assert first_message["connection_text"] == "运行中"
             await asyncio.sleep(1.0)
 
             async with session.post(f"{base_url}/api/admin/restart") as resp:

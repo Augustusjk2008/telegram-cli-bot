@@ -131,6 +131,10 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
             <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tones.badge}`}>
               Exit {parsedStatus.exitCode}
             </span>
+          ) : typeof parsedStatus.success === "boolean" ? (
+            <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tones.badge}`}>
+              {parsedStatus.success ? "成功" : "失败"}
+            </span>
           ) : null}
           {parsedStatus.wallTime ? (
             <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
@@ -176,9 +180,12 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
 }
 
 export function ChatToolTraceCard({ entry }: Props) {
+  const [callSummaryExpanded, setCallSummaryExpanded] = useState(false);
   const [callRawExpanded, setCallRawExpanded] = useState(false);
   const callPayloadText = useMemo(() => (entry.call ? renderPayload(entry.call.payload) : ""), [entry.call]);
   const callSummary = useMemo(() => (entry.call ? resolveSummary(entry.call, callPayloadText) : ""), [callPayloadText, entry.call]);
+  const collapsedCallSummary = useMemo(() => collapseText(callSummary), [callSummary]);
+  const renderedCallSummary = callSummaryExpanded || !collapsedCallSummary.truncated ? callSummary : collapsedCallSummary.text;
   const showCallRawPayload = Boolean(entry.call) && isMeaningfulRenderedValue(callPayloadText) && callPayloadText.trim() !== callSummary.trim();
   const toolName = entry.call?.toolName || entry.call?.title || entry.results[0]?.toolName || entry.results[0]?.title || "";
   const label = entry.call ? `工具调用 ${entry.toolIndex}` : "工具返回（未匹配）";
@@ -202,7 +209,17 @@ export function ChatToolTraceCard({ entry }: Props) {
       {entry.call ? (
         <div className="mt-3 rounded-xl border border-b-0 border-slate-200 bg-slate-50/70 px-3 py-3">
           <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">调用</div>
-          <div className="mt-2 whitespace-pre-wrap break-all text-sm text-slate-900">{callSummary}</div>
+          <div className="mt-2 whitespace-pre-wrap break-all text-sm text-slate-900">{renderedCallSummary}</div>
+          {collapsedCallSummary.truncated ? (
+            <button
+              type="button"
+              onClick={() => setCallSummaryExpanded((prev) => !prev)}
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+            >
+              {callSummaryExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <span>{callSummaryExpanded ? "收起完整内容" : "展开完整内容"}</span>
+            </button>
+          ) : null}
           {showCallRawPayload ? (
             <div className="mt-3">
               <button

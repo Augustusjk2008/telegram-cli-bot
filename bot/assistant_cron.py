@@ -243,7 +243,7 @@ class AssistantCronService:
         await self._recover_startup_state()
         self._loop_task = asyncio.create_task(self._run_loop(), name="assistant-cron-service")
 
-    async def stop(self) -> None:
+    async def stop(self, *, cancel_watch_tasks: bool = True) -> None:
         loop_task = self._loop_task
         self._loop_task = None
         if loop_task is not None:
@@ -251,9 +251,10 @@ class AssistantCronService:
             await asyncio.gather(loop_task, return_exceptions=True)
         watch_tasks = list(self._watch_tasks)
         self._watch_tasks.clear()
-        for task in watch_tasks:
-            task.cancel()
         if watch_tasks:
+            if cancel_watch_tasks:
+                for task in watch_tasks:
+                    task.cancel()
             await asyncio.gather(*watch_tasks, return_exceptions=True)
 
     async def save_job(self, job: AssistantCronJob) -> AssistantCronJob:

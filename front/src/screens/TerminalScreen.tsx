@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
-import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
-import type { WebBotClient } from "../services/webBotClient";
+import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
 
 type Props = {
   authToken: string;
-  botAlias: string;
-  client?: WebBotClient;
   isVisible: boolean;
   preferredWorkingDir: string;
   pendingWorkingDir?: string;
@@ -29,7 +26,6 @@ type Disposable = {
   dispose: () => void;
 };
 
-const defaultTerminalClient = new MockWebBotClient();
 const FOLLOW_THRESHOLD_PX = 24;
 
 function scheduleLayout(callback: () => void) {
@@ -65,8 +61,6 @@ function getTerminalFontSize() {
 
 export function TerminalScreen({
   authToken,
-  botAlias,
-  client = defaultTerminalClient,
   isVisible,
   preferredWorkingDir,
   pendingWorkingDir,
@@ -80,6 +74,7 @@ export function TerminalScreen({
   onCancelPendingWorkingDir,
   onWorkbenchStatusChange,
 }: Props) {
+  const terminal = usePersistentTerminal();
   const layoutHandleRef = useRef<number | null>(null);
   const layoutRequestRef = useRef({
     refit: false,
@@ -93,20 +88,21 @@ export function TerminalScreen({
   const launchPendingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const latestWorkingDirRef = useRef(preferredWorkingDir.trim());
   const lastThemeRef = useRef(themeName);
   const isFollowingRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
   const previousVisibleRef = useRef(isVisible);
-  const [launchKey, setLaunchKey] = useState(0);
   const [instanceId, setInstanceId] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [isFollowing, setIsFollowing] = useState(true);
   const [ptyMode, setPtyMode] = useState<boolean | null>(null);
-  const [activeWorkingDir, setActiveWorkingDir] = useState(preferredWorkingDir.trim());
   const [error, setError] = useState("");
-  const [isTerminalClosed, setIsTerminalClosed] = useState(false);
   const terminalFontSize = getTerminalFontSize();
+  const runningWorkingDir = terminal.snapshot.cwd.trim();
+  const stagedWorkingDir = pendingWorkingDir?.trim() || "";
+  const preferredTerminalDir = preferredWorkingDir.trim();
+  const displayWorkingDir = runningWorkingDir || stagedWorkingDir || preferredTerminalDir;
+  const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -243,79 +239,36 @@ export function TerminalScreen({
     setPtyMode(null);
   }
 
-  function rebuildTerminal() {
-    const nextWorkingDir = latestWorkingDirRef.current || preferredWorkingDir.trim() || activeWorkingDir;
-    disposeSession();
-    setError("");
-    setFollowing(true);
-    setIsTerminalClosed(false);
-    if (nextWorkingDir) {
-      setActiveWorkingDir(nextWorkingDir);
-    }
-    setLaunchKey((value) => value + 1);
-  }
-
-  function closeTerminal() {
-    disposeSession();
-    setError("");
-    setFollowing(true);
-    setIsTerminalClosed(true);
-  }
-
-  useEffect(() => {
-    const nextWorkingDir = preferredWorkingDir.trim();
+  async function rebuildTerminal() {
+    const nextWorkingDir = stagedWorkingDir || preferredTerminalDir || runningWorkingDir;
     if (!nextWorkingDir) {
       return;
     }
-    const previousWorkingDir = latestWorkingDirRef.current;
-    latestWorkingDirRef.current = nextWorkingDir;
-    if (!sessionRef.current) {
-      setActiveWorkingDir(nextWorkingDir);
-      return;
-    }
-    if (nextWorkingDir !== previousWorkingDir && nextWorkingDir !== activeWorkingDir) {
-      setActiveWorkingDir(nextWorkingDir);
-      rebuildTerminal();
-    }
-  }, [activeWorkingDir, preferredWorkingDir]);
+    disposeSession();
+    setError("");
+    setFollowing(true);
+    await terminal.rebuild(nextWorkingDir);
+  }
+
+  async function closeTerminal() {
+    disposeSession();
+    setError("");
+    setFollowing(true);
+    await terminal.close();
+  }
 
   useEffect(() => {
-    let cancelled = false;
-
-    void client.getBotOverview(botAlias)
-      .then((overview) => {
-        if (cancelled) {
-          return;
-        }
-        const nextWorkingDir = overview.workingDir.trim() || latestWorkingDirRef.current;
-        if (!nextWorkingDir) {
-          return;
-        }
-        latestWorkingDirRef.current = nextWorkingDir;
-        if (!sessionRef.current) {
-          setActiveWorkingDir(nextWorkingDir);
-          setError("");
-        }
-      })
-      .catch((err) => {
-        if (cancelled || sessionRef.current || latestWorkingDirRef.current) {
-          return;
-        }
-        setError(err instanceof Error ? err.message : "无法初始化终端");
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [botAlias, client, preferredWorkingDir]);
-
-  useEffect(() => {
-    if (!isVisible || isTerminalClosed || sessionRef.current || launchPendingRef.current || !containerRef.current) {
+    if (terminal.snapshot.started || sessionRef.current === null) {
       return;
     }
+    disposeSession();
+  }, [terminal.snapshot.closed, terminal.snapshot.started]);
 
-    const workingDir = latestWorkingDirRef.current || activeWorkingDir.trim();
-    if (!workingDir) {
+  useEffect(() => {
+    if ((!isVisible && sessionRef.current === null) || !terminal.snapshot.started || terminal.snapshot.closed) {
+      return;
+    }
+    if (sessionRef.current || launchPendingRef.current || !containerRef.current) {
       return;
     }
 
@@ -326,8 +279,8 @@ export function TerminalScreen({
       let session!: TerminalSession;
       session = createTerminalSession(containerRef.current, {
         token: authToken,
-        cwd: workingDir,
-        shell: "auto",
+        ownerId: terminal.ownerId,
+        fromSeq: 0,
         fontSize: terminalFontSize,
         themeName,
         onOpen: () => {
@@ -361,7 +314,6 @@ export function TerminalScreen({
       ];
 
       sessionRef.current = session;
-      setActiveWorkingDir(workingDir);
       setInstanceId((value) => value + 1);
       session.connect();
 
@@ -371,7 +323,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [activeWorkingDir, authToken, isTerminalClosed, isVisible, launchKey, themeName]);
+  }, [authToken, isVisible, terminal.attachNonce, terminal.ownerId, terminal.snapshot.closed, terminal.snapshot.started, terminalFontSize, themeName]);
 
   useEffect(() => {
     const becameVisible = !previousVisibleRef.current && isVisible;
@@ -452,17 +404,22 @@ export function TerminalScreen({
     };
   }, []);
 
-  const connectionText = error ? "连接失败" : isConnected ? "已连接" : instanceId > 0 ? "连接中..." : "准备启动";
-  const canCloseTerminal = !isTerminalClosed && sessionRef.current !== null;
+  const effectiveError = error || terminal.error;
+  const connectionText = effectiveError
+    ? "连接失败"
+    : isConnected
+      ? "已连接"
+      : terminal.snapshot.connectionText || "未启动";
+  const canCloseTerminal = terminal.snapshot.started && !terminal.snapshot.closed;
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
-      connected: isConnected,
+      connected: terminal.snapshot.started && !terminal.snapshot.closed,
       connectionText,
-      currentCwd: activeWorkingDir,
-      overrideCwd: pendingWorkingDir,
+      currentCwd: runningWorkingDir,
+      nextRebuildCwd: stagedWorkingDir,
     });
-  }, [activeWorkingDir, connectionText, isConnected, onWorkbenchStatusChange, pendingWorkingDir]);
+  }, [connectionText, onWorkbenchStatusChange, runningWorkingDir, stagedWorkingDir, terminal.snapshot.closed, terminal.snapshot.started]);
 
   return (
     <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--bg)]">
@@ -471,22 +428,22 @@ export function TerminalScreen({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-semibold text-[var(--text)]">{connectionText}</h1>
-              {pendingWorkingDir ? (
+              {stagedWorkingDir ? (
                 <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
-                  临时目录
+                  下次重建目录
                 </span>
               ) : null}
-              {ptyMode !== null ? (
+              {resolvedPtyMode !== null ? (
                 <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
-                  {ptyMode ? "PTY" : "PIPE"}
+                  {resolvedPtyMode ? "PTY" : "PIPE"}
                 </span>
               ) : null}
             </div>
             <p className="truncate text-xs text-[var(--muted)]">
-              {activeWorkingDir || "等待工作目录..."}
+              {displayWorkingDir || "等待工作目录..."}
             </p>
-            {error ? (
-              <p className="mt-1 text-xs text-red-600">{error}</p>
+            {effectiveError ? (
+              <p className="mt-1 text-xs text-red-600">{effectiveError}</p>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -519,16 +476,16 @@ export function TerminalScreen({
             </button>
           </div>
         </div>
-        {pendingWorkingDir ? (
+        {stagedWorkingDir ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs">
-            <span className="font-medium text-[var(--text)]">临时目录</span>
-            <span className="truncate text-[var(--muted)]">{pendingWorkingDir}</span>
+            <span className="font-medium text-[var(--text)]">下次重建目录</span>
+            <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
             <button
               type="button"
               onClick={onAcceptPendingWorkingDir}
               className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
             >
-              立即切换
+              设为下次重建
             </button>
             <button
               type="button"
@@ -545,9 +502,9 @@ export function TerminalScreen({
       </header>
 
       <section className="relative flex-1 overflow-hidden bg-[var(--terminal-bg)]">
-        {isTerminalClosed ? (
+        {!terminal.snapshot.started || terminal.snapshot.closed ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--terminal-muted)]">
-            终端已关闭
+            {terminal.snapshot.closed ? "终端已关闭" : "未启动终端"}
           </div>
         ) : (
           <div

@@ -53,6 +53,7 @@ import type {
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
+  PersistentTerminalSnapshot,
   PublicHostInfo,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -1442,6 +1443,82 @@ export class RealWebBotClient implements WebBotClient {
   async getDebugState(botAlias: string): Promise<DebugState> {
     const data = await this.requestJson<Record<string, unknown>>(`/api/bots/${encodeURIComponent(botAlias)}/debug/state`);
     return mapDebugState(data);
+  }
+
+  async getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
+    const params = new URLSearchParams({ owner_id: ownerId });
+    const data = await this.requestJson<{
+      started: boolean;
+      closed: boolean;
+      cwd: string;
+      pty_mode?: boolean | null;
+      connection_text?: string;
+      last_seq?: number;
+    }>(`/api/terminal/session?${params.toString()}`);
+    return {
+      started: Boolean(data.started),
+      closed: Boolean(data.closed),
+      cwd: String(data.cwd || ""),
+      ptyMode: typeof data.pty_mode === "boolean" ? data.pty_mode : null,
+      connectionText: String(data.connection_text || ""),
+      lastSeq: Number(data.last_seq || 0),
+    };
+  }
+
+  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    const data = await this.requestJson<{
+      started: boolean;
+      closed: boolean;
+      cwd: string;
+      pty_mode?: boolean | null;
+      connection_text?: string;
+      last_seq?: number;
+    }>("/api/terminal/session/rebuild", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        owner_id: ownerId,
+        cwd,
+        shell,
+      }),
+    });
+    return {
+      started: Boolean(data.started),
+      closed: Boolean(data.closed),
+      cwd: String(data.cwd || ""),
+      ptyMode: typeof data.pty_mode === "boolean" ? data.pty_mode : null,
+      connectionText: String(data.connection_text || ""),
+      lastSeq: Number(data.last_seq || 0),
+    };
+  }
+
+  async closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
+    const data = await this.requestJson<{
+      started: boolean;
+      closed: boolean;
+      cwd: string;
+      pty_mode?: boolean | null;
+      connection_text?: string;
+      last_seq?: number;
+    }>("/api/terminal/session/close", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        owner_id: ownerId,
+      }),
+    });
+    return {
+      started: Boolean(data.started),
+      closed: Boolean(data.closed),
+      cwd: String(data.cwd || ""),
+      ptyMode: typeof data.pty_mode === "boolean" ? data.pty_mode : null,
+      connectionText: String(data.connection_text || ""),
+      lastSeq: Number(data.last_seq || 0),
+    };
   }
 
   async getCurrentPath(botAlias: string): Promise<string> {

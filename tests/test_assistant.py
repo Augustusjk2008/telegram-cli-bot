@@ -1,10 +1,14 @@
 """测试 assistant 模式收敛后的兼容行为。"""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from bot.assistant_cron_store import load_job_runtime_state
+from bot.assistant_cron_types import AssistantCronJob
+from bot.assistant_home import bootstrap_assistant_home
 from bot.models import BotProfile
 
 
@@ -168,3 +172,96 @@ class TestMultiBotManagerWithAssistant:
                 working_dir=str(temp_dir),
                 bot_mode="webcli",
             )
+
+
+@pytest.mark.asyncio
+async def test_assistant_runtime_stop_cancels_active_background_run():
+    from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_result_executor(_request: AssistantRunRequest):
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return {"status": "completed"}
+
+    runtime = AssistantRuntimeCoordinator(result_executor=blocking_result_executor)
+    await runtime.start()
+
+    request = AssistantRunRequest(
+        run_id="run_blocking_stop",
+        source="cron",
+        bot_alias="assistant1",
+        user_id=1,
+        text="do work",
+        interactive=False,
+    )
+    await runtime.submit_background(request)
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await asyncio.wait_for(runtime.stop(), timeout=1)
+
+    assert cancelled.is_set()
+    with pytest.raises(RuntimeError, match="assistant runtime stopped"):
+        await asyncio.wait_for(runtime.wait_for_run(request.run_id), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_stop_background_services_clears_inflight_cron_pending_state(temp_dir):
+    from bot.manager import MultiBotManager
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    job = AssistantCronJob.from_dict(
+        {
+            "id": "daily_dream",
+            "enabled": True,
+            "title": "每日自整理",
+            "schedule": {
+                "type": "daily",
+                "time": "02:00",
+                "timezone": "Asia/Shanghai",
+                "misfire_policy": "once",
+            },
+            "task": {
+                "prompt": "dream",
+                "mode": "dream",
+            },
+            "execution": {"timeout_seconds": 600},
+        }
+    )
+
+    async def blocking_result_executor(_request):
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            raise
+        return {"status": "completed"}
+
+    manager = MultiBotManager(
+        BotProfile(alias="assistant1", token="main_token", working_dir=str(temp_dir), bot_mode="assistant"),
+        str(temp_dir / "bots.json"),
+    )
+    home = bootstrap_assistant_home(temp_dir)
+
+    with patch("bot.manager.terminate_bot_processes"):
+        await manager.start_background_services(result_executor=blocking_result_executor)
+        assert manager.assistant_cron_service is not None
+        await manager.assistant_cron_service.save_job(job)
+        await manager.assistant_cron_service.run_job_now(job.id)
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        await asyncio.wait_for(manager.stop_background_services(), timeout=1)
+
+    state = load_job_runtime_state(home, job.id)
+    assert state.pending_run_id == ""
+    assert state.current_run_id == ""
+    assert state.last_status == "error"
+    assert state.last_error == "assistant runtime stopped"

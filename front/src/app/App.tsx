@@ -27,6 +27,7 @@ import { LoginScreen } from "../screens/LoginScreen";
 import { MobileDebugScreen } from "../screens/MobileDebugScreen";
 import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
+import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
@@ -701,8 +702,6 @@ export function App() {
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
           <TerminalScreen
             authToken={readStoredToken()}
-            botAlias={currentBot}
-            client={client}
             isVisible
             preferredWorkingDir={currentBotSummary?.workingDir || ""}
             themeName={themeName}
@@ -781,75 +780,77 @@ export function App() {
   if (effectiveLayoutMode === "desktop") {
     return (
       <>
-        <DesktopWorkbench
-          authToken={readStoredToken()}
-          botAlias={currentBot}
-          botAvatarName={currentBotSummary?.avatarName}
-          userAvatarName={userAvatarName}
-          client={client}
-          structureOnly={structureOnly}
-          chatReadOnly={chatReadOnly}
-          allowTrace={allowTrace}
-          allowCodeJump={!structureOnly && !isGuest(session)}
-          themeName={themeName}
-          onThemeChange={handleThemeChange}
-          chatBodyFontFamily={chatBodyFontFamily}
-          onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
-          chatBodyFontSize={chatBodyFontSize}
-          onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
-          chatBodyLineHeight={chatBodyLineHeight}
-          onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
-          chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-          onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
-          onUserAvatarChange={handleUserAvatarChange}
-          sessionCapabilities={session?.capabilities}
-          viewMode={viewMode}
-          hasUnreadOtherBots={hasUnreadOtherBots}
-          chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-          chatPaneContent={({ requestPreview }) => (
-            <div className="h-full">
-              {mountedChatBots.map((alias) => (
-                <div key={`desktop-chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
-                  <ChatScreen
-                    botAlias={alias}
-                    client={client}
-                    botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
-                    userAvatarName={userAvatarName}
-                    isVisible={alias === currentBot && desktopChatPaneVisible}
-                    readOnly={chatReadOnly}
-                    allowTrace={allowTrace}
-                    embedded
-                    onRequestDesktopPreview={requestPreview}
-                    onUnreadResult={markBotUnread}
-                    onWorkbenchStatusChange={(status) => {
-                      setDesktopChatStatusByBot((prev) => {
-                        const currentStatus = prev[alias];
-                        if (
-                          currentStatus?.state === status.state
-                          && currentStatus.processing === status.processing
-                          && currentStatus.elapsedSeconds === status.elapsedSeconds
-                          && currentStatus.lastError === status.lastError
-                        ) {
-                          return prev;
-                        }
-                        return {
-                          ...prev,
-                          [alias]: status,
-                        };
-                      });
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-          onViewModeChange={setViewMode}
-          onOpenBotSwitcher={() => {
-            void openBotSwitcher();
-          }}
-          onDirtyTabsChange={setDesktopHasDirtyTabs}
-          onChatPaneVisibilityChange={setDesktopChatPaneVisible}
-        />
+        <PersistentTerminalProvider client={client}>
+          <DesktopWorkbench
+            authToken={readStoredToken()}
+            botAlias={currentBot}
+            botAvatarName={currentBotSummary?.avatarName}
+            userAvatarName={userAvatarName}
+            client={client}
+            structureOnly={structureOnly}
+            chatReadOnly={chatReadOnly}
+            allowTrace={allowTrace}
+            allowCodeJump={!structureOnly && !isGuest(session)}
+            themeName={themeName}
+            onThemeChange={handleThemeChange}
+            chatBodyFontFamily={chatBodyFontFamily}
+            onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
+            chatBodyFontSize={chatBodyFontSize}
+            onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
+            chatBodyLineHeight={chatBodyLineHeight}
+            onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
+            chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+            onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
+            onUserAvatarChange={handleUserAvatarChange}
+            sessionCapabilities={session?.capabilities}
+            viewMode={viewMode}
+            hasUnreadOtherBots={hasUnreadOtherBots}
+            chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
+            chatPaneContent={({ requestPreview }) => (
+              <div className="h-full">
+                {mountedChatBots.map((alias) => (
+                  <div key={`desktop-chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
+                    <ChatScreen
+                      botAlias={alias}
+                      client={client}
+                      botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
+                      userAvatarName={userAvatarName}
+                      isVisible={alias === currentBot && desktopChatPaneVisible}
+                      readOnly={chatReadOnly}
+                      allowTrace={allowTrace}
+                      embedded
+                      onRequestDesktopPreview={requestPreview}
+                      onUnreadResult={markBotUnread}
+                      onWorkbenchStatusChange={(status) => {
+                        setDesktopChatStatusByBot((prev) => {
+                          const currentStatus = prev[alias];
+                          if (
+                            currentStatus?.state === status.state
+                            && currentStatus.processing === status.processing
+                            && currentStatus.elapsedSeconds === status.elapsedSeconds
+                            && currentStatus.lastError === status.lastError
+                          ) {
+                            return prev;
+                          }
+                          return {
+                            ...prev,
+                            [alias]: status,
+                          };
+                        });
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            onViewModeChange={setViewMode}
+            onOpenBotSwitcher={() => {
+              void openBotSwitcher();
+            }}
+            onDirtyTabsChange={setDesktopHasDirtyTabs}
+            onChatPaneVisibilityChange={setDesktopChatPaneVisible}
+          />
+        </PersistentTerminalProvider>
         {switcher}
       </>
     );
@@ -857,28 +858,30 @@ export function App() {
 
   return (
     <>
-      <MobileShell
-        session={session}
-        currentBot={currentBot}
-        currentTab={currentTab}
-        hideOuterChrome={hideOuterChrome}
-        activeScreen={activeScreen}
-        viewMode={viewMode}
-        hasUnreadOtherBots={hasUnreadOtherBots}
-        onOpenBotSwitcher={() => {
-          void openBotSwitcher();
-        }}
-        onViewModeChange={setViewMode}
-        onTabChange={(tab) => {
-          setCurrentTab(tab);
-          if (tab !== "chat") {
-            setIsChatImmersive(false);
-          }
-          if (tab !== "terminal") {
-            setIsTerminalImmersive(false);
-          }
-        }}
-      />
+      <PersistentTerminalProvider client={client}>
+        <MobileShell
+          session={session}
+          currentBot={currentBot}
+          currentTab={currentTab}
+          hideOuterChrome={hideOuterChrome}
+          activeScreen={activeScreen}
+          viewMode={viewMode}
+          hasUnreadOtherBots={hasUnreadOtherBots}
+          onOpenBotSwitcher={() => {
+            void openBotSwitcher();
+          }}
+          onViewModeChange={setViewMode}
+          onTabChange={(tab) => {
+            setCurrentTab(tab);
+            if (tab !== "chat") {
+              setIsChatImmersive(false);
+            }
+            if (tab !== "terminal") {
+              setIsTerminalImmersive(false);
+            }
+          }}
+        />
+      </PersistentTerminalProvider>
       {switcher}
     </>
   );

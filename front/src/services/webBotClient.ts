@@ -46,6 +46,7 @@ import type {
   RegisterCodeCreateResult,
   RegisterCodeItem,
   SessionState,
+  PersistentTerminalSnapshot,
   SystemScript,
   SystemScriptResult,
   TunnelSnapshot,
@@ -85,6 +86,9 @@ export interface WebBotClient {
   ): Promise<ChatMessage>;
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
+  getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
+  rebuildTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
+  closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
   revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult>;

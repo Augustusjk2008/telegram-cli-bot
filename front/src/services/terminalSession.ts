@@ -5,8 +5,8 @@ import { DEFAULT_UI_THEME, getTerminalTheme, type UiThemeName } from "../theme";
 
 export type TerminalSessionOptions = {
   token: string;
-  cwd: string;
-  shell?: string;
+  ownerId: string;
+  fromSeq?: number;
   fontSize?: number;
   themeName?: UiThemeName;
   onOpen?: () => void;
@@ -108,7 +108,11 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socketUrl = `${protocol}//${window.location.host}/terminal/ws?token=${encodeURIComponent(options.token)}`;
+    const params = new URLSearchParams({
+      token: options.token,
+      owner_id: options.ownerId,
+    });
+    const socketUrl = `${protocol}//${window.location.host}/terminal/ws?${params.toString()}`;
     socket = new WebSocket(socketUrl);
     socket.binaryType = "arraybuffer";
     isAttached = false;
@@ -116,10 +120,9 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     socket.addEventListener("open", () => {
       const geometry = getGeometry();
       sendJson({
-        shell: options.shell || "auto",
-        cwd: options.cwd,
-        cols: geometry?.cols,
-        rows: geometry?.rows,
+        owner_id: options.ownerId,
+        from_seq: options.fromSeq ?? 0,
+        ...(geometry ? { cols: geometry.cols, rows: geometry.rows } : {}),
       });
     });
 
@@ -128,7 +131,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
 
       if (typeof event.data === "string") {
         try {
-          const payload = JSON.parse(event.data) as { error?: string; pty_mode?: boolean };
+          const payload = JSON.parse(event.data) as { error?: string; pty_mode?: boolean | null };
           if (payload.error) {
             handleTerminalError(payload.error);
             return;

@@ -11,6 +11,7 @@ ResultExecutor = Callable[["AssistantRunRequest"], Awaitable[dict[str, Any]]]
 StreamExecutor = Callable[["AssistantRunRequest"], AsyncIterator[dict[str, Any]]]
 
 _STOP = object()
+_RUNTIME_STOPPED_MESSAGE = "assistant runtime stopped"
 
 
 @dataclass(frozen=True)
@@ -51,19 +52,24 @@ class AssistantRuntimeCoordinator:
         self._queue: asyncio.Queue[_QueuedRun | object] = asyncio.Queue()
         self._runs: dict[str, _QueuedRun] = {}
         self._worker_task: asyncio.Task[None] | None = None
+        self._stopping = False
 
     async def start(self) -> None:
         if self._worker_task is not None and not self._worker_task.done():
             return
+        self._stopping = False
         self._worker_task = asyncio.create_task(self._worker(), name="assistant-runtime-coordinator")
 
     async def stop(self) -> None:
         task = self._worker_task
         if task is None:
             return
-        await self._queue.put(_STOP)
-        await task
+        self._stopping = True
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         self._worker_task = None
+        self._fail_pending_runs(_RUNTIME_STOPPED_MESSAGE)
 
     async def submit_interactive(self, request: AssistantRunRequest) -> dict[str, Any]:
         run = self._enqueue(request, mode="result")
@@ -96,7 +102,7 @@ class AssistantRuntimeCoordinator:
         return run_id in self._runs
 
     def _enqueue(self, request: AssistantRunRequest, *, mode: Literal["result", "stream", "background"]) -> _QueuedRun:
-        if self._worker_task is None or self._worker_task.done():
+        if self._stopping or self._worker_task is None or self._worker_task.done():
             raise RuntimeError("assistant runtime coordinator is not started")
         loop = asyncio.get_running_loop()
         run = _QueuedRun(
@@ -109,36 +115,81 @@ class AssistantRuntimeCoordinator:
         self._queue.put_nowait(run)
         return run
 
-    async def _worker(self) -> None:
+    def _fail_run(self, run: _QueuedRun, message: str) -> None:
+        run.status = "failed"
+        if run.mode == "stream" and run.event_queue is not None:
+            run.event_queue.put_nowait(
+                {
+                    "type": "error",
+                    "code": "assistant_runtime_stopped",
+                    "message": message,
+                }
+            )
+            run.event_queue.put_nowait(_STOP)
+        if not run.future.done():
+            run.future.set_exception(RuntimeError(message))
+
+    def _fail_pending_runs(self, message: str) -> None:
         while True:
-            queued = await self._queue.get()
-            if queued is _STOP:
-                break
-            run = queued
-            run.status = "running"
             try:
-                if run.mode == "stream":
-                    await self._run_stream_request(run)
-                else:
-                    result = await self._result_executor(run.request)
-                    run.status = "completed"
+                queued = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if queued is _STOP:
+                continue
+            self._fail_run(queued, message)
+
+    async def _worker(self) -> None:
+        current_run: _QueuedRun | None = None
+        try:
+            while True:
+                queued = await self._queue.get()
+                if queued is _STOP:
+                    break
+                run = queued
+                current_run = run
+                run.status = "running"
+                try:
+                    if run.mode == "stream":
+                        await self._run_stream_request(run)
+                    else:
+                        result = await self._result_executor(run.request)
+                        run.status = "completed"
+                        if not run.future.done():
+                            run.future.set_result(result)
+                except asyncio.CancelledError:
+                    run.status = "failed"
+                    if run.mode == "stream" and run.event_queue is not None:
+                        await run.event_queue.put(
+                            {
+                                "type": "error",
+                                "code": "assistant_runtime_stopped",
+                                "message": _RUNTIME_STOPPED_MESSAGE,
+                            }
+                        )
                     if not run.future.done():
-                        run.future.set_result(result)
-            except Exception as exc:
-                run.status = "failed"
-                if run.mode == "stream" and run.event_queue is not None:
-                    await run.event_queue.put(
-                        {
-                            "type": "error",
-                            "code": "assistant_runtime_failed",
-                            "message": str(exc),
-                        }
-                    )
-                if not run.future.done():
-                    run.future.set_exception(exc)
-            finally:
-                if run.mode == "stream" and run.event_queue is not None:
-                    await run.event_queue.put(_STOP)
+                        run.future.set_exception(RuntimeError(_RUNTIME_STOPPED_MESSAGE))
+                    raise
+                except Exception as exc:
+                    run.status = "failed"
+                    if run.mode == "stream" and run.event_queue is not None:
+                        await run.event_queue.put(
+                            {
+                                "type": "error",
+                                "code": "assistant_runtime_failed",
+                                "message": str(exc),
+                            }
+                        )
+                    if not run.future.done():
+                        run.future.set_exception(exc)
+                finally:
+                    if run.mode == "stream" and run.event_queue is not None:
+                        await run.event_queue.put(_STOP)
+                current_run = None
+        except asyncio.CancelledError:
+            if current_run is not None and not current_run.future.done():
+                self._fail_run(current_run, _RUNTIME_STOPPED_MESSAGE)
+            raise
 
     async def _run_stream_request(self, run: _QueuedRun) -> None:
         if self._stream_executor is None:
