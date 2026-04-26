@@ -384,6 +384,9 @@ test("main settings show update log modal and restart guidance after download", 
     expect(dialog).toHaveTextContent(/不要在页面里重启程序/);
   });
   await waitFor(() => {
+    expect(screen.getByText(/待应用更新: .*（安装版）/)).toBeInTheDocument();
+  });
+  await waitFor(() => {
     expect(screen.getByRole("dialog", { name: "更新日志" })).toBeInTheDocument();
   });
 });

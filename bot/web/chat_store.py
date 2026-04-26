@@ -857,6 +857,63 @@ class ChatStore:
             ).fetchone()
             return int(row["count"])
 
+    def mark_stale_streaming_turns(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        session_epoch: int,
+        error_code: str = "stale_stream_recovered",
+        fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
+    ) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        now = _utc_now()
+        with conn:
+            conversation_id = self._get_active_conversation_id(
+                conn,
+                bot_id=bot_id,
+                user_id=user_id,
+                working_dir=working_dir,
+                session_epoch=session_epoch,
+            )
+            if conversation_id is None:
+                return 0
+            rows = conn.execute(
+                """
+                SELECT
+                    t.id AS turn_id,
+                    t.assistant_message_id AS assistant_message_id,
+                    m.content AS assistant_content
+                FROM turns AS t
+                JOIN messages AS m ON m.id = t.assistant_message_id
+                WHERE t.conversation_id = ? AND m.role = ? AND m.state = ?
+                """,
+                (conversation_id, "assistant", "streaming"),
+            ).fetchall()
+            for row in rows:
+                content = str(row["assistant_content"] or "").strip() or fallback_content
+                conn.execute(
+                    "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
+                    (content, "error", now, row["assistant_message_id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE turns
+                    SET assistant_state = ?,
+                        completion_state = ?,
+                        completed_at = ?,
+                        updated_at = ?,
+                        error_code = ?,
+                        error_message = ?
+                    WHERE id = ?
+                    """,
+                    ("error", error_code, now, now, error_code, content, row["turn_id"]),
+                )
+            return len(rows)
+
     def get_running_reply(
         self,
         *,

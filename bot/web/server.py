@@ -1757,16 +1757,17 @@ class WebApiServer:
 
     async def admin_get_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": get_update_status()})
+        return _json({"ok": True, "data": get_update_status(_REPO_ROOT)})
 
     async def admin_patch_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
-        return _json({"ok": True, "data": set_update_enabled(bool(body.get("update_enabled", True)))})
+        data = set_update_enabled(bool(body.get("update_enabled", True)), _REPO_ROOT)
+        return _json({"ok": True, "data": data})
 
     async def admin_update_check(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        data = await asyncio.to_thread(check_for_updates)
+        data = await asyncio.to_thread(check_for_updates, _REPO_ROOT)
         return _json({"ok": True, "data": data})
 
     async def admin_update_download(self, request: web.Request) -> web.Response:
@@ -1790,7 +1791,7 @@ class WebApiServer:
         await response.prepare(request)
 
         client_disconnected = False
-        async for event in stream_update_download():
+        async for event in stream_update_download(_REPO_ROOT):
             if client_disconnected:
                 continue
             try:
@@ -1923,11 +1924,11 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def _auto_refresh_update_status(self) -> None:
-        status = get_update_status()
+        status = get_update_status(_REPO_ROOT)
         if not status.get("update_enabled"):
             return
         try:
-            checked_status = await asyncio.to_thread(check_for_updates)
+            checked_status = await asyncio.to_thread(check_for_updates, _REPO_ROOT)
             latest_version = str(checked_status.get("last_available_version") or "").strip()
             current_version = str(checked_status.get("current_version") or "").strip()
             pending_version = str(

@@ -104,9 +104,9 @@ function toneClasses(tone: "neutral" | "success" | "error") {
     };
   }
   return {
-    container: "border-slate-200 bg-slate-50/80",
-    badge: "border-slate-200 bg-white text-slate-700",
-    text: "text-slate-900",
+    container: "border-sky-200 bg-sky-50/80",
+    badge: "border-sky-200 bg-sky-100 text-sky-700",
+    text: "text-sky-900",
   };
 }
 

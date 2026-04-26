@@ -9,6 +9,23 @@ from bot import app_settings, updater
 from bot.version import APP_VERSION
 
 
+def _windows_release_assets() -> list[dict[str, str]]:
+    return [
+        {
+            "name": "orbit-safe-claw-windows-x64-1.2.0.zip",
+            "browser_download_url": "https://example.invalid/portable.zip",
+        },
+        {
+            "name": "orbit-safe-claw-windows-x64-installer-1.2.0.zip",
+            "browser_download_url": "https://example.invalid/installer.zip",
+        },
+        {
+            "name": "orbit-safe-claw-linux-x64-1.2.0.tar.gz",
+            "browser_download_url": "https://example.invalid/linux.tar.gz",
+        },
+    ]
+
+
 def test_get_update_status_defaults_to_current_version(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
@@ -44,12 +61,74 @@ def test_check_for_updates_persists_latest_release_metadata(monkeypatch, tmp_pat
     assert saved["last_available_version"] == "1.0.1"
 
 
+def test_detect_update_package_kind_uses_distribution_marker(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+    (tmp_path / ".distribution.json").write_text(
+        json.dumps({"packageKind": "portable", "platform": "windows-x64"}),
+        encoding="utf-8",
+    )
+
+    assert updater.detect_update_package_kind(tmp_path) == "portable"
+
+
+def test_detect_update_package_kind_ignores_windows_marker_on_linux(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: False)
+    (tmp_path / ".distribution.json").write_text(
+        json.dumps({"packageKind": "installer", "platform": "windows-x64"}),
+        encoding="utf-8",
+    )
+
+    assert updater.detect_update_package_kind(tmp_path) == "linux"
+
+
+def test_detect_update_package_kind_falls_back_to_portable_layout(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "portable_bootstrap.py").write_text("", encoding="utf-8")
+    (tmp_path / "runtime" / "python").mkdir()
+    (tmp_path / "runtime" / "python" / "python.exe").write_text("", encoding="utf-8")
+
+    assert updater.detect_update_package_kind(tmp_path) == "portable"
+
+
+def test_detect_update_package_kind_defaults_to_installer_on_windows(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+
+    assert updater.detect_update_package_kind(tmp_path) == "installer"
+
+
+def test_select_release_asset_uses_installer_asset_on_windows(monkeypatch):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+
+    asset = updater._select_release_asset(_windows_release_assets(), "installer")
+
+    assert asset["name"] == "orbit-safe-claw-windows-x64-installer-1.2.0.zip"
+
+
+def test_select_release_asset_uses_portable_asset_on_windows(monkeypatch):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+
+    asset = updater._select_release_asset(_windows_release_assets(), "portable")
+
+    assert asset["name"] == "orbit-safe-claw-windows-x64-1.2.0.zip"
+
+
+def test_select_release_asset_uses_linux_asset_for_linux_package_kind(monkeypatch):
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+
+    asset = updater._select_release_asset(_windows_release_assets(), "linux")
+
+    assert asset["name"] == "orbit-safe-claw-linux-x64-1.2.0.tar.gz"
+
+
 def test_download_latest_update_marks_pending_bundle(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     cache_dir = tmp_path / ".updates"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
     monkeypatch.setattr(updater, "UPDATE_CACHE_DIR_NAME", ".updates")
     monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda repo_root=None: "installer")
     monkeypatch.setattr(
         updater,
         "_fetch_latest_release",
@@ -57,23 +136,24 @@ def test_download_latest_update_marks_pending_bundle(monkeypatch, tmp_path: Path
             "tag_name": "v1.0.1",
             "html_url": "https://github.com/owner/repo/releases/tag/v1.0.1",
             "body": "Bugfixes",
-            "assets": [
-                {
-                    "name": "cli-bridge-windows-x64.zip",
-                    "browser_download_url": "https://example.invalid/cli-bridge-windows-x64.zip",
-                }
-            ],
+            "assets": _windows_release_assets(),
         },
     )
-    monkeypatch.setattr(
-        updater,
-        "_download_file",
-        lambda url, target: target.write_bytes(b"zip-bytes"),
-    )
+    downloaded: dict[str, object] = {}
+
+    def fake_download(url, target):
+        downloaded["url"] = url
+        downloaded["target"] = target
+        target.write_bytes(b"zip-bytes")
+
+    monkeypatch.setattr(updater, "_download_file", fake_download)
 
     status = updater.download_latest_update(repo_root=tmp_path)
 
     assert status["pending_update_version"] == "1.0.1"
+    assert status["pending_update_platform"] == "windows-x64-installer"
+    assert status["pending_update_package_kind"] == "installer"
+    assert downloaded["url"] == "https://example.invalid/installer.zip"
     assert Path(status["pending_update_path"]).exists()
     assert Path(status["pending_update_path"]).parent == cache_dir
 
@@ -82,6 +162,8 @@ def test_download_latest_update_forwards_progress_callback(monkeypatch, tmp_path
     settings_file = tmp_path / ".web_admin_settings.json"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
     monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda repo_root=None: "portable")
     monkeypatch.setattr(
         updater,
         "_fetch_latest_release",
@@ -138,9 +220,16 @@ def test_download_latest_update_forwards_progress_callback(monkeypatch, tmp_path
         "downloaded_bytes": 0,
         "total_bytes": None,
         "percent": 0,
+        "message": "当前安装类型: Windows 绿色版",
+    }
+    assert progress_events[2] == {
+        "phase": "log",
+        "downloaded_bytes": 0,
+        "total_bytes": None,
+        "percent": 0,
         "message": "找到更新包: cli-bridge-windows-x64.zip",
     }
-    assert progress_events[2:4] == [
+    assert progress_events[3:5] == [
         {
             "phase": "starting",
             "downloaded_bytes": 0,

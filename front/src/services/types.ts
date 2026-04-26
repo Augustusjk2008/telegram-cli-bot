@@ -959,8 +959,11 @@ export type GitProxySettings = {
   port: string;
 };
 
+export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "unknown" | "";
+
 export type AppUpdateStatus = {
   currentVersion: string;
+  currentPackageKind: AppUpdatePackageKind;
   updateEnabled: boolean;
   updateChannel: "release";
   lastCheckedAt: string;
@@ -971,6 +974,7 @@ export type AppUpdateStatus = {
   pendingUpdatePath: string;
   pendingUpdateNotes: string;
   pendingUpdatePlatform: string;
+  pendingUpdatePackageKind: AppUpdatePackageKind;
   lastError: string;
 };
 

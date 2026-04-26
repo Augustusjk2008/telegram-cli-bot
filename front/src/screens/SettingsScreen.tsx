@@ -128,6 +128,13 @@ function tunnelStatusText(status: TunnelSnapshot["status"]) {
   return "已停止";
 }
 
+function formatUpdatePackageKind(kind?: string) {
+  if (kind === "installer") return "安装版";
+  if (kind === "portable") return "绿色版";
+  if (kind === "linux") return "Linux";
+  return "未知";
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
@@ -1511,6 +1518,10 @@ export function SettingsScreen({
                     <span className="text-[var(--text)]">可用版本</span>
                     <span>{updateStatus?.latestVersion || "暂无"}</span>
                   </p>
+                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                    <span className="text-[var(--text)]">当前包</span>
+                    <span>{formatUpdatePackageKind(updateStatus?.currentPackageKind)}</span>
+                  </p>
                 </div>
 
                 <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
@@ -1527,7 +1538,10 @@ export function SettingsScreen({
                 <div className="space-y-2 text-xs text-[var(--muted)]">
                   <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
                   {updateStatus?.pendingUpdateVersion ? (
-                    <p>待应用更新: {updateStatus.pendingUpdateVersion}，重启后生效</p>
+                    <p>
+                      待应用更新: {updateStatus.pendingUpdateVersion}
+                      {updateStatus.pendingUpdatePackageKind ? `（${formatUpdatePackageKind(updateStatus.pendingUpdatePackageKind)}）` : ""}，重启后生效
+                    </p>
                   ) : null}
                   {updateStatus?.lastError ? (
                     <p className="text-red-700">最近错误: {updateStatus.lastError}</p>

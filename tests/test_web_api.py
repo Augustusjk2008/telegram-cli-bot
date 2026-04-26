@@ -10,6 +10,7 @@ import threading
 import time
 import zlib
 from datetime import datetime, timedelta
+from itertools import chain, repeat
 from pathlib import Path
 from typing import cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -218,6 +219,33 @@ def test_overview_includes_local_store_running_snapshot(web_manager: MultiBotMan
     assert overview["session"]["history_count"] == 2
     assert overview["session"]["running_reply"]["user_text"] == "列出当前目录"
     assert overview["session"]["running_reply"]["preview_text"] == "处理中预览"
+
+def test_overview_hides_stale_running_reply_when_session_is_idle(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    service = ChatHistoryService(ChatStore(tmp_path))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="修吧",
+        native_provider="codex",
+    )
+    service.replace_assistant_preview(handle, "已修。")
+    with session._lock:
+        session.is_processing = False
+        session.process = None
+
+    overview = get_overview(web_manager, "main", 1001)
+    history = get_history(web_manager, "main", 1001, limit=10)
+
+    assert overview["session"]["is_processing"] is False
+    assert overview["session"]["running_reply"] is None
+    assert history["items"][-1]["role"] == "assistant"
+    assert history["items"][-1]["state"] == "error"
+    assert history["items"][-1]["content"] == "已修。"
+    assert history["items"][-1]["meta"]["completion_state"] == "stale_stream_recovered"
 
 def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBotManager):
     real_get_session = api_service.get_session_for_alias
@@ -3364,13 +3392,18 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
 
 def test_cli_params_model_schema_uses_env_model_options(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     web_manager.main_profile.cli_type = "codex"
-    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", ["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"])
+    monkeypatch.setattr(
+        api_service,
+        "CLI_MODEL_OPTIONS",
+        ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3", "gpt-5.3-codex", "gpt-5.2"],
+    )
 
     payload = api_service.get_cli_params_payload(web_manager, "main")
 
     assert payload["schema"]["model"]["enum"] == [
         "gpt-5.5",
         "gpt-5.4-mini",
+        "gpt-5.3-codex",
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
@@ -3476,6 +3509,7 @@ async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch
 
     base_status = {
         "current_version": "1.0.0",
+        "current_package_kind": "installer",
         "update_enabled": True,
         "update_channel": "release",
         "last_checked_at": "",
@@ -3486,6 +3520,7 @@ async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch
         "pending_update_path": "",
         "pending_update_notes": "",
         "pending_update_platform": "",
+        "pending_update_package_kind": "",
         "update_last_error": "",
     }
 
@@ -3505,7 +3540,8 @@ async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch
                 resp = await client.post("/api/admin/update/download")
                 assert resp.status == 200
 
-    toggle_mock.assert_called_once_with(False)
+    toggle_mock.assert_called_once()
+    assert toggle_mock.call_args.args[0] is False
     check_mock.assert_called_once()
     download_mock.assert_called_once()
 
@@ -3517,6 +3553,7 @@ async def test_admin_update_download_stream_returns_sse_events(web_manager, monk
 
     base_status = {
         "current_version": "1.0.0",
+        "current_package_kind": "installer",
         "update_enabled": True,
         "update_channel": "release",
         "last_checked_at": "",
@@ -3527,10 +3564,11 @@ async def test_admin_update_download_stream_returns_sse_events(web_manager, monk
         "pending_update_path": ".updates/cli-bridge-windows-x64.zip",
         "pending_update_notes": "Bugfixes",
         "pending_update_platform": "windows-x64",
+        "pending_update_package_kind": "installer",
         "update_last_error": "",
     }
 
-    async def fake_stream_update_download():
+    async def fake_stream_update_download(repo_root=None):
         yield {
             "type": "progress",
             "phase": "downloading",
@@ -3611,7 +3649,7 @@ async def test_auto_refresh_update_status_downloads_latest_update_when_enabled(w
     ) as download_mock:
         await server._auto_refresh_update_status()
 
-    check_mock.assert_called_once_with()
+    check_mock.assert_called_once_with(repo_root)
     download_mock.assert_called_once_with(repo_root)
 
 @pytest.mark.asyncio
@@ -5176,6 +5214,261 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "目录已读取完成。"
 
+
+def test_codex_done_candidate_ignores_event_msg_commentary():
+    thread_id, candidate_text, candidate_seen_at = api_service._advance_codex_done_candidate(
+        '{"type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}',
+        thread_id=None,
+        candidate_text=None,
+        candidate_seen_at=None,
+        now=1.0,
+    )
+    assert thread_id is None
+    assert candidate_text == "我先检查目录结构。"
+    assert candidate_seen_at is None
+
+    thread_id, candidate_text, candidate_seen_at = api_service._advance_codex_done_candidate(
+        '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}',
+        thread_id=thread_id,
+        candidate_text=candidate_text,
+        candidate_seen_at=candidate_seen_at,
+        now=2.0,
+    )
+    assert candidate_text == "我先检查目录结构。"
+    assert candidate_seen_at == 2.0
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_codex_agent_message_before_tool_does_not_finish(
+    web_manager: MultiBotManager,
+):
+    web_manager.main_profile.cli_type = "codex"
+
+    class FakeStdout:
+        def __init__(self, process):
+            self.process = process
+            self.delay_next = False
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-progress"}\n',
+                '{"type":"item.completed","item":{"type":"agent_message","text":"我先检查目录结构。"}}\n',
+                '{"type":"item.completed","item":{"type":"function_call","name":"shell_command","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}","call_id":"call_1"}}\n',
+                '{"type":"item.completed","item":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}\n',
+                '{"type":"item.completed","item":{"type":"agent_message","text":"目录已读取完成。"}}\n',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+            ]
+
+        def readline(self):
+            if self.delay_next:
+                self.delay_next = False
+                time.sleep(0.2)
+                if self.process.poll() is not None:
+                    return ""
+            if not self._lines:
+                return ""
+            line = self._lines.pop(0)
+            if '"text":"我先检查目录结构。"' in line:
+                self.delay_next = True
+            if '"type":"turn.completed"' in line:
+                self.process.turn_completed_seen = True
+            return line
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = None
+            self.returncode = None
+            self.turn_completed_seen = False
+            self.stdout = FakeStdout(self)
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = 0
+
+        def poll(self):
+            if self.returncode is None and self.turn_completed_seen:
+                self.returncode = 0
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("codex", timeout or 0)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service.CODEX_DONE_QUIET_SECONDS", 0.0):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "列出当前目录")]
+
+    trace_events = [event for event in events if event["type"] == "trace"]
+    tool_trace_events = [
+        event for event in trace_events
+        if event["event"]["kind"] in {"tool_call", "tool_result"}
+    ]
+    done_event = next(event for event in events if event["type"] == "done")
+
+    assert [event["event"]["kind"] for event in tool_trace_events] == ["tool_call", "tool_result"]
+    assert done_event["output"] == "目录已读取完成。"
+    assert fake_process.terminate.call_count <= 1
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_codex_final_event_terminates_hanging_process(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-final"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("codex", timeout or 0)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service.CODEX_DONE_QUIET_SECONDS", 0.0):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["output"] == "完成回复"
+    assert done_event["returncode"] == 0
+    fake_process.terminate.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_codex_final_event_terminates_hanging_process(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-final"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("codex", timeout or 0)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service.CODEX_DONE_QUIET_SECONDS", 0.0):
+        result = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert result["output"] == "完成回复"
+    assert result["returncode"] == 0
+    fake_process.terminate.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_cancellation_terminates_active_process(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+
+    class FakeStdout:
+        def readline(self):
+            time.sleep(0.05)
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = -15
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("codex", timeout or 0)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        stream = _stream_cli_chat(web_manager, "main", 1001, "hello")
+        assert (await anext(stream))["type"] == "meta"
+        await stream.aclose()
+
+    fake_process.terminate.assert_called()
+    session = get_session_for_alias(web_manager, "main", 1001)
+    assert session.is_processing is False
+    assert session.process is None
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_done(
     web_manager: MultiBotManager,
@@ -5204,7 +5497,7 @@ async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_d
 
     fake_process = MagicMock()
     fake_process.stdout = FakeStdout()
-    fake_process.poll.side_effect = [None, None, None, 0, 0]
+    fake_process.poll.side_effect = chain([None, None, None, 0], repeat(0))
     fake_process.wait.return_value = 0
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
@@ -5250,7 +5543,7 @@ async def test_stream_cli_chat_persists_trace_counts_from_codex_response_items(
 
     fake_process = MagicMock()
     fake_process.stdout = FakeStdout()
-    fake_process.poll.side_effect = [None, None, None, None, 0, 0]
+    fake_process.poll.side_effect = chain([None, None, None, None, 0], repeat(0))
     fake_process.wait.return_value = 0
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \

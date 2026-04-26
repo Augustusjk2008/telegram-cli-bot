@@ -2,6 +2,7 @@ import { WebApiClientError } from "./types";
 import type {
   AccountRole,
   AppUpdateDownloadProgress,
+  AppUpdatePackageKind,
   AppUpdateStatus,
   AssistantCronJob,
   AssistantCronRun,
@@ -348,6 +349,7 @@ type RawGitProxySettings = {
 
 type RawAppUpdateStatus = {
   current_version: string;
+  current_package_kind?: AppUpdatePackageKind;
   update_enabled: boolean;
   update_channel: "release";
   last_checked_at?: string;
@@ -358,6 +360,7 @@ type RawAppUpdateStatus = {
   pending_update_path?: string;
   pending_update_notes?: string;
   pending_update_platform?: string;
+  pending_update_package_kind?: AppUpdatePackageKind;
   update_last_error?: string;
 };
 
@@ -859,6 +862,7 @@ function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
 function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
   return {
     currentVersion: raw.current_version || "",
+    currentPackageKind: raw.current_package_kind || "",
     updateEnabled: Boolean(raw.update_enabled),
     updateChannel: raw.update_channel || "release",
     lastCheckedAt: raw.last_checked_at || "",
@@ -869,6 +873,7 @@ function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
     pendingUpdatePath: raw.pending_update_path || "",
     pendingUpdateNotes: raw.pending_update_notes || "",
     pendingUpdatePlatform: raw.pending_update_platform || "",
+    pendingUpdatePackageKind: raw.pending_update_package_kind || "",
     lastError: raw.update_last_error || "",
   };
 }

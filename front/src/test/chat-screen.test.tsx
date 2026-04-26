@@ -1032,6 +1032,56 @@ test("assistant send does not let an old idle poll replace the finishing reply w
   expect(screen.queryByText(/已等待 \d+ 秒/)).not.toBeInTheDocument();
 });
 
+test("assistant sse recovery resolves stale runningReply when overview is idle", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "assistant1",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+      runningReply: {
+        userText: "修吧",
+        previewText: "旧预览",
+        startedAt: "2026-04-26T01:00:57.000Z",
+      },
+    }),
+    listMessages: async () => [
+      {
+        id: "user-server-1",
+        role: "user",
+        text: "修吧",
+        createdAt: "2026-04-26T01:00:57.000Z",
+        state: "done",
+      },
+      {
+        id: "assistant-server-1",
+        role: "assistant",
+        text: "已修。",
+        createdAt: "2026-04-26T01:00:58.000Z",
+        state: "done",
+      },
+    ],
+    sendMessage: () => new Promise<ChatMessage>(() => undefined),
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "修吧" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(screen.getByText("正在输出")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
+  }, { timeout: 4000 });
+  expect(screen.getByText("已修。")).toBeInTheDocument();
+});
+
 test("shows reset kill and system-function actions for non-main bots", async () => {
   const client = createClient({
     listSystemScripts: async () => [{

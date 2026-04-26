@@ -1500,6 +1500,7 @@ describe("RealWebBotClient", () => {
           ok: true,
           data: {
             current_version: "1.0.0",
+            current_package_kind: "installer",
             update_enabled: true,
             update_channel: "release",
             last_checked_at: "2026-04-15T10:00:00+08:00",
@@ -1510,6 +1511,7 @@ describe("RealWebBotClient", () => {
             pending_update_path: "",
             pending_update_notes: "",
             pending_update_platform: "",
+            pending_update_package_kind: "installer",
             update_last_error: "",
           },
         }),
@@ -1526,7 +1528,9 @@ describe("RealWebBotClient", () => {
       }),
     );
     expect(status.currentVersion).toBe("1.0.0");
+    expect(status.currentPackageKind).toBe("installer");
     expect(status.latestVersion).toBe("1.0.1");
+    expect(status.pendingUpdatePackageKind).toBe("installer");
   });
 
   test("downloadUpdateStream forwards progress events and returns the final update status", async () => {
@@ -1540,7 +1544,7 @@ describe("RealWebBotClient", () => {
         );
         controller.enqueue(
           encoder.encode(
-            "event: done\ndata: {\"status\":{\"current_version\":\"1.0.0\",\"update_enabled\":true,\"update_channel\":\"release\",\"last_checked_at\":\"2026-04-15T10:00:00+08:00\",\"last_available_version\":\"1.0.1\",\"last_available_release_url\":\"https://github.com/owner/repo/releases/tag/v1.0.1\",\"last_available_notes\":\"Bugfixes\",\"pending_update_version\":\"1.0.1\",\"pending_update_path\":\".updates/cli-bridge-windows-x64.zip\",\"pending_update_notes\":\"Bugfixes\",\"pending_update_platform\":\"windows-x64\",\"update_last_error\":\"\"}}\n\n",
+            "event: done\ndata: {\"status\":{\"current_version\":\"1.0.0\",\"current_package_kind\":\"installer\",\"update_enabled\":true,\"update_channel\":\"release\",\"last_checked_at\":\"2026-04-15T10:00:00+08:00\",\"last_available_version\":\"1.0.1\",\"last_available_release_url\":\"https://github.com/owner/repo/releases/tag/v1.0.1\",\"last_available_notes\":\"Bugfixes\",\"pending_update_version\":\"1.0.1\",\"pending_update_path\":\".updates/cli-bridge-windows-x64-installer.zip\",\"pending_update_notes\":\"Bugfixes\",\"pending_update_platform\":\"windows-x64-installer\",\"pending_update_package_kind\":\"installer\",\"update_last_error\":\"\"}}\n\n",
           ),
         );
         controller.close();
@@ -1572,6 +1576,7 @@ describe("RealWebBotClient", () => {
       ) => Promise<{
         pendingUpdateVersion: string;
         pendingUpdatePath: string;
+        pendingUpdatePackageKind: string;
       }>;
     };
     await client.login("secret-token");
@@ -1601,7 +1606,8 @@ describe("RealWebBotClient", () => {
       },
     ]);
     expect(status.pendingUpdateVersion).toBe("1.0.1");
-    expect(status.pendingUpdatePath).toBe(".updates/cli-bridge-windows-x64.zip");
+    expect(status.pendingUpdatePath).toBe(".updates/cli-bridge-windows-x64-installer.zip");
+    expect(status.pendingUpdatePackageKind).toBe("installer");
   });
 
   test("requestJson reports a friendly error when the server returns HTML", async () => {

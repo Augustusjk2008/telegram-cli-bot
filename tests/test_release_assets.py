@@ -49,6 +49,10 @@ def test_local_release_script_supports_version_bump_and_publish():
     assert '"{0}-linux-x64-{1}.tar.gz"' in content
     assert "WindowsInstallerArchive" in content
     assert "portable-win\\build-portable.ps1" in content
+    assert ".distribution.json" in content
+    assert "packageKind" in content
+    assert 'Write-DistributionMarker -Root $stageDir -PackageKind "installer" -Platform "windows-x64"' in content
+    assert 'Write-DistributionMarker -Root $stageDir -PackageKind "linux" -Platform "linux-x64"' in content
 
 
 def test_portable_build_script_only_copies_tracked_files():
@@ -57,6 +61,9 @@ def test_portable_build_script_only_copies_tracked_files():
     assert 'ls-files' in content
     assert '-o --exclude-standard' not in content
     assert 'Write-Step "复制 tracked 文件"' in content
+    assert ".distribution.json" in content
+    assert "packageKind" in content
+    assert 'Write-DistributionMarker -Root $packageRoot -PackageKind "portable" -Platform "windows-x64"' in content
 
 
 def test_agent_guides_document_the_release_command():

@@ -25,7 +25,10 @@ def test_history_service_lists_local_messages_and_running_snapshot(monkeypatch, 
         user_text="列出当前目录",
         native_provider="codex",
     )
+    session.is_processing = True
+    session.start_running_reply("列出当前目录")
     service.replace_assistant_preview(handle, "我先检查目录结构。")
+    session.update_running_reply("我先检查目录结构。")
 
     items = service.list_history(profile, session, limit=10)
     assert [(item["role"], item["content"], item["state"]) for item in items] == [
@@ -57,7 +60,7 @@ def test_build_session_snapshot_does_not_materialize_empty_store(monkeypatch, tm
     assert not runtime_paths.get_chat_history_db_path(workspace).exists()
 
 
-def test_history_service_reloads_streaming_row_after_restart(monkeypatch, tmp_path: Path):
+def test_history_service_marks_restarted_streaming_row_stale_when_session_is_idle(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
     workspace = tmp_path / "workspace"
@@ -82,4 +85,6 @@ def test_history_service_reloads_streaming_row_after_restart(monkeypatch, tmp_pa
     items = restored_service.list_history(profile, restored_session, limit=10)
 
     assert items[-1]["content"] == "我先检查目录结构。"
-    assert items[-1]["state"] == "streaming"
+    assert items[-1]["state"] == "error"
+    snapshot = restored_service.build_session_snapshot(profile, restored_session)
+    assert snapshot["running_reply"] is None

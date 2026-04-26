@@ -29,12 +29,23 @@ PROTECTED_UPDATE_PATHS = {
     ".git",
     ".updates",
 }
+DISTRIBUTION_MARKER_FILE = ".distribution.json"
+WINDOWS_INSTALLER_PACKAGE_KIND = "installer"
+WINDOWS_PORTABLE_PACKAGE_KIND = "portable"
+LINUX_PACKAGE_KIND = "linux"
+UNKNOWN_PACKAGE_KIND = "unknown"
+SUPPORTED_UPDATE_PACKAGE_KINDS = {
+    WINDOWS_INSTALLER_PACKAGE_KIND,
+    WINDOWS_PORTABLE_PACKAGE_KIND,
+    LINUX_PACKAGE_KIND,
+}
 
 
-def get_update_status() -> dict[str, Any]:
+def get_update_status(repo_root: Path | None = None) -> dict[str, Any]:
     settings = app_settings._load_settings()
     return {
         "current_version": APP_VERSION,
+        "current_package_kind": detect_update_package_kind(repo_root),
         "update_enabled": bool(settings["update_enabled"]),
         "update_channel": settings["update_channel"] or "release",
         "last_checked_at": settings["last_checked_at"],
@@ -45,18 +56,19 @@ def get_update_status() -> dict[str, Any]:
         "pending_update_path": settings["pending_update_path"],
         "pending_update_notes": settings["pending_update_notes"],
         "pending_update_platform": settings["pending_update_platform"],
+        "pending_update_package_kind": settings["pending_update_package_kind"],
         "update_last_error": settings["update_last_error"],
     }
 
 
-def set_update_enabled(enabled: bool) -> dict[str, Any]:
+def set_update_enabled(enabled: bool, repo_root: Path | None = None) -> dict[str, Any]:
     settings = app_settings._load_settings()
     settings["update_enabled"] = bool(enabled)
     app_settings._save_settings(settings)
-    return get_update_status()
+    return get_update_status(repo_root)
 
 
-def check_for_updates() -> dict[str, Any]:
+def check_for_updates(repo_root: Path | None = None) -> dict[str, Any]:
     settings = app_settings._load_settings()
     settings["last_checked_at"] = _now_iso()
     settings["update_last_error"] = ""
@@ -66,13 +78,13 @@ def check_for_updates() -> dict[str, Any]:
     except Exception as exc:
         settings["update_last_error"] = str(exc)
         app_settings._save_settings(settings)
-        return get_update_status()
+        return get_update_status(repo_root)
 
     settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
     settings["last_available_release_url"] = str(release.get("html_url") or "")
     settings["last_available_notes"] = str(release.get("body") or "")
     app_settings._save_settings(settings)
-    return get_update_status()
+    return get_update_status(repo_root)
 
 
 def _build_url_opener():
@@ -89,6 +101,49 @@ def _build_url_opener():
     return urllib.request.build_opener()
 
 
+def detect_update_package_kind(repo_root: Path | None = None) -> str:
+    override = _normalize_update_package_kind(os.environ.get("CLI_BRIDGE_UPDATE_PACKAGE_KIND"))
+    if override:
+        return override
+
+    root = Path(repo_root or Path.cwd()).resolve()
+    if not _is_windows_runtime():
+        return LINUX_PACKAGE_KIND
+    marker_kind = _read_distribution_marker_kind(root)
+    if marker_kind:
+        return marker_kind
+    if _looks_like_portable_install(root):
+        return WINDOWS_PORTABLE_PACKAGE_KIND
+    return WINDOWS_INSTALLER_PACKAGE_KIND
+
+
+def _is_windows_runtime() -> bool:
+    return os.name == "nt"
+
+
+def _normalize_update_package_kind(value: Any) -> str:
+    kind = str(value or "").strip().lower()
+    return kind if kind in SUPPORTED_UPDATE_PACKAGE_KINDS else ""
+
+
+def _read_distribution_marker_kind(repo_root: Path) -> str:
+    marker_path = repo_root / DISTRIBUTION_MARKER_FILE
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return _normalize_update_package_kind(payload.get("packageKind") or payload.get("package_kind"))
+
+
+def _looks_like_portable_install(repo_root: Path) -> bool:
+    return (
+        (repo_root / "runtime" / "portable_bootstrap.py").exists()
+        and (repo_root / "runtime" / "python" / "python.exe").exists()
+    ) or (repo_root / "PORTABLE-README.txt").exists()
+
+
 def download_latest_update(
     repo_root: Path | None = None,
     progress_callback: Any | None = None,
@@ -97,6 +152,8 @@ def download_latest_update(
     settings["last_checked_at"] = _now_iso()
     settings["update_last_error"] = ""
     _emit_download_log(progress_callback, "正在检查最新版本信息")
+    package_kind = detect_update_package_kind(repo_root)
+    _emit_download_log(progress_callback, f"当前安装类型: {_format_update_package_kind(package_kind)}")
 
     try:
         release = _fetch_latest_release()
@@ -104,7 +161,7 @@ def download_latest_update(
         settings["last_available_release_url"] = str(release.get("html_url") or "")
         settings["last_available_notes"] = str(release.get("body") or "")
 
-        asset = _select_release_asset(release.get("assets", []))
+        asset = _select_release_asset(release.get("assets", []), package_kind)
         cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
         cache_root.mkdir(parents=True, exist_ok=True)
         target_path = cache_root / asset["name"]
@@ -125,10 +182,11 @@ def download_latest_update(
     settings["pending_update_version"] = _normalize_tag_name(release["tag_name"])
     settings["pending_update_path"] = str(target_path)
     settings["pending_update_notes"] = str(release.get("body") or "")
-    settings["pending_update_platform"] = "windows-x64" if os.name == "nt" else "linux-x64"
+    settings["pending_update_platform"] = _pending_update_platform(package_kind)
+    settings["pending_update_package_kind"] = package_kind
     app_settings._save_settings(settings)
     _emit_download_log(progress_callback, f"更新包已保存到: {target_path}")
-    return get_update_status()
+    return get_update_status(repo_root)
 
 
 def _emit_apply_log(log_callback: Any | None, message: str) -> None:
@@ -237,14 +295,48 @@ def _fetch_latest_release() -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _select_release_asset(assets: list[dict[str, Any]]) -> dict[str, Any]:
-    expected_token = "windows" if os.name == "nt" else "linux"
-    expected_suffix = ".zip" if os.name == "nt" else ".tar.gz"
-    for asset in assets:
-        name = str(asset.get("name") or "").lower()
-        if expected_token in name and name.endswith(expected_suffix):
-            return asset
+def _select_release_asset(assets: list[dict[str, Any]], package_kind: str | None = None) -> dict[str, Any]:
+    normalized_kind = _normalize_update_package_kind(package_kind) or detect_update_package_kind()
+    if normalized_kind == LINUX_PACKAGE_KIND:
+        for asset in assets:
+            name = str(asset.get("name") or "").lower()
+            if "linux" in name and name.endswith(".tar.gz"):
+                return asset
+        raise RuntimeError("未找到 Linux release 包")
+
+    if normalized_kind in {WINDOWS_INSTALLER_PACKAGE_KIND, WINDOWS_PORTABLE_PACKAGE_KIND}:
+        want_installer = normalized_kind == WINDOWS_INSTALLER_PACKAGE_KIND
+        for asset in assets:
+            name = str(asset.get("name") or "").lower()
+            if "windows-x64" not in name or not name.endswith(".zip"):
+                continue
+            is_installer = "installer" in name
+            if is_installer == want_installer:
+                return asset
+        label = "安装版" if want_installer else "绿色版"
+        raise RuntimeError(f"未找到 Windows {label} release 包")
+
     raise RuntimeError("未找到当前平台的 release 包")
+
+
+def _pending_update_platform(package_kind: str) -> str:
+    if package_kind == WINDOWS_INSTALLER_PACKAGE_KIND:
+        return "windows-x64-installer"
+    if package_kind == WINDOWS_PORTABLE_PACKAGE_KIND:
+        return "windows-x64-portable"
+    if package_kind == LINUX_PACKAGE_KIND:
+        return "linux-x64"
+    return UNKNOWN_PACKAGE_KIND
+
+
+def _format_update_package_kind(package_kind: str) -> str:
+    if package_kind == WINDOWS_INSTALLER_PACKAGE_KIND:
+        return "Windows 安装版"
+    if package_kind == WINDOWS_PORTABLE_PACKAGE_KIND:
+        return "Windows 绿色版"
+    if package_kind == LINUX_PACKAGE_KIND:
+        return "Linux"
+    return "未知"
 
 
 def _download_file(
@@ -523,6 +615,7 @@ def _clear_pending_update(settings: dict[str, Any]) -> None:
     settings["pending_update_path"] = ""
     settings["pending_update_notes"] = ""
     settings["pending_update_platform"] = ""
+    settings["pending_update_package_kind"] = ""
 
 
 def _normalize_tag_name(tag_name: Any) -> str:

@@ -49,6 +49,34 @@ function createLongApplyPatchEntry(): ToolGroupChatTraceEntry {
   };
 }
 
+function createNeutralResultEntry(): ToolGroupChatTraceEntry {
+  return {
+    kind: "tool_group",
+    toolIndex: 2,
+    state: "completed",
+    call: {
+      kind: "tool_call",
+      title: "shell_command",
+      toolName: "shell_command",
+      callId: "call_shell_1",
+      summary: "Get-ChildItem -Force",
+      payload: {
+        arguments: "Get-ChildItem -Force",
+      },
+    },
+    results: [
+      {
+        kind: "tool_result",
+        callId: "call_shell_1",
+        summary: "README.md\nbot\nfront",
+        payload: {
+          output: "README.md\nbot\nfront",
+        },
+      },
+    ],
+  };
+}
+
 describe("ChatToolTraceCard", () => {
   test("collapses long apply_patch call summary by default and expands on demand", async () => {
     const user = userEvent.setup();
@@ -66,5 +94,17 @@ describe("ChatToolTraceCard", () => {
 
     expect(callSummary.textContent || "").toContain("+new line 7");
     expect(screen.getByRole("button", { name: "收起完整内容" })).toBeInTheDocument();
+  });
+
+  test("renders unknown tool result with light blue tone", () => {
+    render(<ChatToolTraceCard entry={createNeutralResultEntry()} />);
+
+    const resultLabel = screen.getByText("返回");
+    const resultCard = resultLabel.closest("div.rounded-xl.border");
+
+    expect(resultCard).toHaveClass("border-sky-200");
+    expect(resultCard).toHaveClass("bg-sky-50/80");
+    expect(screen.queryByText("成功")).not.toBeInTheDocument();
+    expect(screen.queryByText("失败")).not.toBeInTheDocument();
   });
 });

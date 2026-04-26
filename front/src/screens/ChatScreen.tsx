@@ -761,7 +761,7 @@ export function ChatScreen({
           setBotOverview(overview);
           setWorkingDir(overview.workingDir || "");
 
-          if (overview.isProcessing || overview.runningReply) {
+          if (overview.isProcessing) {
             sseLastActivityAtRef.current = Date.now();
             scheduleSseRecoveryWatch();
             return;

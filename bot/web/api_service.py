@@ -102,6 +102,7 @@ _WINDOWS_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[\\/]*$")
 _WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WORKDIR_CHANGE_REQUIRES_RESET = "workdir_change_requires_reset"
 WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
+CODEX_DONE_QUIET_SECONDS = 0.5
 
 
 class WebApiError(Exception):
@@ -2061,6 +2062,66 @@ def _extract_final_codex_completed_message(raw_output: str) -> Optional[str]:
     return last_completed
 
 
+def _load_codex_json_event(line: str) -> dict[str, Any]:
+    try:
+        event: Any = json.loads(line)
+    except json.JSONDecodeError:
+        return {}
+    return event if isinstance(event, dict) else {}
+
+
+def _codex_line_allows_quiet_finish(line: str, completed_text: str) -> bool:
+    event = _load_codex_json_event(line)
+    event_type = str(event.get("type") or "").strip()
+    if event_type == "turn.completed":
+        return True
+
+    payload: Any = None
+    if event_type == "event_msg":
+        payload = event.get("payload")
+    elif event_type == "response_item":
+        payload = event.get("item")
+
+    if not isinstance(payload, dict):
+        return False
+
+    payload_type = str(payload.get("type") or "").strip()
+    if event_type == "event_msg" and payload_type == "agent_message" and completed_text:
+        phase = str(payload.get("phase") or "").strip().lower()
+        return phase not in {"commentary", "progress", "partial"}
+    if event_type == "response_item" and payload_type == "message":
+        phase = str(payload.get("phase") or "").strip().lower()
+        return bool(completed_text and phase in {"final", "final_answer"})
+    return False
+
+
+def _advance_codex_done_candidate(
+    line: str,
+    *,
+    thread_id: Optional[str],
+    candidate_text: Optional[str],
+    candidate_seen_at: Optional[float],
+    now: float,
+) -> tuple[Optional[str], Optional[str], Optional[float]]:
+    stripped = line.strip()
+    if not stripped:
+        return thread_id, candidate_text, candidate_seen_at
+
+    parsed = parse_codex_json_line(stripped)
+    next_thread_id = thread_id
+    if parsed["thread_id"]:
+        next_thread_id = parsed["thread_id"]
+
+    completed_text = str(parsed.get("completed_text") or "").strip()
+    if completed_text:
+        candidate_text = completed_text
+
+    if _codex_line_allows_quiet_finish(stripped, completed_text):
+        return next_thread_id, candidate_text, now
+
+    return next_thread_id, candidate_text, candidate_seen_at
+
+
 def _trace_event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
     return (
         str(event.get("kind") or ""),
@@ -2171,6 +2232,21 @@ def _wait_for_process_exit_sync(process: subprocess.Popen, timeout: float) -> Op
         return None
 
 
+def _resolve_process_returncode(process: subprocess.Popen | None, waited_returncode: Any = None) -> int:
+    if isinstance(waited_returncode, int):
+        return waited_returncode
+    candidate = getattr(process, "returncode", None) if process is not None else None
+    if isinstance(candidate, int):
+        return candidate
+    if process is None:
+        return -1
+    try:
+        polled = process.poll()
+    except Exception:
+        return -1
+    return polled if isinstance(polled, int) else -1
+
+
 def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0) -> None:
     try:
         if process.poll() is not None:
@@ -2237,11 +2313,105 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
 
 
 async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Optional[str], int]:
-    raw_output, returncode = await _communicate_process(process)
-    final_text, thread_id = parse_codex_json_output(raw_output)
+    stdout = getattr(process, "stdout", None)
+    if stdout is None or not hasattr(stdout, "readline"):
+        raw_output, returncode = await _communicate_process(process)
+        final_text, thread_id = parse_codex_json_output(raw_output)
+        if not final_text:
+            final_text = msg("chat", "no_output")
+        return final_text, thread_id, returncode
+
+    loop = asyncio.get_running_loop()
+    output_queue: queue.Queue[Any] = queue.Queue()
+    reader_done = threading.Event()
+    chunks: list[str] = []
+    thread_id: Optional[str] = None
+    candidate_text: Optional[str] = None
+    candidate_seen_at: Optional[float] = None
+    done_terminate_started_at: Optional[float] = None
+    done_force_killed = False
+
+    def read_stdout() -> None:
+        try:
+            if process.stdout is None:
+                return
+            stdout = process.stdout
+            while True:
+                line = stdout.readline()
+                if line:
+                    output_queue.put(line)
+                    continue
+                if process.poll() is not None:
+                    remaining = stdout.read()
+                    if remaining:
+                        output_queue.put(remaining)
+                    break
+                time.sleep(0.05)
+        except Exception as exc:  # pragma: no cover - defensive
+            output_queue.put(exc)
+        finally:
+            reader_done.set()
+
+    threading.Thread(target=read_stdout, daemon=True).start()
+
+    try:
+        while not reader_done.is_set() or not output_queue.empty():
+            drained = False
+            while True:
+                try:
+                    item = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained = True
+                if isinstance(item, Exception):
+                    raise item
+                chunk = str(item)
+                chunks.append(chunk)
+                now = loop.time()
+                for line in chunk.splitlines():
+                    thread_id, candidate_text, candidate_seen_at = _advance_codex_done_candidate(
+                        line,
+                        thread_id=thread_id,
+                        candidate_text=candidate_text,
+                        candidate_seen_at=candidate_seen_at,
+                        now=now,
+                    )
+
+            now = loop.time()
+            if (
+                candidate_seen_at is not None
+                and done_terminate_started_at is None
+                and process.poll() is None
+                and (now - candidate_seen_at) >= CODEX_DONE_QUIET_SECONDS
+            ):
+                done_terminate_started_at = now
+                process.terminate()
+            elif (
+                done_terminate_started_at is not None
+                and not done_force_killed
+                and process.poll() is None
+                and (now - done_terminate_started_at) >= 1.0
+            ):
+                done_force_killed = True
+                await loop.run_in_executor(None, _terminate_process_sync, process)
+
+            if not drained:
+                await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        _terminate_process_sync(process)
+        raise
+
+    waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+    returncode = _resolve_process_returncode(process, waited_returncode)
+    if done_terminate_started_at is not None:
+        returncode = 0
+
+    raw_output = "".join(chunks)
+    final_text, parsed_thread_id = parse_codex_json_output(raw_output)
+    final_text = candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
     if not final_text:
         final_text = msg("chat", "no_output")
-    return final_text, thread_id, returncode
+    return final_text, thread_id or parsed_thread_id, returncode
 
 
 async def _communicate_claude_process(
@@ -2320,10 +2490,8 @@ async def _communicate_claude_process(
         if not drained:
             await asyncio.sleep(0.1)
 
-    await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
-    returncode = process.poll() if process is not None else -1
-    if returncode is None:
-        returncode = -1
+    waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+    returncode = _resolve_process_returncode(process, waited_returncode)
     if done_terminate_started_at is not None:
         returncode = 0
 
@@ -2374,6 +2542,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             _raise(409, "session_busy", msg("chat", "busy"))
         session.is_processing = True
 
+    loop: asyncio.AbstractEventLoop | None = None
     try:
         session.touch()
         loop = asyncio.get_running_loop()
@@ -2456,6 +2625,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
+            codex_done_candidate: Optional[str] = None
+            codex_done_seen_at: Optional[float] = None
             trace_state = create_stream_trace_state(cli_type)
             live_trace_events: list[dict[str, Any]] = []
             latest_preview_text = ""
@@ -2503,13 +2674,15 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                             yield {"type": "trace", "event": trace_event}
 
                         if cli_type == "codex":
+                            now = loop.time()
                             for line in text_chunk.splitlines():
-                                stripped = line.strip()
-                                if not stripped:
-                                    continue
-                                parsed = parse_codex_json_line(stripped)
-                                if parsed["thread_id"]:
-                                    thread_id = parsed["thread_id"]
+                                thread_id, codex_done_candidate, codex_done_seen_at = _advance_codex_done_candidate(
+                                    line,
+                                    thread_id=thread_id,
+                                    candidate_text=codex_done_candidate,
+                                    candidate_seen_at=codex_done_seen_at,
+                                    now=now,
+                                )
                         elif claude_collector is not None:
                             claude_collector.consume_chunk(text_chunk, now=loop.time())
 
@@ -2529,6 +2702,15 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         and done_terminate_started_at is None
                         and claude_collector.detector.poll(now=loop.time())
                         and process.poll() is None
+                    ):
+                        done_terminate_started_at = loop.time()
+                        process.terminate()
+                    elif (
+                        cli_type == "codex"
+                        and codex_done_seen_at is not None
+                        and done_terminate_started_at is None
+                        and process.poll() is None
+                        and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
                     ):
                         done_terminate_started_at = loop.time()
                         process.terminate()
@@ -2568,12 +2750,14 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                     if not drained:
                         await asyncio.sleep(0.1)
 
-                await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
-                returncode = process.poll() if process is not None else -1
-                if returncode is None:
-                    returncode = -1
+                waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+                returncode = _resolve_process_returncode(process, waited_returncode)
                 if done_terminate_started_at is not None:
                     returncode = 0
+            except asyncio.CancelledError:
+                if process.poll() is None:
+                    await loop.run_in_executor(None, _terminate_process_sync, process)
+                raise
             finally:
                 with session._lock:
                     session.process = None
@@ -2582,7 +2766,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             if cli_type == "codex":
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id
-                response = _extract_final_codex_completed_message(raw_output) or response
+                response = codex_done_candidate or _extract_final_codex_completed_message(raw_output) or response
             elif cli_type == "claude":
                 if claude_collector is not None:
                     response = claude_collector.final_text or ""
@@ -2686,9 +2870,16 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             yield done_event
             return
     finally:
+        lingering_process: subprocess.Popen | None = None
         with session._lock:
+            lingering_process = session.process
             session.process = None
             session.is_processing = False
+        if lingering_process is not None and lingering_process.poll() is None:
+            if loop is not None:
+                await loop.run_in_executor(None, _terminate_process_sync, lingering_process)
+            else:
+                _terminate_process_sync(lingering_process)
 
 
 async def run_cli_chat(

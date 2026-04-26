@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 MODEL_OPTION_NONE = "none"
-REMOVED_CLI_MODEL_OPTIONS = {"gpt-5.2"}
+REMOVED_CLI_MODEL_OPTIONS = {"gpt-5.2", "gpt-5.3"}
 REQUIRED_CLI_MODEL_OPTIONS = [
     "claude-opus-4-7",
     "claude-opus-4-6",

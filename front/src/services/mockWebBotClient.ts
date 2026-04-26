@@ -119,7 +119,6 @@ const MOCK_CLI_MODEL_OPTIONS = [
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
-  "gpt-5.3",
   "gpt-5.3-codex",
   "claude-opus-4-7",
   "claude-opus-4-6",
@@ -795,6 +794,7 @@ export class MockWebBotClient implements WebBotClient {
   private gitProxySettings: GitProxySettings = { port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
+    currentPackageKind: "installer",
     updateEnabled: true,
     updateChannel: "release",
     lastCheckedAt: "",
@@ -805,6 +805,7 @@ export class MockWebBotClient implements WebBotClient {
     pendingUpdatePath: "",
     pendingUpdateNotes: "",
     pendingUpdatePlatform: "",
+    pendingUpdatePackageKind: "",
     lastError: "",
   };
   private readonly avatarAssets: AvatarAsset[] = [
@@ -2475,12 +2476,24 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async downloadUpdate(): Promise<AppUpdateStatus> {
+    const packageKind = this.updateStatus.currentPackageKind || "installer";
+    const pendingUpdatePath = packageKind === "portable"
+      ? ".updates/orbit-safe-claw-windows-x64.zip"
+      : packageKind === "linux"
+        ? ".updates/orbit-safe-claw-linux-x64.tar.gz"
+        : ".updates/orbit-safe-claw-windows-x64-installer.zip";
+    const pendingUpdatePlatform = packageKind === "portable"
+      ? "windows-x64-portable"
+      : packageKind === "linux"
+        ? "linux-x64"
+        : "windows-x64-installer";
     this.updateStatus = {
       ...this.updateStatus,
       pendingUpdateVersion: this.updateStatus.latestVersion || APP_VERSION,
-      pendingUpdatePath: ".updates/cli-bridge-windows-x64.zip",
+      pendingUpdatePath,
       pendingUpdateNotes: this.updateStatus.latestNotes || "Bugfixes",
-      pendingUpdatePlatform: "windows-x64",
+      pendingUpdatePlatform,
+      pendingUpdatePackageKind: packageKind,
       lastError: "",
     };
     return { ...this.updateStatus };

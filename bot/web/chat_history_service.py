@@ -19,6 +19,18 @@ class ChatHistoryService:
     def __init__(self, store: ChatStore) -> None:
         self.store = store
 
+    def reconcile_idle_streaming_turns(self, session: UserSession) -> int:
+        with session._lock:
+            is_processing = bool(session.is_processing)
+        if is_processing:
+            return 0
+        return self.store.mark_stale_streaming_turns(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+        )
+
     def _should_attempt_trace_recovery(self, context: dict[str, Any]) -> bool:
         if str(context.get("role") or "") != "assistant":
             return False
@@ -130,6 +142,7 @@ class ChatHistoryService:
         )
 
     def list_history(self, profile: BotProfile, session: UserSession, limit: int = 50) -> list[dict[str, Any]]:
+        self.reconcile_idle_streaming_turns(session)
         items = self.store.list_active_history(
             bot_id=session.bot_id,
             user_id=session.user_id,
@@ -206,6 +219,9 @@ class ChatHistoryService:
         return True
 
     def build_session_snapshot(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
+        self.reconcile_idle_streaming_turns(session)
+        with session._lock:
+            is_processing = bool(session.is_processing)
         return {
             "bot_alias": profile.alias,
             "bot_mode": profile.bot_mode,
@@ -219,13 +235,13 @@ class ChatHistoryService:
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
             ),
-            "is_processing": session.is_processing,
+            "is_processing": is_processing,
             "running_reply": self.store.get_running_reply(
                 bot_id=session.bot_id,
                 user_id=session.user_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
-            ),
+            ) if is_processing else None,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
