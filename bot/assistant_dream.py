@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bot.assistant_home import AssistantHome
+from bot.assistant_knowledge_indexer import index_knowledge_memories
 from bot.assistant_memory_writer import DreamMemoryInput, write_dream_memories
 from bot.assistant_proposals import create_proposal
 from bot.models import BotProfile, UserSession
@@ -614,6 +615,9 @@ def apply_dream_result(
             content = f"# {title}\n\n{body}\n" if title else body + "\n"
             path.write_text(content, encoding="utf-8")
             applied_paths.append(str(path))
+        if knowledge_entries:
+            indexed = index_knowledge_memories(home)
+            applied_paths.extend(f"memory:{memory_id}" for memory_id in indexed.memory_ids)
 
         memory_ids = write_dream_memories(
             home,

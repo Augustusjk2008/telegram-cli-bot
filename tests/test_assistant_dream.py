@@ -13,6 +13,7 @@ from bot.assistant_dream import (
     prepare_dream_prompt,
 )
 from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_memory_recall import recall_assistant_memories
 
 
 class _FakeHistoryService:
@@ -252,3 +253,38 @@ def test_apply_dream_result_rejects_malformed_dream_blocks_and_still_writes_audi
     assert len(audit_files) == 1
     audit_payload = json.loads(audit_files[0].read_text(encoding="utf-8"))
     assert "<DREAM_SUMMARY>" in audit_payload["error"]
+
+
+def test_apply_dream_result_indexes_knowledge_entries(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    raw_output = """
+<DREAM_SUMMARY>
+沉淀 Vivado 知识
+</DREAM_SUMMARY>
+
+<DREAM_KNOWLEDGE>
+bucket: vivado
+title: Vivado generated clock
+- generated_clock 需要检查主时钟、派生源和约束覆盖。
+</DREAM_KNOWLEDGE>
+""".strip()
+
+    apply_dream_result(
+        home,
+        raw_output=raw_output,
+        visible_text="",
+        prompt_excerpt="",
+        context_stats={},
+        run_id="dream_knowledge_index",
+        job_id="daily_dream",
+        scheduled_at="2026-04-27T02:00:00+00:00",
+        context_user_id=1001,
+        synthetic_user_id=0,
+    )
+
+    recall = recall_assistant_memories(home, user_id=1001, user_text="generated_clock 约束")
+
+    assert "Vivado generated clock" in recall.prompt_block
+    assert "generated_clock" in recall.prompt_block
