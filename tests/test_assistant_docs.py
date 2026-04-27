@@ -282,3 +282,31 @@ def test_read_current_managed_prompt_hash_matches_helper(tmp_path: Path):
         "agent body\n",
         "claude body\n",
     )
+
+
+def test_managed_prompt_uses_latest_recent_summary_items(tmp_path: Path):
+    template_path = tmp_path / "managed_prompt_template.md"
+    template_path.write_text("assistant template", encoding="utf-8")
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    (home.root / "memory" / "working" / "recent_summary.md").write_text(
+        "\n".join(
+            [
+                "- old item 1",
+                "- old item 2",
+                "- old item 3",
+                "- old item 4",
+                "- old item 5",
+                "- latest memory hardening plan",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    sync_managed_prompt_files(home, template_path=template_path)
+    text = home.agents_path.read_text(encoding="utf-8")
+
+    assert "latest memory hardening plan" in text
+    assert "old item 1" not in text

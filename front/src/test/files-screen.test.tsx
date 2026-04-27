@@ -484,6 +484,35 @@ test("renders svg files as images in preview mode", async () => {
   expect(within(dialog).queryByText(/<svg/i)).not.toBeInTheDocument();
 });
 
+test("renders png files as images in preview mode", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "photo.png", isDir: false, size: 68, updatedAt: "2026-04-27T10:00:00Z" }],
+    }),
+    readFile: async () => ({
+      content: "",
+      mode: "head" as const,
+      fileSizeBytes: 68,
+      isFullContent: true,
+      previewKind: "image" as const,
+      contentType: "image/png",
+      contentBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2WJw0AAAAASUVORK5CYII=",
+    }),
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 photo.png" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "photo.png" });
+  expect(within(dialog).getByRole("img", { name: "photo.png" })).toBeInTheDocument();
+  expect(within(dialog).queryByText("文件为空")).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
+});
+
 test("can load full file content from preview modal", async () => {
   const user = userEvent.setup();
   const readFullSpy = vi.fn(async () => ({

@@ -70,3 +70,26 @@ async def test_hex_preview_plugin_truncates_large_binary(tmp_path: Path) -> None
     assert rendered["payload"]["rows"][-1]["offset"] == 16368
 
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_hex_preview_plugin_leaves_common_images_to_builtin_preview(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "plugins"
+    shutil.copytree(Path("examples/plugins/hex-preview"), plugins_root / "hex-preview")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+
+    assert service.resolve_file_target("assets/logo.png") == {"kind": "file"}
+    assert service.resolve_file_target("assets/photo.jpg") == {"kind": "file"}
+    assert service.resolve_file_target("assets/photo.jpeg") == {"kind": "file"}
+    assert service.resolve_file_target("assets/anim.gif") == {"kind": "file"}
+    assert service.resolve_file_target("assets/cover.webp") == {"kind": "file"}
+
+    resolved = service.resolve_file_target("firmware/app.bin")
+    assert resolved["kind"] == "plugin_view"
+    assert resolved["pluginId"] == "hex-preview"
+    assert resolved["viewId"] == "hex"
+
+    await service.shutdown()

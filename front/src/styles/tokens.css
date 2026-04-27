@@ -27,7 +27,8 @@
   --workbench-panel-elevated-bg: var(--surface-strong);
   --workbench-statusbar-bg: var(--surface-strong);
   --workbench-hairline: var(--border);
-  --workbench-hover-bg: var(--surface-strong);
+  --workbench-hover-bg: rgba(97, 203, 255, 0.08);
+  --workbench-hover-border: rgba(97, 203, 255, 0.28);
   --workbench-active-bg: var(--accent-soft);
   --workbench-focus-ring: var(--accent-outline);
   --hero-grid: rgba(122, 246, 214, 0.09);
@@ -79,7 +80,8 @@
   --workbench-panel-elevated-bg: var(--surface-strong);
   --workbench-statusbar-bg: var(--surface-strong);
   --workbench-hairline: var(--border);
-  --workbench-hover-bg: var(--surface-strong);
+  --workbench-hover-bg: rgba(15, 140, 120, 0.07);
+  --workbench-hover-border: rgba(15, 140, 120, 0.22);
   --workbench-active-bg: var(--accent-soft);
   --workbench-focus-ring: var(--accent-outline);
   --hero-grid: rgba(15, 140, 120, 0.08);

@@ -1,8 +1,19 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
+
+function render(ui: ReactElement) {
+  const client = ((ui.props as { client?: MockWebBotClient }).client) || new MockWebBotClient();
+  return rtlRender(
+    <PersistentTerminalProvider client={client}>
+      {ui}
+    </PersistentTerminalProvider>,
+  );
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -89,6 +100,36 @@ test("directory click expands the tree without changing the working directory", 
     expect(screen.getByRole("button", { name: "打开 docs/project-plan.md" })).toBeInTheDocument();
   });
   expect(changeDirectorySpy).toHaveBeenCalledTimes(callsBeforeToggle);
+});
+
+test("desktop file tree items keep a thin hover border", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "docs", isDir: true },
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const dirButton = await screen.findByRole("button", { name: "展开 docs" });
+  const fileButton = screen.getByRole("button", { name: "打开 README.md" });
+
+  expect(dirButton).toHaveClass("h-full", "border", "border-transparent", "hover:border-[var(--workbench-hover-border)]", "hover:bg-[var(--workbench-hover-bg)]");
+  expect(fileButton).toHaveClass("h-full", "border", "border-transparent", "hover:border-[var(--workbench-hover-border)]", "hover:bg-[var(--workbench-hover-bg)]");
 });
 
 test("file context menu copies a sibling file", async () => {

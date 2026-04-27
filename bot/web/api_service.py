@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import json
 import logging
@@ -40,6 +41,7 @@ from bot.assistant_compaction import (
 )
 from bot.assistant_context import compile_assistant_prompt
 from bot.assistant_memory_recall import recall_assistant_memories
+from bot.assistant_working_memory_indexer import index_working_memories
 from bot.assistant_memory_writer import write_hot_path_memories
 from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
@@ -103,6 +105,13 @@ _WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WORKDIR_CHANGE_REQUIRES_RESET = "workdir_change_requires_reset"
 WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
+_RASTER_IMAGE_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 
 class WebApiError(Exception):
@@ -1640,6 +1649,10 @@ def _prepare_assistant_prompt(
     compaction_prompt_active = is_compaction_prompt_active(assistant_home)
     sync_result = sync_managed_prompt_files(assistant_home)
     prompt_source_text = user_text
+    try:
+        index_working_memories(assistant_home)
+    except Exception as exc:
+        logger.warning("assistant working memory index failed user=%s error=%s", user_id, exc)
     try:
         recall = recall_assistant_memories(assistant_home, user_id=user_id, user_text=user_text)
         if recall.prompt_block:
@@ -3367,6 +3380,16 @@ def read_file_content(
         _raise(404, "file_not_found", "文件不存在")
 
     file_size = os.path.getsize(file_path)
+    raster_preview = _build_raster_image_preview(
+        filename=filename,
+        file_path=file_path,
+        working_dir=browser_dir,
+        mode=mode,
+        file_size=file_size,
+    )
+    if raster_preview is not None:
+        return raster_preview
+
     try:
         with open(file_path, "r", encoding="utf-8") as handle:
             if mode == "head":
@@ -3394,6 +3417,32 @@ def read_file_content(
         "working_dir": browser_dir,
         "file_size_bytes": file_size,
         "is_full_content": is_full_content,
+        "last_modified_ns": _stat_file_version(file_path),
+    }
+
+
+def _build_raster_image_preview(
+    *,
+    filename: str,
+    file_path: str,
+    working_dir: str,
+    mode: str,
+    file_size: int,
+) -> dict[str, Any] | None:
+    content_type = _RASTER_IMAGE_CONTENT_TYPES.get(Path(filename).suffix.lower())
+    if not content_type:
+        return None
+
+    return {
+        "filename": filename,
+        "mode": mode,
+        "content": "",
+        "preview_kind": "image",
+        "content_type": content_type,
+        "content_base64": base64.b64encode(Path(file_path).read_bytes()).decode("ascii"),
+        "working_dir": working_dir,
+        "file_size_bytes": file_size,
+        "is_full_content": True,
         "last_modified_ns": _stat_file_version(file_path),
     }
 

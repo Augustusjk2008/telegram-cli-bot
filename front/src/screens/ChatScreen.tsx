@@ -1110,7 +1110,7 @@ export function ChatScreen({
       setPreviewName(name);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
-      setPreviewContent(result.content || "文件为空");
+      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
       setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
     } finally {
@@ -1119,7 +1119,7 @@ export function ChatScreen({
   }, [botAlias, client]);
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
+  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
   const shouldUseInlinePreview = !(embedded && onRequestDesktopPreview);
 
   const handleFileLinkClick = useCallback((href: string) => {
@@ -1647,6 +1647,9 @@ export function ChatScreen({
           title={previewName}
           content={previewContent}
           mode={previewMode}
+          previewKind={previewResult?.previewKind}
+          contentType={previewResult?.contentType}
+          contentBase64={previewResult?.contentBase64}
           loading={previewLoading}
           statusText={previewStatusText}
           onClose={() => {

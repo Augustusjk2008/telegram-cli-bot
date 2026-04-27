@@ -12,6 +12,30 @@ def test_extract_hot_path_memories_from_explicit_preference():
     assert "默认中文" in records[0].summary
 
 
+def test_hot_path_memory_does_not_extract_from_assistant_reply():
+    records = extract_hot_path_memories(
+        user_id=1001,
+        user_text="我想知道你的记忆系统生效没",
+        assistant_text="当前能看到“凯”“默认中文”“7897”等记忆。",
+        source_ref="cap_pollution",
+    )
+
+    assert records == []
+
+
+def test_hot_path_memory_extracts_explicit_user_preference_only():
+    records = extract_hot_path_memories(
+        user_id=1001,
+        user_text="请记住以后默认用简短中文回答",
+        assistant_text="已记录。",
+        source_ref="cap_preference",
+    )
+
+    assert len(records) == 1
+    assert records[0].summary == "以后默认用简短中文回答"
+    assert records[0].source_ref == "cap_preference"
+
+
 def test_hot_path_and_dream_memory_writes_are_recallable(tmp_path: Path):
     home = bootstrap_assistant_home(tmp_path / "assistant-root")
     write_hot_path_memories(home, user_id=1001, user_text="请记住默认中文", assistant_text="好的", source_ref="cap_1")

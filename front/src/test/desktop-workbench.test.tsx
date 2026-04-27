@@ -253,6 +253,49 @@ test("desktop workbench opens .pdf files as document plugin tabs", async () => {
   expect(screen.getByText("Current status: in progress.")).toBeInTheDocument();
 });
 
+test("desktop workbench opens png files in the shared preview window", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "photo.png", isDir: false, size: 68, updatedAt: "2026-04-27T09:00:00Z" }],
+  });
+  vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "",
+    mode: "head",
+    fileSizeBytes: 68,
+    isFullContent: true,
+    previewKind: "image",
+    contentType: "image/png",
+    contentBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2WJw0AAAAASUVORK5CYII=",
+    lastModifiedNs: "1",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 photo.png" }));
+
+  expect(await screen.findByTestId("desktop-workbench-preview-window")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "photo.png" })).toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-plugin-view")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
+});
+
 test("desktop workbench opens .xlsx files as document plugin tabs", async () => {
   const user = userEvent.setup();
 

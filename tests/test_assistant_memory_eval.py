@@ -25,3 +25,48 @@ def test_run_memory_eval_reports_hits_and_stale_recall_rate(tmp_path: Path):
     assert results.metrics["hit_at_5"] == 1.0
     assert results.metrics["stale_recall_rate"] == 0.0
     assert Path(results.report_path).is_file()
+
+
+def test_memory_eval_covers_chinese_short_query_and_working_memory(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path)
+    store = AssistantMemoryStore(home)
+    store.upsert(
+        MemoryRecordInput(
+            user_id=1001,
+            scope="user",
+            kind="semantic",
+            source_type="test",
+            source_ref="case_cjk_eval",
+            title="用户偏好",
+            summary="以后默认用简短中文回答",
+            body="- 以后默认用简短中文回答",
+            tags=["preference"],
+            entity_keys=["user:1001"],
+        )
+    )
+    store.upsert(
+        MemoryRecordInput(
+            user_id=0,
+            scope="global",
+            kind="episodic",
+            source_type="working",
+            source_ref="memory/working/recent_summary.md:1",
+            title="working/recent_summary",
+            summary="startup_misfire 补跑成功，email_recvbox_check 仍需复测。",
+            body="- startup_misfire 补跑成功，email_recvbox_check 仍需复测。",
+            tags=["working", "recent_summary"],
+            entity_keys=["working:recent_summary"],
+        )
+    )
+
+    run = run_memory_eval(
+        home,
+        user_id=1001,
+        cases=[
+            MemoryEvalCase(query="简短中文", expected_memory_kind="semantic", expected_hit_terms=["简短中文"], must_not_hit_terms=["默认英文"]),
+            MemoryEvalCase(query="startup_misfire", expected_memory_kind="episodic", expected_hit_terms=["startup_misfire"], must_not_hit_terms=["无关旧结论"]),
+        ],
+    )
+
+    assert run.metrics["hit_at_5"] == 1.0
+    assert run.metrics["stale_recall_rate"] == 0.0

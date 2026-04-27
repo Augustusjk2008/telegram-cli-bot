@@ -66,20 +66,18 @@ def _read_working_file(home: AssistantHome, name: str) -> str:
     return content.strip()
 
 
-def _parse_working_list(text: str, *, max_items: int, max_chars: int) -> list[str]:
-    items: list[str] = []
+def _parse_working_list(text: str, *, max_items: int, max_chars: int, prefer_recent: bool = False) -> list[str]:
+    parsed: list[str] = []
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         line = _LIST_MARKER_RE.sub("", line)
         line = _normalize_text(line, max_chars)
-        if not line:
-            continue
-        items.append(line)
-        if len(items) >= max_items:
-            break
-    return items
+        if line:
+            parsed.append(line)
+    selected = parsed[-max_items:] if prefer_recent else parsed[:max_items]
+    return selected
 
 
 def _parse_working_goal(text: str, *, max_chars: int) -> str:
@@ -148,6 +146,7 @@ def build_managed_memory_prompt(home: AssistantHome) -> str:
         _read_working_file(home, "recent_summary"),
         max_items=5,
         max_chars=140,
+        prefer_recent=True,
     )
     if recent_summary:
         sections.append(_render_section("recent_summary", recent_summary))

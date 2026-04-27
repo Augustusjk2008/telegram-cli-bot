@@ -199,7 +199,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       setPreviewName(name);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
-      setPreviewContent(result.content || "文件为空");
+      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
       setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
     } finally {
@@ -208,7 +208,8 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   };
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult?.fileSizeBytes);
+  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
+  const canEditPreview = previewResult?.previewKind !== "image";
 
   const handleFileClick = async (name: string) => {
     if (structureOnly) {
@@ -496,6 +497,9 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           title={previewName}
           content={previewContent}
           mode={previewMode}
+          previewKind={previewResult?.previewKind}
+          contentType={previewResult?.contentType}
+          contentBase64={previewResult?.contentBase64}
           loading={previewLoading}
           onClose={() => {
             setPreviewName("");
@@ -504,7 +508,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           }}
           statusText={previewStatusText}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-          onEdit={() => void handleOpenEditor(previewName)}
+          onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
       ) : null}

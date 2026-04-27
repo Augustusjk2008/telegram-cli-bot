@@ -640,6 +640,69 @@ async def test_plugin_service_lists_installable_plugins_and_installs_folder(tmp_
     await service.shutdown()
 
 
+def test_plugin_service_syncs_bundled_manifest_and_preserves_user_state(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "home" / ".tcb" / "plugins"
+    plugins_root.mkdir(parents=True)
+    source_plugins_root = repo_root / "examples" / "plugins"
+    source_plugins_root.mkdir(parents=True)
+    source_dir = source_plugins_root / "hex-preview"
+    source_dir.mkdir()
+    target_dir = plugins_root / "hex-preview"
+    target_dir.mkdir()
+
+    source_manifest = {
+        "schemaVersion": 2,
+        "id": "hex-preview",
+        "name": "Hex Preview",
+        "version": "0.2.0",
+        "description": "hex plugin",
+        "enabled": False,
+        "config": {"maxPreviewBytes": 16384, "bytesPerRow": 16},
+        "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+        "views": [{"id": "hex", "title": "Hex 预览", "renderer": "hex"}],
+        "fileHandlers": [
+            {
+                "id": "binary-file",
+                "label": "Hex 预览",
+                "extensions": [".bin", ".dat"],
+                "viewId": "hex",
+            }
+        ],
+    }
+    installed_manifest = {
+        **source_manifest,
+        "enabled": True,
+        "config": {"maxPreviewBytes": 1234},
+        "fileHandlers": [
+            {
+                "id": "binary-file",
+                "label": "Hex 预览",
+                "extensions": [".bin", ".dat", ".png", ".jpg", ".jpeg", ".gif"],
+                "viewId": "hex",
+            }
+        ],
+    }
+    (source_dir / "plugin.json").write_text(json.dumps(source_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (target_dir / "plugin.json").write_text(json.dumps(installed_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    service = PluginService(repo_root, plugins_root=plugins_root, source_plugins_root=source_plugins_root)
+
+    synced = json.loads((target_dir / "plugin.json").read_text(encoding="utf-8"))
+    assert synced["enabled"] is True
+    assert synced["config"] == {"maxPreviewBytes": 1234, "bytesPerRow": 16}
+    assert synced["fileHandlers"][0]["extensions"] == [".bin", ".dat"]
+    assert service.resolve_file_target("assets/logo.png") == {"kind": "file"}
+    assert service.resolve_file_target("assets/blob.bin") == {
+        "kind": "plugin_view",
+        "pluginId": "hex-preview",
+        "viewId": "hex",
+        "title": "blob.bin",
+        "input": {"path": "assets/blob.bin"},
+    }
+
+
 def _write_document_plugin(root: Path, *, plugin_id: str) -> None:
     plugin_dir = root
     backend_dir = plugin_dir / "backend"

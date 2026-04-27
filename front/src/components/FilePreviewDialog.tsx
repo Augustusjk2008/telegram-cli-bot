@@ -12,6 +12,9 @@ type Props = {
   title: string;
   content: string;
   mode: "preview" | "full";
+  previewKind?: "text" | "image";
+  contentType?: string;
+  contentBase64?: string;
   variant?: "mobile" | "desktop";
   desktopAnchorRect?: DesktopAnchorRect | null;
   loading?: boolean;
@@ -38,6 +41,9 @@ export function FilePreviewDialog({
   title,
   content,
   mode,
+  previewKind,
+  contentType,
+  contentBase64,
   variant = "mobile",
   desktopAnchorRect = null,
   loading = false,
@@ -50,8 +56,9 @@ export function FilePreviewDialog({
 }: Props) {
   const isMarkdownPreview = /\.(md|markdown)$/i.test(title);
   const isSvgPreview = /\.svg$/i.test(title);
+  const isRasterPreview = previewKind === "image" && Boolean(contentType) && Boolean(contentBase64);
   const [desktopOffset, setDesktopOffset] = useState({ x: 0, y: 0 });
-  const [svgPreviewUrl, setSvgPreviewUrl] = useState("");
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const dragStateRef = useRef<{
     pointerId: number;
     startX: number;
@@ -67,22 +74,27 @@ export function FilePreviewDialog({
   }, [title, variant]);
 
   useEffect(() => {
+    if (isRasterPreview) {
+      setImagePreviewUrl(`data:${contentType};base64,${contentBase64}`);
+      return undefined;
+    }
+
     if (!isSvgPreview) {
-      setSvgPreviewUrl("");
+      setImagePreviewUrl("");
       return undefined;
     }
 
     if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
       const objectUrl = URL.createObjectURL(new Blob([content], { type: "image/svg+xml" }));
-      setSvgPreviewUrl(objectUrl);
+      setImagePreviewUrl(objectUrl);
       return () => {
         URL.revokeObjectURL(objectUrl);
       };
     }
 
-    setSvgPreviewUrl(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`);
+    setImagePreviewUrl(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`);
     return undefined;
-  }, [content, isSvgPreview]);
+  }, [content, contentBase64, contentType, isRasterPreview, isSvgPreview]);
 
   useEffect(() => {
     if (variant !== "desktop") {
@@ -213,9 +225,9 @@ export function FilePreviewDialog({
           <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
             {isMarkdownPreview ? (
               <MarkdownPreview content={content} variant="desktop-preview" onFileLinkClick={onFileLinkClick} />
-            ) : isSvgPreview && svgPreviewUrl ? (
+            ) : imagePreviewUrl ? (
               <div className="flex h-full items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4">
-                <img src={svgPreviewUrl} alt={title} className="block h-auto max-w-full" />
+                <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
               </div>
             ) : (
               <pre className="h-full overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all">
@@ -284,9 +296,9 @@ export function FilePreviewDialog({
         </div>
         {isMarkdownPreview ? (
           <MarkdownPreview content={content} onFileLinkClick={onFileLinkClick} />
-        ) : isSvgPreview && svgPreviewUrl ? (
+        ) : imagePreviewUrl ? (
           <div className="flex max-h-[50vh] items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4">
-            <img src={svgPreviewUrl} alt={title} className="block h-auto max-w-full" />
+            <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
           </div>
         ) : (
           <pre className="max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all">

@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 
 from bot.assistant_home import AssistantHome
 
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+
 
 @dataclass(frozen=True)
 class MemoryRecordInput:
@@ -111,6 +113,19 @@ class AssistantMemoryStore:
     def _clip_score(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
 
+    @staticmethod
+    def _cjk_ngrams(text: str, *, max_terms: int = 80) -> list[str]:
+        chars = [char for char in str(text or "") if _CJK_CHAR_RE.fullmatch(char)]
+        terms: list[str] = []
+        for size in (2, 3):
+            for index in range(0, max(0, len(chars) - size + 1)):
+                term = "".join(chars[index : index + size])
+                if term and term not in terms:
+                    terms.append(term)
+                if len(terms) >= max_terms:
+                    return terms
+        return terms
+
     def upsert(self, record: MemoryRecordInput) -> str:
         now = self._now()
         with closing(self._connect()) as conn:
@@ -149,7 +164,17 @@ class AssistantMemoryStore:
             conn.execute("DELETE FROM memory_fts WHERE memory_id=?", (memory_id,))
             conn.execute(
                 "INSERT INTO memory_fts(memory_id, title, summary, body, tags) VALUES (?, ?, ?, ?, ?)",
-                (memory_id, record.title, record.summary, record.body, " ".join(record.tags + record.entity_keys)),
+                (
+                    memory_id,
+                    record.title,
+                    record.summary,
+                    record.body,
+                    " ".join(
+                        record.tags
+                        + record.entity_keys
+                        + self._cjk_ngrams(f"{record.title} {record.summary} {record.body}")
+                    ),
+                ),
             )
             conn.commit()
         return memory_id
@@ -170,8 +195,16 @@ class AssistantMemoryStore:
 
     @staticmethod
     def _fts_query(query_text: str) -> str:
-        tokens = re.findall(r"[\w\u4e00-\u9fff]+", str(query_text or ""), flags=re.UNICODE)
-        return " OR ".join(tokens[:12])
+        text = str(query_text or "")
+        tokens = re.findall(r"[\w\u4e00-\u9fff]+", text, flags=re.UNICODE)
+        expanded: list[str] = []
+        for token in tokens:
+            if token not in expanded:
+                expanded.append(token)
+            for gram in AssistantMemoryStore._cjk_ngrams(token, max_terms=20):
+                if gram not in expanded:
+                    expanded.append(gram)
+        return " OR ".join(expanded[:24])
 
     def search_lexical(self, *, user_id: int, query_text: str, kinds: list[str] | None = None, scopes: list[str] | None = None, limit: int = 5) -> list[MemorySearchRow]:
         query = self._fts_query(query_text)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import struct
 import subprocess
@@ -1039,6 +1040,27 @@ def test_read_file_preview_marks_small_file_as_full_content(web_manager: MultiBo
     assert content["content"] == "line1"
     assert content["file_size_bytes"] == len(b"line1\n")
     assert content["is_full_content"] is True
+
+def test_read_file_content_returns_png_preview_payload(web_manager: MultiBotManager, temp_dir: Path):
+    image_bytes = _png_bytes(2, 2)
+    save_uploaded_file(web_manager, "main", 1001, "diagram.png", image_bytes)
+
+    content = read_file_content(web_manager, "main", 1001, "diagram.png", mode="head", lines=80)
+
+    assert content["preview_kind"] == "image"
+    assert content["content_type"] == "image/png"
+    assert content["content"] == ""
+    assert base64.b64decode(content["content_base64"]) == image_bytes
+    assert content["file_size_bytes"] == len(image_bytes)
+    assert content["is_full_content"] is True
+
+def test_read_file_content_still_rejects_non_image_binary_as_text(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "payload.bin", b"\xff\xfe\x00\x01")
+
+    with pytest.raises(WebApiError) as exc_info:
+        read_file_content(web_manager, "main", 1001, "payload.bin", mode="head", lines=80)
+
+    assert exc_info.value.code == "unsupported_encoding"
 
 def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
@@ -4270,6 +4292,50 @@ async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     assert session.managed_prompt_hash_seen == "hash-updated"
     assert build_mock.call_args.kwargs["user_text"] == "hello from payload"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_indexes_working_memory_before_assistant_recall(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root-working-index"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.is_compaction_prompt_active", return_value=False), \
+         patch(
+             "bot.web.api_service.sync_managed_prompt_files",
+             return_value=ManagedPromptSyncResult(False, False, "hash-current"),
+         ), \
+         patch("bot.web.api_service.index_working_memories") as working_index_mock, \
+         patch(
+             "bot.web.api_service.compile_assistant_prompt",
+             return_value=AssistantPromptPayload(
+                 prompt_text="hello from payload",
+                 managed_prompt_hash_seen="hash-updated",
+             ),
+         ), \
+         patch("bot.web.api_service.record_assistant_capture", return_value={"id": "cap_1"}), \
+         patch("bot.web.api_service.refresh_compaction_state"), \
+         patch("bot.web.api_service.list_pending_capture_ids", return_value=["cap_1"]), \
+         patch("bot.web.api_service.snapshot_managed_surface", side_effect=[{"a": "1"}, {"a": "1"}]), \
+         patch("bot.web.api_service.finalize_compaction", return_value="none"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service._communicate_codex_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0)):
+        await run_cli_chat(web_manager, "assistant1", 1001, "hello")
+
+    working_index_mock.assert_called_once_with(ANY)
 
 @pytest.mark.asyncio
 async def test_execute_assistant_run_request_applies_dream_result_and_skips_captures(

@@ -37,11 +37,7 @@
         ".exe",
         ".dll",
         ".so",
-        ".wasm",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif"
+        ".wasm"
       ],
       "viewId": "hex"
     }

@@ -1760,6 +1760,51 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("readFile maps raster image preview payload", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            content: "",
+            mode: "head",
+            preview_kind: "image",
+            content_type: "image/png",
+            content_base64: "AA==",
+            file_size_bytes: 4,
+            is_full_content: true,
+            last_modified_ns: "1776420510390927700",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const content = await client.readFile("main", "diagram.png");
+
+    expect(content).toEqual({
+      content: "",
+      mode: "head",
+      workingDir: "",
+      fileSizeBytes: 4,
+      isFullContent: true,
+      lastModifiedNs: "1776420510390927700",
+      previewKind: "image",
+      contentType: "image/png",
+      contentBase64: "AA==",
+    });
+  });
+
   test("writeFile preserves string file versions in the request body", async () => {
     fetchMock
       .mockResolvedValueOnce({

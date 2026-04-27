@@ -45,6 +45,8 @@ import {
   type TerminalWorkbenchStatus,
 } from "./workbenchTypes";
 
+const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
+
 type Props = {
   authToken?: string;
   botAlias: string;
@@ -212,8 +214,11 @@ export function DesktopWorkbench({
           ? "minmax(0, 1fr) 0px 0px"
           : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
-  const previewStatusText = isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
+  const previewStatusText = previewResult?.previewKind === "image"
+    ? "已加载图片预览"
+    : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult);
+  const canEditPreview = previewResult?.previewKind !== "image";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const availableSidebarPanels = structureOnly
     ? ["files"] as const
@@ -411,6 +416,10 @@ export function DesktopWorkbench({
     setPreviewResult(null);
   }
 
+  function isRasterImagePath(path: string) {
+    return RASTER_IMAGE_PREVIEW_RE.test(path);
+  }
+
   const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     try {
@@ -420,7 +429,7 @@ export function DesktopWorkbench({
       setPreviewName(path);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
-      setPreviewContent(result.content || "文件为空");
+      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } finally {
       setPreviewLoading(false);
     }
@@ -444,6 +453,14 @@ export function DesktopWorkbench({
         fileTree.revealPath(path),
       ]);
       setEditorReveal(typeof line === "number" && line > 0 ? { path, line } : null);
+      return;
+    }
+    if (isRasterImagePath(path)) {
+      await Promise.allSettled([
+        loadPreview(path, "preview"),
+        fileTree.revealPath(path),
+      ]);
+      setEditorReveal(null);
       return;
     }
 
@@ -972,17 +989,20 @@ export function DesktopWorkbench({
           title={previewName}
           content={previewContent}
           mode={previewMode}
+          previewKind={previewResult?.previewKind}
+          contentType={previewResult?.contentType}
+          contentBase64={previewResult?.contentBase64}
           variant="desktop"
           desktopAnchorRect={editorPaneBounds}
           loading={previewLoading}
           statusText={previewStatusText}
           onClose={closePreview}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-          onEdit={() => {
+          onEdit={canEditPreview ? () => {
             const nextPath = previewName;
             closePreview();
             void openWorkspaceFile(nextPath);
-          }}
+          } : undefined}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
       ) : null}

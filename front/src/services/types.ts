@@ -181,6 +181,7 @@ export type FileEntry = {
 };
 
 export type FileReadMode = "head" | "cat";
+export type FilePreviewKind = "text" | "image";
 
 export type FileReadResult = {
   content: string;
@@ -189,6 +190,9 @@ export type FileReadResult = {
   fileSizeBytes?: number;
   isFullContent?: boolean;
   lastModifiedNs?: string;
+  previewKind?: FilePreviewKind;
+  contentType?: string;
+  contentBase64?: string;
 };
 
 export type FileWriteResult = {

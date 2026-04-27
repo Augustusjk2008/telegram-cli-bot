@@ -1135,6 +1135,7 @@ export function FileTreePane({
     const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations);
     const isIgnored = gitDecoration === "ignored";
     const itemToneClass = treeItemToneClass(gitDecoration);
+    const itemButtonClassName = "flex h-full min-w-0 flex-1 items-center rounded border border-transparent px-2 text-left transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]";
 
     return (
       <div
@@ -1160,12 +1161,12 @@ export function FileTreePane({
             onDragEnd={resetInternalDrag}
             onClick={() => void tree.toggleDirectory(entry.path)}
             className={clsx(
-              "min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]",
+              itemButtonClassName,
               dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
               itemToneClass,
             )}
           >
-            <span className="flex min-w-0 items-center gap-2">
+            <span className="flex w-full min-w-0 items-center gap-2">
               <TreeNodeIcon kind={iconKind} />
               <span className="truncate">{dirLabel}</span>
             </span>
@@ -1184,9 +1185,9 @@ export function FileTreePane({
                 onOpenFile(entry.path);
               }
             }}
-            className={clsx("min-w-0 flex-1 rounded px-2 py-0.5 text-left hover:bg-[var(--surface-strong)]", itemToneClass)}
+            className={clsx(itemButtonClassName, itemToneClass)}
           >
-            <span className="flex min-w-0 items-center gap-2">
+            <span className="flex w-full min-w-0 items-center gap-2">
               <TreeNodeIcon kind={iconKind} />
               <span className="truncate">{entry.name}</span>
             </span>

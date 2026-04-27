@@ -176,6 +176,9 @@ type RawFileReadResult = {
   file_size_bytes?: number;
   is_full_content?: boolean;
   last_modified_ns?: string | number;
+  preview_kind?: "text" | "image";
+  content_type?: string;
+  content_base64?: string;
 };
 
 type RawFileWriteResult = {
@@ -1624,7 +1627,7 @@ export class RealWebBotClient implements WebBotClient {
       lines: "80",
     });
     const data = await this.requestJson<RawFileReadResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
-    return {
+    const result: FileReadResult = {
       content: data.content || "",
       mode: data.mode || "head",
       workingDir: data.working_dir || "",
@@ -1632,6 +1635,16 @@ export class RealWebBotClient implements WebBotClient {
       isFullContent: data.is_full_content,
       lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
     };
+    if (data.preview_kind) {
+      result.previewKind = data.preview_kind;
+    }
+    if (data.content_type) {
+      result.contentType = data.content_type;
+    }
+    if (data.content_base64) {
+      result.contentBase64 = data.content_base64;
+    }
+    return result;
   }
 
   async readFileFull(botAlias: string, filename: string): Promise<FileReadResult> {
@@ -1641,7 +1654,7 @@ export class RealWebBotClient implements WebBotClient {
       lines: "0",
     });
     const data = await this.requestJson<RawFileReadResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
-    return {
+    const result: FileReadResult = {
       content: data.content || "",
       mode: data.mode || "cat",
       workingDir: data.working_dir || "",
@@ -1649,6 +1662,16 @@ export class RealWebBotClient implements WebBotClient {
       isFullContent: data.is_full_content ?? true,
       lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
     };
+    if (data.preview_kind) {
+      result.previewKind = data.preview_kind;
+    }
+    if (data.content_type) {
+      result.contentType = data.content_type;
+    }
+    if (data.content_base64) {
+      result.contentBase64 = data.content_base64;
+    }
+    return result;
   }
 
   async openPluginView(

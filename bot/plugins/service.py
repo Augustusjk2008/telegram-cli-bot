@@ -56,6 +56,7 @@ class PluginService:
             if source_plugins_root is not None
             else self.repo_root / "examples" / "plugins"
         )
+        self._sync_bundled_plugin_manifests()
         self._workspace_root_for = workspace_root_for or (lambda _alias: self.repo_root)
         self.registry = PluginRegistry(self.plugins_root)
         self.artifacts = ArtifactStore(self.repo_root)
@@ -259,6 +260,46 @@ class PluginService:
             payload["configSchema"] = self._serialize_config_schema(manifest)
         return payload
 
+    def _read_manifest_json(self, path: Path) -> dict[str, Any] | None:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
+    def _merge_bundled_manifest(
+        self,
+        source_raw: dict[str, Any],
+        installed_raw: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = copy.deepcopy(source_raw)
+        if "enabled" in installed_raw:
+            merged["enabled"] = bool(installed_raw.get("enabled"))
+        source_config = merged.get("config") if isinstance(merged.get("config"), dict) else {}
+        installed_config = installed_raw.get("config") if isinstance(installed_raw.get("config"), dict) else {}
+        if source_config or installed_config:
+            merged["config"] = {**source_config, **installed_config}
+        return merged
+
+    def _sync_bundled_plugin_manifests(self) -> None:
+        if not self.source_plugins_root.exists() or not self.plugins_root.exists():
+            return
+        for source_dir in self._iter_source_plugin_dirs():
+            target_manifest_path = self.plugins_root / source_dir.name / "plugin.json"
+            if not target_manifest_path.is_file():
+                continue
+            source_raw = self._read_manifest_json(source_dir / "plugin.json")
+            installed_raw = self._read_manifest_json(target_manifest_path)
+            if source_raw is None or installed_raw is None:
+                continue
+            merged = self._merge_bundled_manifest(source_raw, installed_raw)
+            if merged == installed_raw:
+                continue
+            target_manifest_path.write_text(
+                json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
     def _iter_source_plugin_dirs(self) -> list[Path]:
         root = self.source_plugins_root
         if not root.exists():
@@ -412,7 +453,11 @@ class PluginService:
         }
 
     def list_plugins(self, refresh: bool = False) -> list[dict[str, Any]]:
-        manifests = list(self.registry.discover().values()) if refresh else self.registry.list_manifests()
+        if refresh:
+            self._sync_bundled_plugin_manifests()
+            manifests = list(self.registry.discover().values())
+        else:
+            manifests = self.registry.list_manifests()
         return [self._manifest_payload(manifest) for manifest in manifests]
 
     async def reload_plugins(self) -> list[dict[str, Any]]:
@@ -420,6 +465,7 @@ class PluginService:
             manifest.plugin_id: self._manifest_signature(manifest)
             for manifest in self.registry.list_manifests()
         }
+        self._sync_bundled_plugin_manifests()
         manifests = self.registry.discover()
         after = {
             plugin_id: self._manifest_signature(manifest)

@@ -24,38 +24,43 @@ class DreamMemoryInput:
 
 def extract_hot_path_memories(*, user_id: int, user_text: str, assistant_text: str, source_ref: str) -> list[MemoryRecordInput]:
     text = str(user_text or "").strip()
-    response = str(assistant_text or "").strip()
-    combined = f"{text}\n{response}"
     patterns = [
-        (r"(?:以后|今后|默认|请记住|记住)[:： ]*(.+)", "用户偏好"),
-        (r"(?:我的|我叫|用户名是)[:： ]*([\w\u4e00-\u9fff-]{1,40})", "用户身份"),
+        (r"^(?:请记住|记住|以后|今后|默认)[:： ]*(.+)$", "用户偏好"),
+        (r"^(?:我的名字是|我的用户名是|我叫|用户名是)[:： ]*([\w\u4e00-\u9fff-]{1,40})$", "用户身份"),
     ]
     records: list[MemoryRecordInput] = []
-    for pattern, title in patterns:
-        match = re.search(pattern, combined)
-        if not match:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
-        summary = match.group(1).strip(" 。.\n\r\t")[:120]
-        if not summary:
-            continue
-        records.append(
-            MemoryRecordInput(
-                user_id=user_id,
-                scope="user",
-                kind="semantic",
-                source_type="chat",
-                source_ref=source_ref,
-                title=title,
-                summary=summary,
-                body=f"- {summary}",
-                tags=["preference"],
-                entity_keys=[f"user:{user_id}"],
-                importance=0.85,
-                confidence=0.75,
-                freshness=0.9,
+        for pattern, title in patterns:
+            match = re.search(pattern, line)
+            if not match:
+                continue
+            summary = match.group(1).strip(" 。.\n\r\t")[:120]
+            if not summary:
+                continue
+            records.append(
+                MemoryRecordInput(
+                    user_id=user_id,
+                    scope="user",
+                    kind="semantic",
+                    source_type="chat",
+                    source_ref=source_ref,
+                    title=title,
+                    summary=summary,
+                    body=f"- {summary}",
+                    tags=["preference"] if title == "用户偏好" else ["identity"],
+                    entity_keys=[f"user:{user_id}"],
+                    importance=0.85,
+                    confidence=0.78,
+                    freshness=0.9,
+                )
             )
-        )
-    return records[:3]
+            break
+        if len(records) >= 3:
+            break
+    return records
 
 
 def write_hot_path_memories(home: AssistantHome, *, user_id: int, user_text: str, assistant_text: str, source_ref: str) -> list[str]:
