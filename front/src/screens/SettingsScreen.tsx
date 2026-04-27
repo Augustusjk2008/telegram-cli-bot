@@ -4,7 +4,6 @@ import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square }
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotIdentity } from "../components/BotIdentity";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-import { PluginCatalog } from "../components/PluginCatalog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
@@ -17,7 +16,6 @@ import type {
   CliParamField,
   CliParamsPayload,
   GitProxySettings,
-  PluginSummary,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
@@ -212,7 +210,6 @@ export function SettingsScreen({
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
@@ -381,7 +378,6 @@ export function SettingsScreen({
       client.getTunnelStatus(),
       isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
       isMainBot ? client.getUpdateStatus() : Promise.resolve(null),
-      client.listPlugins(),
       client.listAvatarAssets(),
     ])
       .then(([
@@ -390,7 +386,6 @@ export function SettingsScreen({
         tunnelResult,
         gitProxyResult,
         updateResult,
-        pluginsResult,
         avatarAssetsResult,
       ]) => {
         if (cancelled) return;
@@ -412,7 +407,6 @@ export function SettingsScreen({
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
         const updateData = updateResult.status === "fulfilled" ? updateResult.value : null;
-        const pluginData = pluginsResult.status === "fulfilled" ? pluginsResult.value : [];
         const avatarData = avatarAssetsResult.status === "fulfilled" && avatarAssetsResult.value.length > 0
           ? avatarAssetsResult.value
           : DEFAULT_AVATAR_ASSETS;
@@ -428,7 +422,6 @@ export function SettingsScreen({
         setGitProxySettings(gitProxyData);
         setGitProxyPortDraft(gitProxyData?.port || "");
         setUpdateStatus(updateData);
-        setPlugins(pluginData);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -1572,14 +1565,6 @@ export function SettingsScreen({
             ) : null}
           </section>
         ) : null}
-
-        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-          <div>
-            <h2 className="text-base font-semibold text-[var(--text)]">插件</h2>
-            <p className="text-sm text-[var(--muted)]">检测到的宿主插件和支持格式。</p>
-          </div>
-          <PluginCatalog plugins={plugins} />
-        </div>
 
         {showWorkdirPicker && !workdirLocked ? (
           <DirectoryPickerDialog

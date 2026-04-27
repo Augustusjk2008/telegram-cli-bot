@@ -30,6 +30,10 @@ function describeProcessEvent(event: ChatTraceEvent) {
   return "事件";
 }
 
+function isGenericProcessEvent(event: ChatTraceEvent) {
+  return event.kind !== "commentary" && event.kind !== "cancelled" && event.kind !== "error";
+}
+
 function ChatTracePanelInner({
   messageId,
   trace,
@@ -120,16 +124,27 @@ function ChatTracePanelInner({
             }
 
             const event = entry.event;
+            const isGenericEvent = isGenericProcessEvent(event);
             return (
               <div
                 key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
                 data-trace-seq={index}
-                className="rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                className={isGenericEvent
+                  ? "rounded-2xl border border-violet-200 bg-violet-50/80 px-3 py-2"
+                  : "rounded-2xl border border-slate-200 bg-white px-3 py-2"}
               >
-                <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+                <div
+                  className={isGenericEvent
+                    ? "text-[11px] font-medium uppercase tracking-[0.12em] text-violet-600"
+                    : "text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500"}
+                >
                   {describeProcessEvent(event)}
                 </div>
-                <div className="mt-1 whitespace-pre-wrap break-all text-sm text-slate-800">
+                <div
+                  className={isGenericEvent
+                    ? "mt-1 whitespace-pre-wrap break-all text-sm text-violet-900"
+                    : "mt-1 whitespace-pre-wrap break-all text-sm text-slate-800"}
+                >
                   {event.summary || "无摘要"}
                 </div>
               </div>

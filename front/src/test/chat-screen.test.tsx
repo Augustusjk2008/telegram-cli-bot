@@ -657,6 +657,56 @@ test("lazy-loads trace details and groups tool call/result into one trace card",
   expect(traceItems[2]?.textContent).toContain("目录已读取完成。");
 });
 
+test("shows generic process events with light-violet style after expanding trace panel", async () => {
+  const user = userEvent.setup();
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      {
+        kind: "status",
+        summary: "检测到额外事件。",
+      },
+    ],
+    traceCount: 1,
+    toolCallCount: 0,
+    processCount: 1,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "看看过程",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "已完成",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          traceCount: 1,
+          toolCallCount: 0,
+          processCount: 1,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "展开过程详情" }));
+
+  const panel = screen.getByTestId("chat-trace-panel-assistant-1");
+  const eventRow = panel.querySelector("[data-trace-seq='0']");
+  expect(eventRow).not.toBeNull();
+  expect(eventRow?.textContent).toContain("事件");
+  expect(eventRow?.className).toContain("bg-violet-50/80");
+  expect(eventRow?.className).toContain("border-violet-200");
+});
+
 test("shows pending tool state when tool call has no matching result", async () => {
   const user = userEvent.setup();
   const getMessageTrace = vi.fn(async () => ({
