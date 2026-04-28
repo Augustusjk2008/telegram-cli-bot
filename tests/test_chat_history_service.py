@@ -88,3 +88,42 @@ def test_history_service_marks_restarted_streaming_row_stale_when_session_is_idl
     assert items[-1]["state"] == "error"
     snapshot = restored_service.build_session_snapshot(profile, restored_session)
     assert snapshot["running_reply"] is None
+
+
+def test_list_history_does_not_repeat_failed_trace_recovery(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    service = ChatHistoryService(store)
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(workspace))
+    profile = BotProfile(alias="main", cli_type="codex", working_dir=str(workspace))
+
+    handle = service.start_turn(
+        profile=profile,
+        session=session,
+        user_text="查目录",
+        native_provider="codex",
+    )
+    service.complete_turn(
+        handle,
+        content="完成",
+        completion_state="completed",
+        native_session_id="codex-session-1",
+    )
+
+    calls = []
+
+    def fake_recover(*args, **kwargs):
+        calls.append((args, kwargs))
+        return None
+
+    monkeypatch.setattr("bot.web.chat_history_service.resolve_native_trace_for_turn", fake_recover)
+
+    service.list_history(profile, session)
+    service.list_history(profile, session)
+
+    assert len(calls) == 1

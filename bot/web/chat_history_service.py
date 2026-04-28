@@ -32,6 +32,8 @@ class ChatHistoryService:
         )
 
     def _should_attempt_trace_recovery(self, context: dict[str, Any]) -> bool:
+        if str(context.get("trace_recovery_status") or "") in {"no_trace", "recovered", "kept_existing"}:
+            return False
         if str(context.get("role") or "") != "assistant":
             return False
         if str(context.get("completion_state") or "") != "completed":
@@ -66,6 +68,7 @@ class ChatHistoryService:
             return False
 
         provider = normalize_cli_type(str(context.get("native_provider") or ""))
+        turn_id = str(context.get("turn_id") or "")
         recovered = resolve_native_trace_for_turn(
             provider,
             str(context.get("native_session_id") or ""),
@@ -74,8 +77,11 @@ class ChatHistoryService:
             cwd_hint=str(context.get("working_dir") or "") or None,
         )
         if not self._should_replace_trace(context, recovered):
+            status = "kept_existing" if int(context.get("trace_count") or 0) > 0 else "no_trace"
+            self.store.mark_trace_recovery_attempted(turn_id, status=status)
             return False
-        self.store.replace_trace_events(str(context.get("turn_id") or ""), recovered["trace"])
+        self.store.replace_trace_events(turn_id, recovered["trace"])
+        self.store.mark_trace_recovery_attempted(turn_id, status="recovered")
         return True
 
     def start_turn(

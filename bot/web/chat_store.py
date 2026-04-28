@@ -124,6 +124,21 @@ class ChatStore:
         assert conn is not None
         return conn
 
+    def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _ensure_column(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        column_name: str,
+        column_type: str,
+    ) -> None:
+        if column_name in self._table_columns(conn, table):
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}")
+
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
             """
@@ -165,6 +180,8 @@ class ChatStore:
                 completed_at TEXT,
                 error_code TEXT,
                 error_message TEXT,
+                trace_recovery_attempted_at TEXT,
+                trace_recovery_status TEXT,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
@@ -207,6 +224,8 @@ class ChatStore:
             ON trace_events(turn_id, ordinal);
             """
         )
+        self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
+        self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
 
     def _next_turn_seq(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(
@@ -525,6 +544,23 @@ class ChatStore:
                 ),
             )
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+
+    def mark_trace_recovery_attempted(self, turn_id: str, *, status: str) -> None:
+        now = _utc_now()
+        normalized_status = str(status or "").strip() or "attempted"
+        with self._connect_for_write() as conn:
+            result = conn.execute(
+                """
+                UPDATE turns
+                SET trace_recovery_attempted_at = ?,
+                    trace_recovery_status = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, normalized_status, now, turn_id),
+            )
+            if result.rowcount == 0:
+                raise KeyError(turn_id)
 
     def replace_trace_events(self, turn_id: str, trace: list[dict[str, Any]] | None) -> None:
         now = _utc_now()
@@ -1184,7 +1220,9 @@ class ChatStore:
                     conversation.working_dir AS working_dir,
                     turn.native_provider AS native_provider,
                     turn.native_session_id AS native_session_id,
-                    turn.completion_state AS completion_state
+                    turn.completion_state AS completion_state,
+                    turn.trace_recovery_attempted_at AS trace_recovery_attempted_at,
+                    turn.trace_recovery_status AS trace_recovery_status
                 FROM messages AS assistant
                 JOIN turns AS turn ON turn.id = assistant.turn_id
                 JOIN conversations AS conversation ON conversation.id = assistant.conversation_id
@@ -1207,6 +1245,8 @@ class ChatStore:
                 "native_provider": str(row["native_provider"] or ""),
                 "native_session_id": str(row["native_session_id"] or ""),
                 "completion_state": str(row["completion_state"] or ""),
+                "trace_recovery_attempted_at": str(row["trace_recovery_attempted_at"] or ""),
+                "trace_recovery_status": str(row["trace_recovery_status"] or ""),
                 "trace_count": int(trace_stats.get("trace_count", 0) or 0),
                 "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
                 "process_count": int(trace_stats.get("process_count", 0) or 0),
