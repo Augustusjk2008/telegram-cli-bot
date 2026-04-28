@@ -62,6 +62,73 @@ version_ge() {
   dpkg --compare-versions "$current" ge "$minimum"
 }
 
+detect_tailwind_oxide_binding() {
+  local front_dir="$1"
+  local node_platform node_arch libc_flavor
+
+  node_platform="$(cd "$front_dir" && node -p "process.platform")"
+  node_arch="$(cd "$front_dir" && node -p "process.arch")"
+  libc_flavor="gnu"
+
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | head -n1 | grep -qi musl; then
+    libc_flavor="musl"
+  fi
+
+  if [[ "$node_platform" != "linux" ]]; then
+    return 1
+  fi
+
+  case "$node_arch" in
+    x64)
+      printf '@tailwindcss/oxide-linux-x64-%s\n' "$libc_flavor"
+      ;;
+    arm64)
+      printf '@tailwindcss/oxide-linux-arm64-%s\n' "$libc_flavor"
+      ;;
+    arm)
+      if [[ "$libc_flavor" == "gnu" ]]; then
+        printf '@tailwindcss/oxide-linux-arm-gnueabihf\n'
+        return 0
+      fi
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ensure_tailwind_oxide_binding() {
+  local front_dir="$SCRIPT_DIR/front"
+  local binding_name oxide_version
+
+  if [[ ! -d "$front_dir/node_modules/@tailwindcss/oxide" ]]; then
+    return 0
+  fi
+
+  if (cd "$front_dir" && node -e "require('@tailwindcss/oxide')" >/dev/null 2>&1); then
+    info "Tailwind oxide 原生绑定正常"
+    return 0
+  fi
+
+  if ! binding_name="$(detect_tailwind_oxide_binding "$front_dir")"; then
+    warn "Tailwind oxide 原生绑定加载失败，当前平台暂不支持自动修复"
+    return 0
+  fi
+
+  oxide_version="$(cd "$front_dir" && node -p "require('./node_modules/@tailwindcss/oxide/package.json').version")"
+  warn "检测到 Tailwind oxide 原生绑定缺失，尝试补装 ${binding_name}@${oxide_version}"
+  (cd "$front_dir" && npm install --no-save "${binding_name}@${oxide_version}")
+
+  if (cd "$front_dir" && node -e "require('@tailwindcss/oxide')" >/dev/null 2>&1); then
+    info "Tailwind oxide 原生绑定已修复"
+    return 0
+  fi
+
+  fail "Tailwind oxide 原生绑定修复失败，请删除 front/node_modules 后重试"
+  return 1
+}
+
 detect_python() {
   if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
     printf '%s\n' "$SCRIPT_DIR/.venv/bin/python"
@@ -207,6 +274,7 @@ step "安装后端依赖"
 
 step "安装前端依赖"
 (cd front && npm install)
+ensure_tailwind_oxide_binding
 
 step "构建前端"
 (cd front && npm run build)
