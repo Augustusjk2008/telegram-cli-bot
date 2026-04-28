@@ -6,6 +6,7 @@ cd "$SCRIPT_DIR"
 
 CHECK_ONLY=0
 NON_INTERACTIVE=0
+INSTALL_USER_PHASE="${INSTALL_USER_PHASE:-0}"
 for arg in "$@"; do
   case "$arg" in
     --check-only) CHECK_ONLY=1 ;;
@@ -253,14 +254,23 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
   exit 0
 fi
 
-step "安装系统依赖"
-$SUDO apt-get update
-$SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
+if [[ "$INSTALL_USER_PHASE" != "1" ]]; then
+  step "安装系统依赖"
+  $SUDO apt-get update
+  $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
 
-if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
-  step "安装 Node.js LTS"
-  curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
-  $SUDO apt-get install -y nodejs
+  if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
+    step "安装 Node.js LTS"
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
+    $SUDO apt-get install -y nodejs
+  fi
+
+  if [[ ${EUID:-0} -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    step "修复项目目录权限"
+    chown -R "${SUDO_UID:-$(id -u "$SUDO_USER")}":"${SUDO_GID:-$(id -g "$SUDO_USER")}" "$SCRIPT_DIR"
+    info "切回 ${SUDO_USER} 执行项目安装步骤"
+    exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 bash "$0" "$@"
+  fi
 fi
 
 step "准备 Python 虚拟环境"
