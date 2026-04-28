@@ -24,10 +24,11 @@ export function SearchPane({ botAlias, client, onOpenFile }: Props) {
       return;
     }
 
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     let cancelled = false;
     setLoading(true);
     const timer = window.setTimeout(() => {
-      void client.searchWorkspace(botAlias, nextQuery, 100)
+      void client.searchWorkspace(botAlias, nextQuery, 100, controller?.signal)
         .then((result) => {
           if (!cancelled) {
             setItems(result.items);
@@ -35,10 +36,14 @@ export function SearchPane({ botAlias, client, onOpenFile }: Props) {
           }
         })
         .catch((caught) => {
-          if (!cancelled) {
-            setItems([]);
-            setError(caught instanceof Error ? caught.message : "搜索失败");
+          if (cancelled) {
+            return;
           }
+          if (typeof DOMException !== "undefined" && caught instanceof DOMException && caught.name === "AbortError") {
+            return;
+          }
+          setItems([]);
+          setError(caught instanceof Error ? caught.message : "搜索失败");
         })
         .finally(() => {
           if (!cancelled) {
@@ -49,6 +54,7 @@ export function SearchPane({ botAlias, client, onOpenFile }: Props) {
 
     return () => {
       cancelled = true;
+      controller?.abort();
       window.clearTimeout(timer);
     };
   }, [botAlias, client, query]);

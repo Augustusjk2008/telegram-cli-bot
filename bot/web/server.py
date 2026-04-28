@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import getpass
 import ipaddress
 import json
@@ -1135,7 +1136,12 @@ class WebApiServer:
         workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
         query = request.query.get("q", "")
         limit = int(request.query.get("limit", "50"))
-        return _json({"ok": True, "data": quick_open_files(workspace, query, limit=limit)})
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            None,
+            functools.partial(quick_open_files, workspace, query, limit=limit),
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_workspace_search(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
@@ -1143,7 +1149,12 @@ class WebApiServer:
         workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
         query = request.query.get("q", "")
         limit = int(request.query.get("limit", "100"))
-        return _json({"ok": True, "data": search_workspace_text(workspace, query, limit=limit)})
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            None,
+            functools.partial(search_workspace_text, workspace, query, limit=limit),
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_workspace_outline(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)

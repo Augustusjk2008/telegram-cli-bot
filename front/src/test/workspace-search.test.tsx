@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
+import { SearchPane } from "../workbench/SearchPane";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 
 beforeEach(() => {
@@ -15,17 +17,19 @@ afterEach(() => {
 
 function renderWorkbench(client: MockWebBotClient) {
   render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={client}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench
+        authToken="123"
+        botAlias="main"
+        botAvatarName="avatar_01.png"
+        userAvatarName="avatar_01.png"
+        client={client}
+        themeName="deep-space"
+        viewMode="desktop"
+        onViewModeChange={() => {}}
+        onOpenBotSwitcher={() => {}}
+      />
+    </PersistentTerminalProvider>,
   );
 }
 
@@ -110,4 +114,31 @@ test("outline pane follows active editor file", async () => {
 
   expect(await screen.findByRole("button", { name: "run function 第 2 行" })).toBeInTheDocument();
   expect(client.getWorkspaceOutline).toHaveBeenCalledWith("main", "src/app.py");
+});
+
+test("search pane aborts stale workspace searches", async () => {
+  vi.useFakeTimers();
+  const client = new MockWebBotClient();
+  const signals: Array<AbortSignal | undefined> = [];
+  vi.spyOn(client, "searchWorkspace").mockImplementation((_alias, _query, _limit, signal) => {
+    signals.push(signal);
+    return Promise.resolve({ items: [] });
+  });
+
+  render(<SearchPane botAlias="main" client={client} onOpenFile={() => {}} />);
+
+  const input = screen.getByLabelText("全文搜索");
+  await act(async () => {
+    fireEvent.change(input, { target: { value: "a" } });
+    await vi.advanceTimersByTimeAsync(180);
+  });
+  await act(async () => {
+    fireEvent.change(input, { target: { value: "ab" } });
+    await vi.advanceTimersByTimeAsync(180);
+  });
+
+  expect(client.searchWorkspace).toHaveBeenCalledTimes(2);
+  expect(signals[0]?.aborted).toBe(true);
+  expect(signals[1]?.aborted).toBe(false);
+  vi.useRealTimers();
 });

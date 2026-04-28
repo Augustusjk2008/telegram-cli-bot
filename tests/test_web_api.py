@@ -2520,6 +2520,54 @@ async def test_workspace_search_routes_use_current_working_directory(
 
 
 @pytest.mark.asyncio
+async def test_workspace_search_route_runs_search_in_executor(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    from bot.web import server as server_module
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    search_calls = []
+    loop_calls = []
+    real_loop = asyncio.get_running_loop()
+
+    def fake_search(workspace_arg, query, *, limit=100):
+        search_calls.append((workspace_arg, query, limit))
+        return {"items": []}
+
+    class FakeLoop:
+        def __getattr__(self, name):
+            return getattr(real_loop, name)
+
+        async def run_in_executor(self, executor, func):
+            loop_calls.append(executor)
+            return func()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            monkeypatch.setattr(server_module, "search_workspace_text", fake_search)
+            monkeypatch.setattr(server_module.asyncio, "get_running_loop", lambda: FakeLoop())
+            resp = await client.get("/api/bots/main/workspace/search?q=needle&limit=5")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert payload["data"] == {"items": []}
+    assert search_calls == [(str(workspace), "needle", 5)]
+    assert loop_calls == [None]
+
+
+@pytest.mark.asyncio
 async def test_history_delta_route_returns_items_after_last_id(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

@@ -120,7 +120,7 @@ export interface WebBotClient {
   copyPath(botAlias: string, path: string): Promise<FileCopyResult>;
   movePath(botAlias: string, path: string, targetParentPath: string): Promise<FileMoveResult>;
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
-  searchWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceSearchResult>;
+  searchWorkspace(botAlias: string, query: string, limit?: number, signal?: AbortSignal): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
   resolveWorkspaceDefinition(
     botAlias: string,

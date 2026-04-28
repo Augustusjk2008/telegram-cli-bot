@@ -2332,7 +2332,12 @@ export class MockWebBotClient implements WebBotClient {
     return { items };
   }
 
-  async searchWorkspace(botAlias: string, query: string, limit = 100): Promise<WorkspaceSearchResult> {
+  async searchWorkspace(
+    botAlias: string,
+    query: string,
+    limit = 100,
+    _signal?: AbortSignal,
+  ): Promise<WorkspaceSearchResult> {
     const q = query.trim().toLowerCase();
     if (!q) {
       return { items: [] };

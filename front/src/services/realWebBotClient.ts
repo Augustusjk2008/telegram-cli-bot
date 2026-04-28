@@ -1904,13 +1904,19 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
-  async searchWorkspace(botAlias: string, query: string, limit = 100): Promise<WorkspaceSearchResult> {
+  async searchWorkspace(
+    botAlias: string,
+    query: string,
+    limit = 100,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceSearchResult> {
     const params = new URLSearchParams({
       q: query,
       limit: String(limit),
     });
     return this.requestJson<WorkspaceSearchResult>(
       `/api/bots/${encodeURIComponent(botAlias)}/workspace/search?${params.toString()}`,
+      { signal },
     );
   }
 
