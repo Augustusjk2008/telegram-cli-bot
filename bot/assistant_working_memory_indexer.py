@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
+from threading import RLock
 
 from bot.assistant_home import AssistantHome
 from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
@@ -14,12 +16,36 @@ _WORKING_KINDS = {
     "user_prefs": "semantic",
     "recent_summary": "episodic",
 }
+_INDEX_CACHE_LOCK = RLock()
+_INDEX_CACHE: dict[tuple[str, int], tuple[tuple[tuple[str, int, int], ...], WorkingMemoryIndexResult]] = {}
 
 
 @dataclass(frozen=True)
 class WorkingMemoryIndexResult:
     indexed_count: int
     memory_ids: list[str]
+
+
+def _fingerprint_path(path: Path) -> tuple[int, int]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (0, -1)
+    return (int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _working_memory_fingerprint(home: AssistantHome) -> tuple[tuple[str, int, int], ...]:
+    working_root = home.root / "memory" / "working"
+    rows: list[tuple[str, int, int]] = []
+    for name in _WORKING_KINDS:
+        mtime_ns, size = _fingerprint_path(working_root / f"{name}.md")
+        rows.append((name, mtime_ns, size))
+    return tuple(rows)
+
+
+def clear_working_memory_index_cache() -> None:
+    with _INDEX_CACHE_LOCK:
+        _INDEX_CACHE.clear()
 
 
 def _list_items(text: str) -> list[str]:
@@ -51,7 +77,20 @@ def _invalidate_stale_refs(store: AssistantMemoryStore, *, name: str, active_ref
             store.invalidate(str(row["id"]), reason="working_memory_reindexed")
 
 
-def index_working_memories(home: AssistantHome, *, user_id: int = 0) -> WorkingMemoryIndexResult:
+def index_working_memories(
+    home: AssistantHome,
+    *,
+    user_id: int = 0,
+    force: bool = False,
+) -> WorkingMemoryIndexResult:
+    cache_key = (str(home.root.resolve()), int(user_id))
+    fingerprint = _working_memory_fingerprint(home)
+    if not force:
+        with _INDEX_CACHE_LOCK:
+            cached = _INDEX_CACHE.get(cache_key)
+            if cached and cached[0] == fingerprint:
+                return WorkingMemoryIndexResult(indexed_count=0, memory_ids=list(cached[1].memory_ids))
+
     store = AssistantMemoryStore(home)
     memory_ids: list[str] = []
     working_root = home.root / "memory" / "working"
@@ -80,4 +119,7 @@ def index_working_memories(home: AssistantHome, *, user_id: int = 0) -> WorkingM
                     )
                 )
             )
-    return WorkingMemoryIndexResult(indexed_count=len(memory_ids), memory_ids=memory_ids)
+    result = WorkingMemoryIndexResult(indexed_count=len(memory_ids), memory_ids=memory_ids)
+    with _INDEX_CACHE_LOCK:
+        _INDEX_CACHE[cache_key] = (fingerprint, result)
+    return result

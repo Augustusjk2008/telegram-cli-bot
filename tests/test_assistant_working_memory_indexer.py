@@ -28,5 +28,21 @@ def test_index_working_memories_is_idempotent(tmp_path):
     second = index_working_memories(home)
 
     assert first.indexed_count == 1
-    assert second.indexed_count == 1
+    assert second.indexed_count == 0
     assert first.memory_ids == second.memory_ids
+
+
+def test_index_working_memories_skips_unchanged_files(tmp_path):
+    home = bootstrap_assistant_home(tmp_path)
+    target = home.root / "memory" / "working" / "open_loops.md"
+    target.write_text(
+        "- email_recvbox_check 仍需复测。\n",
+        encoding="utf-8",
+    )
+
+    first = index_working_memories(home)
+    second = index_working_memories(home)
+
+    assert first.indexed_count == 1
+    assert second.indexed_count == 0
+    assert second.memory_ids == first.memory_ids
