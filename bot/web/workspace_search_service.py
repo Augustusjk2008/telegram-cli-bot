@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import heapq
 import json
 import os
 import re
@@ -142,26 +143,34 @@ def _quick_open_score(path: str, query: str) -> int:
     return score
 
 
+def _iter_quick_open_candidates(paths: Iterable[str], q: str) -> Iterable[tuple[int, int, str]]:
+    lowered_query = q.lower()
+    for index, path in enumerate(paths):
+        normalized = path.replace("\\", "/")
+        if lowered_query and lowered_query not in normalized.lower():
+            continue
+        score = _quick_open_score(normalized, q)
+        if lowered_query and score <= 0:
+            continue
+        yield (score, index, normalized)
+
+
 def quick_open_files(workspace: Path | str, query: str, *, limit: int = 50) -> dict[str, object]:
     root = _workspace_root(workspace)
     q = (query or "").strip()
     safe_limit = max(1, min(int(limit or 50), 200))
-    items: list[tuple[int, int, str]] = []
-
-    for index, path in enumerate(workspace_index_service.get_workspace_files(root, _list_workspace_files)):
-        normalized = path.replace("\\", "/")
-        if q and q.lower() not in normalized.lower():
-            continue
-        score = _quick_open_score(normalized, q)
-        if q and score <= 0:
-            continue
-        items.append((score, index, normalized))
-
-    items.sort(key=lambda item: (-item[0], item[1], item[2]))
+    items = heapq.nsmallest(
+        safe_limit,
+        _iter_quick_open_candidates(
+            workspace_index_service.get_workspace_files(root, _list_workspace_files),
+            q,
+        ),
+        key=lambda item: (-item[0], item[2], item[1]),
+    )
     return {
         "items": [
             {"path": path, "score": score}
-            for score, _index, path in items[:safe_limit]
+            for score, _index, path in items
         ]
     }
 

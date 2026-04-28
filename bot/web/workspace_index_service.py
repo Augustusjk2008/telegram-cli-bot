@@ -17,7 +17,7 @@ class _IndexEntry:
 
 _CACHE: dict[str, _IndexEntry] = {}
 _LOCK = threading.RLock()
-DEFAULT_TTL_SECONDS = 5.0
+DEFAULT_TTL_SECONDS = 30.0
 
 
 def _cache_key(workspace: Path | str) -> str:

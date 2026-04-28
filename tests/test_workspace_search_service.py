@@ -64,3 +64,29 @@ def test_build_file_outline_returns_python_symbols(tmp_path):
         {"name": "Api", "kind": "class", "line": 1},
         {"name": "run", "kind": "function", "line": 2},
     ]
+
+
+def test_quick_open_files_uses_bounded_top_k(tmp_path, monkeypatch):
+    from bot.web import workspace_index_service
+    from bot.web import workspace_search_service as service
+
+    for index in range(300):
+        path = tmp_path / "src" / f"api_{index:03d}.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n", encoding="utf-8")
+
+    workspace_index_service.clear_workspace_indexes()
+    calls = []
+    original_score = service._quick_open_score
+
+    def counted_score(path: str, query: str) -> int:
+        calls.append(path)
+        return original_score(path, query)
+
+    monkeypatch.setattr(service, "_quick_open_score", counted_score)
+
+    result = service.quick_open_files(tmp_path, "api", limit=10)
+
+    assert len(result["items"]) == 10
+    assert len(calls) == 300
+    assert result["items"][0]["path"].endswith("api_000.py")
