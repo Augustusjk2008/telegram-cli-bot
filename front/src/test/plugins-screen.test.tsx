@@ -61,7 +61,7 @@ test("plugins screen opens folder picker before installing plugin", async () => 
 
   await screen.findByText("Vivado Waveform");
   await user.click(screen.getByRole("button", { name: "安装插件" }));
-  expect(await screen.findByRole("dialog", { name: "选择插件目录" })).toBeInTheDocument();
+  expect(await screen.findByRole("dialog", { name: "选择含 plugin.json 的插件根目录" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "使用当前目录" }));
 
   await waitFor(() => {
