@@ -20,6 +20,8 @@ from bot.runtime_paths import (
 LOCAL_HISTORY_BACKEND = "local_v1"
 LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
 _STORE_PREPARE_LOCK = Lock()
+_PREPARED_STORES: set[Path] = set()
+_SCHEMA_READY_STORES: set[Path] = set()
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,12 @@ def _parse_json(value: str | None) -> Any:
 
 def _row_text(row: sqlite3.Row, key: str) -> str:
     return str(row[key] or "")
+
+
+def clear_chat_store_prepare_cache() -> None:
+    with _STORE_PREPARE_LOCK:
+        _PREPARED_STORES.clear()
+        _SCHEMA_READY_STORES.clear()
 
 
 class ChatStore:
@@ -97,16 +105,21 @@ class ChatStore:
 
     def _prepare_store(self, *, create: bool) -> bool:
         with _STORE_PREPARE_LOCK:
+            if self.db_path in _PREPARED_STORES and self._db_exists():
+                return True
             if self._db_exists():
                 self._write_workspace_metadata(migrated_from_legacy_project_store=False)
+                _PREPARED_STORES.add(self.db_path)
                 return True
             if self.legacy_db_path.is_file():
                 self._migrate_legacy_store()
+                _PREPARED_STORES.add(self.db_path)
                 return True
             if not create:
                 return False
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._write_workspace_metadata(migrated_from_legacy_project_store=False)
+            _PREPARED_STORES.add(self.db_path)
             return True
 
     def _connect(self, *, create: bool) -> sqlite3.Connection | None:
@@ -114,15 +127,22 @@ class ChatStore:
             return None
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        self._ensure_schema(conn)
+        self._ensure_schema_once(conn)
         return conn
 
     def _connect_for_write(self) -> sqlite3.Connection:
         conn = self._connect(create=True)
         assert conn is not None
         return conn
+
+    def _ensure_schema_once(self, conn: sqlite3.Connection) -> None:
+        with _STORE_PREPARE_LOCK:
+            if self.db_path in _SCHEMA_READY_STORES:
+                return
+            conn.execute("PRAGMA journal_mode=WAL")
+            self._ensure_schema(conn)
+            _SCHEMA_READY_STORES.add(self.db_path)
 
     def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()

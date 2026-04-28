@@ -3,6 +3,7 @@ import sqlite3
 from pathlib import Path
 
 import bot.runtime_paths as runtime_paths
+from bot.web import chat_store as chat_store_module
 from bot.web.chat_store import ChatStore, LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH
 
 
@@ -439,3 +440,37 @@ def test_append_trace_events_writes_batch_with_stable_ordinals(monkeypatch, tmp_
 
     assert [item["ordinal"] for item in trace] == [1, 2]
     assert [item["kind"] for item in trace] == ["commentary", "tool_call"]
+
+
+def test_chat_store_schema_is_prepared_once_per_db_path(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    chat_store_module.clear_chat_store_prepare_cache()
+    calls = []
+    original = ChatStore._ensure_schema
+
+    def counted(self, conn):
+        calls.append(self.db_path)
+        return original(self, conn)
+
+    monkeypatch.setattr(ChatStore, "_ensure_schema", counted)
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=0,
+        user_text="查目录",
+        native_provider="codex",
+    )
+    store.replace_assistant_content(handle, "预览")
+    store.count_history(bot_id=1, user_id=1001, working_dir=str(workspace), session_epoch=0)
+
+    assert calls == [store.db_path]
