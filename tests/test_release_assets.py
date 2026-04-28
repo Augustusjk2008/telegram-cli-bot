@@ -39,6 +39,7 @@ def test_local_release_script_supports_version_bump_and_publish():
     assert '$RunChecks' in content
     assert "AllowDirtyWorktree" in content
     assert "AutoConfirmDirtyWorktree" in content
+    assert "SkipWindowsPortable" in content
     assert "Read-Host" in content
     assert 'Set-Content -LiteralPath $script:VersionFile' in content
     assert "Commit-ReleaseChanges" in content
@@ -48,6 +49,7 @@ def test_local_release_script_supports_version_bump_and_publish():
     assert '"{0}-windows-x64-installer-{1}.zip"' in content
     assert '"{0}-linux-x64-{1}.tar.gz"' in content
     assert "WindowsInstallerArchive" in content
+    assert 'Write-Info "Windows 绿色版包: 已跳过"' in content
     assert "portable-win\\build-portable.ps1" in content
     assert ".distribution.json" in content
     assert "packageKind" in content

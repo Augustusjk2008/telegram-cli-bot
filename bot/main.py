@@ -129,12 +129,35 @@ def _get_local_browser_url(bind: RuntimeWebBind) -> str:
     return f"http://127.0.0.1:{bind.actual_port}"
 
 
+def _env_flag_enabled(name: str, default: bool = True) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _should_open_local_browser() -> bool:
+    if not _env_flag_enabled("WEB_AUTO_OPEN_BROWSER", True):
+        return False
+    if sys.platform in {"win32", "darwin"}:
+        return True
+    if sys.platform.startswith(("linux", "freebsd", "openbsd", "netbsd")):
+        return any(
+            os.environ.get(name)
+            for name in ("DISPLAY", "WAYLAND_DISPLAY", "MIR_SOCKET", "BROWSER")
+        )
+    return True
+
+
 def _open_default_browser(url: str) -> bool:
     return bool(webbrowser.open(url, new=2))
 
 
 async def _open_local_browser(bind: RuntimeWebBind):
     url = _get_local_browser_url(bind)
+    if not _should_open_local_browser():
+        logger.info("当前环境未检测到图形浏览器，跳过自动打开: %s", url)
+        return
     try:
         opened = await asyncio.to_thread(_open_default_browser, url)
         if opened:
