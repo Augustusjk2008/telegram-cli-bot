@@ -7,8 +7,19 @@ import type {
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
+  AssistantMemoryEvalReport,
+  AssistantMemoryEvalRun,
+  AssistantMemoryInvalidateResult,
+  AssistantMemoryReindexResult,
+  AssistantMemorySearchResult,
+  AssistantPerfDiagnostics,
+  AssistantPerfRecord,
+  AssistantProposal,
+  AssistantProposalDetail,
   AssistantRuntimePendingRun,
   AssistantRuntimeSnapshot,
+  AssistantUpgradeApplyLog,
+  AssistantUpgradeApplyResult,
   Capability,
   CreateAssistantCronJobInput,
   GitActionResult,
@@ -375,6 +386,113 @@ type RawAppUpdateDownloadProgress = {
   total_bytes?: number;
   percent?: number;
   message?: string;
+};
+
+type RawAssistantProposal = {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  status: string;
+  created_at?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  applied_at?: string;
+};
+
+type RawAssistantUpgradeApplyState = {
+  available?: boolean;
+  applied?: boolean;
+  last_error?: string;
+  last_error_at?: string;
+  last_error_log_path?: string;
+};
+
+type RawAssistantProposalDetail = {
+  proposal: RawAssistantProposal;
+  diff?: {
+    available?: boolean;
+    source?: string;
+    text?: string;
+  };
+  apply?: RawAssistantUpgradeApplyState;
+};
+
+type RawAssistantUpgradeApplyResult = {
+  id: string;
+  status: string;
+  patch_path?: string;
+  repo_root?: string;
+  applied_at?: string;
+};
+
+type RawAssistantUpgradeApplyLog = {
+  id: string;
+  status: string;
+  repo_root?: string;
+  patch_path?: string;
+  applied_at?: string;
+  failed_at?: string;
+  error?: string;
+};
+
+type RawAssistantMemorySearchItem = {
+  id: string;
+  kind: string;
+  scope: string;
+  title: string;
+  summary: string;
+  body: string;
+  score?: number;
+  source_type?: string;
+  source_ref?: string;
+  updated_at?: string;
+  invalidated_at?: string;
+};
+
+type RawAssistantMemoryEvalReportRow = {
+  query?: string;
+  prompt_block?: string;
+  hit?: boolean;
+  stale?: boolean;
+  audit_path?: string | null;
+};
+
+type RawAssistantMemoryEvalReport = {
+  report_path?: string;
+  created_at?: string;
+  metrics?: {
+    hit_at_5?: number;
+    stale_recall_rate?: number;
+  };
+  rows?: RawAssistantMemoryEvalReportRow[];
+};
+
+type RawAssistantPerfRecord = {
+  run_id?: string;
+  created_at?: string;
+  bot_alias?: string;
+  source?: string;
+  task_mode?: string;
+  interactive?: boolean;
+  user_id?: number;
+  status?: string;
+  stage_durations?: {
+    sync_ms?: number;
+    index_ms?: number;
+    recall_ms?: number;
+    cli_ms?: number;
+    db_ms?: number;
+    trace_ms?: number;
+    plugin_ms?: number;
+  };
+  elapsed_ms?: number;
+  prompt_chars?: number;
+  output_chars?: number;
+  trace_count?: number;
+  tool_call_count?: number;
+  process_count?: number;
+  error?: string;
 };
 
 type RawAssistantCronSchedule = {
@@ -909,6 +1027,166 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
     ...(typeof raw.total_bytes === "number" ? { totalBytes: raw.total_bytes } : {}),
     ...(typeof raw.percent === "number" ? { percent: raw.percent } : {}),
     ...(raw.message ? { message: raw.message } : {}),
+  };
+}
+
+function mapAssistantProposal(raw: RawAssistantProposal): AssistantProposal {
+  return {
+    id: raw.id,
+    kind: raw.kind || "",
+    title: raw.title || raw.id,
+    body: raw.body || "",
+    status: raw.status || "proposed",
+    createdAt: raw.created_at || "",
+    reviewedBy: raw.reviewed_by || "",
+    reviewedAt: raw.reviewed_at || "",
+    appliedAt: raw.applied_at || "",
+  };
+}
+
+function mapAssistantProposalDetail(raw: RawAssistantProposalDetail): AssistantProposalDetail {
+  return {
+    proposal: mapAssistantProposal(raw.proposal),
+    diff: {
+      available: Boolean(raw.diff?.available),
+      source: raw.diff?.source || "",
+      text: raw.diff?.text || "",
+    },
+    apply: {
+      available: Boolean(raw.apply?.available),
+      applied: Boolean(raw.apply?.applied),
+      lastError: raw.apply?.last_error || "",
+      lastErrorAt: raw.apply?.last_error_at || "",
+      lastErrorLogPath: raw.apply?.last_error_log_path || "",
+    },
+  };
+}
+
+function mapAssistantUpgradeApplyResult(raw: RawAssistantUpgradeApplyResult): AssistantUpgradeApplyResult {
+  return {
+    id: raw.id,
+    status: raw.status || "",
+    patchPath: raw.patch_path || "",
+    repoRoot: raw.repo_root || "",
+    appliedAt: raw.applied_at || "",
+  };
+}
+
+function mapAssistantUpgradeApplyLog(raw: RawAssistantUpgradeApplyLog): AssistantUpgradeApplyLog {
+  return {
+    id: raw.id,
+    status: raw.status || "",
+    repoRoot: raw.repo_root || "",
+    patchPath: raw.patch_path || "",
+    appliedAt: raw.applied_at || "",
+    failedAt: raw.failed_at || "",
+    error: raw.error || "",
+  };
+}
+
+function mapAssistantMemorySearchResult(raw: { items?: RawAssistantMemorySearchItem[] }): AssistantMemorySearchResult {
+  return {
+    items: (raw.items || []).map((item) => ({
+      id: item.id,
+      kind: item.kind || "",
+      scope: item.scope || "",
+      title: item.title || item.id,
+      summary: item.summary || "",
+      body: item.body || "",
+      score: Number(item.score || 0),
+      sourceType: item.source_type || "",
+      sourceRef: item.source_ref || "",
+      updatedAt: item.updated_at || "",
+      invalidatedAt: item.invalidated_at || "",
+    })),
+  };
+}
+
+function mapAssistantMemoryInvalidateResult(raw: {
+  memory_id?: string;
+  invalidated?: boolean;
+  reason?: string;
+}): AssistantMemoryInvalidateResult {
+  return {
+    memoryId: raw.memory_id || "",
+    invalidated: Boolean(raw.invalidated),
+    reason: raw.reason || "",
+  };
+}
+
+function mapAssistantMemoryReindexResult(raw: {
+  working?: { indexed_count?: number; memory_ids?: string[] };
+  knowledge?: { indexed_count?: number; memory_ids?: string[] };
+}): AssistantMemoryReindexResult {
+  return {
+    working: {
+      indexedCount: Number(raw.working?.indexed_count || 0),
+      memoryIds: raw.working?.memory_ids || [],
+    },
+    knowledge: {
+      indexedCount: Number(raw.knowledge?.indexed_count || 0),
+      memoryIds: raw.knowledge?.memory_ids || [],
+    },
+  };
+}
+
+function mapAssistantMemoryEvalRun(raw: {
+  metrics?: { hit_at_5?: number; stale_recall_rate?: number };
+  report_path?: string;
+}): AssistantMemoryEvalRun {
+  return {
+    metrics: {
+      hitAt5: Number(raw.metrics?.hit_at_5 || 0),
+      staleRecallRate: Number(raw.metrics?.stale_recall_rate || 0),
+    },
+    reportPath: raw.report_path || "",
+  };
+}
+
+function mapAssistantMemoryEvalReport(raw: RawAssistantMemoryEvalReport): AssistantMemoryEvalReport {
+  return {
+    reportPath: raw.report_path || "",
+    createdAt: raw.created_at || "",
+    metrics: {
+      hitAt5: Number(raw.metrics?.hit_at_5 || 0),
+      staleRecallRate: Number(raw.metrics?.stale_recall_rate || 0),
+    },
+    rows: (raw.rows || []).map((row) => ({
+      query: row.query || "",
+      promptBlock: row.prompt_block || "",
+      hit: Boolean(row.hit),
+      stale: Boolean(row.stale),
+      auditPath: row.audit_path || "",
+    })),
+  };
+}
+
+function mapAssistantPerfRecord(raw: RawAssistantPerfRecord): AssistantPerfRecord {
+  return {
+    runId: raw.run_id || "",
+    createdAt: raw.created_at || "",
+    botAlias: raw.bot_alias || "",
+    source: raw.source || "",
+    taskMode: raw.task_mode || "",
+    interactive: Boolean(raw.interactive),
+    userId: Number(raw.user_id || 0),
+    status: raw.status || "",
+    stageDurations: {
+      syncMs: Number(raw.stage_durations?.sync_ms || 0),
+      indexMs: Number(raw.stage_durations?.index_ms || 0),
+      recallMs: Number(raw.stage_durations?.recall_ms || 0),
+      cliMs: Number(raw.stage_durations?.cli_ms || 0),
+      dbMs: Number(raw.stage_durations?.db_ms || 0),
+      traceMs: Number(raw.stage_durations?.trace_ms || 0),
+      pluginMs: Number(raw.stage_durations?.plugin_ms || 0),
+    },
+    elapsedMs: Number(raw.elapsed_ms || 0),
+    promptChars: Number(raw.prompt_chars || 0),
+    outputChars: Number(raw.output_chars || 0),
+    traceCount: Number(raw.trace_count || 0),
+    toolCallCount: Number(raw.tool_call_count || 0),
+    processCount: Number(raw.process_count || 0),
+    error: raw.error || "",
   };
 }
 
@@ -2328,6 +2606,167 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({ avatar_name: avatarName }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]> {
+    const params = new URLSearchParams();
+    if (status) {
+      params.set("status", status);
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<{ items: RawAssistantProposal[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals${suffix}`,
+    );
+    return (data.items || []).map(mapAssistantProposal);
+  }
+
+  async getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail> {
+    const data = await this.requestJson<RawAssistantProposalDetail>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}`,
+    );
+    return mapAssistantProposalDetail(data);
+  }
+
+  async getAssistantProposalApplyLog(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyLog> {
+    const data = await this.requestJson<RawAssistantUpgradeApplyLog>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/apply-log`,
+    );
+    return mapAssistantUpgradeApplyLog(data);
+  }
+
+  async approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
+    const data = await this.requestJson<RawAssistantProposal>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/approve`,
+      {
+        method: "POST",
+      },
+    );
+    return mapAssistantProposal(data);
+  }
+
+  async rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
+    const data = await this.requestJson<RawAssistantProposal>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/reject`,
+      {
+        method: "POST",
+      },
+    );
+    return mapAssistantProposal(data);
+  }
+
+  async applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult> {
+    const data = await this.requestJson<RawAssistantUpgradeApplyResult>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/upgrades/${encodeURIComponent(proposalId)}/apply`,
+      {
+        method: "POST",
+      },
+    );
+    return mapAssistantUpgradeApplyResult(data);
+  }
+
+  async searchAssistantMemories(
+    botAlias: string,
+    query: string,
+    options: { userId?: number; limit?: number } = {},
+  ): Promise<AssistantMemorySearchResult> {
+    const params = new URLSearchParams({
+      query,
+    });
+    if (typeof options.userId === "number") {
+      params.set("user_id", String(options.userId));
+    }
+    if (typeof options.limit === "number") {
+      params.set("limit", String(options.limit));
+    }
+    const data = await this.requestJson<{ items: RawAssistantMemorySearchItem[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/memory/search?${params.toString()}`,
+    );
+    return mapAssistantMemorySearchResult(data);
+  }
+
+  async invalidateAssistantMemory(
+    botAlias: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<AssistantMemoryInvalidateResult> {
+    const data = await this.requestJson<{ memory_id?: string; invalidated?: boolean; reason?: string }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/memory/${encodeURIComponent(memoryId)}/invalidate`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ reason }),
+      },
+    );
+    return mapAssistantMemoryInvalidateResult(data);
+  }
+
+  async reindexAssistantMemory(
+    botAlias: string,
+    options: { userId?: number; force?: boolean } = {},
+  ): Promise<AssistantMemoryReindexResult> {
+    const data = await this.requestJson<{
+      working?: { indexed_count?: number; memory_ids?: string[] };
+      knowledge?: { indexed_count?: number; memory_ids?: string[] };
+    }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/memory/reindex`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...(typeof options.userId === "number" ? { user_id: options.userId } : {}),
+        ...(typeof options.force === "boolean" ? { force: options.force } : {}),
+      }),
+    });
+    return mapAssistantMemoryReindexResult(data);
+  }
+
+  async runAssistantMemoryEval(
+    botAlias: string,
+    input: { userId?: number; cases: Array<{ query: string; expectedMemoryKind: string; expectedHitTerms: string[]; mustNotHitTerms: string[] }> },
+  ): Promise<AssistantMemoryEvalRun> {
+    const data = await this.requestJson<{ metrics?: { hit_at_5?: number; stale_recall_rate?: number }; report_path?: string }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/evals/memory/run`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...(typeof input.userId === "number" ? { user_id: input.userId } : {}),
+          cases: input.cases.map((item) => ({
+            query: item.query,
+            expected_memory_kind: item.expectedMemoryKind,
+            expected_hit_terms: item.expectedHitTerms,
+            must_not_hit_terms: item.mustNotHitTerms,
+          })),
+        }),
+      },
+    );
+    return mapAssistantMemoryEvalRun(data);
+  }
+
+  async listAssistantMemoryEvalReports(botAlias: string, limit = 10): Promise<AssistantMemoryEvalReport[]> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+    });
+    const data = await this.requestJson<{ items: RawAssistantMemoryEvalReport[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/evals/memory/reports?${params.toString()}`,
+    );
+    return (data.items || []).map(mapAssistantMemoryEvalReport);
+  }
+
+  async getAssistantDiagnostics(botAlias: string, limit = 20): Promise<AssistantPerfDiagnostics> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+    });
+    const data = await this.requestJson<{ items: RawAssistantPerfRecord[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/diagnostics/perf?${params.toString()}`,
+    );
+    return {
+      items: (data.items || []).map(mapAssistantPerfRecord),
+    };
   }
 
   async listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]> {

@@ -38,6 +38,11 @@ def list_proposals(home: AssistantHome, *, status: str | None = None) -> list[di
     return items
 
 
+def get_proposal(home: AssistantHome, proposal_id: str) -> dict:
+    path = _proposal_path(home, proposal_id)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def set_proposal_status(home: AssistantHome, proposal_id: str, status: str, *, reviewer: str) -> dict:
     path = _proposal_path(home, proposal_id)
     data = json.loads(path.read_text(encoding="utf-8"))

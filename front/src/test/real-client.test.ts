@@ -2563,4 +2563,156 @@ describe("RealWebBotClient", () => {
       }),
     );
   });
+
+  test("assistant proposal endpoints map payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [
+              {
+                id: "pr_1",
+                kind: "code",
+                title: "补审计",
+                body: "- body",
+                status: "proposed",
+                created_at: "2026-04-28T00:00:00Z",
+              },
+            ],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            proposal: {
+              id: "pr_1",
+              kind: "code",
+              title: "补审计",
+              body: "- body",
+              status: "approved",
+              created_at: "2026-04-28T00:00:00Z",
+            },
+            diff: {
+              available: true,
+              source: "upgrades/approved/pr_1.patch",
+              text: "diff --git",
+            },
+            apply: {
+              available: true,
+              applied: false,
+              last_error: "",
+              last_error_at: "",
+              last_error_log_path: "",
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const proposals = await client.listAssistantProposals("assistant1", "proposed");
+    const detail = await client.getAssistantProposal("assistant1", "pr_1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/bots/assistant1/assistant/proposals?status=proposed",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/admin/bots/assistant1/assistant/proposals/pr_1",
+      expect.any(Object),
+    );
+    expect(proposals[0]).toEqual(expect.objectContaining({
+      id: "pr_1",
+      title: "补审计",
+      status: "proposed",
+    }));
+    expect(detail.diff.available).toBe(true);
+    expect(detail.apply.available).toBe(true);
+  });
+
+  test("assistant diagnostics endpoint maps stage durations", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [
+              {
+                run_id: "run_1",
+                created_at: "2026-04-28T00:00:00Z",
+                bot_alias: "assistant1",
+                source: "web",
+                task_mode: "standard",
+                interactive: true,
+                user_id: 1001,
+                status: "completed",
+                stage_durations: {
+                  sync_ms: 10,
+                  index_ms: 11,
+                  recall_ms: 12,
+                  cli_ms: 1000,
+                  db_ms: 9,
+                  trace_ms: 15,
+                  plugin_ms: 0,
+                },
+                elapsed_ms: 1100,
+                prompt_chars: 100,
+                output_chars: 80,
+                trace_count: 3,
+                tool_call_count: 1,
+                process_count: 1,
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const result = await client.getAssistantDiagnostics("assistant1", 5);
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/assistant1/assistant/diagnostics/perf?limit=5",
+      expect.any(Object),
+    );
+    expect(result.items[0].stageDurations).toEqual({
+      syncMs: 10,
+      indexMs: 11,
+      recallMs: 12,
+      cliMs: 1000,
+      dbMs: 9,
+      traceMs: 15,
+      pluginMs: 0,
+    });
+  });
 });

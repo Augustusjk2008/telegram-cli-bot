@@ -1010,6 +1010,157 @@ export type AppUpdateDownloadProgress = {
   message?: string;
 };
 
+export type AssistantProposalStatus = "proposed" | "approved" | "rejected" | "applied";
+
+export type AssistantProposal = {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  status: AssistantProposalStatus | string;
+  createdAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  appliedAt?: string;
+};
+
+export type AssistantUpgradeApplyState = {
+  available: boolean;
+  applied: boolean;
+  lastError: string;
+  lastErrorAt: string;
+  lastErrorLogPath: string;
+};
+
+export type AssistantProposalDetail = {
+  proposal: AssistantProposal;
+  diff: {
+    available: boolean;
+    source: string;
+    text: string;
+  };
+  apply: AssistantUpgradeApplyState;
+};
+
+export type AssistantUpgradeApplyResult = {
+  id: string;
+  status: string;
+  patchPath: string;
+  repoRoot: string;
+  appliedAt: string;
+};
+
+export type AssistantUpgradeApplyLog = {
+  id: string;
+  status: string;
+  repoRoot?: string;
+  patchPath?: string;
+  appliedAt?: string;
+  failedAt?: string;
+  error?: string;
+};
+
+export type AssistantMemorySearchItem = {
+  id: string;
+  kind: string;
+  scope: string;
+  title: string;
+  summary: string;
+  body: string;
+  score: number;
+  sourceType?: string;
+  sourceRef?: string;
+  updatedAt?: string;
+  invalidatedAt?: string;
+};
+
+export type AssistantMemorySearchResult = {
+  items: AssistantMemorySearchItem[];
+};
+
+export type AssistantMemoryInvalidateResult = {
+  memoryId: string;
+  invalidated: boolean;
+  reason: string;
+};
+
+export type AssistantMemoryReindexResult = {
+  working: {
+    indexedCount: number;
+    memoryIds: string[];
+  };
+  knowledge: {
+    indexedCount: number;
+    memoryIds: string[];
+  };
+};
+
+export type AssistantMemoryEvalCase = {
+  query: string;
+  expectedMemoryKind: string;
+  expectedHitTerms: string[];
+  mustNotHitTerms: string[];
+};
+
+export type AssistantMemoryEvalRun = {
+  metrics: {
+    hitAt5: number;
+    staleRecallRate: number;
+  };
+  reportPath: string;
+};
+
+export type AssistantMemoryEvalReportRow = {
+  query: string;
+  promptBlock: string;
+  hit: boolean;
+  stale: boolean;
+  auditPath?: string | null;
+};
+
+export type AssistantMemoryEvalReport = {
+  reportPath: string;
+  createdAt: string;
+  metrics: {
+    hitAt5: number;
+    staleRecallRate: number;
+  };
+  rows: AssistantMemoryEvalReportRow[];
+};
+
+export type AssistantPerfStageDurations = {
+  syncMs: number;
+  indexMs: number;
+  recallMs: number;
+  cliMs: number;
+  dbMs: number;
+  traceMs: number;
+  pluginMs: number;
+};
+
+export type AssistantPerfRecord = {
+  runId: string;
+  createdAt: string;
+  botAlias: string;
+  source: string;
+  taskMode: string;
+  interactive: boolean;
+  userId: number;
+  status: string;
+  stageDurations: AssistantPerfStageDurations;
+  elapsedMs: number;
+  promptChars: number;
+  outputChars: number;
+  traceCount: number;
+  toolCallCount: number;
+  processCount: number;
+  error?: string;
+};
+
+export type AssistantPerfDiagnostics = {
+  items: AssistantPerfRecord[];
+};
+
 export type AssistantCronScheduleType = "daily" | "interval";
 export type AssistantCronMisfirePolicy = "skip" | "once";
 export type AssistantCronTaskMode = "standard" | "dream";

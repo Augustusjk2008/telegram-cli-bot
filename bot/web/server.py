@@ -78,6 +78,7 @@ from .api_service import (
     apply_assistant_upgrade,
     AuthContext,
     _require_capability,
+    _parse_memory_eval_cases,
     WebApiError,
     add_managed_bot,
     build_bot_summary,
@@ -97,9 +98,13 @@ from .api_service import (
     get_history,
     get_history_delta,
     get_history_trace,
+    get_assistant_diagnostics,
     get_overview,
     list_avatar_assets,
+    list_assistant_memory_eval_reports,
     list_assistant_proposals,
+    get_assistant_proposal_detail,
+    get_assistant_upgrade_apply_log,
     get_cli_params_payload,
     get_processing_sessions,
     get_working_directory,
@@ -111,7 +116,9 @@ from .api_service import (
     list_plugins,
     open_plugin_view,
     list_system_scripts,
+    invalidate_assistant_memory,
     read_file_content,
+    reindex_assistant_memory,
     rename_path,
     move_path,
     remove_managed_bot,
@@ -119,7 +126,9 @@ from .api_service import (
     reset_user_session,
     reset_cli_params,
     run_chat,
+    run_assistant_memory_eval_task,
     run_assistant_cron_job_now,
+    search_assistant_memories,
     render_plugin_view,
     run_system_script,
     resolve_plugin_file_target,
@@ -1854,6 +1863,18 @@ class WebApiServer:
         status = request.query.get("status") or None
         return _json({"ok": True, "data": list_assistant_proposals(self.manager, alias, status=status)})
 
+    async def admin_assistant_proposal_detail(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        return _json({"ok": True, "data": get_assistant_proposal_detail(self.manager, alias, proposal_id)})
+
+    async def admin_assistant_upgrade_apply_log(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        return _json({"ok": True, "data": get_assistant_upgrade_apply_log(self.manager, alias, proposal_id)})
+
     async def admin_assistant_proposal_approve(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
@@ -1883,6 +1904,82 @@ class WebApiServer:
         alias = self._manager_alias(request)
         proposal_id = request.match_info["proposal_id"]
         data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_memory_search(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        query_text = str(request.query.get("query") or "").strip()
+        try:
+            limit = int(request.query.get("limit") or 10)
+        except ValueError:
+            limit = 10
+        try:
+            user_id = int(request.query.get("user_id") or auth.user_id)
+        except ValueError:
+            user_id = auth.user_id
+        data = search_assistant_memories(self.manager, alias, user_id=user_id, query_text=query_text, limit=limit)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_memory_invalidate(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        memory_id = request.match_info["memory_id"]
+        body = await self._parse_json(request)
+        reason = str(body.get("reason") or "").strip() or "web_admin"
+        data = invalidate_assistant_memory(self.manager, alias, memory_id, reason=reason, user_id=auth.user_id)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_memory_reindex(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        try:
+            user_id = int(body.get("user_id") or auth.user_id)
+        except (TypeError, ValueError):
+            user_id = auth.user_id
+        data = reindex_assistant_memory(
+            self.manager,
+            alias,
+            user_id=user_id,
+            force=bool(body.get("force")),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_memory_eval_run(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        try:
+            user_id = int(body.get("user_id") or auth.user_id)
+        except (TypeError, ValueError):
+            user_id = auth.user_id
+        data = run_assistant_memory_eval_task(
+            self.manager,
+            alias,
+            user_id=user_id,
+            cases=_parse_memory_eval_cases(body),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_memory_eval_reports(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        try:
+            limit = int(request.query.get("limit") or 10)
+        except ValueError:
+            limit = 10
+        data = list_assistant_memory_eval_reports(self.manager, alias, limit=limit)
+        return _json({"ok": True, "data": data})
+
+    async def admin_assistant_diagnostics(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        try:
+            limit = int(request.query.get("limit") or 20)
+        except ValueError:
+            limit = 20
+        data = get_assistant_diagnostics(self.manager, alias, limit=limit)
         return _json({"ok": True, "data": data})
 
     async def admin_assistant_cron_jobs(self, request: web.Request) -> web.Response:
@@ -2057,6 +2154,10 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
         app.router.add_patch("/api/admin/bots/{alias}/avatar", self.admin_update_avatar)
         app.router.add_get("/api/admin/bots/{alias}/assistant/proposals", self.admin_assistant_proposals)
+        app.router.add_get(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}",
+            self.admin_assistant_proposal_detail,
+        )
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/approve",
             self.admin_assistant_proposal_approve,
@@ -2065,9 +2166,31 @@ class WebApiServer:
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/reject",
             self.admin_assistant_proposal_reject,
         )
+        app.router.add_get(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/apply-log",
+            self.admin_assistant_upgrade_apply_log,
+        )
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/upgrades/{proposal_id}/apply",
             self.admin_assistant_upgrade_apply,
+        )
+        app.router.add_get("/api/admin/bots/{alias}/assistant/memory/search", self.admin_assistant_memory_search)
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/memory/{memory_id}/invalidate",
+            self.admin_assistant_memory_invalidate,
+        )
+        app.router.add_post("/api/admin/bots/{alias}/assistant/memory/reindex", self.admin_assistant_memory_reindex)
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/evals/memory/run",
+            self.admin_assistant_memory_eval_run,
+        )
+        app.router.add_get(
+            "/api/admin/bots/{alias}/assistant/evals/memory/reports",
+            self.admin_assistant_memory_eval_reports,
+        )
+        app.router.add_get(
+            "/api/admin/bots/{alias}/assistant/diagnostics/perf",
+            self.admin_assistant_diagnostics,
         )
         app.router.add_get("/api/admin/bots/{alias}/assistant/cron/jobs", self.admin_assistant_cron_jobs)
         app.router.add_post("/api/admin/bots/{alias}/assistant/cron/jobs", self.admin_assistant_cron_job_create)

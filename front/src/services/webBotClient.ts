@@ -5,6 +5,17 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  AssistantProposal,
+  AssistantProposalDetail,
+  AssistantPerfDiagnostics,
+  AssistantMemoryEvalCase,
+  AssistantMemoryEvalReport,
+  AssistantMemoryEvalRun,
+  AssistantMemoryInvalidateResult,
+  AssistantMemoryReindexResult,
+  AssistantMemorySearchResult,
+  AssistantUpgradeApplyLog,
+  AssistantUpgradeApplyResult,
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
@@ -162,6 +173,25 @@ export interface WebBotClient {
   removeBot(botAlias: string): Promise<void>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
+  listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]>;
+  getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail>;
+  getAssistantProposalApplyLog(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyLog>;
+  approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
+  rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
+  applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult>;
+  searchAssistantMemories(botAlias: string, query: string, options?: { userId?: number; limit?: number }): Promise<AssistantMemorySearchResult>;
+  invalidateAssistantMemory(
+    botAlias: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<AssistantMemoryInvalidateResult>;
+  reindexAssistantMemory(botAlias: string, options?: { userId?: number; force?: boolean }): Promise<AssistantMemoryReindexResult>;
+  runAssistantMemoryEval(
+    botAlias: string,
+    input: { userId?: number; cases: AssistantMemoryEvalCase[] },
+  ): Promise<AssistantMemoryEvalRun>;
+  listAssistantMemoryEvalReports(botAlias: string, limit?: number): Promise<AssistantMemoryEvalReport[]>;
+  getAssistantDiagnostics(botAlias: string, limit?: number): Promise<AssistantPerfDiagnostics>;
   listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]>;
   createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob>;
   updateAssistantCronJob(botAlias: string, jobId: string, input: UpdateAssistantCronJobInput): Promise<AssistantCronJob>;

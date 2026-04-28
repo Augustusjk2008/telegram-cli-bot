@@ -40,7 +40,11 @@ def test_start_ps1_removes_tray_and_hidden_window_logic():
 def test_start_sh_runs_python_module_and_sets_supervisor_env():
     content = Path("start.sh").read_text(encoding="utf-8")
 
+<<<<<<< Updated upstream
     assert "CLI_BRIDGE_SUPERVISOR=1" in content
+=======
+    assert "TELEGRAM_CLI_BRIDGE_SUPERVISOR=1" in content
+>>>>>>> Stashed changes
     assert 'if command -v python3 >/dev/null 2>&1; then' in content
     assert 'elif command -v python >/dev/null 2>&1; then' in content
     assert '"$PYTHON_BIN" -m bot' in content

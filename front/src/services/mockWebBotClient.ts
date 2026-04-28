@@ -6,6 +6,19 @@ import type {
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
+  AssistantMemoryEvalCase,
+  AssistantMemoryEvalReport,
+  AssistantMemoryEvalRun,
+  AssistantMemoryInvalidateResult,
+  AssistantMemoryReindexResult,
+  AssistantMemorySearchItem,
+  AssistantMemorySearchResult,
+  AssistantPerfDiagnostics,
+  AssistantPerfRecord,
+  AssistantProposal,
+  AssistantProposalDetail,
+  AssistantUpgradeApplyLog,
+  AssistantUpgradeApplyResult,
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
@@ -986,6 +999,12 @@ export class MockWebBotClient implements WebBotClient {
   ];
   private assistantCronJobs = new Map<string, AssistantCronJob[]>();
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
+  private assistantProposals = new Map<string, AssistantProposal[]>();
+  private assistantProposalDiffs = new Map<string, string>();
+  private assistantProposalApplyLogs = new Map<string, AssistantUpgradeApplyLog>();
+  private assistantMemories = new Map<string, AssistantMemorySearchItem[]>();
+  private assistantMemoryEvalReports = new Map<string, AssistantMemoryEvalReport[]>();
+  private assistantPerfRecords = new Map<string, AssistantPerfRecord[]>();
   private fileContents = new Map<string, string>();
   private fileVersions = new Map<string, number>();
   private registerCodes: RegisterCodeItem[] = [
@@ -1205,6 +1224,10 @@ export class MockWebBotClient implements WebBotClient {
     return `${botAlias}:${jobId}`;
   }
 
+  private assistantProposalKey(botAlias: string, proposalId: string): string {
+    return `${botAlias}:${proposalId}`;
+  }
+
   private fileKey(botAlias: string, browserPath: string, filename: string): string {
     return `${botAlias}:${browserPath}:${filename}`;
   }
@@ -1233,8 +1256,140 @@ export class MockWebBotClient implements WebBotClient {
     return version;
   }
 
+  private ensureAssistantOpsState(botAlias: string) {
+    if (!this.assistantProposals.has(botAlias)) {
+      const proposals: AssistantProposal[] = [
+        {
+          id: "pr_sync_memory_index",
+          kind: "code",
+          title: "补 memory index 审计",
+          body: "- 为 recall 路径补独立 audit\n- 保留现有行为",
+          status: "proposed",
+          createdAt: "2026-04-28T08:30:00+08:00",
+        },
+        {
+          id: "pr_apply_upgrade_guard",
+          kind: "rule",
+          title: "apply 前强校验 approved",
+          body: "- apply 前要求 proposal=approved\n- 失败写 last-error audit",
+          status: "approved",
+          createdAt: "2026-04-28T09:00:00+08:00",
+          reviewedBy: "127.0.0.1",
+          reviewedAt: "2026-04-28T09:10:00+08:00",
+        },
+      ];
+      this.assistantProposals.set(botAlias, proposals);
+      this.assistantProposalDiffs.set(
+        this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"),
+        "diff --git a/bot/assistant_upgrade.py b/bot/assistant_upgrade.py\n+def apply_approved_upgrade(...):\n+    pass\n",
+      );
+      this.assistantProposalDiffs.set(
+        this.assistantProposalKey(botAlias, "pr_sync_memory_index"),
+        "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py\n+def recall_assistant_memories(...):\n+    pass\n",
+      );
+    }
+    if (!this.assistantMemories.has(botAlias)) {
+      this.assistantMemories.set(botAlias, [
+        {
+          id: "mem_pref_cn_short",
+          kind: "semantic",
+          scope: "user",
+          title: "回复偏好",
+          summary: "默认简短中文",
+          body: "- 默认简短中文\n- 少解释",
+          score: 0.96,
+          sourceType: "chat",
+          sourceRef: "capture_1",
+          updatedAt: "2026-04-28T08:00:00+08:00",
+        },
+        {
+          id: "mem_incident_cron",
+          kind: "episodic",
+          scope: "project",
+          title: "cron 根因",
+          summary: "pending_run_id 残留",
+          body: "- pending_run_id 残留\n- 重启丢队列",
+          score: 0.82,
+          sourceType: "dream",
+          sourceRef: "dream_1",
+          updatedAt: "2026-04-28T07:40:00+08:00",
+        },
+      ]);
+    }
+    if (!this.assistantMemoryEvalReports.has(botAlias)) {
+      this.assistantMemoryEvalReports.set(botAlias, [
+        {
+          reportPath: `.assistant/evals/memory/20260428T020000Z.json`,
+          createdAt: "2026-04-28T10:00:00+08:00",
+          metrics: {
+            hitAt5: 1,
+            staleRecallRate: 0,
+          },
+          rows: [
+            {
+              query: "默认简短中文",
+              promptBlock: "<ASSISTANT_MEMORY_RECALL>\n1. [semantic/user] 回复偏好: 默认简短中文\n</ASSISTANT_MEMORY_RECALL>",
+              hit: true,
+              stale: false,
+              auditPath: ".assistant/audit/memory/20260428T020000Z-1001.json",
+            },
+          ],
+        },
+      ]);
+    }
+    if (!this.assistantPerfRecords.has(botAlias)) {
+      this.assistantPerfRecords.set(botAlias, [
+        {
+          runId: "run_perf_1",
+          createdAt: "2026-04-28T10:10:00+08:00",
+          botAlias,
+          source: "web",
+          taskMode: "standard",
+          interactive: true,
+          userId: 1001,
+          status: "completed",
+          stageDurations: {
+            syncMs: 18,
+            indexMs: 11,
+            recallMs: 24,
+            cliMs: 1320,
+            dbMs: 17,
+            traceMs: 42,
+            pluginMs: 0,
+          },
+          elapsedMs: 1445,
+          promptChars: 1280,
+          outputChars: 640,
+          traceCount: 7,
+          toolCallCount: 2,
+          processCount: 3,
+        },
+      ]);
+    }
+  }
+
   private getAssistantCronJobs(botAlias: string): AssistantCronJob[] {
     return [...(this.assistantCronJobs.get(botAlias) || [])];
+  }
+
+  private getAssistantProposals(botAlias: string): AssistantProposal[] {
+    this.ensureAssistantOpsState(botAlias);
+    return [...(this.assistantProposals.get(botAlias) || [])];
+  }
+
+  private getAssistantMemories(botAlias: string): AssistantMemorySearchItem[] {
+    this.ensureAssistantOpsState(botAlias);
+    return [...(this.assistantMemories.get(botAlias) || [])];
+  }
+
+  private getAssistantMemoryEvalReports(botAlias: string): AssistantMemoryEvalReport[] {
+    this.ensureAssistantOpsState(botAlias);
+    return [...(this.assistantMemoryEvalReports.get(botAlias) || [])];
+  }
+
+  private getAssistantPerfRecords(botAlias: string): AssistantPerfRecord[] {
+    this.ensureAssistantOpsState(botAlias);
+    return [...(this.assistantPerfRecords.get(botAlias) || [])];
   }
 
   async getPublicHostInfo(): Promise<PublicHostInfo> {
@@ -2755,6 +2910,202 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
+  async listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]> {
+    return this.getAssistantProposals(botAlias).filter((item) => !status || item.status === status);
+  }
+
+  async getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail> {
+    const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
+    if (!proposal) {
+      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
+    }
+    const key = this.assistantProposalKey(botAlias, proposalId);
+    const log = this.assistantProposalApplyLogs.get(key);
+    return {
+      proposal,
+      diff: {
+        available: this.assistantProposalDiffs.has(key),
+        source: this.assistantProposalDiffs.has(key) ? `upgrades/approved/${proposalId}.patch` : "",
+        text: this.assistantProposalDiffs.get(key) || "",
+      },
+      apply: {
+        available: this.assistantProposalDiffs.has(key),
+        applied: proposal.status === "applied",
+        lastError: log?.status === "failed" ? (log.error || "") : "",
+        lastErrorAt: log?.status === "failed" ? (log.failedAt || "") : "",
+        lastErrorLogPath: log?.status === "failed" ? `upgrades/applied/${proposalId}.last-error.json` : "",
+      },
+    };
+  }
+
+  async getAssistantProposalApplyLog(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyLog> {
+    const key = this.assistantProposalKey(botAlias, proposalId);
+    const log = this.assistantProposalApplyLogs.get(key);
+    if (!log) {
+      throw new WebApiClientError("apply 日志不存在", { status: 404, code: "assistant_upgrade_log_not_found" });
+    }
+    return { ...log };
+  }
+
+  async approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
+    const items = this.getAssistantProposals(botAlias);
+    const next = items.map((item) => (
+      item.id === proposalId
+        ? {
+            ...item,
+            status: "approved",
+            reviewedBy: "127.0.0.1",
+            reviewedAt: new Date().toISOString(),
+          }
+        : item
+    ));
+    const updated = next.find((item) => item.id === proposalId);
+    if (!updated) {
+      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
+    }
+    this.assistantProposals.set(botAlias, next);
+    return updated;
+  }
+
+  async rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
+    const items = this.getAssistantProposals(botAlias);
+    const next = items.map((item) => (
+      item.id === proposalId
+        ? {
+            ...item,
+            status: "rejected",
+            reviewedBy: "127.0.0.1",
+            reviewedAt: new Date().toISOString(),
+          }
+        : item
+    ));
+    const updated = next.find((item) => item.id === proposalId);
+    if (!updated) {
+      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
+    }
+    this.assistantProposals.set(botAlias, next);
+    return updated;
+  }
+
+  async applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult> {
+    const items = this.getAssistantProposals(botAlias);
+    const proposal = items.find((item) => item.id === proposalId);
+    if (!proposal) {
+      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
+    }
+    if (proposal.status !== "approved") {
+      throw new WebApiClientError("proposal 尚未批准", { status: 409, code: "proposal_not_approved" });
+    }
+    const appliedAt = new Date().toISOString();
+    this.assistantProposals.set(
+      botAlias,
+      items.map((item) => (item.id === proposalId ? { ...item, status: "applied", appliedAt } : item)),
+    );
+    this.assistantProposalApplyLogs.set(this.assistantProposalKey(botAlias, proposalId), {
+      id: proposalId,
+      status: "applied",
+      repoRoot: "C:\\workspace\\assistant1",
+      patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
+      appliedAt,
+    });
+    return {
+      id: proposalId,
+      status: "applied",
+      patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
+      repoRoot: "C:\\workspace\\assistant1",
+      appliedAt,
+    };
+  }
+
+  async searchAssistantMemories(
+    botAlias: string,
+    query: string,
+    options: { userId?: number; limit?: number } = {},
+  ): Promise<AssistantMemorySearchResult> {
+    const needle = query.trim().toLowerCase();
+    const items = this.getAssistantMemories(botAlias)
+      .filter((item) => !needle || `${item.title}\n${item.summary}\n${item.body}`.toLowerCase().includes(needle))
+      .slice(0, options.limit || 10);
+    return { items };
+  }
+
+  async invalidateAssistantMemory(
+    botAlias: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<AssistantMemoryInvalidateResult> {
+    const now = new Date().toISOString();
+    const items = this.getAssistantMemories(botAlias);
+    const exists = items.some((item) => item.id === memoryId);
+    if (!exists) {
+      throw new WebApiClientError("memory 不存在", { status: 404, code: "assistant_memory_not_found" });
+    }
+    this.assistantMemories.set(
+      botAlias,
+      items.map((item) => (item.id === memoryId ? { ...item, invalidatedAt: now } : item)),
+    );
+    return {
+      memoryId,
+      invalidated: true,
+      reason,
+    };
+  }
+
+  async reindexAssistantMemory(
+    botAlias: string,
+    _options: { userId?: number; force?: boolean } = {},
+  ): Promise<AssistantMemoryReindexResult> {
+    this.ensureAssistantOpsState(botAlias);
+    return {
+      working: {
+        indexedCount: 4,
+        memoryIds: ["wm_1", "wm_2", "wm_3", "wm_4"],
+      },
+      knowledge: {
+        indexedCount: 2,
+        memoryIds: ["kg_1", "kg_2"],
+      },
+    };
+  }
+
+  async runAssistantMemoryEval(
+    botAlias: string,
+    input: { userId?: number; cases: AssistantMemoryEvalCase[] },
+  ): Promise<AssistantMemoryEvalRun> {
+    const createdAt = new Date().toISOString();
+    const reportPath = `.assistant/evals/memory/${createdAt.replace(/[-:.]/g, "").slice(0, 15)}Z.json`;
+    const report: AssistantMemoryEvalReport = {
+      reportPath,
+      createdAt,
+      metrics: {
+        hitAt5: input.cases.length ? 1 : 0,
+        staleRecallRate: 0,
+      },
+      rows: input.cases.map((item) => ({
+        query: item.query,
+        promptBlock: `<ASSISTANT_MEMORY_RECALL>\n1. [${item.expectedMemoryKind}/user] ${item.expectedHitTerms[0] || item.query}\n</ASSISTANT_MEMORY_RECALL>`,
+        hit: true,
+        stale: false,
+        auditPath: `.assistant/audit/memory/${Date.now()}-${input.userId || 1001}.json`,
+      })),
+    };
+    this.assistantMemoryEvalReports.set(botAlias, [report, ...this.getAssistantMemoryEvalReports(botAlias)]);
+    return {
+      metrics: report.metrics,
+      reportPath,
+    };
+  }
+
+  async listAssistantMemoryEvalReports(botAlias: string, limit = 10): Promise<AssistantMemoryEvalReport[]> {
+    return this.getAssistantMemoryEvalReports(botAlias).slice(0, limit);
+  }
+
+  async getAssistantDiagnostics(botAlias: string, limit = 20): Promise<AssistantPerfDiagnostics> {
+    return {
+      items: this.getAssistantPerfRecords(botAlias).slice(0, limit),
+    };
+  }
+
   async listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]> {
     return this.getAssistantCronJobs(botAlias);
   }
@@ -2897,6 +3248,7 @@ export class MockWebBotClient implements WebBotClient {
     this.workdirOverrides.set(alias, bot.workingDir);
     if (bot.botMode === "assistant" && !this.assistantCronJobs.has(alias)) {
       this.assistantCronJobs.set(alias, []);
+      this.ensureAssistantOpsState(alias);
     }
     return this.getBotSummary(alias);
   }
@@ -2913,6 +3265,24 @@ export class MockWebBotClient implements WebBotClient {
     this.moveKey(this.workdirOverrides, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
     this.moveKey(this.assistantCronJobs, botAlias, alias);
+    this.moveKey(this.assistantProposals, botAlias, alias);
+    this.moveKey(this.assistantMemories, botAlias, alias);
+    this.moveKey(this.assistantMemoryEvalReports, botAlias, alias);
+    this.moveKey(this.assistantPerfRecords, botAlias, alias);
+    for (const [key, value] of Array.from(this.assistantProposalDiffs.entries())) {
+      if (!key.startsWith(`${botAlias}:`)) {
+        continue;
+      }
+      this.assistantProposalDiffs.delete(key);
+      this.assistantProposalDiffs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
+    }
+    for (const [key, value] of Array.from(this.assistantProposalApplyLogs.entries())) {
+      if (!key.startsWith(`${botAlias}:`)) {
+        continue;
+      }
+      this.assistantProposalApplyLogs.delete(key);
+      this.assistantProposalApplyLogs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
+    }
     for (const [key, value] of Array.from(this.assistantCronRuns.entries())) {
       if (!key.startsWith(`${botAlias}:`)) {
         continue;
@@ -2932,6 +3302,20 @@ export class MockWebBotClient implements WebBotClient {
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);
     this.assistantCronJobs.delete(botAlias);
+    this.assistantProposals.delete(botAlias);
+    this.assistantMemories.delete(botAlias);
+    this.assistantMemoryEvalReports.delete(botAlias);
+    this.assistantPerfRecords.delete(botAlias);
+    for (const key of Array.from(this.assistantProposalDiffs.keys())) {
+      if (key.startsWith(`${botAlias}:`)) {
+        this.assistantProposalDiffs.delete(key);
+      }
+    }
+    for (const key of Array.from(this.assistantProposalApplyLogs.keys())) {
+      if (key.startsWith(`${botAlias}:`)) {
+        this.assistantProposalApplyLogs.delete(key);
+      }
+    }
     for (const key of Array.from(this.assistantCronRuns.keys())) {
       if (key.startsWith(`${botAlias}:`)) {
         this.assistantCronRuns.delete(key);

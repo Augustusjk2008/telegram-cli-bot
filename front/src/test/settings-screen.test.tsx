@@ -125,6 +125,25 @@ test("assistant bots lock the default workdir in settings", async () => {
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
 
+test("assistant settings render assistant ops console", async () => {
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "assistant1",
+    botMode: "assistant",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\assistant1",
+    avatarName: "avatar_01.png",
+  });
+
+  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByRole("heading", { name: "Assistant 运维台" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Proposal" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Memory / Knowledge" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Diagnostics" })).toBeInTheDocument();
+});
+
 test("settings can browse and pick a workdir before saving", async () => {
   const user = userEvent.setup();
   const client = new SettingsDirectoryPickerClient();

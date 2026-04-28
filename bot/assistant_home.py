@@ -20,9 +20,12 @@ REQUIRED_DIRS = (
     "upgrades/approved",
     "upgrades/applied",
     "evals/runs",
+    "evals/memory",
     "audit",
     "audit/cron",
     "audit/dream",
+    "audit/memory",
+    "audit/perf",
     "indexes",
     "prompts",
 )
