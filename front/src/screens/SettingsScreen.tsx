@@ -6,7 +6,6 @@ import { BotIdentity } from "../components/BotIdentity";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
-import { AssistantOpsScreen } from "./AssistantOpsScreen";
 import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
@@ -1239,8 +1238,6 @@ export function SettingsScreen({
 
             {isAssistantBot ? (
               <div className="space-y-4 border-t border-[var(--border)] pt-4">
-                <AssistantOpsScreen botAlias={botAlias} client={client} />
-
                 <div className="space-y-1">
                   <h3 className="font-medium text-[var(--text)]">Automation 定时任务</h3>
                   <p className="text-xs text-[var(--muted)]">定时任务会和人工对话共用 assistant 串行执行队列。</p>

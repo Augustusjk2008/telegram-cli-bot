@@ -1,34 +1,35 @@
 import { clsx } from "clsx";
-import { Bug, Files, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, Puzzle, Search, Settings2 } from "lucide-react";
-import type { DesktopSidebarView } from "./workbenchTypes";
+import { Bug, Files, Gauge, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, Puzzle, Search, Settings2 } from "lucide-react";
+import type { WorkbenchActivityId } from "./workbenchTypes";
 
 type Props = {
-  activePanel: DesktopSidebarView;
+  activeItem: WorkbenchActivityId;
   sidebarCollapsed: boolean;
-  availablePanels?: DesktopSidebarView[];
+  availableItems?: WorkbenchActivityId[];
   onToggleSidebar: () => void;
-  onSelectPanel: (panel: DesktopSidebarView) => void;
+  onSelectItem: (item: WorkbenchActivityId) => void;
 };
 
-const ITEMS: Array<{ id: DesktopSidebarView; label: string; icon: typeof Files }> = [
+const ITEMS: Array<{ id: WorkbenchActivityId; label: string; icon: typeof Files }> = [
   { id: "files", label: "文件", icon: Files },
   { id: "search", label: "搜索", icon: Search },
   { id: "outline", label: "大纲", icon: ListTree },
   { id: "debug", label: "调试", icon: Bug },
   { id: "git", label: "Git", icon: GitBranch },
+  { id: "assistant-ops", label: "运维", icon: Gauge },
   { id: "plugins", label: "插件", icon: Puzzle },
   { id: "settings", label: "设置", icon: Settings2 },
 ];
 
 export function WorkbenchActivityRail({
-  activePanel,
+  activeItem,
   sidebarCollapsed,
-  availablePanels,
+  availableItems,
   onToggleSidebar,
-  onSelectPanel,
+  onSelectItem,
 }: Props) {
-  const items = availablePanels?.length
-    ? ITEMS.filter((item) => availablePanels.includes(item.id))
+  const items = availableItems?.length
+    ? ITEMS.filter((item) => availableItems.includes(item.id))
     : ITEMS;
   return (
     <aside
@@ -48,11 +49,11 @@ export function WorkbenchActivityRail({
           key={id}
           type="button"
           aria-label={label}
-          aria-pressed={id === activePanel}
-          onClick={() => onSelectPanel(id)}
+          aria-pressed={id === activeItem}
+          onClick={() => onSelectItem(id)}
           className={clsx(
             "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
-            id === activePanel && "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]",
+            id === activeItem && "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]",
           )}
         >
           <Icon className="h-4 w-4" />

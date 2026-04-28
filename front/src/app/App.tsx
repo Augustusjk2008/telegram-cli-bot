@@ -268,6 +268,9 @@ export function App() {
     }
     return botSummaryByAlias.get(currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
   }, [botSummaryByAlias, bots, currentBot]);
+  const canViewAssistantOps = effectiveLayoutMode === "desktop"
+    && currentBotSummary?.botMode === "assistant"
+    && hasCapability(session, "admin_ops");
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
@@ -803,6 +806,7 @@ export function App() {
             onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
             onUserAvatarChange={handleUserAvatarChange}
             sessionCapabilities={session?.capabilities}
+            canViewAssistantOps={canViewAssistantOps}
             viewMode={viewMode}
             hasUnreadOtherBots={hasUnreadOtherBots}
             chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}

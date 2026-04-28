@@ -666,3 +666,34 @@ test("terminal immersive mode hides outer app chrome but keeps the terminal visi
   expect(screen.getByRole("button", { name: "退出沉浸模式" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "关闭终端" })).toBeInTheDocument();
 });
+
+test("mobile app never exposes assistant ops navigation", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    ...SUPER_ADMIN_SESSION,
+    currentBotAlias: "assistant1",
+  });
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "assistant1",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\assistant1",
+      lastActiveText: "运行中",
+      botMode: "assistant",
+      avatarName: "avatar_01.png",
+    },
+  ]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "127.0.0.1");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "运维" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
+});

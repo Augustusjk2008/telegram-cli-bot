@@ -125,7 +125,7 @@ test("assistant bots lock the default workdir in settings", async () => {
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
 
-test("assistant settings render assistant ops console", async () => {
+test("assistant settings do not render assistant ops console", async () => {
   const client = new MockWebBotClient();
   await client.addBot({
     alias: "assistant1",
@@ -138,10 +138,10 @@ test("assistant settings render assistant ops console", async () => {
 
   render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
 
-  expect(await screen.findByRole("heading", { name: "Assistant 运维台" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "Proposal" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "Memory / Knowledge" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "Diagnostics" })).toBeInTheDocument();
+  expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Proposal" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Automation 定时任务" })).toBeInTheDocument();
 });
 
 test("settings can browse and pick a workdir before saving", async () => {

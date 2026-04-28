@@ -300,7 +300,11 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
   }
 
   return (
-    <section className="space-y-4 border-t border-[var(--border)] pt-4" aria-labelledby="assistant-ops-title">
+    <section
+      data-testid="assistant-ops-screen"
+      className="h-full min-h-0 space-y-4 overflow-y-auto bg-[var(--surface)] p-4"
+      aria-labelledby="assistant-ops-title"
+    >
       <div className="space-y-1">
         <h3 id="assistant-ops-title" className="font-medium text-[var(--text)]">Assistant 运维台</h3>
         <p className="text-xs text-[var(--muted)]">proposal 审批、memory/knowledge 管理和性能诊断。</p>
@@ -396,12 +400,12 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
                 ))}
               </div>
 
-              <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4">
+              <div className="space-y-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4">
                 {proposalDetailLoading ? (
                   <p className="text-sm text-[var(--muted)]">加载详情...</p>
                 ) : proposalDetail ? (
                   <>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3 pb-1">
                       <div className="space-y-1">
                         <h4 className="text-sm font-medium text-[var(--text)]">{proposalDetail.proposal.title}</h4>
                         <p className="text-xs text-[var(--muted)]">
@@ -564,8 +568,11 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
           )}
 
           <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4">
-            <div className="flex items-center justify-between gap-2">
-              <h4 className="text-sm font-medium text-[var(--text)]">Eval</h4>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h4 className="text-sm font-medium text-[var(--text)]">Eval</h4>
+                <p className="text-xs text-[var(--muted)]">用样例 query 检查 memory 召回是否命中预期，看 hit@5 和误召回。</p>
+              </div>
               <button
                 type="button"
                 onClick={() => void runMemoryEval()}

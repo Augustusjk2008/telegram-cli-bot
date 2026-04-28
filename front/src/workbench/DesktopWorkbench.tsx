@@ -8,6 +8,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { GitScreen } from "../screens/GitScreen";
 import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
+import { AssistantOpsScreen } from "../screens/AssistantOpsScreen";
 import "../styles/workbench.css";
 import type {
   ChatBodyFontFamilyName,
@@ -40,9 +41,11 @@ import {
   MIN_TERMINAL_HEIGHT_PX,
   PANE_RESIZER_SIZE_PX,
   type ChatWorkbenchStatus,
+  type DesktopWorkspaceView,
   type FocusedWorkbenchPane,
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
+  type WorkbenchActivityId,
 } from "./workbenchTypes";
 
 const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
@@ -69,6 +72,7 @@ type Props = {
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
   onUserAvatarChange?: (avatarName: string) => void;
   sessionCapabilities?: string[];
+  canViewAssistantOps?: boolean;
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
@@ -102,6 +106,7 @@ export function DesktopWorkbench({
   onChatBodyParagraphSpacingChange,
   onUserAvatarChange,
   sessionCapabilities = [],
+  canViewAssistantOps = false,
   viewMode = "desktop",
   hasUnreadOtherBots = false,
   chatPaneContent,
@@ -136,6 +141,7 @@ export function DesktopWorkbench({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
+  const [workspaceView, setWorkspaceView] = useState<DesktopWorkspaceView>("editor");
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
   const [pendingTerminalOverride, setPendingTerminalOverride] = useState<TerminalOverrideState | null>(null);
   const [localChatStatus, setLocalChatStatus] = useState<ChatWorkbenchStatus>({
@@ -164,6 +170,8 @@ export function DesktopWorkbench({
   const activeSidebarView = !canViewPlugins && layoutState.sidebarView === "plugins"
     ? "files"
     : layoutState.sidebarView;
+  const showAssistantOpsWorkspace = !structureOnly && canViewAssistantOps && workspaceView === "assistant-ops";
+  const activeActivityItem: WorkbenchActivityId = showAssistantOpsWorkspace ? "assistant-ops" : activeSidebarView;
   const debug = useDebugSession({
     authToken,
     botAlias,
@@ -220,12 +228,19 @@ export function DesktopWorkbench({
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult);
   const canEditPreview = previewResult?.previewKind !== "image";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
-  const availableSidebarPanels = structureOnly
-    ? ["files"] as const
-    : canViewPlugins
-      ? ["files", "search", "outline", "debug", "git", "plugins", "settings"] as const
-      : ["files", "search", "outline", "debug", "git", "settings"] as const;
-  const activeEditorLine = tabs.activeTab && editorReveal?.path === tabs.activeTab.path
+  const availableActivityItems: WorkbenchActivityId[] = structureOnly
+    ? ["files"]
+    : [
+        "files",
+        "search",
+        "outline",
+        "debug",
+        "git",
+        ...(canViewAssistantOps ? ["assistant-ops" as const] : []),
+        ...(canViewPlugins ? ["plugins" as const] : []),
+        "settings",
+      ];
+  const activeEditorLine = !showAssistantOpsWorkspace && tabs.activeTab && editorReveal?.path === tabs.activeTab.path
     ? editorReveal.line
     : tabs.activeTab
       ? debug.currentLineForPath(tabs.activeTab.path)
@@ -380,6 +395,12 @@ export function DesktopWorkbench({
   }, [layoutState.sidebarView, setSidebarView, structureOnly]);
 
   useEffect(() => {
+    if (workspaceView === "assistant-ops" && (!canViewAssistantOps || structureOnly)) {
+      setWorkspaceView("editor");
+    }
+  }, [canViewAssistantOps, structureOnly, workspaceView]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (structureOnly) {
         return;
@@ -408,6 +429,16 @@ export function DesktopWorkbench({
 
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
+  }
+
+  function selectActivityItem(item: WorkbenchActivityId) {
+    if (item === "assistant-ops") {
+      setWorkspaceView("assistant-ops");
+      setFocusedPane(null);
+      return;
+    }
+    setWorkspaceView("editor");
+    setSidebarView(item);
   }
 
   function closePreview() {
@@ -786,11 +817,11 @@ export function DesktopWorkbench({
               )}
             >
               <WorkbenchActivityRail
-                activePanel={activeSidebarView}
+                activeItem={activeActivityItem}
                 sidebarCollapsed={layoutState.sidebarCollapsed}
-                availablePanels={[...availableSidebarPanels]}
+                availableItems={availableActivityItems}
                 onToggleSidebar={toggleSidebar}
-                onSelectPanel={setSidebarView}
+                onSelectItem={selectActivityItem}
               />
 
               {showSidebarContent ? (
@@ -828,48 +859,52 @@ export function DesktopWorkbench({
                 data-focused={focusedPane === "editor" ? "true" : "false"}
                 className="desktop-workbench-pane min-h-0 overflow-hidden"
               >
-                <EditorPane
-                  botAlias={botAlias}
-                  client={client}
-                  tabs={tabs.tabs}
-                  activeTab={tabs.activeTab}
-                  activeTabPath={tabs.activeTabPath}
-                  breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                  currentLine={activeEditorLine}
-                  allowCodeJump={allowCodeJump}
-                  onResolveDefinition={(input) => {
-                    void handleResolveDefinition(input);
-                  }}
-                  onToggleBreakpoint={tabs.activeTab
-                    ? (line) => {
-                        void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
-                      }
-                    : undefined}
-                  onActivateTab={(path) => {
-                    void tabs.activateTab(path);
-                  }}
-                  onCloseTab={tabs.closeTab}
-                  onChangeActiveContent={tabs.updateActiveContent}
-                  onSaveActiveTab={() => void tabs.saveActiveTab()}
-                  onCloseOthers={tabs.closeOtherTabs}
-                  onCloseTabsToRight={tabs.closeTabsToRight}
-                  onReopenLastClosed={() => {
-                    void tabs.reopenLastClosedTab();
-                  }}
-                  onRevealInTree={(path) => {
-                    setSidebarView("files");
-                    void fileTree.revealPath(path);
-                  }}
-                  onApplyHostEffects={runPluginHostEffects}
-                  onClosePluginTab={(path) => {
-                    tabs.closePath(path);
-                  }}
-                  onReopenPluginView={(target) => {
-                    void openPluginViewTab(target);
-                  }}
-                  focused={focusedPane === "editor"}
-                  onToggleFocus={() => toggleFocusedPane("editor")}
-                />
+                {showAssistantOpsWorkspace ? (
+                  <AssistantOpsScreen botAlias={botAlias} client={client} />
+                ) : (
+                  <EditorPane
+                    botAlias={botAlias}
+                    client={client}
+                    tabs={tabs.tabs}
+                    activeTab={tabs.activeTab}
+                    activeTabPath={tabs.activeTabPath}
+                    breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                    currentLine={activeEditorLine}
+                    allowCodeJump={allowCodeJump}
+                    onResolveDefinition={(input) => {
+                      void handleResolveDefinition(input);
+                    }}
+                    onToggleBreakpoint={tabs.activeTab
+                      ? (line) => {
+                          void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                        }
+                      : undefined}
+                    onActivateTab={(path) => {
+                      void tabs.activateTab(path);
+                    }}
+                    onCloseTab={tabs.closeTab}
+                    onChangeActiveContent={tabs.updateActiveContent}
+                    onSaveActiveTab={() => void tabs.saveActiveTab()}
+                    onCloseOthers={tabs.closeOtherTabs}
+                    onCloseTabsToRight={tabs.closeTabsToRight}
+                    onReopenLastClosed={() => {
+                      void tabs.reopenLastClosedTab();
+                    }}
+                    onRevealInTree={(path) => {
+                      setSidebarView("files");
+                      void fileTree.revealPath(path);
+                    }}
+                    onApplyHostEffects={runPluginHostEffects}
+                    onClosePluginTab={(path) => {
+                      tabs.closePath(path);
+                    }}
+                    onReopenPluginView={(target) => {
+                      void openPluginViewTab(target);
+                    }}
+                    focused={focusedPane === "editor"}
+                    onToggleFocus={() => toggleFocusedPane("editor")}
+                  />
+                )}
               </section>
             ) : null}
 

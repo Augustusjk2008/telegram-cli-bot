@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -1098,4 +1098,108 @@ test("desktop workbench refreshes file tree git decorations after an embedded gi
   });
   expect(document.querySelector("[data-git-decoration]")).toBeNull();
   expect(getGitTreeStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
+});
+
+test("desktop assistant bot with admin ops opens assistant ops from the activity rail", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "assistant1",
+    botMode: "assistant",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\assistant1",
+    avatarName: "avatar_01.png",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="assistant1"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      sessionCapabilities={["admin_ops", "view_plugins"]}
+      canViewAssistantOps
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const rail = await screen.findByTestId("desktop-workbench-activity-rail");
+  const labels = within(rail)
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label"));
+  expect(labels).toEqual(["折叠侧边栏", "文件", "搜索", "大纲", "调试", "Git", "运维", "插件", "设置"]);
+
+  await user.click(screen.getByRole("button", { name: "运维" }));
+
+  expect(await screen.findByRole("heading", { name: "Assistant 运维台" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Proposal" })).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-pane-editor")).toHaveTextContent("Assistant 运维台");
+  expect(screen.getByRole("button", { name: "运维" })).toHaveAttribute("aria-pressed", "true");
+
+  await user.click(screen.getByRole("button", { name: "文件" }));
+  expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
+  expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
+});
+
+test("desktop assistant ops rail item hides without the gate and falls back from the ops workspace", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "assistant1",
+    botMode: "assistant",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\assistant1",
+    avatarName: "avatar_01.png",
+  });
+
+  const view = rtlRender(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench
+        authToken="123"
+        botAlias="assistant1"
+        botAvatarName="avatar_01.png"
+        userAvatarName="avatar_01.png"
+        client={client}
+        sessionCapabilities={["admin_ops"]}
+        canViewAssistantOps
+        themeName="deep-space"
+        viewMode="desktop"
+        onViewModeChange={() => {}}
+        onOpenBotSwitcher={() => {}}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "运维" }));
+  expect(await screen.findByRole("heading", { name: "Assistant 运维台" })).toBeInTheDocument();
+
+  view.rerender(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench
+        authToken="123"
+        botAlias="assistant1"
+        botAvatarName="avatar_01.png"
+        userAvatarName="avatar_01.png"
+        client={client}
+        sessionCapabilities={[]}
+        canViewAssistantOps={false}
+        themeName="deep-space"
+        viewMode="desktop"
+        onViewModeChange={() => {}}
+        onOpenBotSwitcher={() => {}}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
+  });
+  expect(screen.queryByRole("button", { name: "运维" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("desktop-pane-editor")).toBeInTheDocument();
 });
