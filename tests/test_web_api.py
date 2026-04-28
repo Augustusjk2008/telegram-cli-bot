@@ -248,6 +248,57 @@ def test_overview_hides_stale_running_reply_when_session_is_idle(web_manager: Mu
     assert history["items"][-1]["content"] == "已修。"
     assert history["items"][-1]["meta"]["completion_state"] == "stale_stream_recovered"
 
+
+def test_overview_includes_assistant_runtime_snapshot(web_manager: MultiBotManager, tmp_path: Path):
+    assistant_root = tmp_path / "assistant-root"
+    assistant_root.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(assistant_root),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    web_manager.assistant_runtime = type("FakeAssistantRuntime", (), {
+        "snapshot_for_bot": staticmethod(lambda alias: {
+            "pending_count": 2,
+            "queued_count": 1,
+            "active": {
+                "run_id": "run_active",
+                "source": "cron",
+                "status": "running",
+                "task_mode": "dream",
+                "interactive": False,
+                "job_id": "daily_dream",
+                "job_title": "每日自整理",
+                "visible_text": "dream",
+                "enqueued_at": "2026-04-28T10:30:00+08:00",
+            },
+            "queue": [
+                {
+                    "run_id": "run_queued",
+                    "source": "web",
+                    "status": "queued",
+                    "task_mode": "standard",
+                    "interactive": True,
+                    "job_id": "",
+                    "job_title": "",
+                    "visible_text": "帮我总结今天进度",
+                    "enqueued_at": "2026-04-28T10:30:01+08:00",
+                }
+            ],
+        }),
+    })()
+
+    overview = get_overview(web_manager, "assistant1", 1001)
+
+    assert overview["bot"]["assistant_runtime"]["pending_count"] == 2
+    assert overview["bot"]["assistant_runtime"]["active"]["job_title"] == "每日自整理"
+    assert overview["bot"]["assistant_runtime"]["queue"][0]["run_id"] == "run_queued"
+
+
 def test_get_overview_reuses_the_loaded_session_for_summary(web_manager: MultiBotManager):
     real_get_session = api_service.get_session_for_alias
     call_count = 0

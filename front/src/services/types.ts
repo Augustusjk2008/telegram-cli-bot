@@ -90,6 +90,25 @@ export type RunningReply = {
   updatedAt?: string;
 };
 
+export type AssistantRuntimePendingRun = {
+  runId: string;
+  source: "web" | "cron" | "manual";
+  status: "queued" | "running";
+  taskMode: "standard" | "dream";
+  interactive: boolean;
+  jobId?: string;
+  jobTitle?: string;
+  visibleText?: string;
+  enqueuedAt?: string;
+};
+
+export type AssistantRuntimeSnapshot = {
+  pendingCount: number;
+  queuedCount: number;
+  active?: AssistantRuntimePendingRun | null;
+  queue: AssistantRuntimePendingRun[];
+};
+
 export type BotOverview = {
   alias: string;
   cliType: CliType;
@@ -104,6 +123,7 @@ export type BotOverview = {
   historyCount?: number;
   isProcessing?: boolean;
   runningReply?: RunningReply | null;
+  assistantRuntime?: AssistantRuntimeSnapshot | null;
 };
 
 export type ChatTraceEvent = {

@@ -7,6 +7,8 @@ import type {
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
+  AssistantRuntimePendingRun,
+  AssistantRuntimeSnapshot,
   Capability,
   CreateAssistantCronJobInput,
   GitActionResult,
@@ -427,6 +429,25 @@ type RawAssistantCronRun = {
   prompt_excerpt?: string;
   output_excerpt?: string;
   error?: string;
+};
+
+type RawAssistantRuntimePendingRun = {
+  run_id?: string;
+  source?: "web" | "cron" | "manual";
+  status?: "queued" | "running";
+  task_mode?: "standard" | "dream";
+  interactive?: boolean;
+  job_id?: string;
+  job_title?: string;
+  visible_text?: string;
+  enqueued_at?: string;
+};
+
+type RawAssistantRuntimeSnapshot = {
+  pending_count?: number;
+  queued_count?: number;
+  active?: RawAssistantRuntimePendingRun | null;
+  queue?: RawAssistantRuntimePendingRun[];
 };
 
 type StreamEvent =
@@ -943,6 +964,37 @@ function mapAssistantCronRun(raw: RawAssistantCronRun): AssistantCronRun {
   };
 }
 
+function mapAssistantRuntimePendingRun(raw?: RawAssistantRuntimePendingRun | null): AssistantRuntimePendingRun | null {
+  if (!raw?.run_id || !raw.source || !raw.status) {
+    return null;
+  }
+  return {
+    runId: raw.run_id,
+    source: raw.source,
+    status: raw.status,
+    taskMode: raw.task_mode || "standard",
+    interactive: Boolean(raw.interactive),
+    ...(raw.job_id ? { jobId: raw.job_id } : {}),
+    ...(raw.job_title ? { jobTitle: raw.job_title } : {}),
+    ...(raw.visible_text ? { visibleText: raw.visible_text } : {}),
+    ...(raw.enqueued_at ? { enqueuedAt: raw.enqueued_at } : {}),
+  };
+}
+
+function mapAssistantRuntimeSnapshot(raw?: RawAssistantRuntimeSnapshot | null): AssistantRuntimeSnapshot | null {
+  if (!raw) {
+    return null;
+  }
+  return {
+    pendingCount: Number(raw.pending_count || 0),
+    queuedCount: Number(raw.queued_count || 0),
+    active: mapAssistantRuntimePendingRun(raw.active),
+    queue: (raw.queue || [])
+      .map((item) => mapAssistantRuntimePendingRun(item))
+      .filter((item): item is AssistantRuntimePendingRun => Boolean(item)),
+  };
+}
+
 function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
   const trace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
@@ -1249,7 +1301,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async getBotOverview(botAlias: string): Promise<BotOverview> {
     const data = await this.requestJson<{
-      bot: RawBotSummary;
+      bot: RawBotSummary & { assistant_runtime?: RawAssistantRuntimeSnapshot | null };
       session: {
         working_dir: string;
         message_count: number;
@@ -1267,6 +1319,7 @@ export class RealWebBotClient implements WebBotClient {
       historyCount: data.session.history_count,
       isProcessing: data.session.is_processing,
       runningReply: mapRunningReply(data.session.running_reply),
+      assistantRuntime: mapAssistantRuntimeSnapshot(data.bot.assistant_runtime),
     };
     if (data.bot.bot_mode) {
       overview.botMode = data.bot.bot_mode;

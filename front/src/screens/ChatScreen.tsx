@@ -10,6 +10,7 @@ import { ChatTracePanel } from "../components/ChatTracePanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
+  AssistantRuntimePendingRun,
   BotOverview,
   ChatAttachmentUploadResult,
   ChatMessage,
@@ -88,6 +89,35 @@ function toModelOptionValue(value: unknown, options: string[]) {
 
 function pendingCronAssistantId(runId: string) {
   return `assistant-cron-assistant-${runId}`;
+}
+
+function summarizeRuntimeText(text: string | undefined, limit = 28) {
+  const value = (text || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (value.length <= limit) {
+    return value;
+  }
+  return `${value.slice(0, limit).trimEnd()}...`;
+}
+
+function assistantRuntimeSourceLabel(run: AssistantRuntimePendingRun) {
+  if (run.source === "cron") {
+    return run.taskMode === "dream" ? "定时 dream" : "定时任务";
+  }
+  if (run.source === "manual") {
+    return run.interactive ? "手动执行" : "后台手动任务";
+  }
+  return run.interactive ? "聊天消息" : "后台任务";
+}
+
+function assistantRuntimeRunLabel(run: AssistantRuntimePendingRun) {
+  const detail = summarizeRuntimeText(run.jobTitle || run.visibleText);
+  if (!detail) {
+    return assistantRuntimeSourceLabel(run);
+  }
+  return `${assistantRuntimeSourceLabel(run)} · ${detail}`;
 }
 
 function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRunEnqueuedDetail[]) {
@@ -760,8 +790,9 @@ export function ChatScreen({
 
           setBotOverview(overview);
           setWorkingDir(overview.workingDir || "");
+          const runtimePendingCount = overview.assistantRuntime?.pendingCount || 0;
 
-          if (overview.isProcessing) {
+          if (overview.isProcessing || runtimePendingCount > 0) {
             sseLastActivityAtRef.current = Date.now();
             scheduleSseRecoveryWatch();
             return;
@@ -1005,6 +1036,27 @@ export function ChatScreen({
   }, [isStreaming, streamStartedAtMs]);
 
   const isAssistantBot = botOverview?.botMode === "assistant";
+  const assistantRuntime = botOverview?.assistantRuntime || null;
+  const assistantRuntimeActive = assistantRuntime?.active || null;
+  const assistantRuntimeQueuedCount = assistantRuntime?.queuedCount || 0;
+  const assistantRuntimeQueueLabels = (assistantRuntime?.queue || []).slice(0, 2).map(assistantRuntimeRunLabel);
+  const showAssistantRuntimeBanner = Boolean(
+    isAssistantBot
+    && assistantRuntime
+    && (
+      assistantRuntimeQueuedCount > 0
+      || (assistantRuntimeActive && !assistantRuntimeActive.interactive)
+    ),
+  );
+  let assistantRuntimeHeadline = "";
+  if (assistantRuntimeActive && assistantRuntimeQueuedCount > 0) {
+    assistantRuntimeHeadline = `assistant 串行队列忙碌中：1 项执行，${assistantRuntimeQueuedCount} 项排队`;
+  } else if (assistantRuntimeActive && !assistantRuntimeActive.interactive) {
+    assistantRuntimeHeadline = "assistant 后台任务执行中，新消息会等待当前任务完成";
+  } else if (assistantRuntimeQueuedCount > 0) {
+    assistantRuntimeHeadline = `assistant 队列中 ${assistantRuntimeQueuedCount} 项，新消息会按顺序执行`;
+  }
+  const assistantRuntimeActiveLabel = assistantRuntimeActive ? assistantRuntimeRunLabel(assistantRuntimeActive) : "";
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
@@ -1573,6 +1625,25 @@ export function ChatScreen({
               {actionLoading === "kill" ? "终止中..." : "终止任务"}
             </button>
           </div>
+        </section>
+      ) : null}
+      {showAssistantRuntimeBanner ? (
+        <section className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+            <span>{assistantRuntimeHeadline}</span>
+          </div>
+          {assistantRuntimeActiveLabel ? (
+            <p className="mt-1 text-xs text-amber-800 break-all">当前：{assistantRuntimeActiveLabel}</p>
+          ) : null}
+          {assistantRuntimeQueueLabels.length > 0 ? (
+            <p className="mt-1 text-xs text-amber-800 break-all">
+              排队：{assistantRuntimeQueueLabels.join("；")}
+              {assistantRuntimeQueuedCount > assistantRuntimeQueueLabels.length
+                ? `；还有 ${assistantRuntimeQueuedCount - assistantRuntimeQueueLabels.length} 项`
+                : ""}
+            </p>
+          ) : null}
         </section>
       ) : null}
       <section

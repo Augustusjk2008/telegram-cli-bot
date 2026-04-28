@@ -375,6 +375,19 @@ def _build_assistant_cron_job_item(job: AssistantCronJob, *, state: Any) -> dict
     }
 
 
+def _build_assistant_runtime_item(manager: MultiBotManager, profile: BotProfile) -> dict[str, Any] | None:
+    if profile.bot_mode != "assistant":
+        return None
+    runtime = manager.assistant_runtime
+    if runtime is None:
+        return None
+    snapshot_for_bot = getattr(runtime, "snapshot_for_bot", None)
+    if not callable(snapshot_for_bot):
+        return None
+    snapshot = snapshot_for_bot(profile.alias)
+    return snapshot if isinstance(snapshot, dict) else None
+
+
 def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
     alias = (alias or "").strip().lower()
     if alias == manager.main_profile.alias:
@@ -589,6 +602,7 @@ def build_bot_summary(
         "is_processing": is_processing,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(profile, alias == manager.main_profile.alias),
+        "assistant_runtime": _build_assistant_runtime_item(manager, profile),
     }
 
 

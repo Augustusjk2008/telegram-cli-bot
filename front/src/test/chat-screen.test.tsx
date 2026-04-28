@@ -1850,3 +1850,141 @@ test("assistant chat immediately shows manual cron prompts after the settings ha
 
   expect(screen.getByText("正在读取最近邮件")).toBeInTheDocument();
 });
+
+test("assistant chat shows explicit runtime queue banner for background tasks", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "assistant1",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+      assistantRuntime: {
+        pendingCount: 2,
+        queuedCount: 1,
+        active: {
+          runId: "run_active",
+          source: "cron",
+          status: "running",
+          taskMode: "dream",
+          interactive: false,
+          jobId: "daily_dream",
+          jobTitle: "每日自整理",
+          visibleText: "dream prompt",
+          enqueuedAt: "2026-04-16T18:05:00",
+        },
+        queue: [
+          {
+            runId: "run_queued",
+            source: "web",
+            status: "queued",
+            taskMode: "standard",
+            interactive: true,
+            visibleText: "帮我总结今天进度",
+            enqueuedAt: "2026-04-16T18:05:01",
+          },
+        ],
+      },
+    }),
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+
+  expect(await screen.findByText("assistant 串行队列忙碌中：1 项执行，1 项排队")).toBeInTheDocument();
+  expect(screen.getByText("当前：定时 dream · 每日自整理")).toBeInTheDocument();
+  expect(screen.getByText("排队：聊天消息 · 帮我总结今天进度")).toBeInTheDocument();
+});
+
+test("assistant queued send keeps the pending row visible while runtime queue is still busy", async () => {
+  vi.useFakeTimers();
+
+  let overviewCalls = 0;
+  let resolveSend: ((message: ChatMessage) => void) | null = null;
+  const sendResult = new Promise<ChatMessage>((resolve) => {
+    resolveSend = resolve;
+  });
+
+  const client = createClient({
+    getBotOverview: async () => {
+      overviewCalls += 1;
+      if (overviewCalls === 1) {
+        return {
+          alias: "assistant1",
+          cliType: "codex",
+          status: "running",
+          workingDir: "C:\\workspace",
+          botMode: "assistant",
+          isProcessing: false,
+        };
+      }
+      return {
+        alias: "assistant1",
+        cliType: "codex",
+        status: "running",
+        workingDir: "C:\\workspace",
+        botMode: "assistant",
+        isProcessing: false,
+        assistantRuntime: {
+          pendingCount: 2,
+          queuedCount: 1,
+          active: {
+            runId: "run_active",
+            source: "cron",
+            status: "running",
+            taskMode: "dream",
+            interactive: false,
+            jobTitle: "每日自整理",
+            visibleText: "dream prompt",
+            enqueuedAt: "2026-04-16T18:05:00",
+          },
+          queue: [
+            {
+              runId: "run_queued",
+              source: "web",
+              status: "queued",
+              taskMode: "standard",
+              interactive: true,
+              visibleText: "帮我总结今天进度",
+              enqueuedAt: "2026-04-16T18:05:01",
+            },
+          ],
+        },
+      };
+    },
+    listMessages: async () => [],
+    sendMessage: async () => sendResult,
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+    target: { value: "帮我总结今天进度" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2600);
+  });
+
+  expect(screen.getByText("assistant 串行队列忙碌中：1 项执行，1 项排队")).toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
+
+  resolveSend?.({
+    id: "assistant-final",
+    role: "assistant",
+    text: "已总结完成",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  });
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+});

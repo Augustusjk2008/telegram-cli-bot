@@ -213,6 +213,64 @@ async def test_assistant_runtime_stop_cancels_active_background_run():
 
 
 @pytest.mark.asyncio
+async def test_assistant_runtime_snapshot_reports_active_and_queued_runs():
+    from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_result_executor(_request: AssistantRunRequest):
+        started.set()
+        await release.wait()
+        return {"status": "completed"}
+
+    runtime = AssistantRuntimeCoordinator(result_executor=blocking_result_executor)
+    await runtime.start()
+
+    running_request = AssistantRunRequest(
+        run_id="run_active_1",
+        source="cron",
+        bot_alias="assistant1",
+        user_id=-1,
+        text="dream prompt",
+        interactive=False,
+        visible_text="dream prompt",
+        task_mode="dream",
+        job_id="daily_dream",
+        job_title="每日自整理",
+        enqueued_at="2026-04-28T10:30:00+08:00",
+    )
+    queued_request = AssistantRunRequest(
+        run_id="run_queued_1",
+        source="web",
+        bot_alias="assistant1",
+        user_id=1001,
+        text="帮我总结今天进度",
+        interactive=True,
+        visible_text="帮我总结今天进度",
+        enqueued_at="2026-04-28T10:30:01+08:00",
+    )
+
+    await runtime.submit_background(running_request)
+    await runtime.submit_background(queued_request)
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    snapshot = runtime.snapshot_for_bot("assistant1")
+
+    assert snapshot["pending_count"] == 2
+    assert snapshot["queued_count"] == 1
+    assert snapshot["active"]["run_id"] == "run_active_1"
+    assert snapshot["active"]["job_title"] == "每日自整理"
+    assert snapshot["queue"][0]["run_id"] == "run_queued_1"
+    assert snapshot["queue"][0]["source"] == "web"
+
+    release.set()
+    await asyncio.wait_for(runtime.wait_for_run(running_request.run_id), timeout=1)
+    await asyncio.wait_for(runtime.wait_for_run(queued_request.run_id), timeout=1)
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_stop_background_services_clears_inflight_cron_pending_state(temp_dir):
     from bot.manager import MultiBotManager
 

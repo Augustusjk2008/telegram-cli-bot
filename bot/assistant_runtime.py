@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 RunSource = Literal["web", "cron", "manual"]
@@ -27,6 +28,7 @@ class AssistantRunRequest:
     task_mode: Literal["standard", "dream"] = "standard"
     task_payload: dict[str, Any] | None = None
     job_id: str | None = None
+    job_title: str | None = None
     scheduled_at: str | None = None
     enqueued_at: str | None = None
 
@@ -38,6 +40,48 @@ class _QueuedRun:
     future: asyncio.Future[dict[str, Any]]
     event_queue: asyncio.Queue[dict[str, Any] | object] | None = None
     status: RunStatus = field(default="queued")
+
+
+@dataclass(frozen=True)
+class AssistantRuntimePendingRunSnapshot:
+    run_id: str
+    source: RunSource
+    status: Literal["queued", "running"]
+    task_mode: Literal["standard", "dream"]
+    interactive: bool
+    job_id: str = ""
+    job_title: str = ""
+    visible_text: str = ""
+    enqueued_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "source": self.source,
+            "status": self.status,
+            "task_mode": self.task_mode,
+            "interactive": self.interactive,
+            "job_id": self.job_id,
+            "job_title": self.job_title,
+            "visible_text": self.visible_text,
+            "enqueued_at": self.enqueued_at,
+        }
+
+
+@dataclass(frozen=True)
+class AssistantRuntimeSnapshot:
+    pending_count: int
+    queued_count: int
+    active: AssistantRuntimePendingRunSnapshot | None = None
+    queue: tuple[AssistantRuntimePendingRunSnapshot, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pending_count": self.pending_count,
+            "queued_count": self.queued_count,
+            "active": self.active.to_dict() if self.active is not None else None,
+            "queue": [item.to_dict() for item in self.queue],
+        }
 
 
 class AssistantRuntimeCoordinator:
@@ -101,9 +145,57 @@ class AssistantRuntimeCoordinator:
     def has_run(self, run_id: str) -> bool:
         return run_id in self._runs
 
+    @staticmethod
+    def _excerpt(text: str | None, *, limit: int = 80) -> str:
+        value = str(text or "").strip()
+        if len(value) <= limit:
+            return value
+        return value[:limit].rstrip() + "..."
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).astimezone().isoformat()
+
+    def _snapshot_item(self, run: _QueuedRun) -> AssistantRuntimePendingRunSnapshot:
+        request = run.request
+        return AssistantRuntimePendingRunSnapshot(
+            run_id=request.run_id,
+            source=request.source,
+            status="running" if run.status == "running" else "queued",
+            task_mode=request.task_mode,
+            interactive=request.interactive,
+            job_id=str(request.job_id or ""),
+            job_title=self._excerpt(request.job_title),
+            visible_text=self._excerpt(request.visible_text or request.text),
+            enqueued_at=str(request.enqueued_at or ""),
+        )
+
+    def snapshot_for_bot(self, bot_alias: str, *, queue_limit: int = 5) -> dict[str, Any]:
+        pending_runs = [
+            run
+            for run in self._runs.values()
+            if run.request.bot_alias == bot_alias and run.status in {"queued", "running"}
+        ]
+        active_run = next((run for run in pending_runs if run.status == "running"), None)
+        queued_runs = [run for run in pending_runs if run.status == "queued"]
+        snapshot = AssistantRuntimeSnapshot(
+            pending_count=len(pending_runs),
+            queued_count=len(queued_runs),
+            active=self._snapshot_item(active_run) if active_run is not None else None,
+            queue=tuple(self._snapshot_item(run) for run in queued_runs[: max(0, int(queue_limit))]),
+        )
+        return snapshot.to_dict()
+
     def _enqueue(self, request: AssistantRunRequest, *, mode: Literal["result", "stream", "background"]) -> _QueuedRun:
         if self._stopping or self._worker_task is None or self._worker_task.done():
             raise RuntimeError("assistant runtime coordinator is not started")
+        if not request.enqueued_at:
+            request = AssistantRunRequest(
+                **{
+                    **request.__dict__,
+                    "enqueued_at": self._now_iso(),
+                }
+            )
         loop = asyncio.get_running_loop()
         run = _QueuedRun(
             request=request,

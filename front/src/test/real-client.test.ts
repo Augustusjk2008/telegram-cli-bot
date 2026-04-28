@@ -804,6 +804,32 @@ describe("RealWebBotClient", () => {
               cli_type: "codex",
               status: "running",
               working_dir: "C:\\workspace\\profile",
+              assistant_runtime: {
+                pending_count: 2,
+                queued_count: 1,
+                active: {
+                  run_id: "run_active",
+                  source: "cron",
+                  status: "running",
+                  task_mode: "dream",
+                  interactive: false,
+                  job_id: "daily_dream",
+                  job_title: "每日自整理",
+                  visible_text: "dream prompt",
+                  enqueued_at: "2026-04-09T10:39:59",
+                },
+                queue: [
+                  {
+                    run_id: "run_queued",
+                    source: "web",
+                    status: "queued",
+                    task_mode: "standard",
+                    interactive: true,
+                    visible_text: "帮我总结今天进度",
+                    enqueued_at: "2026-04-09T10:40:01",
+                  },
+                ],
+              },
             },
             session: {
               working_dir: "C:\\workspace\\session",
@@ -830,6 +856,32 @@ describe("RealWebBotClient", () => {
       previewText: "处理中预览",
       startedAt: "2026-04-09T10:40:00",
       updatedAt: "2026-04-09T10:40:05",
+    });
+    expect(overview.assistantRuntime).toEqual({
+      pendingCount: 2,
+      queuedCount: 1,
+      active: {
+        runId: "run_active",
+        source: "cron",
+        status: "running",
+        taskMode: "dream",
+        interactive: false,
+        jobId: "daily_dream",
+        jobTitle: "每日自整理",
+        visibleText: "dream prompt",
+        enqueuedAt: "2026-04-09T10:39:59",
+      },
+      queue: [
+        {
+          runId: "run_queued",
+          source: "web",
+          status: "queued",
+          taskMode: "standard",
+          interactive: true,
+          visibleText: "帮我总结今天进度",
+          enqueuedAt: "2026-04-09T10:40:01",
+        },
+      ],
     });
   });
 

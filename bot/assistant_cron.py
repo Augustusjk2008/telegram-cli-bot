@@ -375,6 +375,7 @@ class AssistantCronService:
             task_mode=job.task.mode,
             task_payload=job.task.to_dict(),
             job_id=job.id,
+            job_title=job.title,
             scheduled_at=scheduled_at.isoformat(),
             enqueued_at=self.now_func().isoformat(),
         )
