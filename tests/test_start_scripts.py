@@ -58,6 +58,15 @@ def test_start_sh_requires_env_and_applies_pending_updates():
     assert "WEB_PUBLIC_URL" in content
 
 
+def test_start_sh_drops_sudo_to_original_user():
+    content = Path("start.sh").read_text(encoding="utf-8")
+
+    assert "SUDO_USER" in content
+    assert "CLI_BRIDGE_ALLOW_ROOT" in content
+    assert 'sudo -H -u "$SUDO_USER"' in content
+    assert ".npm-global/bin" in content
+
+
 def test_start_ps1_applies_pending_updates_before_boot():
     content = Path("start.ps1").read_text(encoding="utf-8")
 

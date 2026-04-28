@@ -110,6 +110,7 @@ async def test_run_all_bots_opens_localhost_with_actual_port(monkeypatch):
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_HOST", "0.0.0.0")
     monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
+    monkeypatch.setenv("BROWSER", "test-browser")
     monkeypatch.setattr(
         main_module,
         "resolve_runtime_web_bind",
@@ -137,6 +138,43 @@ async def test_open_local_browser_skips_headless_linux(monkeypatch):
     monkeypatch.setattr(main_module.sys, "platform", "linux")
     for name in ("DISPLAY", "WAYLAND_DISPLAY", "MIR_SOCKET", "BROWSER", "WEB_AUTO_OPEN_BROWSER"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(main_module, "_open_default_browser", open_browser)
+
+    await main_module._open_local_browser(
+        main_module.RuntimeWebBind(host="127.0.0.1", configured_port=8765, actual_port=8765)
+    )
+
+    open_browser.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_open_local_browser_skips_posix_root(monkeypatch):
+    import bot.main as main_module
+
+    open_browser = MagicMock(side_effect=AssertionError("不应尝试打开浏览器"))
+    monkeypatch.setattr(main_module.sys, "platform", "linux")
+    monkeypatch.setattr(main_module.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("BROWSER", "test-browser")
+    monkeypatch.setattr(main_module, "_open_default_browser", open_browser)
+
+    await main_module._open_local_browser(
+        main_module.RuntimeWebBind(host="127.0.0.1", configured_port=8765, actual_port=8765)
+    )
+
+    open_browser.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_open_local_browser_skips_linux_without_browser_command(monkeypatch):
+    import bot.main as main_module
+
+    open_browser = MagicMock(side_effect=AssertionError("不应尝试打开浏览器"))
+    monkeypatch.setattr(main_module.sys, "platform", "linux")
+    monkeypatch.setattr(main_module.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("BROWSER", raising=False)
+    monkeypatch.setattr(main_module, "_has_posix_browser_command", lambda: False)
     monkeypatch.setattr(main_module, "_open_default_browser", open_browser)
 
     await main_module._open_local_browser(

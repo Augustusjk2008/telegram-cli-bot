@@ -24,6 +24,22 @@ def test_build_executable_invocation_leaves_linux_binary_unwrapped(monkeypatch):
     assert executables.build_executable_invocation("/usr/local/bin/codex") == ["/usr/local/bin/codex"]
 
 
+def test_resolve_cli_executable_checks_sudo_user_npm_global_bin(tmp_path, monkeypatch):
+    fake_home = tmp_path / "user-home"
+    npm_bin = fake_home / ".npm-global" / "bin"
+    npm_bin.mkdir(parents=True)
+    codex = npm_bin / "codex"
+    codex.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr(executables.os, "name", "posix")
+    monkeypatch.setattr(executables.shutil, "which", lambda value: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "current-home"))
+    monkeypatch.setenv("SUDO_USER", "jiangkai")
+    monkeypatch.setattr(executables, "_get_home_for_user", lambda username: str(fake_home))
+
+    assert executables.resolve_cli_executable("codex") == str(codex)
+
+
 def test_truncate_path_for_display_handles_unix_paths():
     rendered = paths.truncate_path_for_display("/srv/telegram-cli-bridge/projects/demo-repo", max_len=22)
     assert rendered.endswith("/demo-repo")

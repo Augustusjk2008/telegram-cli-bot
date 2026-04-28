@@ -34,6 +34,12 @@ def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> 
     if found:
         return found
 
+    if os.name != "nt" and not any(sep in path for sep in ("/", "\\")):
+        for bin_dir in _iter_posix_user_bin_dirs():
+            found = _existing_file(os.path.join(bin_dir, path))
+            if found:
+                return found
+
     if os.name == "nt" and not os.path.splitext(path)[1]:
         for ext in (".cmd", ".bat", ".exe", ".com"):
             found = shutil.which(path + ext)
@@ -64,6 +70,53 @@ def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> 
                     return found
 
     return None
+
+
+def _get_home_for_user(username: str) -> Optional[str]:
+    if not username:
+        return None
+    try:
+        import pwd
+
+        return pwd.getpwnam(username).pw_dir
+    except (ImportError, KeyError, OSError):
+        candidate = os.path.join("/home", username)
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def _iter_posix_user_bin_dirs() -> list[str]:
+    homes: list[str] = []
+    current_home = os.path.expanduser("~")
+    if current_home and current_home != "~":
+        homes.append(current_home)
+
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if sudo_user and sudo_user != "root":
+        sudo_home = _get_home_for_user(sudo_user)
+        if sudo_home:
+            homes.append(sudo_home)
+
+    dirs: list[str] = []
+    for home in homes:
+        dirs.extend(
+            [
+                os.path.join(home, ".local", "bin"),
+                os.path.join(home, ".npm-global", "bin"),
+                os.path.join(home, ".cargo", "bin"),
+                os.path.join(home, ".bun", "bin"),
+            ]
+        )
+        nvm_root = os.path.join(home, ".nvm", "versions", "node")
+        try:
+            node_versions = sorted(os.listdir(nvm_root), reverse=True)
+        except OSError:
+            node_versions = []
+        dirs.extend(os.path.join(nvm_root, version, "bin") for version in node_versions)
+
+    seen: set[str] = set()
+    return [item for item in dirs if item and not (item in seen or seen.add(item))]
 
 
 def build_executable_invocation(resolved_path: str) -> list[str]:

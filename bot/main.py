@@ -4,6 +4,7 @@ import asyncio
 import ctypes
 import logging
 import os
+import shutil
 import socket
 import sys
 import time
@@ -44,6 +45,22 @@ from bot.web.api_service import execute_assistant_run_request, stream_assistant_
 from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
 
 logger = logging.getLogger(__name__)
+
+_POSIX_BROWSER_COMMANDS = (
+    "x-www-browser",
+    "sensible-browser",
+    "firefox",
+    "firefox-esr",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "brave-browser",
+    "brave-browser-stable",
+    "microsoft-edge",
+    "microsoft-edge-stable",
+    "opera",
+)
 
 
 def safe_print(text: str = ""):
@@ -136,16 +153,37 @@ def _env_flag_enabled(name: str, default: bool = True) -> bool:
     return raw_value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _is_posix_root() -> bool:
+    geteuid = getattr(os, "geteuid", None)
+    if not callable(geteuid):
+        return False
+    try:
+        return int(geteuid()) == 0
+    except OSError:
+        return False
+
+
+def _has_posix_browser_command() -> bool:
+    if os.environ.get("BROWSER"):
+        return True
+    return any(shutil.which(command) for command in _POSIX_BROWSER_COMMANDS)
+
+
 def _should_open_local_browser() -> bool:
     if not _env_flag_enabled("WEB_AUTO_OPEN_BROWSER", True):
         return False
     if sys.platform in {"win32", "darwin"}:
         return True
     if sys.platform.startswith(("linux", "freebsd", "openbsd", "netbsd")):
-        return any(
+        if _is_posix_root():
+            return False
+        has_display = any(
             os.environ.get(name)
-            for name in ("DISPLAY", "WAYLAND_DISPLAY", "MIR_SOCKET", "BROWSER")
+            for name in ("DISPLAY", "WAYLAND_DISPLAY", "MIR_SOCKET")
         )
+        if not has_display and not os.environ.get("BROWSER"):
+            return False
+        return _has_posix_browser_command()
     return True
 
 
