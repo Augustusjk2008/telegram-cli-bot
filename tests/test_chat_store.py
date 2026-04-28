@@ -405,3 +405,37 @@ def test_trace_recovery_context_includes_attempt_status(monkeypatch, tmp_path: P
 
     assert context["trace_recovery_status"] == "no_trace"
     assert context["trace_recovery_attempted_at"]
+
+
+def test_append_trace_events_writes_batch_with_stable_ordinals(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="查目录",
+        native_provider="codex",
+    )
+
+    store.append_trace_events(
+        handle.turn_id,
+        [
+            {"kind": "commentary", "summary": "准备"},
+            {"kind": "tool_call", "summary": "Get-ChildItem", "tool_name": "shell"},
+        ],
+    )
+
+    trace = store.get_message_trace(handle.assistant_message_id)["trace"]
+
+    assert [item["ordinal"] for item in trace] == [1, 2]
+    assert [item["kind"] for item in trace] == ["commentary", "tool_call"]

@@ -88,7 +88,7 @@ from bot.sessions import (
 )
 from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command
-from bot.web.chat_history_service import ChatHistoryService
+from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_VIEW_PLUGINS, MEMBER_CAPABILITIES
@@ -2647,6 +2647,11 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
             output_queue: queue.Queue[Any] = queue.Queue()
             reader_done = threading.Event()
             preview_state = _StreamPreviewState(cli_type)
+            persistence_buffer = StreamingPersistenceBuffer(
+                service,
+                turn_handle,
+                loop_time=loop.time,
+            )
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str]] | None = None
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
@@ -2697,7 +2702,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         preview_state.consume(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             live_trace_events.append(trace_event)
-                            service.append_trace_event(turn_handle, trace_event)
+                            persistence_buffer.queue_trace(trace_event)
+                            persistence_buffer.maybe_flush()
                             yield {"type": "trace", "event": trace_event}
 
                         if cli_type == "codex":
@@ -2770,7 +2776,8 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                         preview_text = str(status_event.get("preview_text") or "")
                         if preview_text:
                             latest_preview_text = preview_text
-                            service.replace_assistant_preview(turn_handle, preview_text)
+                            persistence_buffer.queue_preview(preview_text)
+                            persistence_buffer.maybe_flush()
                         yield status_event
                         last_status_signature = status_signature
 
@@ -2782,6 +2789,7 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 if done_terminate_started_at is not None:
                     returncode = 0
             except asyncio.CancelledError:
+                persistence_buffer.flush()
                 if process.poll() is None:
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
@@ -2853,8 +2861,10 @@ async def _stream_cli_chat(manager: MultiBotManager, alias: str, user_id: int, u
                 stop_requested=stop_requested,
                 returncode=returncode,
             )
+            persistence_buffer.flush()
             for trace_event in final_trace[len(live_trace_events):]:
-                service.append_trace_event(turn_handle, trace_event)
+                persistence_buffer.queue_trace(trace_event)
+            persistence_buffer.flush()
             native_session_id = session.codex_session_id if cli_type == "codex" else session.claude_session_id
             await _reconcile_native_trace_before_completion(
                 service,

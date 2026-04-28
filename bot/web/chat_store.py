@@ -505,44 +505,65 @@ class ChatStore:
         call_id: str = "",
         payload: dict[str, Any] | None = None,
     ) -> None:
+        self.append_trace_events(
+            turn_id,
+            [
+                {
+                    "kind": kind,
+                    "summary": summary,
+                    "raw_type": raw_type,
+                    "title": title,
+                    "tool_name": tool_name,
+                    "call_id": call_id,
+                    "payload": payload,
+                }
+            ],
+        )
+
+    def append_trace_events(self, turn_id: str, events: list[dict[str, Any]]) -> None:
+        normalized_events = [dict(event) for event in events if isinstance(event, dict)]
+        if not normalized_events:
+            return
         now = _utc_now()
-        trace_id = f"trace_{uuid.uuid4().hex}"
-        payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
         with self._connect_for_write() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
                 (turn_id,),
             ).fetchone()
-            conn.execute(
-                """
-                INSERT INTO trace_events (
-                    id,
-                    turn_id,
-                    ordinal,
-                    kind,
-                    raw_type,
-                    title,
-                    tool_name,
-                    call_id,
-                    summary,
-                    payload_json,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    trace_id,
-                    turn_id,
-                    int(row["next_ordinal"]),
-                    kind,
-                    raw_type,
-                    title,
-                    tool_name,
-                    call_id,
-                    summary,
-                    payload_json,
-                    now,
-                ),
-            )
+            next_ordinal = int(row["next_ordinal"])
+            for offset, event in enumerate(normalized_events):
+                payload = event.get("payload")
+                payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+                conn.execute(
+                    """
+                    INSERT INTO trace_events (
+                        id,
+                        turn_id,
+                        ordinal,
+                        kind,
+                        raw_type,
+                        title,
+                        tool_name,
+                        call_id,
+                        summary,
+                        payload_json,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"trace_{uuid.uuid4().hex}",
+                        turn_id,
+                        next_ordinal + offset,
+                        str(event.get("kind") or "unknown"),
+                        str(event.get("raw_type") or ""),
+                        str(event.get("title") or ""),
+                        str(event.get("tool_name") or ""),
+                        str(event.get("call_id") or ""),
+                        str(event.get("summary") or ""),
+                        payload_json,
+                        now,
+                    ),
+                )
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
 
     def mark_trace_recovery_attempted(self, turn_id: str, *, status: str) -> None:

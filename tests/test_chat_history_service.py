@@ -2,7 +2,7 @@ from pathlib import Path
 
 import bot.runtime_paths as runtime_paths
 from bot.models import BotProfile, UserSession
-from bot.web.chat_history_service import ChatHistoryService
+from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
 
 
@@ -127,3 +127,40 @@ def test_list_history_does_not_repeat_failed_trace_recovery(monkeypatch, tmp_pat
     service.list_history(profile, session)
 
     assert len(calls) == 1
+
+
+def test_streaming_persistence_buffer_coalesces_preview_and_trace():
+    calls = []
+
+    class FakeService:
+        def replace_assistant_preview(self, handle, preview_text):
+            calls.append(("preview", preview_text))
+
+        def append_trace_events(self, handle, events):
+            calls.append(("trace", list(events)))
+
+    now = {"value": 0.0}
+    buffer = StreamingPersistenceBuffer(
+        FakeService(),
+        object(),
+        loop_time=lambda: now["value"],
+        flush_interval_seconds=0.25,
+    )
+
+    buffer.queue_preview("a")
+    buffer.queue_trace({"kind": "commentary", "summary": "一"})
+    buffer.maybe_flush()
+    assert calls == []
+
+    buffer.queue_preview("ab")
+    buffer.queue_trace({"kind": "tool_call", "summary": "二"})
+    now["value"] = 0.26
+    buffer.maybe_flush()
+
+    assert calls == [
+        ("preview", "ab"),
+        ("trace", [
+            {"kind": "commentary", "summary": "一"},
+            {"kind": "tool_call", "summary": "二"},
+        ]),
+    ]

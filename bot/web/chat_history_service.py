@@ -15,6 +15,52 @@ def _session_epoch(session: UserSession) -> int:
         return 0
 
 
+class StreamingPersistenceBuffer:
+    def __init__(
+        self,
+        service: "ChatHistoryService",
+        handle: ChatTurnHandle,
+        *,
+        loop_time,
+        flush_interval_seconds: float = 0.25,
+    ) -> None:
+        self._service = service
+        self._handle = handle
+        self._loop_time = loop_time
+        self._flush_interval_seconds = max(0.05, float(flush_interval_seconds))
+        self._last_flush_at = float(loop_time())
+        self._pending_preview: str | None = None
+        self._pending_trace: list[dict[str, Any]] = []
+
+    def queue_preview(self, preview_text: str) -> None:
+        text = str(preview_text or "").strip()
+        if text:
+            self._pending_preview = text[-800:]
+
+    def queue_trace(self, event: dict[str, Any]) -> None:
+        if isinstance(event, dict):
+            self._pending_trace.append(dict(event))
+
+    def maybe_flush(self) -> None:
+        if not self._pending_preview and not self._pending_trace:
+            return
+        now = float(self._loop_time())
+        if now - self._last_flush_at < self._flush_interval_seconds:
+            return
+        self.flush()
+
+    def flush(self) -> None:
+        preview = self._pending_preview
+        trace = list(self._pending_trace)
+        self._pending_preview = None
+        self._pending_trace.clear()
+        if preview:
+            self._service.replace_assistant_preview(self._handle, preview)
+        if trace:
+            self._service.append_trace_events(self._handle, trace)
+        self._last_flush_at = float(self._loop_time())
+
+
 class ChatHistoryService:
     def __init__(self, store: ChatStore) -> None:
         self.store = store
@@ -124,6 +170,9 @@ class ChatHistoryService:
             summary=str(event.get("summary") or ""),
             payload=event.get("payload"),
         )
+
+    def append_trace_events(self, handle: ChatTurnHandle, events: list[dict[str, Any]]) -> None:
+        self.store.append_trace_events(handle.turn_id, events)
 
     def replace_assistant_content(self, handle: ChatTurnHandle, content: str, *, state: str = "streaming") -> None:
         self.store.replace_assistant_content(handle, content, state=state)
