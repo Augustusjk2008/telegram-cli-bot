@@ -1,9 +1,11 @@
 import { Settings } from "lucide-react";
-import type { TerminalAction } from "../services/types";
+import type { TerminalAction, TerminalRuntimePlatform } from "../services/types";
+import { isTerminalActionVisible, resolveTerminalActionCommand } from "./terminalActionPlatform";
 import { getTerminalActionIcon } from "./terminalActionIcons";
 
 type Props = {
   actions: TerminalAction[];
+  runtimePlatform: TerminalRuntimePlatform;
   canEdit: boolean;
   runningActionId: string;
   onRunAction: (action: TerminalAction) => void;
@@ -12,27 +14,29 @@ type Props = {
 
 export function TerminalActionsBar({
   actions,
+  runtimePlatform,
   canEdit,
   runningActionId,
   onRunAction,
   onOpenConfig,
 }: Props) {
-  const enabledActions = actions.filter((action) => action.enabled);
-  if (enabledActions.length === 0 && !canEdit) {
+  const visibleActions = actions.filter((action) => isTerminalActionVisible(action, runtimePlatform));
+  if (visibleActions.length === 0 && !canEdit) {
     return null;
   }
 
   return (
     <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-      {enabledActions.map((action) => {
+      {visibleActions.map((action) => {
         const Icon = getTerminalActionIcon(action.icon);
         const running = runningActionId === action.id;
+        const command = resolveTerminalActionCommand(action, runtimePlatform);
         return (
           <button
             key={action.id}
             type="button"
             aria-label={action.label}
-            title={action.command}
+            title={command}
             onClick={() => onRunAction(action)}
             disabled={running}
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border)] px-2 text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"

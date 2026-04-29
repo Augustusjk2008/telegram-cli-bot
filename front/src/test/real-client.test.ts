@@ -45,19 +45,29 @@ describe("RealWebBotClient", () => {
       ok: true,
       json: async () => ({
         ok: true,
-        data: {
-          schemaVersion: 1,
-          configPath: "C:/repo/scripts/terminal-actions.json",
-          exists: true,
-          mtimeNs: "123",
-          editable: true,
-          errors: [],
-          actions: [
-            { id: "build", label: "构建", icon: "Hammer", command: "npm run build", cwd: ".", confirm: false, enabled: true },
-          ],
-        },
-      }),
-    });
+          data: {
+            schemaVersion: 1,
+            configPath: "C:/repo/scripts/terminal-actions.json",
+            exists: true,
+            mtimeNs: "123",
+            editable: true,
+            errors: [],
+            runtimePlatform: "windows",
+            actions: [
+              {
+                id: "build",
+                label: "构建",
+                icon: "Hammer",
+                windowsCommand: "npm run build",
+                linuxCommand: "",
+                cwd: ".",
+                confirm: false,
+                enabled: true,
+              },
+            ],
+          },
+        }),
+      });
 
     const client = new RealWebBotClient();
     const result = await client.getTerminalActionsConfig("main");
@@ -74,17 +84,18 @@ describe("RealWebBotClient", () => {
       ok: true,
       json: async () => ({
         ok: true,
-        data: {
-          schemaVersion: 1,
-          configPath: "C:/repo/scripts/terminal-actions.json",
-          exists: true,
-          mtimeNs: "124",
-          editable: true,
-          errors: [],
-          actions: [],
-        },
-      }),
-    });
+          data: {
+            schemaVersion: 1,
+            configPath: "C:/repo/scripts/terminal-actions.json",
+            exists: true,
+            mtimeNs: "124",
+            editable: true,
+            errors: [],
+            runtimePlatform: "windows",
+            actions: [],
+          },
+        }),
+      });
 
     const client = new RealWebBotClient();
     await client.saveTerminalActionsConfig("main", { schemaVersion: 1, actions: [] }, "");

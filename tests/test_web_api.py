@@ -3030,6 +3030,7 @@ async def test_terminal_actions_routes_read_save_and_run(
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.terminal_actions.get_runtime_platform", lambda: "linux")
 
     config_path = temp_dir / "scripts" / "terminal-actions.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3091,6 +3092,8 @@ async def test_terminal_actions_routes_read_save_and_run(
             assert read_resp.status == 200
             read_payload = await read_resp.json()
             assert read_payload["data"]["actions"][0]["id"] == "build"
+            assert read_payload["data"]["runtimePlatform"] == "linux"
+            assert read_payload["data"]["actions"][0]["linuxCommand"] == "npm run build"
             assert read_payload["data"]["editable"] is True
 
             save_resp = await client.put(
@@ -3104,7 +3107,8 @@ async def test_terminal_actions_routes_read_save_and_run(
                                 "id": "test",
                                 "label": "测试",
                                 "icon": "TestTube2",
-                                "command": "python -m pytest tests -q",
+                                "windowsCommand": "",
+                                "linuxCommand": "python -m pytest tests -q",
                             }
                         ],
                     },
@@ -3113,6 +3117,7 @@ async def test_terminal_actions_routes_read_save_and_run(
             assert save_resp.status == 200
             save_payload = await save_resp.json()
             assert save_payload["data"]["actions"][0]["id"] == "test"
+            assert save_payload["data"]["actions"][0]["linuxCommand"] == "python -m pytest tests -q"
 
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
                  patch("bot.web.server.get_default_shell", return_value="bash"):

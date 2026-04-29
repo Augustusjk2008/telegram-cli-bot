@@ -5,7 +5,8 @@
       "id": "codex",
       "label": "Codex",
       "icon": "Zap",
-      "command": "codex",
+      "windowsCommand": "codex",
+      "linuxCommand": "codex",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -14,7 +15,18 @@
       "id": "Claude",
       "label": "Claude",
       "icon": "Zap",
-      "command": "claude",
+      "windowsCommand": "claude",
+      "linuxCommand": "claude",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "Rebuild",
+      "label": "重建前端",
+      "icon": "Server",
+      "windowsCommand": "cd front; npm run build",
+      "linuxCommand": "cd front && npm run build",
       "cwd": ".",
       "confirm": false,
       "enabled": true

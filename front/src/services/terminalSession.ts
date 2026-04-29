@@ -1,7 +1,12 @@
 import { AttachAddon } from "@xterm/addon-attach";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { DEFAULT_UI_THEME, getTerminalTheme, type UiThemeName } from "../theme";
+import {
+  DEFAULT_UI_THEME,
+  getTerminalMinimumContrastRatio,
+  getTerminalTheme,
+  type UiThemeName,
+} from "../theme";
 
 export type TerminalSessionOptions = {
   token: string;
@@ -31,13 +36,21 @@ export type TerminalSession = {
   setTheme: (themeName: UiThemeName) => void;
 };
 
+function buildTerminalAppearance(themeName: UiThemeName) {
+  return {
+    minimumContrastRatio: getTerminalMinimumContrastRatio(themeName),
+    theme: getTerminalTheme(themeName),
+  };
+}
+
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
+  const themeName = options.themeName ?? DEFAULT_UI_THEME;
   const term = new Terminal({
     cursorBlink: true,
     convertEol: false,
     fontSize: options.fontSize ?? 13,
     fontFamily: '"Cascadia Code", "Consolas", "Courier New", monospace',
-    theme: getTerminalTheme(options.themeName ?? DEFAULT_UI_THEME),
+    ...buildTerminalAppearance(themeName),
   });
   const fitAddon = new FitAddon();
   let socket: WebSocket | null = null;
@@ -201,7 +214,9 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       }
     },
     setTheme: (themeName: UiThemeName) => {
-      term.options.theme = getTerminalTheme(themeName);
+      const appearance = buildTerminalAppearance(themeName);
+      term.options.minimumContrastRatio = appearance.minimumContrastRatio;
+      term.options.theme = appearance.theme;
     },
   };
 }

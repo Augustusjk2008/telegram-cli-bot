@@ -6,7 +6,7 @@ const terminalState = vi.hoisted(() => ({
   instances: [] as Array<{
     cols: number;
     rows: number;
-    options: { theme?: unknown };
+    options: { theme?: unknown; minimumContrastRatio?: unknown };
   }>,
   fitCalls: 0,
 }));
@@ -15,10 +15,10 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class MockTerminal {
     cols = 132;
     rows = 40;
-    options: { theme?: unknown };
+    options: { theme?: unknown; minimumContrastRatio?: unknown };
     textarea = document.createElement("textarea");
 
-    constructor(options: { theme?: unknown }) {
+    constructor(options: { theme?: unknown; minimumContrastRatio?: unknown }) {
       this.options = { ...options };
       terminalState.instances.push(this);
     }
@@ -152,4 +152,15 @@ test("setTheme updates the live xterm theme in place", () => {
   session.setTheme("classic");
 
   expect(terminalState.instances[0]?.options.theme).toEqual(getTerminalTheme("classic"));
+});
+
+test("classic theme enables minimum contrast for dim terminal text", () => {
+  const container = document.createElement("div");
+  createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    themeName: "classic",
+  });
+
+  expect(terminalState.instances[0]?.options.minimumContrastRatio).toBe(4.5);
 });

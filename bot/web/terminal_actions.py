@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bot.platform.runtime import get_runtime_platform
+
 TERMINAL_ACTIONS_RELATIVE_PATH = Path("scripts") / "terminal-actions.json"
 MAX_TERMINAL_ACTIONS = 50
 MAX_COMMAND_LENGTH = 2000
@@ -51,6 +53,8 @@ class TerminalAction:
     id: str
     label: str
     icon: str
+    windows_command: str
+    linux_command: str
     command: str
     cwd: str
     resolved_cwd: str
@@ -97,6 +101,48 @@ def _normalize_icon(value: Any) -> str:
     return icon if icon in SAFE_TERMINAL_ACTION_ICONS else DEFAULT_TERMINAL_ACTION_ICON
 
 
+def _normalize_command(value: Any, *, label: str, allow_empty: bool) -> str:
+    command = str(value or "").strip()
+    if not command:
+        if allow_empty:
+            return ""
+        raise TerminalActionValidationError(f"{label} 不能为空")
+    if len(command) > MAX_COMMAND_LENGTH:
+        raise TerminalActionValidationError(f"{label} 不能超过 {MAX_COMMAND_LENGTH} 字符")
+    if "\r" in command or "\n" in command:
+        raise TerminalActionValidationError(f"{label} 不能包含换行")
+    return command
+
+
+def _resolve_platform_commands(current: dict[str, Any], index: int) -> tuple[str, str]:
+    windows_command = _normalize_command(
+        current.get("windowsCommand"),
+        label=f"actions[{index}].windowsCommand",
+        allow_empty=True,
+    )
+    linux_command = _normalize_command(
+        current.get("linuxCommand"),
+        label=f"actions[{index}].linuxCommand",
+        allow_empty=True,
+    )
+
+    if not windows_command and not linux_command and current.get("command") is not None:
+        legacy_command = _normalize_command(
+            current.get("command"),
+            label=f"actions[{index}].command",
+            allow_empty=False,
+        )
+        if get_runtime_platform() == "windows":
+            windows_command = legacy_command
+        else:
+            linux_command = legacy_command
+
+    if not windows_command and not linux_command:
+        raise TerminalActionValidationError(f"actions[{index}] 的 Windows/Linux 命令至少填一个")
+
+    return windows_command, linux_command
+
+
 def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction:
     current = _expect_mapping(item, f"actions[{index}]")
     action_id = str(current.get("id") or "").strip()
@@ -107,23 +153,20 @@ def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction
     if not label or len(label) > MAX_LABEL_LENGTH:
         raise TerminalActionValidationError(f"actions[{index}].label 长度必须为 1-{MAX_LABEL_LENGTH}")
 
-    command = str(current.get("command") or "").strip()
-    if not command:
-        raise TerminalActionValidationError(f"actions[{index}].command 不能为空")
-    if len(command) > MAX_COMMAND_LENGTH:
-        raise TerminalActionValidationError(f"actions[{index}].command 不能超过 {MAX_COMMAND_LENGTH} 字符")
-    if "\r" in command or "\n" in command:
-        raise TerminalActionValidationError(f"actions[{index}].command 不能包含换行")
-
     cwd = str(current.get("cwd") or ".").strip() or "."
     resolved_cwd = _resolve_workspace_path(workspace_root, cwd)
     if not resolved_cwd.exists() or not resolved_cwd.is_dir():
         raise TerminalActionValidationError(f"actions[{index}].cwd 目录不存在: {cwd}")
 
+    windows_command, linux_command = _resolve_platform_commands(current, index)
+    command = windows_command if get_runtime_platform() == "windows" else linux_command
+
     return TerminalAction(
         id=action_id,
         label=label,
         icon=_normalize_icon(current.get("icon")),
+        windows_command=windows_command,
+        linux_command=linux_command,
         command=command,
         cwd=cwd,
         resolved_cwd=str(resolved_cwd),
@@ -180,7 +223,8 @@ def _serialize_action(action: TerminalAction) -> dict[str, Any]:
         "id": action.id,
         "label": action.label,
         "icon": action.icon,
-        "command": action.command,
+        "windowsCommand": action.windows_command,
+        "linuxCommand": action.linux_command,
         "cwd": action.cwd,
         "confirm": action.confirm,
         "enabled": action.enabled,
@@ -195,6 +239,7 @@ def serialize_terminal_actions_config(result: TerminalActionsConfigReadResult, *
         "mtimeNs": result.mtime_ns,
         "editable": editable,
         "errors": list(result.errors),
+        "runtimePlatform": get_runtime_platform(),
         "actions": [_serialize_action(action) for action in result.config.actions],
     }
 
@@ -235,6 +280,8 @@ def resolve_terminal_action(workspace_root: str | Path, action_id: str, *, confi
             continue
         if not action.enabled:
             raise TerminalActionValidationError(f"快捷命令已禁用: {normalized_id}")
+        if not action.command:
+            raise TerminalActionValidationError("当前平台未配置命令")
         if action.confirm and not confirmed:
             raise TerminalActionValidationError("快捷命令需要确认")
         return action

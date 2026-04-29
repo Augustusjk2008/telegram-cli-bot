@@ -859,9 +859,28 @@ export class MockWebBotClient implements WebBotClient {
     mtimeNs: "1",
     editable: true,
     errors: [],
+    runtimePlatform: "windows",
     actions: [
-      { id: "build", label: "构建", icon: "Hammer", command: "npm run build", cwd: ".", confirm: false, enabled: true },
-      { id: "test", label: "测试", icon: "TestTube2", command: "python -m pytest tests -q", cwd: ".", confirm: false, enabled: true },
+      {
+        id: "build",
+        label: "构建",
+        icon: "Hammer",
+        windowsCommand: "npm run build",
+        linuxCommand: "",
+        cwd: ".",
+        confirm: false,
+        enabled: true,
+      },
+      {
+        id: "test",
+        label: "测试",
+        icon: "TestTube2",
+        windowsCommand: "python -m pytest tests -q",
+        linuxCommand: "",
+        cwd: ".",
+        confirm: false,
+        enabled: true,
+      },
     ],
   };
   private gitOverviews = new Map<string, GitOverview>([
@@ -2049,9 +2068,12 @@ export class MockWebBotClient implements WebBotClient {
       connectionText: "运行中",
     };
     writeMockPersistentTerminalSnapshot(snapshot);
+    const command = (this.terminalActionsConfig.runtimePlatform === "windows"
+      ? action.windowsCommand
+      : action.linuxCommand).trim();
     return {
       actionId,
-      command: action.command,
+      command,
       cwd: snapshot.cwd,
       startedTerminal: !current.started,
       snapshot,

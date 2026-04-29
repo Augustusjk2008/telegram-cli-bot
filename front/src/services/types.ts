@@ -179,11 +179,14 @@ export type ChatStatusUpdate = {
   previewText?: string;
 };
 
+export type TerminalRuntimePlatform = "windows" | "linux";
+
 export type TerminalAction = {
   id: string;
   label: string;
   icon: string;
-  command: string;
+  windowsCommand: string;
+  linuxCommand: string;
   cwd: string;
   confirm: boolean;
   enabled: boolean;
@@ -200,6 +203,7 @@ export type TerminalActionsConfig = TerminalActionsEditableConfig & {
   mtimeNs: string;
   editable: boolean;
   errors: string[];
+  runtimePlatform: TerminalRuntimePlatform;
 };
 
 export type TerminalActionRunInput = {

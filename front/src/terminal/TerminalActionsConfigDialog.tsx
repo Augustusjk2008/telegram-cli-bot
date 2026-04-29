@@ -16,7 +16,8 @@ function createAction(index: number): TerminalAction {
     id: `action-${index + 1}`,
     label: "新命令",
     icon: "Terminal",
-    command: "echo hello",
+    windowsCommand: "",
+    linuxCommand: "",
     cwd: ".",
     confirm: false,
     enabled: true,
@@ -28,7 +29,8 @@ function normalizeActions(actions: TerminalAction[]): TerminalAction[] {
     id: action.id.trim(),
     label: action.label.trim(),
     icon: action.icon.trim() || "Terminal",
-    command: action.command.trim(),
+    windowsCommand: action.windowsCommand.trim(),
+    linuxCommand: action.linuxCommand.trim(),
     cwd: action.cwd.trim() || ".",
     confirm: Boolean(action.confirm),
     enabled: Boolean(action.enabled),
@@ -53,7 +55,7 @@ export function TerminalActionsConfigDialog({
       if (seen.has(action.id)) return `ID 重复: ${action.id}`;
       seen.add(action.id);
       if (!action.label) return "名称不能为空";
-      if (!action.command) return "命令不能为空";
+      if (!action.windowsCommand && !action.linuxCommand) return "Windows/Linux 命令至少填一个";
     }
     return "";
   }, [actions]);
@@ -164,10 +166,31 @@ export function TerminalActionsConfigDialog({
                   </label>
                 </div>
 
-                <label className="space-y-1 text-sm">
-                  <span className="font-medium text-[var(--text)]">命令</span>
-                  <textarea aria-label="命令" rows={3} value={selected.command} onChange={(event) => updateSelected({ command: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-sm" />
-                </label>
+                <div className="space-y-1 text-sm">
+                  <span className="font-medium text-[var(--text)]">平台命令</span>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="space-y-1 text-sm">
+                      <span className="font-medium text-[var(--text)]">Windows 命令</span>
+                      <textarea
+                        aria-label="Windows 命令"
+                        rows={3}
+                        value={selected.windowsCommand}
+                        onChange={(event) => updateSelected({ windowsCommand: event.target.value })}
+                        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-sm"
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="font-medium text-[var(--text)]">Linux 命令</span>
+                      <textarea
+                        aria-label="Linux 命令"
+                        rows={3}
+                        value={selected.linuxCommand}
+                        onChange={(event) => updateSelected({ linuxCommand: event.target.value })}
+                        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-sm"
+                      />
+                    </label>
+                  </div>
+                </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="space-y-1 text-sm">

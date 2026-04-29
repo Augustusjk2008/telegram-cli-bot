@@ -319,7 +319,7 @@ export function getTerminalTheme(themeName: UiThemeName) {
       magenta: "#8e63c7",
       cyan: "#0f8c78",
       white: "#efe6d9",
-      brightBlack: "#8b7f72",
+      brightBlack: "#6d675f",
       brightRed: "#d47a58",
       brightGreen: "#52966d",
       brightYellow: "#b98a33",
@@ -351,4 +351,8 @@ export function getTerminalTheme(themeName: UiThemeName) {
     brightCyan: "#67e8f9",
     brightWhite: "#f8fafc",
   };
+}
+
+export function getTerminalMinimumContrastRatio(themeName: UiThemeName) {
+  return themeName === "classic" ? 4.5 : 1;
 }

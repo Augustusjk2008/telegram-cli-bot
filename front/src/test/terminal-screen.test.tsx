@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TerminalScreen } from "../screens/TerminalScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
-import { getTerminalTheme } from "../theme";
+import { getTerminalMinimumContrastRatio, getTerminalTheme } from "../theme";
 
 const createTerminalSessionMock = vi.hoisted(() => vi.fn());
 const terminalEventHandlers = vi.hoisted(() => ({
@@ -207,6 +207,8 @@ test("classic terminal theme uses a light background with dark text", () => {
   expect(theme.background).toBe("#fbf7ef");
   expect(theme.foreground).toBe("#1d1b18");
   expect(theme.cursor).toBe("#0f8c78");
+  expect(theme.brightBlack).toBe("#6d675f");
+  expect(getTerminalMinimumContrastRatio("classic")).toBe(4.5);
 });
 
 test("lets the user close the terminal session", async () => {
@@ -350,6 +352,7 @@ test("opens terminal action config dialog and saves changes", async () => {
 
   await user.click(await screen.findByRole("button", { name: "编辑快捷命令" }));
   await user.click(screen.getByRole("button", { name: "新增快捷命令" }));
+  await user.type(screen.getByLabelText("Windows 命令"), "echo hello");
   await user.click(screen.getByRole("button", { name: "保存快捷命令" }));
 
   await waitFor(() => {

@@ -3,10 +3,16 @@ import { Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
-import type { TerminalAction, TerminalActionsConfig, TerminalActionsEditableConfig } from "../services/types";
+import type {
+  TerminalAction,
+  TerminalActionsConfig,
+  TerminalActionsEditableConfig,
+  TerminalRuntimePlatform,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { TerminalActionsBar } from "../terminal/TerminalActionsBar";
 import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDialog";
+import { isTerminalActionVisible, resolveTerminalActionCommand } from "../terminal/terminalActionPlatform";
 import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
@@ -113,7 +119,8 @@ export function TerminalScreen({
   const [savingActionsConfig, setSavingActionsConfig] = useState(false);
   const [actionsConfigError, setActionsConfigError] = useState("");
   const terminalFontSize = getTerminalFontSize();
-  const enabledActions = actionsConfig?.actions.filter((action) => action.enabled) ?? [];
+  const runtimePlatform: TerminalRuntimePlatform = actionsConfig?.runtimePlatform ?? "windows";
+  const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
   const runningWorkingDir = terminal.snapshot.cwd.trim();
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
   const preferredTerminalDir = preferredWorkingDir.trim();
@@ -292,7 +299,12 @@ export function TerminalScreen({
   }
 
   async function runTerminalAction(action: TerminalAction) {
-    if (action.confirm && !window.confirm(`执行命令？\n\n${action.command}`)) {
+    const command = resolveTerminalActionCommand(action, runtimePlatform);
+    if (!command) {
+      setActionsError("当前平台未配置命令");
+      return;
+    }
+    if (action.confirm && !window.confirm(`执行命令？\n\n${command}`)) {
       return;
     }
     setRunningActionId(action.id);
@@ -521,6 +533,7 @@ export function TerminalScreen({
           <div className="flex shrink-0 items-center gap-2">
             <TerminalActionsBar
               actions={[]}
+              runtimePlatform={runtimePlatform}
               canEdit={Boolean(actionsConfig?.editable)}
               runningActionId=""
               onRunAction={() => {}}
@@ -616,13 +629,14 @@ export function TerminalScreen({
         ) : null}
       </section>
 
-      {enabledActions.length > 0 ? (
+      {visibleActions.length > 0 ? (
         <div
           data-testid="terminal-actions-panel"
           className="border-t border-[var(--border)] bg-[var(--surface)] px-3 py-2"
         >
           <TerminalActionsBar
-            actions={enabledActions}
+            actions={visibleActions}
+            runtimePlatform={runtimePlatform}
             canEdit={false}
             runningActionId={runningActionId}
             onRunAction={(action) => void runTerminalAction(action)}
