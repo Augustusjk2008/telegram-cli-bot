@@ -56,7 +56,6 @@ from .auth_store import (
     CAP_MUTATE_BROWSE_STATE,
     CAP_READ_FILE_CONTENT,
     CAP_RUN_PLUGINS,
-    CAP_RUN_SCRIPTS,
     CAP_TERMINAL_EXEC,
     CAP_VIEW_BOTS,
     CAP_VIEW_BOT_STATUS,
@@ -119,7 +118,6 @@ from .api_service import (
     list_installable_plugins,
     list_plugins,
     open_plugin_view,
-    list_system_scripts,
     invalidate_assistant_memory,
     read_file_content,
     reindex_assistant_memory,
@@ -136,7 +134,6 @@ from .api_service import (
     dry_run_assistant_upgrade,
     search_assistant_memories,
     render_plugin_view,
-    run_system_script,
     resolve_plugin_file_target,
     reveal_directory_tree,
     save_chat_attachment,
@@ -144,7 +141,6 @@ from .api_service import (
     save_terminal_actions_config_for_bot,
     start_managed_bot,
     stop_managed_bot,
-    stream_system_script,
     stream_update_download,
     stream_chat,
     create_assistant_cron_job,
@@ -1834,51 +1830,6 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
     
-    async def bot_scripts(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_RUN_SCRIPTS)
-        alias = self._manager_alias(request)
-        return _json({"ok": True, "data": list_system_scripts(self.manager, alias, auth.user_id)})
-
-    async def bot_run_script(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_RUN_SCRIPTS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        data = await run_system_script(self.manager, alias, auth.user_id, body.get("script_name", ""))
-        return _json({"ok": True, "data": data})
-
-    async def bot_run_script_stream(self, request: web.Request) -> web.StreamResponse:
-        auth = await self._with_capability(request, CAP_RUN_SCRIPTS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        script_name = str(body.get("script_name", ""))
-
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
-        )
-        await response.prepare(request)
-
-        client_disconnected = False
-        async for event in stream_system_script(self.manager, alias, auth.user_id, script_name):
-            if client_disconnected:
-                continue
-            try:
-                await response.write(_format_sse(event["type"], event))
-            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                client_disconnected = True
-                logger.info("系统功能 SSE 客户端已断开，继续在后台执行: alias=%s script=%s", alias, script_name)
-
-        if not client_disconnected:
-            try:
-                await response.write_eof()
-            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                logger.info("系统功能 SSE 客户端在结束前断开: alias=%s script=%s", alias, script_name)
-        return response
-
     async def admin_processing(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
@@ -2721,9 +2672,6 @@ class WebApiServer:
         app.router.add_delete("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}", self.delete_plugin_view_session)
         app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/actions/invoke", self.post_invoke_plugin_action)
         app.router.add_get("/api/bots/{alias}/plugins/artifacts/{artifact_id}", self.download_plugin_artifact)
-        app.router.add_get("/api/bots/{alias}/scripts", self.bot_scripts)
-        app.router.add_post("/api/bots/{alias}/scripts/run/stream", self.bot_run_script_stream)
-        app.router.add_post("/api/bots/{alias}/scripts/run", self.bot_run_script)
         app.router.add_get("/api/admin/bots", self.admin_bots)
         app.router.add_get("/api/admin/assets/avatars", self.admin_list_avatar_assets)
         app.router.add_get("/api/admin/bots/{alias}/processing", self.admin_processing)

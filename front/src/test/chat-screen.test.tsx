@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { ChatMessage, ChatTraceDetails, CliParamsPayload, GitActionResult, GitDiffPayload, GitOverview, SystemScript } from "../services/types";
+import type { ChatMessage, ChatTraceDetails, CliParamsPayload, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
@@ -209,17 +209,6 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       localUrl: "",
       lastError: "",
       pid: null,
-    }),
-    listSystemScripts: async (): Promise<SystemScript[]> => [],
-    runSystemScript: async () => ({
-      scriptName: "demo",
-      success: true,
-      output: "ok",
-    }),
-    runSystemScriptStream: async () => ({
-      scriptName: "demo",
-      success: true,
-      output: "ok",
     }),
     ...overrides,
   });
@@ -1132,20 +1121,12 @@ test("assistant sse recovery resolves stale runningReply when overview is idle",
   expect(screen.getByText("已修。")).toBeInTheDocument();
 });
 
-test("shows reset kill and system-function actions for non-main bots", async () => {
-  const client = createClient({
-    listSystemScripts: async () => [{
-      scriptName: "network_traffic.ps1",
-      displayName: "网络流量",
-      description: "查看网络状态",
-      path: "C:\\workspace\\team2\\scripts\\network_traffic.ps1",
-    }],
-  });
+test("shows reset and kill actions for non-main bots", async () => {
+  const client = createClient();
 
   render(<ChatScreen botAlias="team2" client={client} />);
 
-  expect(await screen.findByRole("button", { name: "系统功能" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "重置会话" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "重置会话" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
 });
 
@@ -1357,39 +1338,6 @@ test("keeps a newly visible chat screen pinned when rendered content grows", asy
       delete (window as { ResizeObserver?: unknown }).ResizeObserver;
     }
   }
-});
-
-test("opens system functions with bot-scoped calls and compact titles", async () => {
-  const user = userEvent.setup();
-  const listSystemScripts = vi.fn(async () => [{
-    scriptName: "network_traffic.ps1",
-    displayName: "网络流量。查看当前网络流量与连接状态。",
-    description: "查看网络状态并输出详细路径",
-    path: "C:\\workspace\\team2\\scripts\\network_traffic.ps1",
-  }]);
-  const runSystemScript = vi.fn(async () => ({
-    scriptName: "network_traffic.ps1",
-    success: true,
-    output: "执行成功",
-  }));
-  const client = createClient({
-    listSystemScripts,
-    runSystemScript,
-  });
-
-  render(<ChatScreen botAlias="team2" client={client} />);
-  await user.click(await screen.findByRole("button", { name: "系统功能" }));
-
-  expect(listSystemScripts).toHaveBeenCalledWith("team2");
-  expect(screen.getByRole("heading", { name: "系统功能" })).toBeInTheDocument();
-  expect(await screen.findByRole("button", { name: "网络流量" })).toBeInTheDocument();
-  expect(screen.queryByText("查看网络状态并输出详细路径")).not.toBeInTheDocument();
-  expect(screen.queryByText("C:\\workspace\\team2\\scripts\\network_traffic.ps1")).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "网络流量" }));
-
-  expect(runSystemScript).toHaveBeenCalledWith("team2", "network_traffic.ps1");
-  expect(await screen.findByText(/系统功能：网络流量。查看当前网络流量与连接状态。/)).toBeInTheDocument();
 });
 
 test("opens a file preview dialog when clicking a local markdown file link", async () => {

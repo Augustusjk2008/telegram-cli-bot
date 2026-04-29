@@ -81,8 +81,6 @@ import type {
   RegisterCodeItem,
   RunningReply,
   SessionState,
-  SystemScript,
-  SystemScriptResult,
   TerminalActionRunInput,
   TerminalActionRunResult,
   TerminalActionsConfig,
@@ -246,13 +244,6 @@ type RawChatAttachmentDeleteResult = {
   saved_path: string;
   existed: boolean;
   deleted: boolean;
-};
-
-type RawSystemScript = {
-  script_name: string;
-  display_name: string;
-  description: string;
-  path: string;
 };
 
 type RawPersistentTerminalSnapshot = {
@@ -782,15 +773,6 @@ function mapFileEntry(raw: RawFileEntry): FileEntry {
     isDir: raw.is_dir,
     ...(typeof raw.size === "number" ? { size: raw.size } : {}),
     ...(raw.updated_at ? { updatedAt: raw.updated_at } : {}),
-  };
-}
-
-function mapSystemScript(raw: RawSystemScript): SystemScript {
-  return {
-    scriptName: raw.script_name,
-    displayName: raw.display_name,
-    description: raw.description,
-    path: raw.path,
   };
 }
 
@@ -3424,92 +3406,4 @@ export class RealWebBotClient implements WebBotClient {
     return mapTunnelSnapshot(data);
   }
 
-  async listSystemScripts(botAlias: string): Promise<SystemScript[]> {
-    const data = await this.requestJson<{ items: RawSystemScript[] }>(`/api/bots/${encodeURIComponent(botAlias)}/scripts`);
-    return data.items.map(mapSystemScript);
-  }
-
-  async runSystemScript(botAlias: string, scriptName: string): Promise<SystemScriptResult> {
-    const data = await this.requestJson<{ script_name: string; success: boolean; output: string }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/scripts/run`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ script_name: scriptName }),
-      },
-    );
-    return {
-      scriptName: data.script_name,
-      success: data.success,
-      output: data.output,
-    };
-  }
-
-  async runSystemScriptStream(botAlias: string, scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
-    const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/scripts/run/stream`, {
-      method: "POST",
-      headers: this.headers({
-        "Content-Type": "application/json",
-      }),
-      body: JSON.stringify({ script_name: scriptName }),
-    });
-
-    if (!response.ok || !response.body) {
-      let message = "执行系统功能失败";
-      try {
-        const payload = (await response.json()) as JsonEnvelope<unknown>;
-        message = payload.error?.message || message;
-      } catch {
-        // ignore parse failures
-      }
-      throw new Error(message);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalResult: SystemScriptResult | null = null;
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
-
-        const event = parseSseBlock(block);
-        if (!event) {
-          separatorIndex = buffer.indexOf("\n\n");
-          continue;
-        }
-
-        if (event.type === "log" && event.text) {
-          onLog(event.text);
-        } else if (event.type === "done") {
-          finalResult = {
-            scriptName: event.script_name || scriptName,
-            success: Boolean(event.success),
-            output: event.output || "",
-          };
-        } else if (event.type === "error") {
-          throw new Error(event.message || "执行系统功能失败");
-        }
-
-        separatorIndex = buffer.indexOf("\n\n");
-      }
-    }
-
-    if (!finalResult) {
-      throw new Error("脚本执行已中断");
-    }
-
-    return finalResult;
-  }
 }

@@ -33,18 +33,7 @@
 
 - `tests/test_assistant.py`
 
-### 3. Linux 脚本分发
-
-已验证：
-
-- Linux 下系统脚本只识别 `.sh` / `.py`
-- `.sh` 脚本执行会通过 `bash <script>` 启动
-
-对应测试覆盖：
-
-- `tests/test_handlers/test_admin.py`
-
-### 4. Tunnel 启动参数
+### 3. Tunnel 启动参数
 
 已验证：
 
@@ -246,21 +235,9 @@ echo $SHELL
 - 创建后路径保持 Linux 样式
 - 不会被改写成 Windows 形式
 
-13. 检查系统脚本页
-
-预期：
-
-- `build_web_frontend.sh` 可见
-- 不会出现 Windows 专用 `.ps1` / `.bat` 脚本
-
-执行“重建前端”后预期：
-
-- 实际通过 `bash scripts/build_web_frontend.sh` 运行
-- 日志能正常返回到前端
-
 ### 阶段 E：CLI 实际联通
 
-14. 验证本机 CLI 命令可直接运行
+13. 验证本机 CLI 命令可直接运行
 
 例如：
 
@@ -272,7 +249,7 @@ kimi --help
 
 至少确认你真正要用的那个 CLI 是通的。
 
-15. 在 Web Chat 或 Telegram 中发一条最小消息
+14. 在 Web Chat 或 Telegram 中发一条最小消息
 
 建议：
 
@@ -288,7 +265,7 @@ kimi --help
 
 ### 阶段 F：Quick Tunnel 可选验证
 
-16. 如果只想验证 quick tunnel 是否能拉起
+15. 如果只想验证 quick tunnel 是否能拉起
 
 `.env` 改为：
 
@@ -315,14 +292,14 @@ WEB_TUNNEL_CLOUDFLARED_PATH=/usr/bin/cloudflared
 
 ### 阶段 G：Named Tunnel 正式验证
 
-17. 创建 named tunnel
+16. 创建 named tunnel
 
 ```bash
 cloudflared tunnel login
 cloudflared tunnel create telegram-cli-bridge
 ```
 
-18. 写 `/home/<user>/.cloudflared/config.yml`
+17. 写 `/home/<user>/.cloudflared/config.yml`
 
 示例：
 
@@ -335,7 +312,7 @@ ingress:
   - service: http_status:404
 ```
 
-19. 安装 cloudflared 系统服务
+18. 安装 cloudflared 系统服务
 
 ```bash
 sudo cloudflared --config /home/<user>/.cloudflared/config.yml service install
@@ -348,7 +325,7 @@ sudo systemctl status cloudflared
 - 必须显式带 `--config /home/<user>/.cloudflared/config.yml`
 - 因为 `sudo` 会把 `$HOME` 切到 `/root`
 
-20. 应用侧配置改为：
+19. 应用侧配置改为：
 
 ```env
 WEB_TUNNEL_MODE=disabled
@@ -356,7 +333,7 @@ WEB_PUBLIC_URL=https://bot.example.com
 WEB_TUNNEL_CLOUDFLARED_PATH=/usr/bin/cloudflared
 ```
 
-21. 验证公网访问
+20. 验证公网访问
 
 预期：
 
@@ -366,7 +343,7 @@ WEB_TUNNEL_CLOUDFLARED_PATH=/usr/bin/cloudflared
 
 ### 阶段 H：systemd 托管验证
 
-22. 安装应用 systemd 服务
+21. 安装应用 systemd 服务
 
 ```bash
 sudo cp deploy/systemd/telegram-cli-bridge.service /etc/systemd/system/telegram-cli-bridge.service
@@ -382,7 +359,7 @@ sudo systemctl status telegram-cli-bridge
 - `WorkingDirectory`
 - `ExecStart`
 
-23. 重启验证
+22. 重启验证
 
 ```bash
 sudo systemctl restart telegram-cli-bridge

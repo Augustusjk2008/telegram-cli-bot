@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "icon": "Zap",
+      "command": "codex",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "Claude",
+      "label": "Claude",
+      "icon": "Zap",
+      "command": "claude",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    }
+  ]
+}

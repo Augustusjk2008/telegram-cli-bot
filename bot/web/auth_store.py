@@ -29,7 +29,6 @@ CAP_CHAT_SEND = "chat_send"
 CAP_TERMINAL_EXEC = "terminal_exec"
 CAP_DEBUG_EXEC = "debug_exec"
 CAP_GIT_OPS = "git_ops"
-CAP_RUN_SCRIPTS = "run_scripts"
 CAP_MANAGE_CLI_PARAMS = "manage_cli_params"
 CAP_VIEW_PLUGINS = "view_plugins"
 CAP_RUN_PLUGINS = "run_plugins"
@@ -56,7 +55,6 @@ MEMBER_CAPABILITIES = frozenset(
         CAP_TERMINAL_EXEC,
         CAP_DEBUG_EXEC,
         CAP_GIT_OPS,
-        CAP_RUN_SCRIPTS,
         CAP_MANAGE_CLI_PARAMS,
         CAP_VIEW_PLUGINS,
         CAP_RUN_PLUGINS,
@@ -631,7 +629,6 @@ __all__ = [
     "CAP_MUTATE_BROWSE_STATE",
     "CAP_READ_FILE_CONTENT",
     "CAP_RUN_PLUGINS",
-    "CAP_RUN_SCRIPTS",
     "CAP_TERMINAL_EXEC",
     "CAP_VIEW_BOTS",
     "CAP_VIEW_BOT_STATUS",

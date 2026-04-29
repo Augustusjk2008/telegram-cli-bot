@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, SystemScript, SystemScriptResult, TunnelSnapshot } from "../services/types";
+import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
@@ -406,17 +406,6 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     popGitStash: async (): Promise<GitActionResult> => ({
       message: "已恢复暂存",
       overview: await createClient().initGitRepository("main"),
-    }),
-    listSystemScripts: async (): Promise<SystemScript[]> => [],
-    runSystemScript: async (): Promise<SystemScriptResult> => ({
-      scriptName: "demo",
-      success: true,
-      output: "ok",
-    }),
-    runSystemScriptStream: async (): Promise<SystemScriptResult> => ({
-      scriptName: "demo",
-      success: true,
-      output: "ok",
     }),
     ...overrides,
   });

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Square, Terminal, Trash2 } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Square, Trash2 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
@@ -18,7 +18,6 @@ import type {
   CliParamsPayload,
   ChatTraceEvent,
   FileReadResult,
-  SystemScript,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -66,15 +65,6 @@ const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
-
-function getCompactScriptTitle(script: SystemScript) {
-  const source = (script.displayName || script.description || script.scriptName).trim();
-  if (!source) {
-    return script.scriptName;
-  }
-  const firstSentence = source.split(/[。.!?！？;\n]/)[0]?.trim();
-  return firstSentence || script.scriptName;
-}
 
 function pendingCronUserId(runId: string) {
   return `assistant-cron-user-${runId}`;
@@ -620,15 +610,11 @@ export function ChatScreen({
   const [error, setError] = useState("");
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill" | "scripts">("");
+  const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
-  const [showScripts, setShowScripts] = useState(false);
-  const [scripts, setScripts] = useState<SystemScript[]>([]);
-  const [scriptError, setScriptError] = useState("");
-  const [runningScriptName, setRunningScriptName] = useState("");
   const [previewName, setPreviewName] = useState("");
   const [previewContent, setPreviewContent] = useState("");
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
@@ -1504,40 +1490,6 @@ export function ChatScreen({
     }
   }
 
-  async function handleOpenScripts() {
-    setActionLoading("scripts");
-    setScriptError("");
-    try {
-      const nextScripts = await client.listSystemScripts(botAlias);
-      setScripts(nextScripts);
-      setShowScripts(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载系统功能失败");
-    } finally {
-      setActionLoading("");
-    }
-  }
-
-  async function handleRunScript(script: SystemScript) {
-    setRunningScriptName(script.scriptName);
-    setScriptError("");
-    try {
-      const result = await client.runSystemScript(botAlias, script.scriptName);
-      appendSystemMessage(
-        [
-          `系统功能：${script.displayName}`,
-          result.success ? "执行结果：成功" : "执行结果：失败",
-          result.output || "无输出",
-        ].join("\n"),
-      );
-      setShowScripts(false);
-    } catch (err) {
-      setScriptError(err instanceof Error ? err.message : "执行系统功能失败");
-    } finally {
-      setRunningScriptName("");
-    }
-  }
-
   const killTaskActive = isStreaming || actionLoading === "kill";
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
@@ -1595,15 +1547,6 @@ export function ChatScreen({
                 {focused ? "恢复布局" : "聚焦聊天"}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void handleOpenScripts()}
-              disabled={actionLoading === "scripts"}
-              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
-            >
-              <Terminal className="h-4 w-4" />
-              {actionLoading === "scripts" ? "加载系统功能..." : "系统功能"}
-            </button>
             <button
               type="button"
               onClick={() => void handleResetSession()}
@@ -1731,57 +1674,6 @@ export function ChatScreen({
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onDownload={() => void client.downloadFile(botAlias, previewName)}
         />
-      ) : null}
-
-      {showScripts ? (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/45">
-          <div className="w-full rounded-t-3xl bg-[var(--surface)] p-4 shadow-[var(--shadow-card)]">
-            <div className="mb-4 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">系统功能</h2>
-                <p className="text-sm text-[var(--muted)]">选择一个系统功能立即执行</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowScripts(false);
-                  setScriptError("");
-                }}
-                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm"
-              >
-                关闭
-              </button>
-            </div>
-            {scriptError ? (
-              <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {scriptError}
-              </div>
-            ) : null}
-            {scripts.length === 0 ? (
-              <div className="rounded-xl border border-[var(--border)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-                当前没有可执行脚本
-              </div>
-            ) : (
-              <div className="max-h-[60vh] overflow-y-auto pr-1">
-                <div className="grid grid-cols-2 gap-2">
-                {scripts.map((script) => (
-                  <button
-                    key={script.scriptName}
-                    type="button"
-                    onClick={() => void handleRunScript(script)}
-                    disabled={runningScriptName === script.scriptName}
-                    className="min-h-[68px] rounded-2xl border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                  >
-                    <div className="text-sm font-medium leading-5 text-[var(--text)]">
-                      {runningScriptName === script.scriptName ? "执行中..." : getCompactScriptTitle(script)}
-                    </div>
-                  </button>
-                ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
       ) : null}
     </main>
   );

@@ -87,7 +87,6 @@ from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
-from bot.platform.scripts import execute_script, get_scripts_dir, list_available_scripts, stream_execute_script
 from bot.runtime_paths import get_chat_attachments_dir
 from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
 from bot.sessions import (
@@ -4035,11 +4034,6 @@ def _build_raster_image_preview(
     }
 
 
-def _get_system_scripts_dir(manager: MultiBotManager, alias: str) -> Path:
-    profile = get_profile_or_raise(manager, alias)
-    return get_scripts_dir(profile.working_dir)
-
-
 def get_terminal_actions_config(manager: MultiBotManager, alias: str, auth: AuthContext) -> dict[str, Any]:
     _require_capability(auth, CAP_TERMINAL_EXEC)
     profile = get_profile_or_raise(manager, alias)
@@ -4086,104 +4080,6 @@ def resolve_terminal_action_for_bot(
         if "需要确认" in str(exc):
             _raise(409, "terminal_action_confirmation_required", str(exc))
         _raise(400, "invalid_terminal_action", str(exc))
-
-
-def list_system_scripts(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    del user_id
-    items = []
-    for script_name, display_name, description, path in list_available_scripts(_get_system_scripts_dir(manager, alias)):
-        items.append(
-            {
-                "script_name": script_name,
-                "display_name": display_name,
-                "description": description,
-                "path": str(path),
-            }
-        )
-    return {"items": items}
-
-
-def _resolve_system_script_path(manager: MultiBotManager, alias: str, script_name: str) -> Path:
-    if not script_name or not script_name.strip():
-        _raise(400, "empty_script_name", "脚本名不能为空")
-
-    requested_name = Path(script_name.strip()).name
-    scripts_dir = _get_system_scripts_dir(manager, alias).resolve()
-
-    for name, _, _, path in list_available_scripts(scripts_dir):
-        if name.lower() == requested_name.lower():
-            resolved = path.resolve()
-            if scripts_dir not in resolved.parents:
-                _raise(400, "invalid_script_path", "脚本路径无效")
-            return resolved
-
-    _raise(404, "script_not_found", f"未找到脚本: {script_name}")
-
-
-async def run_system_script(manager: MultiBotManager, alias: str, user_id: int, script_name: str) -> dict[str, Any]:
-    del user_id
-    target_path = _resolve_system_script_path(manager, alias, script_name)
-    loop = asyncio.get_running_loop()
-    success, output = await loop.run_in_executor(None, execute_script, target_path)
-    return {
-        "script_name": target_path.name,
-        "success": success,
-        "output": output,
-    }
-
-
-async def _stream_system_script(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    script_name: str,
-) -> AsyncIterator[dict[str, Any]]:
-    del user_id
-    target_path = _resolve_system_script_path(manager, alias, script_name)
-    event_queue: queue.Queue[Any] = queue.Queue()
-    worker_done = threading.Event()
-
-    def run_stream() -> None:
-        try:
-            for event in stream_execute_script(target_path):
-                event_queue.put(event)
-        except Exception as exc:  # pragma: no cover - defensive
-            event_queue.put(exc)
-        finally:
-            worker_done.set()
-
-    threading.Thread(target=run_stream, daemon=True).start()
-
-    while not worker_done.is_set() or not event_queue.empty():
-        try:
-            item = event_queue.get_nowait()
-        except queue.Empty:
-            await asyncio.sleep(0.05)
-            continue
-
-        if isinstance(item, Exception):
-            raise item
-        if item.get("type") == "done":
-            item = {
-                **item,
-                "script_name": target_path.name,
-            }
-        yield item
-
-
-async def stream_system_script(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    script_name: str,
-) -> AsyncIterator[dict[str, Any]]:
-    try:
-        async for event in _stream_system_script(manager, alias, user_id, script_name):
-            yield event
-    except WebApiError as exc:
-        yield {"type": "error", "code": exc.code, "message": exc.message}
-    except Exception as exc:  # pragma: no cover - defensive
-        yield {"type": "error", "code": "script_stream_failed", "message": str(exc)}
 
 
 async def _stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:

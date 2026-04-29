@@ -55,7 +55,6 @@ from bot.web.api_service import (
     get_working_directory,
     kill_user_process,
     list_bots,
-    list_system_scripts,
     copy_path,
     create_text_file,
     delete_chat_attachment,
@@ -65,7 +64,6 @@ from bot.web.api_service import (
     rename_path,
     run_chat,
     run_cli_chat,
-    run_system_script,
     save_chat_attachment,
     save_uploaded_file,
     update_bot_workdir,
@@ -370,45 +368,6 @@ def test_list_bots_includes_avatar_name(web_manager: MultiBotManager, temp_dir: 
     assert items[0]["alias"] == "main"
     assert items[0]["avatar_name"] == "avatar_01.png"
     assert next(item for item in items if item["alias"] == "team2")["avatar_name"] == "claude-blue.png"
-
-def test_list_system_scripts_reads_active_bot_workdir_scripts(
-    monkeypatch: pytest.MonkeyPatch,
-    web_manager: MultiBotManager,
-    tmp_path: Path,
-):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    powershell_script = scripts_dir / "network_traffic.ps1"
-    batch_script = scripts_dir / "build_web_frontend.bat"
-    shell_script = scripts_dir / "deploy.sh"
-    markdown_file = scripts_dir / "README.md"
-
-    powershell_script.write_text("# 网络流量\n# 查看网络状态\n", encoding="utf-8")
-    batch_script.write_text(":: 构建前端\nREM 运行前端构建\n", encoding="utf-8")
-    shell_script.write_text("# Linux only\n", encoding="utf-8")
-    markdown_file.write_text("ignore me\n", encoding="utf-8")
-
-    web_manager.main_profile.working_dir = str(tmp_path)
-    monkeypatch.setattr("bot.platform.scripts.get_runtime_platform", lambda: "windows")
-
-    payload = list_system_scripts(web_manager, "main", 1001)
-
-    assert payload == {
-        "items": [
-            {
-                "script_name": "build_web_frontend.bat",
-                "display_name": "构建前端",
-                "description": "构建前端 | 运行前端构建",
-                "path": str(batch_script),
-            },
-            {
-                "script_name": "network_traffic.ps1",
-                "display_name": "网络流量",
-                "description": "网络流量 | 查看网络状态",
-                "path": str(powershell_script),
-            },
-        ]
-    }
 
 def test_change_working_directory_only_updates_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -3481,98 +3440,6 @@ async def test_terminal_websocket_disconnect_does_not_stop_process(
                 assert snapshot_payload["data"]["closed"] is False
                 assert state.get("terminated") is not True
                 assert state.get("closed") is not True
-
-@pytest.mark.asyncio
-async def test_run_system_script_executes_full_filename_from_bot_scripts_dir(
-    monkeypatch: pytest.MonkeyPatch,
-    web_manager: MultiBotManager,
-    tmp_path: Path,
-):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    script_path = scripts_dir / "network_traffic.ps1"
-    script_path.write_text("# 网络流量\n", encoding="utf-8")
-
-    web_manager.main_profile.working_dir = str(tmp_path)
-    monkeypatch.setattr("bot.platform.scripts.get_runtime_platform", lambda: "windows")
-
-    execute_calls: list[Path] = []
-
-    def fake_execute_script(path: Path) -> tuple[bool, str]:
-        execute_calls.append(path)
-        return True, "ok"
-
-    monkeypatch.setattr("bot.web.api_service.execute_script", fake_execute_script)
-
-    payload = await run_system_script(web_manager, "main", 1001, "network_traffic.ps1")
-
-    assert execute_calls == [script_path.resolve()]
-    assert payload == {
-        "script_name": "network_traffic.ps1",
-        "success": True,
-        "output": "ok",
-    }
-
-@pytest.mark.asyncio
-async def test_bot_run_script_stream_returns_sse_events(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    async def fake_stream_system_script(
-        manager: MultiBotManager,
-        alias: str,
-        user_id: int,
-        script_name: str,
-    ):
-        assert alias == "main"
-        assert user_id == 1001
-        assert script_name == "build_web_frontend.sh"
-        yield {"type": "log", "text": "npm run build"}
-        yield {"type": "done", "script_name": script_name, "success": True, "output": "Web 前端构建完成"}
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            with patch("bot.web.server.stream_system_script", fake_stream_system_script):
-                resp = await client.post("/api/bots/main/scripts/run/stream", json={"script_name": "build_web_frontend.sh"})
-                assert resp.status == 200
-                body = await resp.text()
-                assert "event: log" in body
-                assert "npm run build" in body
-                assert "event: done" in body
-                assert "Web 前端构建完成" in body
-
-@pytest.mark.asyncio
-async def test_stream_system_script_normalizes_done_event_script_name_to_full_filename(
-    monkeypatch: pytest.MonkeyPatch,
-    web_manager: MultiBotManager,
-    tmp_path: Path,
-):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    script_path = scripts_dir / "network_traffic.ps1"
-    script_path.write_text("# 网络流量\n", encoding="utf-8")
-
-    web_manager.main_profile.working_dir = str(tmp_path)
-    monkeypatch.setattr("bot.platform.scripts.get_runtime_platform", lambda: "windows")
-
-    def fake_stream_execute_script(path: Path):
-        assert path == script_path.resolve()
-        yield {"type": "log", "text": "checking"}
-        yield {"type": "done", "script_name": "network_traffic", "success": True, "output": "ok"}
-
-    monkeypatch.setattr("bot.web.api_service.stream_execute_script", fake_stream_execute_script)
-
-    events = [
-        event
-        async for event in api_service.stream_system_script(web_manager, "main", 1001, "network_traffic.ps1")
-    ]
-
-    assert events == [
-        {"type": "log", "text": "checking"},
-        {"type": "done", "script_name": "network_traffic.ps1", "success": True, "output": "ok"},
-    ]
 
 @pytest.mark.asyncio
 async def test_admin_restart_returns_response_before_triggering_restart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):

@@ -66,8 +66,6 @@ import type {
   RegisterCodeItem,
   SessionState,
   PersistentTerminalSnapshot,
-  SystemScript,
-  SystemScriptResult,
   TerminalActionRunInput,
   TerminalActionRunResult,
   TerminalActionsConfig,
@@ -234,7 +232,4 @@ export interface WebBotClient {
   startTunnel(): Promise<TunnelSnapshot>;
   stopTunnel(): Promise<TunnelSnapshot>;
   restartTunnel(): Promise<TunnelSnapshot>;
-  listSystemScripts(botAlias: string): Promise<SystemScript[]>;
-  runSystemScript(botAlias: string, scriptName: string): Promise<SystemScriptResult>;
-  runSystemScriptStream(botAlias: string, scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult>;
 }

@@ -14,7 +14,6 @@ export type Capability =
   | "terminal_exec"
   | "debug_exec"
   | "git_ops"
-  | "run_scripts"
   | "manage_cli_params"
   | "view_plugins"
   | "run_plugins"
@@ -178,19 +177,6 @@ export type HistoryDeltaResult = {
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;
-};
-
-export type SystemScript = {
-  scriptName: string;
-  displayName: string;
-  description: string;
-  path: string;
-};
-
-export type SystemScriptResult = {
-  scriptName: string;
-  success: boolean;
-  output: string;
 };
 
 export type TerminalAction = {

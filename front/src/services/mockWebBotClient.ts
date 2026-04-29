@@ -76,8 +76,6 @@ import type {
   RegisterCodeCreateResult,
   RegisterCodeItem,
   SessionState,
-  SystemScript,
-  SystemScriptResult,
   TerminalActionRunInput,
   TerminalActionRunResult,
   TerminalActionsConfig,
@@ -109,7 +107,6 @@ import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
 import {
   DEMO_MAIN_WORKDIR,
-  DEMO_SYSTEM_SCRIPTS_BY_BOT,
   DEMO_TEAM_WORKDIR,
 } from "../mocks/demoEnvironment";
 import { APP_VERSION } from "../theme";
@@ -129,7 +126,6 @@ const MEMBER_CAPABILITIES: Capability[] = [
   "terminal_exec",
   "debug_exec",
   "git_ops",
-  "run_scripts",
   "manage_cli_params",
   "view_plugins",
   "run_plugins",
@@ -4115,34 +4111,6 @@ export class MockWebBotClient implements WebBotClient {
     return this.getTunnelStatus();
   }
 
-  async listSystemScripts(botAlias: string): Promise<SystemScript[]> {
-    return [...(DEMO_SYSTEM_SCRIPTS_BY_BOT[botAlias] || [])];
-  }
-
-  async runSystemScript(botAlias: string, scriptName: string): Promise<SystemScriptResult> {
-    return {
-      scriptName,
-      success: true,
-      output: `${botAlias}:${scriptName} 执行完成（Mock）`,
-    };
-  }
-
-  async runSystemScriptStream(botAlias: string, scriptName: string, onLog: (line: string) => void): Promise<SystemScriptResult> {
-    const logs = [
-      "cd scripts",
-      scriptName,
-      "系统功能执行完成",
-    ];
-    for (const line of logs) {
-      onLog(line);
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-    return {
-      scriptName,
-      success: true,
-      output: `${botAlias}:${scriptName} 执行完成（Mock）`,
-    };
-  }
 }
 
 export async function streamAssistantReply(onChunk: (chunk: string) => void) {

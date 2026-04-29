@@ -71,7 +71,6 @@ const SUPER_ADMIN_SESSION: SessionState = {
     "terminal_exec",
     "debug_exec",
     "git_ops",
-    "run_scripts",
     "manage_cli_params",
     "manage_register_codes",
     "admin_ops",

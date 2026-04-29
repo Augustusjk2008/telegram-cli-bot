@@ -22,43 +22,6 @@ describe("MockWebBotClient platform defaults", () => {
     expect(overview.repoPath).toBe("/srv/telegram-cli-bridge/demo");
   });
 
-  test("listSystemScripts returns bot-scoped mock system functions", async () => {
-    const client = new MockWebBotClient();
-
-    expect(await client.listSystemScripts("main")).toEqual([
-      {
-        scriptName: "build_web_frontend.sh",
-        displayName: "构建前端",
-        description: "构建 Web 前端资源",
-        path: "/srv/telegram-cli-bridge/demo/scripts/build_web_frontend.sh",
-      },
-    ]);
-
-    expect(await client.listSystemScripts("team2")).toEqual([
-      {
-        scriptName: "sync_docs.sh",
-        displayName: "同步文档",
-        description: "同步 plans 目录下的文档脚本",
-        path: "/srv/telegram-cli-bridge/plans/scripts/sync_docs.sh",
-      },
-    ]);
-  });
-
-  test("runSystemScriptStream emits platform-neutral build logs", async () => {
-    const client = new MockWebBotClient();
-    const logs: string[] = [];
-
-    await client.runSystemScriptStream("main", "build_web_frontend.sh", (line) => {
-      logs.push(line);
-    });
-
-    expect(logs).toEqual([
-      "cd scripts",
-      "build_web_frontend.sh",
-      "系统功能执行完成",
-    ]);
-  });
-
   test("changeDirectory keeps the bot workingDir while moving only the browser path", async () => {
     const client = new MockWebBotClient();
 
