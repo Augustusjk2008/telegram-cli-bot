@@ -3042,6 +3042,7 @@ async def _stream_cli_chat(
     with session._lock:
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
+        session.stop_requested = False
         session.is_processing = True
 
     loop: asyncio.AbstractEventLoop | None = None
@@ -3496,6 +3497,7 @@ async def run_cli_chat(
     with session._lock:
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
+        session.stop_requested = False
         session.is_processing = True
 
     try:

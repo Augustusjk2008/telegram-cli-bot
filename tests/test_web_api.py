@@ -5796,6 +5796,72 @@ async def test_stream_cli_chat_cancellation_terminates_active_process(web_manage
     assert session.process is None
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_resets_stale_stop_requested_before_new_turn(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.stop_requested = True
+        session.is_processing = False
+        session.process = None
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._sent = False
+
+        def readline(self):
+            time.sleep(0.05)
+            if self._owner.poll() is not None:
+                return ""
+            if not self._sent:
+                self._sent = True
+                return '{"type":"item.completed","item":{"type":"assistant_message","text":"新回复"}}\n'
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+            self.returncode = None
+            self.terminate = MagicMock(side_effect=self._terminate)
+
+        def _terminate(self):
+            self.returncode = -15
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("codex", timeout or 0)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "继续")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    trace_kinds = [
+        event["event"]["kind"]
+        for event in events
+        if event["type"] == "trace"
+    ]
+    assert done_event["output"] == "新回复"
+    assert "cancelled" not in trace_kinds
+    assert session.stop_requested is False
+    fake_process.terminate.assert_not_called()
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_persists_one_assistant_row_for_status_trace_and_done(
     web_manager: MultiBotManager,
     tmp_path: Path,
