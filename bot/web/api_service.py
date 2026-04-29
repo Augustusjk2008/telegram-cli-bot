@@ -52,16 +52,21 @@ from bot.assistant_memory_writer import write_hot_path_memories
 from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_patch_generation import generate_pending_patch
 from bot.assistant_upgrade_diff import parse_patch_files, run_upgrade_dry_run
 from bot.assistant_proposals import get_proposal, list_proposals, set_proposal_status
 from bot.assistant_runtime import AssistantRunRequest
 from bot.assistant_upgrade import (
+    approve_pending_upgrade_patch,
     apply_approved_upgrade,
     read_upgrade_apply_failure,
     read_upgrade_apply_result,
+    read_upgrade_metadata,
     resolve_approved_upgrade_patch_path,
+    resolve_approved_upgrade_repo_root,
     write_upgrade_apply_failure,
 )
+from bot.assistant_upgrade_targets import list_upgrade_targets, resolve_upgrade_target
 from bot.assistant_state import (
     attach_assistant_persist_hook,
     clear_assistant_runtime_state,
@@ -883,6 +888,11 @@ def list_assistant_proposals(
     return {"items": list_proposals(home, status=status)}
 
 
+def list_assistant_upgrade_targets(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    _assistant_home_or_raise(manager, alias)
+    return {"items": list_upgrade_targets(manager)}
+
+
 def _assistant_upgrade_patch_candidates(home, proposal_id: str) -> list[tuple[str, Path]]:
     return [
         ("approved", home.root / "upgrades" / "approved" / f"{proposal_id}.patch"),
@@ -919,6 +929,40 @@ def _read_assistant_apply_state(home, proposal_id: str, *, proposal: dict[str, A
     }
 
 
+def _read_assistant_upgrade_state(home, proposal_id: str, *, proposal: dict[str, Any]) -> dict[str, Any]:
+    approved = read_upgrade_metadata(home, proposal_id, "approved")
+    pending = read_upgrade_metadata(home, proposal_id, "pending")
+    applied = read_upgrade_apply_result(home, proposal_id)
+    approved_patch = home.root / "upgrades" / "approved" / f"{proposal_id}.patch"
+    pending_patch = home.root / "upgrades" / "pending" / f"{proposal_id}.patch"
+    metadata = approved or pending or {}
+    if applied:
+        state = "applied"
+    elif approved is not None or approved_patch.exists():
+        state = "approved"
+    elif pending is not None or pending_patch.exists():
+        state = "pending"
+    else:
+        state = "none"
+    sensitive_hits = [str(item) for item in metadata.get("sensitive_hits") or [] if str(item)]
+    can_generate = proposal.get("status") == "approved"
+    can_approve_patch = pending is not None and not sensitive_hits
+    can_dry_run = approved is not None or approved_patch.exists()
+    return {
+        "state": state,
+        "target_alias": str(metadata.get("target_alias") or ""),
+        "target_repo_root": str(metadata.get("target_repo_root") or ""),
+        "base_commit": str(metadata.get("base_commit") or ""),
+        "patch_source": str(metadata.get("patch_path") or ""),
+        "generation_status": str((metadata.get("generator") or {}).get("status") or ""),
+        "sensitive_hits": sensitive_hits,
+        "can_generate": can_generate,
+        "can_approve_patch": can_approve_patch,
+        "can_dry_run": can_dry_run,
+        "can_apply": can_dry_run and proposal.get("status") != "applied",
+    }
+
+
 def get_assistant_proposal_detail(
     manager: MultiBotManager,
     alias: str,
@@ -934,6 +978,7 @@ def get_assistant_proposal_detail(
         "proposal": proposal,
         "diff": diff,
         "apply": _read_assistant_apply_state(home, proposal_id, proposal=proposal, diff=diff),
+        "upgrade": _read_assistant_upgrade_state(home, proposal_id, proposal=proposal),
     }
 
 
@@ -980,13 +1025,86 @@ async def reject_assistant_proposal(
         _raise(404, "proposal_not_found", str(exc))
 
 
+async def generate_assistant_proposal_patch(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+    *,
+    target_alias: str,
+    regenerate: bool,
+    generated_by: str,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    try:
+        proposal = get_proposal(home, proposal_id)
+    except FileNotFoundError as exc:
+        _raise(404, "proposal_not_found", str(exc))
+    if proposal.get("status") != "approved":
+        _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
+    try:
+        target = resolve_upgrade_target(manager, target_alias)
+    except KeyError:
+        _raise(404, "upgrade_target_not_found", target_alias)
+    if not target.get("available"):
+        _raise(409, str(target.get("reason") or "upgrade_target_unavailable"), "目标工程不可用")
+    try:
+        return generate_pending_patch(
+            home,
+            proposal,
+            target=target,
+            generated_by=generated_by,
+            regenerate=regenerate,
+        )
+    except PermissionError as exc:
+        if str(exc) == "proposal_not_approved":
+            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
+        raise
+    except FileExistsError as exc:
+        _raise(409, "patch_generation_already_running", str(exc))
+    except ValueError as exc:
+        _raise(409, str(exc), str(exc))
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = (
+            exc.stderr if isinstance(exc, subprocess.CalledProcessError)
+            else str(exc)
+        ) or (
+            exc.stdout if isinstance(exc, subprocess.CalledProcessError)
+            else ""
+        ) or str(exc)
+        _raise(500, "patch_generation_failed", str(detail).strip() or "生成 patch 失败")
+
+
+async def approve_assistant_proposal_patch(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+    *,
+    reviewer: str,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    try:
+        return approve_pending_upgrade_patch(home, proposal_id, reviewer=reviewer)
+    except PermissionError as exc:
+        if str(exc) == "proposal_not_approved":
+            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能批准 patch")
+        if str(exc) == "sensitive_patch_path":
+            _raise(409, "sensitive_patch_path", "patch 命中敏感路径，不能批准")
+        raise
+    except FileNotFoundError as exc:
+        _raise(404, "pending_patch_not_found", str(exc))
+
+
 async def apply_assistant_upgrade(
     manager: MultiBotManager,
     alias: str,
     proposal_id: str,
 ) -> dict[str, Any]:
     home = _assistant_home_or_raise(manager, alias)
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = resolve_approved_upgrade_repo_root(
+        home,
+        proposal_id,
+        fallback_repo_root=Path(__file__).resolve().parents[2],
+    )
     try:
         return apply_approved_upgrade(home, proposal_id, repo_root=repo_root)
     except PermissionError as exc:
@@ -1017,11 +1135,15 @@ async def dry_run_assistant_upgrade(
     proposal_id: str,
 ) -> dict[str, Any]:
     home = _assistant_home_or_raise(manager, alias)
-    repo_root = Path(__file__).resolve().parents[2]
     try:
         patch_path = resolve_approved_upgrade_patch_path(home, proposal_id)
     except FileNotFoundError as exc:
         _raise(404, "upgrade_patch_not_found", str(exc))
+    repo_root = resolve_approved_upgrade_repo_root(
+        home,
+        proposal_id,
+        fallback_repo_root=Path(__file__).resolve().parents[2],
+    )
     return run_upgrade_dry_run(repo_root=repo_root, patch_path=patch_path)
 
 

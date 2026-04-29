@@ -165,6 +165,87 @@ def test_tunnel_service_does_not_restore_persisted_tunnel_with_unresolvable_publ
 
 
 @pytest.mark.asyncio
+async def test_tunnel_service_start_waits_for_local_health_before_spawning_cloudflared(tmp_path: Path):
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(tmp_path / "web-tunnel-state.json"),
+        startup_timeout=0.01,
+        local_health_timeout=0.01,
+    )
+
+    with patch.object(service, "_wait_for_health", return_value=False), \
+         patch("bot.web.tunnel_service.subprocess.Popen", side_effect=AssertionError("should not spawn cloudflared")):
+        snapshot = await service.start()
+
+    assert snapshot["status"] == "error"
+    assert snapshot["public_url"] == ""
+    assert "本地 Web 未就绪" in snapshot["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_start_requires_public_health_before_running(tmp_path: Path):
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(tmp_path / "web-tunnel-state.json"),
+        startup_timeout=0.01,
+        local_health_timeout=0.01,
+        public_health_timeout=0.01,
+    )
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = ["https://fresh.trycloudflare.com\n", ""]
+
+        def readline(self):
+            return self._lines.pop(0)
+
+    class FakeProcess:
+        pid = 5555
+        stdout = FakeStdout()
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    health_calls: list[str] = []
+
+    def fake_wait_for_health(base_url: str, *, timeout: float) -> bool:
+        health_calls.append(base_url)
+        return base_url == "http://127.0.0.1:8765"
+
+    class ImmediateThread:
+        def __init__(self, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with patch.object(service, "_wait_for_health", side_effect=fake_wait_for_health), \
+         patch("bot.web.tunnel_service.subprocess.Popen", return_value=FakeProcess()), \
+         patch("bot.web.tunnel_service.threading.Thread", ImmediateThread), \
+         patch("bot.web.tunnel_service.asyncio.to_thread", side_effect=fake_to_thread):
+        snapshot = await service.start()
+
+    assert health_calls == ["http://127.0.0.1:8765", "https://fresh.trycloudflare.com"]
+    assert snapshot["status"] == "error"
+    assert snapshot["public_url"] == ""
+    assert "公网地址未就绪" in snapshot["last_error"]
+
+
+@pytest.mark.asyncio
 async def test_tunnel_service_start_passes_platform_process_kwargs(tmp_path: Path):
     service = TunnelService(
         host="127.0.0.1",
@@ -210,7 +291,9 @@ async def test_tunnel_service_start_passes_platform_process_kwargs(tmp_path: Pat
     async def fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
 
-    with patch("bot.web.tunnel_service.subprocess.Popen", side_effect=fake_popen), \
+    with patch.object(service, "_wait_for_health", return_value=True), \
+         patch.object(service, "_is_cloudflared_process", return_value=True), \
+         patch("bot.web.tunnel_service.subprocess.Popen", side_effect=fake_popen), \
          patch("bot.web.tunnel_service.build_subprocess_group_kwargs", return_value={"start_new_session": True}), \
          patch("bot.web.tunnel_service.threading.Thread", ImmediateThread), \
          patch("bot.web.tunnel_service.asyncio.to_thread", side_effect=fake_to_thread):

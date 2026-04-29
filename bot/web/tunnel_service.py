@@ -18,12 +18,14 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from bot.platform.processes import build_subprocess_group_kwargs
 
 logger = logging.getLogger(__name__)
 
 _CLOUDFLARE_URL_RE = re.compile(r"https?://[a-z0-9-]+\.trycloudflare\.com")
+_HEALTH_PATH = "/api/health"
 _BENIGN_TUNNEL_WARNINGS = (
     "Failed to initialize DNS local resolver",
     "cloudflared does not support loading the system root certificate pool on Windows",
@@ -54,6 +56,8 @@ class TunnelService:
         cloudflared_path: str = "",
         state_file: str = ".web_tunnel_state.json",
         startup_timeout: float = 10.0,
+        local_health_timeout: float = 5.0,
+        public_health_timeout: float = 15.0,
     ):
         normalized_mode = (mode or "disabled").strip().lower()
         if public_url.strip():
@@ -66,6 +70,8 @@ class TunnelService:
         self._manual_public_url = public_url.strip()
         self._cloudflared_path = cloudflared_path.strip()
         self._startup_timeout = startup_timeout
+        self._local_health_timeout = local_health_timeout
+        self._public_health_timeout = public_health_timeout
         self._state_file = Path(state_file).expanduser()
         self._local_url = self._build_local_url(host, port)
         normalized_host = host.strip()
@@ -118,6 +124,37 @@ class TunnelService:
             return bool(socket.getaddrinfo(host, None))
         except OSError:
             return False
+
+    @staticmethod
+    def _build_health_url(base_url: str) -> str:
+        parsed = urlsplit((base_url or "").strip())
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        base_path = parsed.path.rstrip("/")
+        return f"{parsed.scheme}://{parsed.netloc}{base_path}{_HEALTH_PATH}"
+
+    @staticmethod
+    def _can_fetch_health(base_url: str, timeout: float = 1.0) -> bool:
+        health_url = TunnelService._build_health_url(base_url)
+        if not health_url:
+            return False
+        try:
+            request = Request(health_url, headers={"Accept": "application/json"})
+            with urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", response.getcode())
+                return 200 <= int(status) < 300
+        except Exception:
+            return False
+
+    def _wait_for_health(self, base_url: str, *, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if self._can_fetch_health(base_url):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.25, remaining))
 
     def _build_initial_snapshot(self) -> dict[str, Any]:
         if self._manual_public_url:
@@ -371,8 +408,7 @@ class TunnelService:
                     self._log_cloudflared_line(line)
                 public_url = self._extract_public_url(line)
                 if public_url:
-                    self._set_snapshot(status="running", public_url=public_url, last_error="", pid=process.pid)
-                    self._persist_running_state()
+                    self._set_snapshot(status="starting", public_url=public_url, last_error="", pid=process.pid)
                     ready_event.set()
 
             returncode = process.poll()
@@ -506,6 +542,12 @@ class TunnelService:
         if self._try_restore_persisted_tunnel():
             return self.snapshot()
 
+        local_ready = await asyncio.to_thread(self._wait_for_health, self._local_url, timeout=self._local_health_timeout)
+        if not local_ready:
+            self._set_snapshot(status="error", last_error="本地 Web 未就绪，未启动 cloudflared", pid=None, public_url="")
+            self._clear_state_file()
+            return self.snapshot()
+
         with self._state_lock:
             self._expected_stop = False
             self._snapshot.update({"status": "starting", "last_error": "", "public_url": "", "pid": None})
@@ -539,12 +581,24 @@ class TunnelService:
         threading.Thread(target=self._consume_output, args=(process, ready_event), daemon=True).start()
 
         received = await asyncio.to_thread(ready_event.wait, self._startup_timeout)
-        if not received or not self.snapshot().get("public_url"):
+        snapshot = self.snapshot()
+        public_url = str(snapshot.get("public_url") or "").strip()
+        if not received or not public_url:
             with self._state_lock:
                 self._expected_stop = True
-            await self._terminate_process(process, clear_public_url=True, status="error", last_error="cloudflared 启动超时，未获取到公网地址")
+            last_error = str(snapshot.get("last_error") or "") or "cloudflared 启动超时，未获取到公网地址"
+            await self._terminate_process(process, clear_public_url=True, status="error", last_error=last_error)
             return self.snapshot()
 
+        public_ready = await asyncio.to_thread(self._wait_for_health, public_url, timeout=self._public_health_timeout)
+        if not public_ready:
+            with self._state_lock:
+                self._expected_stop = True
+            await self._terminate_process(process, clear_public_url=True, status="error", last_error=f"公网地址未就绪: {public_url}")
+            return self.snapshot()
+
+        self._set_snapshot(status="running", public_url=public_url, last_error="", pid=process.pid)
+        self._persist_running_state()
         return self.snapshot()
 
     async def stop(self) -> dict[str, Any]:

@@ -16,6 +16,7 @@ import type {
   AssistantMemoryReindexResult,
   AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
+  AssistantPatchMetadata,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
   AssistantProposal,
@@ -25,6 +26,8 @@ import type {
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
   AssistantUpgradeDryRunResult,
+  AssistantUpgradeState,
+  AssistantUpgradeTarget,
   Capability,
   CreateAssistantCronJobInput,
   GitActionResult,
@@ -468,6 +471,64 @@ type RawAssistantUpgradeApplyState = {
   last_error_log_path?: string;
 };
 
+type RawAssistantUpgradeTarget = {
+  alias?: string;
+  working_dir?: string;
+  repo_root?: string;
+  head?: string;
+  dirty?: boolean;
+  bot_mode?: string;
+  cli_type?: string;
+  cli_path?: string;
+  available?: boolean;
+  reason?: string;
+};
+
+type RawAssistantUpgradeState = {
+  state?: string;
+  target_alias?: string;
+  target_repo_root?: string;
+  base_commit?: string;
+  patch_source?: string;
+  generation_status?: string;
+  sensitive_hits?: string[];
+  can_generate?: boolean;
+  can_approve_patch?: boolean;
+  can_dry_run?: boolean;
+  can_apply?: boolean;
+};
+
+type RawAssistantPatchMetadata = {
+  id?: string;
+  proposal_id?: string;
+  state?: string;
+  target_alias?: string;
+  target_working_dir?: string;
+  target_repo_root?: string;
+  base_commit?: string;
+  worktree_path?: string;
+  patch_path?: string;
+  generated_at?: string;
+  generated_by?: string;
+  approved_by?: string;
+  approved_at?: string;
+  generator?: {
+    cli_type?: string;
+    cli_path?: string;
+    status?: string;
+    elapsed_seconds?: number;
+  };
+  dry_run?: {
+    ok?: boolean;
+    checked_at?: string;
+    stderr?: string;
+  };
+  sensitive_hits?: string[];
+  changed_files?: string[];
+  additions?: number;
+  deletions?: number;
+};
+
 type RawAssistantProposalDetail = {
   proposal: RawAssistantProposal;
   diff?: {
@@ -485,6 +546,7 @@ type RawAssistantProposalDetail = {
     }>;
   };
   apply?: RawAssistantUpgradeApplyState;
+  upgrade?: RawAssistantUpgradeState;
 };
 
 type RawAssistantUpgradeApplyResult = {
@@ -1208,6 +1270,70 @@ function mapAssistantProposal(raw: RawAssistantProposal): AssistantProposal {
   };
 }
 
+function mapAssistantUpgradeTarget(raw: RawAssistantUpgradeTarget): AssistantUpgradeTarget {
+  return {
+    alias: raw.alias || "",
+    workingDir: raw.working_dir || "",
+    repoRoot: raw.repo_root || "",
+    head: raw.head || "",
+    dirty: Boolean(raw.dirty),
+    botMode: raw.bot_mode || "",
+    cliType: raw.cli_type || "",
+    cliPath: raw.cli_path || "",
+    available: Boolean(raw.available),
+    reason: raw.reason || "",
+  };
+}
+
+function mapAssistantUpgradeState(raw: RawAssistantUpgradeState | undefined): AssistantUpgradeState {
+  return {
+    state: raw?.state || "none",
+    targetAlias: raw?.target_alias || "",
+    targetRepoRoot: raw?.target_repo_root || "",
+    baseCommit: raw?.base_commit || "",
+    patchSource: raw?.patch_source || "",
+    generationStatus: raw?.generation_status || "",
+    sensitiveHits: (raw?.sensitive_hits || []).map((item) => String(item)),
+    canGenerate: Boolean(raw?.can_generate),
+    canApprovePatch: Boolean(raw?.can_approve_patch),
+    canDryRun: Boolean(raw?.can_dry_run),
+    canApply: Boolean(raw?.can_apply),
+  };
+}
+
+function mapAssistantPatchMetadata(raw: RawAssistantPatchMetadata): AssistantPatchMetadata {
+  return {
+    id: raw.id || "",
+    proposalId: raw.proposal_id || "",
+    state: raw.state || "",
+    targetAlias: raw.target_alias || "",
+    targetWorkingDir: raw.target_working_dir || "",
+    targetRepoRoot: raw.target_repo_root || "",
+    baseCommit: raw.base_commit || "",
+    worktreePath: raw.worktree_path || "",
+    patchPath: raw.patch_path || "",
+    generatedAt: raw.generated_at || "",
+    generatedBy: raw.generated_by || "",
+    ...(raw.approved_by ? { approvedBy: raw.approved_by } : {}),
+    ...(raw.approved_at ? { approvedAt: raw.approved_at } : {}),
+    generator: {
+      cliType: raw.generator?.cli_type || "",
+      cliPath: raw.generator?.cli_path || "",
+      status: raw.generator?.status || "",
+      elapsedSeconds: Number(raw.generator?.elapsed_seconds || 0),
+    },
+    dryRun: {
+      ok: Boolean(raw.dry_run?.ok),
+      checkedAt: raw.dry_run?.checked_at || "",
+      stderr: raw.dry_run?.stderr || "",
+    },
+    sensitiveHits: (raw.sensitive_hits || []).map((item) => String(item)),
+    changedFiles: (raw.changed_files || []).map((item) => String(item)),
+    additions: Number(raw.additions || 0),
+    deletions: Number(raw.deletions || 0),
+  };
+}
+
 function mapAssistantProposalDetail(raw: RawAssistantProposalDetail): AssistantProposalDetail {
   return {
     proposal: mapAssistantProposal(raw.proposal),
@@ -1236,6 +1362,7 @@ function mapAssistantProposalDetail(raw: RawAssistantProposalDetail): AssistantP
       lastErrorAt: raw.apply?.last_error_at || "",
       lastErrorLogPath: raw.apply?.last_error_log_path || "",
     },
+    upgrade: mapAssistantUpgradeState(raw.upgrade),
   };
 }
 
@@ -2923,6 +3050,13 @@ export class RealWebBotClient implements WebBotClient {
     return (data.items || []).map(mapAssistantProposal);
   }
 
+  async listAssistantUpgradeTargets(botAlias: string): Promise<AssistantUpgradeTarget[]> {
+    const data = await this.requestJson<{ items: RawAssistantUpgradeTarget[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/upgrade-targets`,
+    );
+    return (data.items || []).map(mapAssistantUpgradeTarget);
+  }
+
   async getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail> {
     const data = await this.requestJson<RawAssistantProposalDetail>(
       `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}`,
@@ -2945,6 +3079,34 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapAssistantProposal(data);
+  }
+
+  async generateAssistantProposalPatch(
+    botAlias: string,
+    proposalId: string,
+    input: { targetAlias: string; regenerate?: boolean },
+  ): Promise<AssistantPatchMetadata> {
+    const data = await this.requestJson<RawAssistantPatchMetadata>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/patch`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          target_alias: input.targetAlias,
+          regenerate: Boolean(input.regenerate),
+        }),
+      },
+    );
+    return mapAssistantPatchMetadata(data);
+  }
+
+  async approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata> {
+    const data = await this.requestJson<RawAssistantPatchMetadata>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/patch/approve`,
+      {
+        method: "POST",
+      },
+    );
+    return mapAssistantPatchMetadata(data);
   }
 
   async rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {

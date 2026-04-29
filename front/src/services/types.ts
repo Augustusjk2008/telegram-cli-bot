@@ -1101,6 +1101,64 @@ export type AssistantUpgradeApplyState = {
   lastErrorLogPath: string;
 };
 
+export type AssistantUpgradeTarget = {
+  alias: string;
+  workingDir: string;
+  repoRoot: string;
+  head: string;
+  dirty: boolean;
+  botMode: string;
+  cliType: string;
+  cliPath: string;
+  available: boolean;
+  reason: string;
+};
+
+export type AssistantUpgradeState = {
+  state: string;
+  targetAlias: string;
+  targetRepoRoot: string;
+  baseCommit: string;
+  patchSource: string;
+  generationStatus: string;
+  sensitiveHits: string[];
+  canGenerate: boolean;
+  canApprovePatch: boolean;
+  canDryRun: boolean;
+  canApply: boolean;
+};
+
+export type AssistantPatchMetadata = {
+  id: string;
+  proposalId: string;
+  state: string;
+  targetAlias: string;
+  targetWorkingDir: string;
+  targetRepoRoot: string;
+  baseCommit: string;
+  worktreePath: string;
+  patchPath: string;
+  generatedAt: string;
+  generatedBy: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  generator: {
+    cliType: string;
+    cliPath: string;
+    status: string;
+    elapsedSeconds: number;
+  };
+  dryRun: {
+    ok: boolean;
+    checkedAt: string;
+    stderr: string;
+  };
+  sensitiveHits: string[];
+  changedFiles: string[];
+  additions: number;
+  deletions: number;
+};
+
 export type AssistantProposalDiffFile = {
   path: string;
   oldPath?: string;
@@ -1119,6 +1177,7 @@ export type AssistantProposalDetail = {
     files: AssistantProposalDiffFile[];
   };
   apply: AssistantUpgradeApplyState;
+  upgrade: AssistantUpgradeState;
 };
 
 export type AssistantUpgradeApplyResult = {

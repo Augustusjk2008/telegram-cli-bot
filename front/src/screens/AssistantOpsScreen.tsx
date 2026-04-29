@@ -13,6 +13,7 @@ import type {
   AssistantProposalDetail,
   AssistantUpgradeApplyLog,
   AssistantUpgradeDryRunResult,
+  AssistantUpgradeTarget,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -103,6 +104,15 @@ function toNumberOrUndefined(value: string) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function chooseUpgradeTargetAlias(items: AssistantUpgradeTarget[], ...preferredAliases: string[]) {
+  for (const alias of preferredAliases) {
+    if (alias && items.some((item) => item.alias === alias)) {
+      return alias;
+    }
+  }
+  return items.find((item) => item.available)?.alias || items[0]?.alias || "";
+}
+
 export function AssistantOpsScreen({ botAlias, client }: Props) {
   const [tab, setTab] = useState<AssistantOpsTab>("proposals");
   const [notice, setNotice] = useState("");
@@ -120,6 +130,9 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
   const [proposalDryRunResult, setProposalDryRunResult] = useState<AssistantUpgradeDryRunResult | null>(null);
   const [proposalDryRunning, setProposalDryRunning] = useState(false);
   const [selectedProposalFilePath, setSelectedProposalFilePath] = useState("");
+  const [upgradeTargets, setUpgradeTargets] = useState<AssistantUpgradeTarget[]>([]);
+  const [upgradeTargetsLoading, setUpgradeTargetsLoading] = useState(false);
+  const [selectedUpgradeTargetAlias, setSelectedUpgradeTargetAlias] = useState("");
 
   const [memoryQuery, setMemoryQuery] = useState("");
   const [memoryUserId, setMemoryUserId] = useState("");
@@ -163,6 +176,10 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
       || null,
     [proposalDetail, selectedProposalFilePath],
   );
+  const selectedUpgradeTarget = useMemo(
+    () => upgradeTargets.find((item) => item.alias === selectedUpgradeTargetAlias) || null,
+    [selectedUpgradeTargetAlias, upgradeTargets],
+  );
   const selectedAudit = useMemo(
     () => auditItems.find((item) => item.id === selectedAuditId) || null,
     [auditItems, selectedAuditId],
@@ -191,6 +208,24 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
     }
   }, [botAlias, client]);
 
+  const loadUpgradeTargets = useCallback(async (...preferredAliases: string[]) => {
+    setUpgradeTargetsLoading(true);
+    setError("");
+    try {
+      const items = await client.listAssistantUpgradeTargets(botAlias);
+      setUpgradeTargets(items);
+      setSelectedUpgradeTargetAlias((current) => (
+        chooseUpgradeTargetAlias(items, ...preferredAliases, proposalDetail?.upgrade.targetAlias || "", current)
+      ));
+    } catch (loadError) {
+      setError(getErrorMessage(loadError, "加载目标工程失败"));
+      setUpgradeTargets([]);
+      setSelectedUpgradeTargetAlias("");
+    } finally {
+      setUpgradeTargetsLoading(false);
+    }
+  }, [botAlias, client, proposalDetail?.upgrade.targetAlias]);
+
   const loadProposalDetail = useCallback(async (proposalId: string, keepLog = false) => {
     if (!proposalId) {
       setProposalDetail(null);
@@ -208,6 +243,9 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
       setProposalDetail(detail);
       setProposalDryRunResult(null);
       setSelectedProposalFilePath(detail.diff.files[0]?.path || "");
+      setSelectedUpgradeTargetAlias((current) => (
+        chooseUpgradeTargetAlias(upgradeTargets, detail.upgrade.targetAlias, current)
+      ));
       if (!keepLog) {
         setProposalApplyLog(null);
       }
@@ -222,7 +260,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
     } finally {
       setProposalDetailLoading(false);
     }
-  }, [botAlias, client]);
+  }, [botAlias, client, upgradeTargets]);
 
   const loadProposalApplyLog = useCallback(async (proposalId: string) => {
     setProposalApplyLogLoading(true);
@@ -327,6 +365,12 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
   }, [loadProposalDetail, selectedProposalId]);
 
   useEffect(() => {
+    if (tab === "proposals") {
+      void loadUpgradeTargets();
+    }
+  }, [loadUpgradeTargets, tab]);
+
+  useEffect(() => {
     if (tab === "memory") {
       void loadMemoryReports();
     }
@@ -370,6 +414,52 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
       if (action === "apply") {
         await loadProposalApplyLog(selectedProposalId);
       }
+    } finally {
+      setProposalActioning("");
+    }
+  }
+
+  async function generateProposalPatch() {
+    if (!selectedProposalId || !selectedUpgradeTargetAlias) {
+      return;
+    }
+    setProposalActioning("generate-patch");
+    setError("");
+    try {
+      const result = await client.generateAssistantProposalPatch(botAlias, selectedProposalId, {
+        targetAlias: selectedUpgradeTargetAlias,
+      });
+      setSelectedUpgradeTargetAlias(result.targetAlias || selectedUpgradeTargetAlias);
+      setProposalDryRunResult(null);
+      setNotice(result.sensitiveHits.length ? "patch 已生成，含敏感路径" : "patch 已生成");
+      await loadProposalDetail(selectedProposalId, true);
+      if (tab === "audit") {
+        await loadAudit();
+      }
+    } catch (actionError) {
+      setError(getErrorMessage(actionError, "生成 patch 失败"));
+    } finally {
+      setProposalActioning("");
+    }
+  }
+
+  async function approveProposalPatch() {
+    if (!selectedProposalId) {
+      return;
+    }
+    setProposalActioning("approve-patch");
+    setError("");
+    try {
+      const result = await client.approveAssistantProposalPatch(botAlias, selectedProposalId);
+      setSelectedUpgradeTargetAlias((current) => result.targetAlias || current);
+      setProposalDryRunResult(null);
+      setNotice("patch 已批准");
+      await loadProposalDetail(selectedProposalId, true);
+      if (tab === "audit") {
+        await loadAudit();
+      }
+    } catch (actionError) {
+      setError(getErrorMessage(actionError, "批准 patch 失败"));
     } finally {
       setProposalActioning("");
     }
@@ -485,7 +575,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
   const canApplyProposal = Boolean(
     proposalDetail
     && proposalDetail.proposal.status === "approved"
-    && proposalDetail.apply.available
+    && proposalDetail.upgrade.canApply
     && proposalDryRunResult?.ok,
   );
 
@@ -628,7 +718,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
                         <button
                           type="button"
                           onClick={() => void dryRunProposal()}
-                          disabled={proposalDryRunning || proposalActioning !== "" || proposalDetail.proposal.status !== "approved"}
+                          disabled={proposalDryRunning || proposalActioning !== "" || !proposalDetail.upgrade.canDryRun}
                           className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
                         >
                           {proposalDryRunning ? "Dry-run 中..." : "Dry-run"}
@@ -643,6 +733,65 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
                           Apply
                         </button>
                       </div>
+                    </div>
+
+                    <div className="space-y-2 text-sm text-[var(--text)]">
+                      <div className="font-medium">Patch</div>
+                      <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+                        <div className="space-y-2">
+                          <label className="space-y-1">
+                            <span className="text-xs text-[var(--muted)]">目标工程</span>
+                            <select
+                              aria-label="目标工程"
+                              value={selectedUpgradeTargetAlias}
+                              onChange={(event) => setSelectedUpgradeTargetAlias(event.target.value)}
+                              disabled={upgradeTargetsLoading}
+                              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                            >
+                              {upgradeTargets.map((item) => (
+                                <option key={item.alias} value={item.alias}>
+                                  {item.alias}{item.available ? "" : "（不可用）"}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void generateProposalPatch()}
+                              disabled={
+                                proposalActioning !== ""
+                                || !proposalDetail.upgrade.canGenerate
+                                || !selectedUpgradeTarget?.available
+                              }
+                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              生成 Patch
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void approveProposalPatch()}
+                              disabled={proposalActioning !== "" || !proposalDetail.upgrade.canApprovePatch}
+                              className="rounded-lg border border-emerald-200 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                            >
+                              批准 Patch
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid gap-2 text-xs text-[var(--muted)] sm:grid-cols-2">
+                          <p><span className="text-[var(--text)]">状态:</span> {proposalDetail.upgrade.state || "-"}</p>
+                          <p><span className="text-[var(--text)]">生成:</span> {proposalDetail.upgrade.generationStatus || "-"}</p>
+                          <p><span className="text-[var(--text)]">target:</span> {proposalDetail.upgrade.targetAlias || selectedUpgradeTarget?.alias || "-"}</p>
+                          <p><span className="text-[var(--text)]">repo:</span> {proposalDetail.upgrade.targetRepoRoot || selectedUpgradeTarget?.repoRoot || "-"}</p>
+                          <p><span className="text-[var(--text)]">HEAD:</span> {selectedUpgradeTarget?.head || proposalDetail.upgrade.baseCommit || "-"}</p>
+                          <p><span className="text-[var(--text)]">dirty:</span> {selectedUpgradeTarget ? (selectedUpgradeTarget.dirty ? "是" : "否") : "-"}</p>
+                        </div>
+                      </div>
+                      {proposalDetail.upgrade.sensitiveHits.length > 0 ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                          敏感路径：{proposalDetail.upgrade.sensitiveHits.join(", ")}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="space-y-2 text-sm text-[var(--text)]">

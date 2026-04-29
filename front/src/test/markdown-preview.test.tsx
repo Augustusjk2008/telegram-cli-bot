@@ -68,3 +68,14 @@ test("routes local file links through onFileLinkClick", async () => {
 
   expect(onFileLinkClick).toHaveBeenCalledWith("C:/workspace/README.md");
 });
+
+test("keeps original href on local file links", () => {
+  render(
+    <MarkdownPreview
+      content="[查看 README](/C:/workspace/README.md:12)"
+      onFileLinkClick={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("link", { name: "查看 README" }).getAttribute("href")).toBe("/C:/workspace/README.md:12");
+});

@@ -440,6 +440,70 @@ class TestManagerValidation:
         assert restored.main_profile.avatar_name == "codex-slate.png"
 
     @pytest.mark.asyncio
+    async def test_main_bot_cli_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+        with patch("bot.manager.resolve_cli_executable", return_value="claude"):
+            await manager.set_bot_cli("main", "claude", "claude")
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+
+        assert restored.main_profile.cli_type == "claude"
+        assert restored.main_profile.cli_path == "claude"
+
+    def test_manager_uses_storage_local_settings_for_main_bot_profile(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        global_settings = temp_dir / "global" / ".web_admin_settings.json"
+        global_settings.parent.mkdir()
+        global_settings.write_text(
+            json.dumps({"main_bot_profile": {"cli_type": "claude", "cli_path": "claude"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", global_settings)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+
+        assert manager.main_profile.cli_type == "codex"
+        assert manager.main_profile.cli_path == "codex"
+
+    @pytest.mark.asyncio
+    async def test_main_bot_workdir_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(old_dir)), str(storage))
+        await manager.set_bot_workdir("main", str(new_dir))
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(old_dir)), str(storage))
+
+        assert restored.main_profile.working_dir == str(new_dir)
+
+    @pytest.mark.asyncio
+    async def test_main_bot_cli_params_persist_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex"), str(storage))
+        await manager.set_bot_cli_param("main", "codex", "model", "none")
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex"), str(storage))
+
+        assert restored.main_profile.cli_params.get_param("codex", "model") is None
+
+    @pytest.mark.asyncio
     async def test_managed_bot_avatar_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({

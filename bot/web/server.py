@@ -74,6 +74,7 @@ from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, Term
 from .tunnel_service import TunnelService
 from .api_service import (
     approve_assistant_proposal,
+    approve_assistant_proposal_patch,
     apply_assistant_upgrade,
     AuthContext,
     _assistant_home_or_raise,
@@ -104,6 +105,7 @@ from .api_service import (
     get_overview,
     get_terminal_actions_config,
     list_avatar_assets,
+    list_assistant_upgrade_targets,
     list_assistant_memory_eval_reports,
     list_assistant_proposals,
     get_assistant_proposal_detail,
@@ -154,6 +156,7 @@ from .api_service import (
     rename_managed_bot,
     update_bot_workdir,
     write_file_content,
+    generate_assistant_proposal_patch,
 )
 from bot.assistant_admin_audit import list_admin_audit, summarize_request, write_admin_audit
 from .git_service import (
@@ -719,6 +722,10 @@ class WebApiServer:
         proposal_id = request.match_info.get("proposal_id", "")
         memory_id = request.match_info.get("memory_id", "")
         job_id = request.match_info.get("job_id", "")
+        if method == "POST" and path.endswith("/patch/approve"):
+            return "assistant.proposal.patch.approve", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
+        if method == "POST" and path.endswith("/patch"):
+            return "assistant.proposal.patch.generate", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
         if method == "POST" and path.endswith("/approve"):
             return "assistant.proposal.approve", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
         if method == "POST" and path.endswith("/reject"):
@@ -2008,6 +2015,11 @@ class WebApiServer:
         status = request.query.get("status") or None
         return _json({"ok": True, "data": list_assistant_proposals(self.manager, alias, status=status)})
 
+    async def admin_assistant_upgrade_targets(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": list_assistant_upgrade_targets(self.manager, alias)})
+
     async def admin_assistant_proposal_detail(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
@@ -2065,6 +2077,84 @@ class WebApiServer:
         error_message = ""
         try:
             data = await approve_assistant_proposal(
+                self.manager,
+                alias,
+                proposal_id,
+                reviewer=str(auth.user_id),
+            )
+            response = _json({"ok": True, "data": data})
+            ok = True
+            status_code = response.status
+            return response
+        except WebApiError as exc:
+            status_code = exc.status
+            error_code = exc.code
+            error_message = exc.message
+            raise
+        finally:
+            self._write_assistant_admin_audit(
+                request,
+                auth,
+                body,
+                ok=ok,
+                status_code=status_code,
+                error_code=error_code,
+                error_message=error_message,
+                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
+            )
+
+    async def admin_assistant_proposal_patch_generate(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        body = await self._parse_json(request)
+        started_at = time.perf_counter()
+        ok = False
+        status_code = 500
+        error_code = ""
+        error_message = ""
+        try:
+            data = await generate_assistant_proposal_patch(
+                self.manager,
+                alias,
+                proposal_id,
+                target_alias=str(body.get("target_alias") or ""),
+                regenerate=bool(body.get("regenerate")),
+                generated_by=str(auth.user_id),
+            )
+            response = _json({"ok": True, "data": data})
+            ok = True
+            status_code = response.status
+            return response
+        except WebApiError as exc:
+            status_code = exc.status
+            error_code = exc.code
+            error_message = exc.message
+            raise
+        finally:
+            self._write_assistant_admin_audit(
+                request,
+                auth,
+                body,
+                ok=ok,
+                status_code=status_code,
+                error_code=error_code,
+                error_message=error_message,
+                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
+            )
+
+    async def admin_assistant_proposal_patch_approve(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        body: dict[str, Any] = {}
+        started_at = time.perf_counter()
+        ok = False
+        status_code = 500
+        error_code = ""
+        error_message = ""
+        try:
+            data = await approve_assistant_proposal_patch(
                 self.manager,
                 alias,
                 proposal_id,
@@ -2686,8 +2776,20 @@ class WebApiServer:
         app.router.add_patch("/api/admin/bots/{alias}/avatar", self.admin_update_avatar)
         app.router.add_get("/api/admin/bots/{alias}/assistant/proposals", self.admin_assistant_proposals)
         app.router.add_get(
+            "/api/admin/bots/{alias}/assistant/upgrade-targets",
+            self.admin_assistant_upgrade_targets,
+        )
+        app.router.add_get(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}",
             self.admin_assistant_proposal_detail,
+        )
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch",
+            self.admin_assistant_proposal_patch_generate,
+        )
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch/approve",
+            self.admin_assistant_proposal_patch_approve,
         )
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/approve",

@@ -2641,6 +2641,139 @@ describe("RealWebBotClient", () => {
         json: async () => ({
           ok: true,
           data: {
+            items: [
+              {
+                alias: "target1",
+                working_dir: "C:\\workspace\\target1",
+                repo_root: "C:\\workspace\\target1",
+                head: "deadbeef",
+                dirty: false,
+                bot_mode: "cli",
+                cli_type: "codex",
+                cli_path: "codex",
+                available: true,
+                reason: "",
+              },
+            ],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            proposal: {
+              id: "pr_1",
+              kind: "code",
+              title: "补审计",
+              body: "- body",
+              status: "approved",
+              created_at: "2026-04-28T00:00:00Z",
+            },
+            diff: {
+              available: true,
+              source: "upgrades/pending/pr_1.patch",
+              text: "diff --git",
+            },
+            apply: {
+              available: false,
+              applied: false,
+              last_error: "",
+              last_error_at: "",
+              last_error_log_path: "",
+            },
+            upgrade: {
+              state: "pending",
+              target_alias: "target1",
+              target_repo_root: "C:\\workspace\\target1",
+              base_commit: "deadbeef",
+              patch_source: "upgrades/pending/pr_1.patch",
+              generation_status: "succeeded",
+              sensitive_hits: [],
+              can_generate: true,
+              can_approve_patch: true,
+              can_dry_run: false,
+              can_apply: false,
+            },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            id: "pr_1",
+            proposal_id: "pr_1",
+            state: "pending",
+            target_alias: "target1",
+            target_working_dir: "C:\\workspace\\target1",
+            target_repo_root: "C:\\workspace\\target1",
+            base_commit: "deadbeef",
+            worktree_path: "C:\\workspace\\.assistant\\upgrades\\worktrees\\pr_1",
+            patch_path: "upgrades/pending/pr_1.patch",
+            generated_at: "2026-04-28T01:00:00Z",
+            generated_by: "1001",
+            generator: {
+              cli_type: "codex",
+              cli_path: "codex",
+              status: "succeeded",
+              elapsed_seconds: 3,
+            },
+            dry_run: {
+              ok: false,
+              checked_at: "",
+              stderr: "",
+            },
+            sensitive_hits: [],
+            changed_files: ["bot/x.py"],
+            additions: 3,
+            deletions: 1,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            id: "pr_1",
+            proposal_id: "pr_1",
+            state: "approved",
+            target_alias: "target1",
+            target_working_dir: "C:\\workspace\\target1",
+            target_repo_root: "C:\\workspace\\target1",
+            base_commit: "deadbeef",
+            worktree_path: "C:\\workspace\\.assistant\\upgrades\\worktrees\\pr_1",
+            patch_path: "upgrades/approved/pr_1.patch",
+            generated_at: "2026-04-28T01:00:00Z",
+            generated_by: "1001",
+            approved_by: "1001",
+            approved_at: "2026-04-28T01:10:00Z",
+            generator: {
+              cli_type: "codex",
+              cli_path: "codex",
+              status: "succeeded",
+              elapsed_seconds: 3,
+            },
+            dry_run: {
+              ok: false,
+              checked_at: "",
+              stderr: "",
+            },
+            sensitive_hits: [],
+            changed_files: ["bot/x.py"],
+            additions: 3,
+            deletions: 1,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
             proposal: {
               id: "pr_1",
               kind: "code",
@@ -2661,6 +2794,19 @@ describe("RealWebBotClient", () => {
               last_error_at: "",
               last_error_log_path: "",
             },
+            upgrade: {
+              state: "approved",
+              target_alias: "target1",
+              target_repo_root: "C:\\workspace\\target1",
+              base_commit: "deadbeef",
+              patch_source: "upgrades/approved/pr_1.patch",
+              generation_status: "succeeded",
+              sensitive_hits: [],
+              can_generate: true,
+              can_approve_patch: false,
+              can_dry_run: true,
+              can_apply: true,
+            },
           },
         }),
       });
@@ -2668,6 +2814,13 @@ describe("RealWebBotClient", () => {
     const client = new RealWebBotClient();
     await client.login("secret-token");
     const proposals = await client.listAssistantProposals("assistant1", "proposed");
+    const targets = await client.listAssistantUpgradeTargets("assistant1");
+    const pendingDetail = await client.getAssistantProposal("assistant1", "pr_1");
+    const pendingPatch = await client.generateAssistantProposalPatch("assistant1", "pr_1", {
+      targetAlias: "target1",
+      regenerate: true,
+    });
+    const approvedPatch = await client.approveAssistantProposalPatch("assistant1", "pr_1");
     const detail = await client.getAssistantProposal("assistant1", "pr_1");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -2681,6 +2834,34 @@ describe("RealWebBotClient", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
+      "/api/admin/bots/assistant1/assistant/upgrade-targets",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/admin/bots/assistant1/assistant/proposals/pr_1",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/admin/bots/assistant1/assistant/proposals/pr_1/patch",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          target_alias: "target1",
+          regenerate: true,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/admin/bots/assistant1/assistant/proposals/pr_1/patch/approve",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
       "/api/admin/bots/assistant1/assistant/proposals/pr_1",
       expect.any(Object),
     );
@@ -2689,8 +2870,17 @@ describe("RealWebBotClient", () => {
       title: "补审计",
       status: "proposed",
     }));
+    expect(targets[0]).toEqual(expect.objectContaining({
+      alias: "target1",
+      repoRoot: "C:\\workspace\\target1",
+      available: true,
+    }));
+    expect(pendingDetail.upgrade.state).toBe("pending");
+    expect(pendingPatch.targetAlias).toBe("target1");
+    expect(approvedPatch.approvedBy).toBe("1001");
     expect(detail.diff.available).toBe(true);
     expect(detail.apply.available).toBe(true);
+    expect(detail.upgrade.canDryRun).toBe(true);
   });
 
   test("assistant diagnostics endpoint maps stage durations", async () => {

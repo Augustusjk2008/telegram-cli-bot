@@ -230,7 +230,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
               <a
                 className="break-all font-medium text-[var(--accent)] underline decoration-[var(--accent-outline)] underline-offset-4"
                 data-local-file-href={handleFileLink ? nextHref : undefined}
-                href={handleFileLink ? "#" : nextHref || undefined}
+                href={nextHref || undefined}
                 rel={handleFileLink ? undefined : "noreferrer"}
                 target={handleFileLink ? undefined : "_blank"}
                 onMouseDown={handleFileLink ? (event) => {

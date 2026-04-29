@@ -18,9 +18,11 @@ import type {
   AssistantMemoryReindexResult,
   AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
+  AssistantPatchMetadata,
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
   AssistantUpgradeDryRunResult,
+  AssistantUpgradeTarget,
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
@@ -194,9 +196,16 @@ export interface WebBotClient {
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
   listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]>;
+  listAssistantUpgradeTargets(botAlias: string): Promise<AssistantUpgradeTarget[]>;
   getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail>;
   getAssistantProposalApplyLog(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyLog>;
   approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
+  generateAssistantProposalPatch(
+    botAlias: string,
+    proposalId: string,
+    input: { targetAlias: string; regenerate?: boolean },
+  ): Promise<AssistantPatchMetadata>;
+  approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata>;
   rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
   applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult>;
   dryRunAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeDryRunResult>;

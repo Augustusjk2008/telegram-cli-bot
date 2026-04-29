@@ -1368,6 +1368,33 @@ test("opens a file preview dialog when clicking a local markdown file link", asy
   expect(screen.getByRole("heading", { name: "README" })).toBeInTheDocument();
 });
 
+test("opens a file preview dialog when clicking a local markdown file link with line info", async () => {
+  const user = userEvent.setup();
+  const readSpy = vi.fn(async () => ({
+    content: "export const ok = true;\n",
+    mode: "head" as const,
+    fileSizeBytes: 64,
+    isFullContent: true,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-1",
+      role: "assistant",
+      text: "[查看 app.ts](/C:/workspace/src/app.ts:12)",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }],
+    readFile: readSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("link", { name: "查看 app.ts" }));
+
+  expect(readSpy).toHaveBeenCalledWith("main", "src/app.ts");
+  expect(await screen.findByRole("dialog", { name: "src/app.ts" })).toBeInTheDocument();
+});
+
 test("opens a file preview dialog when clicking a local absolute file link outside the working dir", async () => {
   const user = userEvent.setup();
   const readSpy = vi.fn(async () => ({

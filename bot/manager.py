@@ -16,7 +16,7 @@ from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
-from bot.cli_params import coerce_param_value
+from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
 from bot.models import BotProfile
 from bot.plugins.service import PluginService
@@ -32,6 +32,7 @@ class MultiBotManager:
         self.main_profile = main_profile
         self.storage_file = Path(storage_file)
         self.repo_root = self.storage_file.resolve().parent
+        self.app_settings_file = self.repo_root / ".web_admin_settings.json"
         self.plugin_service = PluginService(
             self.repo_root,
             workspace_root_for=lambda alias: Path(
@@ -50,6 +51,7 @@ class MultiBotManager:
         self._assistant_stream_executor: Callable[[AssistantRunRequest], AsyncIterator[dict[str, Any]]] | None = None
 
         self._load_profiles()
+        self._apply_persisted_main_profile()
         self._apply_persisted_avatar_names()
 
     @staticmethod
@@ -136,14 +138,45 @@ class MultiBotManager:
         )
 
     def _apply_persisted_avatar_names(self) -> None:
-        main_avatar_name = app_settings.get_bot_avatar_name(self.main_profile.alias)
+        main_avatar_name = app_settings.get_bot_avatar_name(self.main_profile.alias, self.app_settings_file)
         if main_avatar_name:
             self.main_profile.avatar_name = main_avatar_name
 
         for alias, profile in self.managed_profiles.items():
-            avatar_name = app_settings.get_bot_avatar_name(alias)
+            avatar_name = app_settings.get_bot_avatar_name(alias, self.app_settings_file)
             if avatar_name:
                 profile.avatar_name = avatar_name
+
+    def _apply_persisted_main_profile(self) -> None:
+        profile_data = app_settings.get_main_bot_profile(self.app_settings_file)
+        if not profile_data:
+            return
+
+        raw_cli_type = str(profile_data.get("cli_type") or "").strip()
+        if raw_cli_type:
+            try:
+                self.main_profile.cli_type = validate_cli_type(raw_cli_type)
+            except ValueError:
+                logger.warning("主 Bot 持久化 cli_type 无效(%s)，已忽略", raw_cli_type)
+
+        cli_path = str(profile_data.get("cli_path") or "").strip()
+        if cli_path:
+            self.main_profile.cli_path = cli_path
+
+        working_dir = str(profile_data.get("working_dir") or "").strip()
+        if working_dir:
+            self.main_profile.working_dir = os.path.abspath(os.path.expanduser(working_dir))
+
+        bot_mode = str(profile_data.get("bot_mode") or "").strip().lower()
+        if bot_mode in {"cli", "assistant"}:
+            self.main_profile.bot_mode = bot_mode
+
+        cli_params = profile_data.get("cli_params")
+        if isinstance(cli_params, dict):
+            self.main_profile.cli_params = CliParamsConfig.from_dict(cli_params)
+
+    def _persist_main_profile(self) -> None:
+        app_settings.update_main_bot_profile(self.main_profile.to_dict(), self.app_settings_file)
 
     def get_profile(self, alias: str) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
@@ -350,7 +383,7 @@ class MultiBotManager:
                 self._bootstrap_and_sync_assistant_home(resolved_working_dir)
 
             self.managed_profiles[normalized_alias] = profile
-            app_settings.update_bot_avatar_name(normalized_alias, profile.avatar_name)
+            app_settings.update_bot_avatar_name(normalized_alias, profile.avatar_name, self.app_settings_file)
             self._save_profiles()
             await self._start_profile(profile, is_main=False)
             await self._ensure_assistant_services()
@@ -363,7 +396,7 @@ class MultiBotManager:
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
             profile.avatar_name = normalized_avatar_name
-            app_settings.update_bot_avatar_name(normalized_alias, normalized_avatar_name)
+            app_settings.update_bot_avatar_name(normalized_alias, normalized_avatar_name, self.app_settings_file)
             if normalized_alias != self.main_profile.alias:
                 self._save_profiles()
 
@@ -377,7 +410,7 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             await self._stop_application(normalized_alias)
             del self.managed_profiles[normalized_alias]
-            app_settings.remove_bot_avatar_name(normalized_alias)
+            app_settings.remove_bot_avatar_name(normalized_alias, self.app_settings_file)
             self._save_profiles()
             await self._ensure_assistant_services()
 
@@ -423,7 +456,10 @@ class MultiBotManager:
                 )
             profile.cli_type = resolved_cli_type
             profile.cli_path = resolved_cli_path
-            self._save_profiles()
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
 
     async def rename_bot(self, alias: str, new_alias: str) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
@@ -455,7 +491,7 @@ class MultiBotManager:
                         self.bot_id_to_alias[bot_id] = normalized_new_alias
 
             update_bot_alias(normalized_alias, normalized_new_alias)
-            app_settings.rename_bot_avatar_name(normalized_alias, normalized_new_alias)
+            app_settings.rename_bot_avatar_name(normalized_alias, normalized_new_alias, self.app_settings_file)
             self._save_profiles()
             await self._ensure_assistant_services()
             return profile
@@ -471,7 +507,10 @@ class MultiBotManager:
             if profile.bot_mode == "assistant":
                 raise ValueError("assistant 型 Bot 不允许修改默认工作目录")
             profile.working_dir = resolved_working_dir
-            self._save_profiles()
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
             if update_sessions:
                 update_bot_working_dir(normalized_alias, resolved_working_dir)
 
@@ -490,14 +529,20 @@ class MultiBotManager:
             profile = self._get_profile_for_update(normalized_alias)
             coerced_value = coerce_param_value(normalized_cli_type, key, value)
             profile.cli_params.set_param(normalized_cli_type, key, coerced_value)
-            self._save_profiles()
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
 
     async def reset_bot_cli_params(self, alias: str, cli_type: Optional[str] = None) -> None:
         normalized_alias = str(alias or "").strip().lower()
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
             profile.cli_params.reset_to_default(cli_type)
-            self._save_profiles()
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
 
     def get_status_lines(self) -> List[str]:
         lines: List[str] = []

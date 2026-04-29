@@ -30,6 +30,16 @@
       "cwd": ".",
       "confirm": false,
       "enabled": true
+    },
+    {
+      "id": "ChangeSourceCodex",
+      "label": "Codex换源",
+      "icon": "Rocket",
+      "windowsCommand": ".\\scripts\\codex_switch_source.bat",
+      "linuxCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }

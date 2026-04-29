@@ -18,6 +18,15 @@ function normalizePath(path: string) {
   return normalized.replace(/^\/([A-Za-z]:\/)/, "$1");
 }
 
+function stripTrailingLocation(path: string) {
+  const match = /^(.*?)(:\d+)(:\d+)?$/.exec(path);
+  if (!match) {
+    return path;
+  }
+  const candidate = match[1] || "";
+  return /^[A-Za-z]$/.test(candidate) ? path : candidate;
+}
+
 export function isExternalHref(href: string) {
   return EXTERNAL_PROTOCOL_RE.test(cleanHref(href));
 }
@@ -53,7 +62,7 @@ export function resolvePreviewFilePath(href: string, workingDir: string) {
     return null;
   }
 
-  const normalizedCandidate = normalizePath(cleaned);
+  const normalizedCandidate = stripTrailingLocation(normalizePath(cleaned));
   const normalizedWorkingDir = normalizePath(workingDir || "");
 
   if (!normalizedCandidate || normalizedCandidate === ".") {

@@ -18,7 +18,7 @@ async function buildAssistantClient() {
   return client;
 }
 
-test("assistant ops screen approves, dry-runs and applies proposal", async () => {
+test("assistant ops screen approves, generates patch, dry-runs and applies proposal", async () => {
   const user = userEvent.setup();
   const client = await buildAssistantClient();
 
@@ -31,6 +31,16 @@ test("assistant ops screen approves, dry-runs and applies proposal", async () =>
   await user.click(await screen.findByRole("button", { name: "批准" }));
 
   expect(await screen.findByText("proposal 已批准")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Dry-run" })).toBeDisabled();
+  await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
+  await user.click(screen.getByRole("button", { name: "生成 Patch" }));
+  expect(await screen.findByText("patch 已生成")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "批准 Patch" }));
+  expect(await screen.findByText("patch 已批准")).toBeInTheDocument();
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "Dry-run" })).toBeEnabled();
+  });
   await user.click(screen.getByRole("button", { name: "Dry-run" }));
   expect(await screen.findByText("dry-run 通过")).toBeInTheDocument();
 
@@ -113,6 +123,12 @@ test("assistant ops disables apply when detail says patch is not applyable", asy
         ...detail.apply,
         available: false,
         applied: false,
+      },
+      upgrade: {
+        ...detail.upgrade,
+        state: "pending",
+        canDryRun: false,
+        canApply: false,
       },
     };
   };

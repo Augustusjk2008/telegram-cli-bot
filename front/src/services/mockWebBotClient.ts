@@ -18,6 +18,7 @@ import type {
   AssistantMemorySearchItem,
   AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
+  AssistantPatchMetadata,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
   AssistantPerfSummary,
@@ -28,6 +29,7 @@ import type {
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
   AssistantUpgradeDryRunResult,
+  AssistantUpgradeTarget,
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
@@ -1161,6 +1163,8 @@ export class MockWebBotClient implements WebBotClient {
   private assistantCronRuns = new Map<string, AssistantCronRun[]>();
   private assistantProposals = new Map<string, AssistantProposal[]>();
   private assistantProposalDiffs = new Map<string, string>();
+  private assistantProposalPatchDiffs = new Map<string, string>();
+  private assistantProposalPatchMetadata = new Map<string, AssistantPatchMetadata>();
   private assistantProposalApplyLogs = new Map<string, AssistantUpgradeApplyLog>();
   private assistantMemories = new Map<string, AssistantMemorySearchItem[]>();
   private assistantMemoryEvalReports = new Map<string, AssistantMemoryEvalReport[]>();
@@ -1391,6 +1395,48 @@ export class MockWebBotClient implements WebBotClient {
     return `${botAlias}:${proposalId}`;
   }
 
+  private buildMockUpgradeTarget(botAlias: string): AssistantUpgradeTarget {
+    const bot = this.getBotSummary(botAlias);
+    return {
+      alias: bot.alias,
+      workingDir: bot.workingDir,
+      repoRoot: bot.workingDir,
+      head: bot.alias === "main" ? "a1b2c3d4" : "b2c3d4e5",
+      dirty: bot.alias === "assistant1",
+      botMode: bot.botMode || "cli",
+      cliType: bot.cliType || "",
+      cliPath: bot.cliPath || "",
+      available: Boolean(bot.workingDir),
+      reason: bot.workingDir ? "" : "working_dir_not_found",
+    };
+  }
+
+  private getAssistantPatchMetadata(botAlias: string, proposalId: string): AssistantPatchMetadata | null {
+    return this.assistantProposalPatchMetadata.get(this.assistantProposalKey(botAlias, proposalId)) || null;
+  }
+
+  private buildAssistantUpgradeState(botAlias: string, proposal: AssistantProposal) {
+    const metadata = this.getAssistantPatchMetadata(botAlias, proposal.id);
+    const key = this.assistantProposalKey(botAlias, proposal.id);
+    const hasPatch = this.assistantProposalPatchDiffs.has(key);
+    const state = proposal.status === "applied"
+      ? "applied"
+      : (metadata?.state || "none");
+    return {
+      state,
+      targetAlias: metadata?.targetAlias || "",
+      targetRepoRoot: metadata?.targetRepoRoot || "",
+      baseCommit: metadata?.baseCommit || "",
+      patchSource: hasPatch && metadata ? `upgrades/${metadata.state}/${proposal.id}.patch` : "",
+      generationStatus: metadata?.generator.status || "",
+      sensitiveHits: metadata?.sensitiveHits || [],
+      canGenerate: proposal.status === "approved",
+      canApprovePatch: metadata?.state === "pending" && (metadata.sensitiveHits?.length || 0) === 0,
+      canDryRun: metadata?.state === "approved",
+      canApply: metadata?.state === "approved" && proposal.status !== "applied",
+    };
+  }
+
   private pushAssistantAdminAudit(
     botAlias: string,
     input: {
@@ -1504,6 +1550,43 @@ export class MockWebBotClient implements WebBotClient {
           "",
         ].join("\n"),
       );
+      this.assistantProposalPatchDiffs.set(
+        this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"),
+        this.assistantProposalDiffs.get(this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard")) || "",
+      );
+      this.assistantProposalPatchMetadata.set(this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"), {
+        id: "pr_apply_upgrade_guard",
+        proposalId: "pr_apply_upgrade_guard",
+        state: "approved",
+        targetAlias: "main",
+        targetWorkingDir: "C:\\workspace\\main",
+        targetRepoRoot: "C:\\workspace\\main",
+        baseCommit: "a1b2c3d4",
+        worktreePath: "C:\\workspace\\.assistant\\upgrades\\worktrees\\pr_apply_upgrade_guard",
+        patchPath: "upgrades/approved/pr_apply_upgrade_guard.patch",
+        generatedAt: "2026-04-28T09:05:00+08:00",
+        generatedBy: "127.0.0.1",
+        approvedBy: "127.0.0.1",
+        approvedAt: "2026-04-28T09:10:00+08:00",
+        generator: {
+          cliType: "codex",
+          cliPath: "codex",
+          status: "succeeded",
+          elapsedSeconds: 8,
+        },
+        dryRun: {
+          ok: false,
+          checkedAt: "",
+          stderr: "",
+        },
+        sensitiveHits: [],
+        changedFiles: [
+          "bot/assistant_upgrade.py",
+          "tests/test_assistant_upgrade.py",
+        ],
+        additions: 6,
+        deletions: 1,
+      });
       this.assistantProposalDiffs.set(
         this.assistantProposalKey(botAlias, "pr_sync_memory_index"),
         [
@@ -3423,6 +3506,11 @@ export class MockWebBotClient implements WebBotClient {
     return this.getAssistantProposals(botAlias).filter((item) => !status || item.status === status);
   }
 
+  async listAssistantUpgradeTargets(botAlias: string): Promise<AssistantUpgradeTarget[]> {
+    this.ensureAssistantOpsState(botAlias);
+    return Array.from(this.bots.keys()).sort().map((alias) => this.buildMockUpgradeTarget(alias));
+  }
+
   async getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail> {
     const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
     if (!proposal) {
@@ -3430,22 +3518,30 @@ export class MockWebBotClient implements WebBotClient {
     }
     const key = this.assistantProposalKey(botAlias, proposalId);
     const log = this.assistantProposalApplyLogs.get(key);
-    const diffText = this.assistantProposalDiffs.get(key) || "";
+    const patchMetadata = this.getAssistantPatchMetadata(botAlias, proposalId);
+    const patchDiffText = this.assistantProposalPatchDiffs.get(key) || "";
+    const proposalDiffText = this.assistantProposalDiffs.get(key) || "";
+    const diffText = patchDiffText || proposalDiffText;
+    const diffSource = patchMetadata
+      ? `upgrades/${patchMetadata.state}/${proposalId}.patch`
+      : (proposalDiffText ? `proposals/${proposalId}.diff` : "");
+    const upgrade = this.buildAssistantUpgradeState(botAlias, proposal);
     return {
       proposal,
       diff: {
-        available: this.assistantProposalDiffs.has(key),
-        source: this.assistantProposalDiffs.has(key) ? `upgrades/approved/${proposalId}.patch` : "",
+        available: Boolean(diffText),
+        source: diffSource,
         text: diffText,
         files: parseMockAssistantDiffFiles(diffText),
       },
       apply: {
-        available: this.assistantProposalDiffs.has(key),
+        available: upgrade.canApply || upgrade.canDryRun,
         applied: proposal.status === "applied",
         lastError: log?.status === "failed" ? (log.error || "") : "",
         lastErrorAt: log?.status === "failed" ? (log.failedAt || "") : "",
         lastErrorLogPath: log?.status === "failed" ? `upgrades/applied/${proposalId}.last-error.json` : "",
       },
+      upgrade,
     };
   }
 
@@ -3485,6 +3581,103 @@ export class MockWebBotClient implements WebBotClient {
     return updated;
   }
 
+  async generateAssistantProposalPatch(
+    botAlias: string,
+    proposalId: string,
+    input: { targetAlias: string; regenerate?: boolean },
+  ): Promise<AssistantPatchMetadata> {
+    const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
+    if (!proposal) {
+      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
+    }
+    if (proposal.status !== "approved") {
+      throw new WebApiClientError("proposal 尚未批准", { status: 409, code: "proposal_not_approved" });
+    }
+    const target = this.buildMockUpgradeTarget(input.targetAlias);
+    const key = this.assistantProposalKey(botAlias, proposalId);
+    const diffText = [
+      "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py",
+      "@@ -20,3 +20,8 @@",
+      " def recall_assistant_memories(...):",
+      "+    emit_audit('memory_recall')",
+      "+    return []",
+      "",
+      "diff --git a/bot/assistant_memory_store.py b/bot/assistant_memory_store.py",
+      "@@ -40,2 +40,5 @@",
+      "+def record_recall_trace(...):",
+      "+    return None",
+      "",
+    ].join("\n");
+    this.assistantProposalPatchDiffs.set(key, diffText);
+    const metadata: AssistantPatchMetadata = {
+      id: proposalId,
+      proposalId,
+      state: "pending",
+      targetAlias: target.alias,
+      targetWorkingDir: target.workingDir,
+      targetRepoRoot: target.repoRoot,
+      baseCommit: target.head,
+      worktreePath: `${botAlias}\\.assistant\\upgrades\\worktrees\\${proposalId}`,
+      patchPath: `upgrades/pending/${proposalId}.patch`,
+      generatedAt: new Date().toISOString(),
+      generatedBy: String(this.session.userId || "1001"),
+      generator: {
+        cliType: target.cliType,
+        cliPath: target.cliPath,
+        status: "succeeded",
+        elapsedSeconds: 3,
+      },
+      dryRun: {
+        ok: false,
+        checkedAt: "",
+        stderr: "",
+      },
+      sensitiveHits: [],
+      changedFiles: [
+        "bot/assistant_memory_recall.py",
+        "bot/assistant_memory_store.py",
+      ],
+      additions: 5,
+      deletions: 0,
+    };
+    this.assistantProposalPatchMetadata.set(key, metadata);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.proposal.patch.generate",
+      resource: "proposal",
+      resourceId: proposalId,
+      requestSummary: { proposalId, targetAlias: input.targetAlias, regenerate: Boolean(input.regenerate) },
+      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/patch`,
+    });
+    return metadata;
+  }
+
+  async approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata> {
+    const key = this.assistantProposalKey(botAlias, proposalId);
+    const current = this.getAssistantPatchMetadata(botAlias, proposalId);
+    if (!current) {
+      throw new WebApiClientError("pending patch 不存在", { status: 404, code: "pending_patch_not_found" });
+    }
+    if (current.state !== "pending") {
+      return current;
+    }
+    const next: AssistantPatchMetadata = {
+      ...current,
+      state: "approved",
+      patchPath: `upgrades/approved/${proposalId}.patch`,
+      approvedBy: String(this.session.userId || "1001"),
+      approvedAt: new Date().toISOString(),
+    };
+    this.assistantProposalPatchMetadata.set(key, next);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.proposal.patch.approve",
+      resource: "proposal",
+      resourceId: proposalId,
+      requestSummary: { proposalId },
+      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/patch/approve`,
+    });
+    return next;
+  }
+
   async rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
     const items = this.getAssistantProposals(botAlias);
     const next = items.map((item) => (
@@ -3521,6 +3714,10 @@ export class MockWebBotClient implements WebBotClient {
     if (proposal.status !== "approved") {
       throw new WebApiClientError("proposal 尚未批准", { status: 409, code: "proposal_not_approved" });
     }
+    const patch = this.getAssistantPatchMetadata(botAlias, proposalId);
+    if (!patch || patch.state !== "approved") {
+      throw new WebApiClientError("approved patch 不存在", { status: 404, code: "upgrade_patch_not_found" });
+    }
     const appliedAt = new Date().toISOString();
     this.assistantProposals.set(
       botAlias,
@@ -3529,8 +3726,8 @@ export class MockWebBotClient implements WebBotClient {
     this.assistantProposalApplyLogs.set(this.assistantProposalKey(botAlias, proposalId), {
       id: proposalId,
       status: "applied",
-      repoRoot: "C:\\workspace\\assistant1",
-      patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
+      repoRoot: patch.targetRepoRoot,
+      patchPath: patch.patchPath,
       appliedAt,
     });
     this.pushAssistantAdminAudit(botAlias, {
@@ -3543,8 +3740,8 @@ export class MockWebBotClient implements WebBotClient {
     return {
       id: proposalId,
       status: "applied",
-      patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
-      repoRoot: "C:\\workspace\\assistant1",
+      patchPath: patch.patchPath,
+      repoRoot: patch.targetRepoRoot,
       appliedAt,
     };
   }
@@ -3554,14 +3751,17 @@ export class MockWebBotClient implements WebBotClient {
     if (!proposal) {
       throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
     }
+    const patch = this.getAssistantPatchMetadata(botAlias, proposalId);
     const checkedAt = new Date().toISOString();
     const result: AssistantUpgradeDryRunResult = {
-      ok: proposal.status === "approved",
+      ok: proposal.status === "approved" && patch?.state === "approved",
       checkedAt,
-      stdout: proposal.status === "approved" ? "Patch cleanly applies" : "",
-      stderr: proposal.status === "approved" ? "" : "proposal 尚未批准",
-      patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
-      repoRoot: "C:\\workspace\\assistant1",
+      stdout: proposal.status === "approved" && patch?.state === "approved" ? "Patch cleanly applies" : "",
+      stderr: proposal.status !== "approved"
+        ? "proposal 尚未批准"
+        : (patch?.state === "approved" ? "" : "approved patch 不存在"),
+      patchPath: patch?.patchPath || "",
+      repoRoot: patch?.targetRepoRoot || "",
     };
     this.pushAssistantAdminAudit(botAlias, {
       action: "assistant.upgrade.dry_run",
@@ -3959,6 +4159,20 @@ export class MockWebBotClient implements WebBotClient {
       this.assistantProposalDiffs.delete(key);
       this.assistantProposalDiffs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
     }
+    for (const [key, value] of Array.from(this.assistantProposalPatchDiffs.entries())) {
+      if (!key.startsWith(`${botAlias}:`)) {
+        continue;
+      }
+      this.assistantProposalPatchDiffs.delete(key);
+      this.assistantProposalPatchDiffs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
+    }
+    for (const [key, value] of Array.from(this.assistantProposalPatchMetadata.entries())) {
+      if (!key.startsWith(`${botAlias}:`)) {
+        continue;
+      }
+      this.assistantProposalPatchMetadata.delete(key);
+      this.assistantProposalPatchMetadata.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
+    }
     for (const [key, value] of Array.from(this.assistantProposalApplyLogs.entries())) {
       if (!key.startsWith(`${botAlias}:`)) {
         continue;
@@ -3993,6 +4207,16 @@ export class MockWebBotClient implements WebBotClient {
     for (const key of Array.from(this.assistantProposalDiffs.keys())) {
       if (key.startsWith(`${botAlias}:`)) {
         this.assistantProposalDiffs.delete(key);
+      }
+    }
+    for (const key of Array.from(this.assistantProposalPatchDiffs.keys())) {
+      if (key.startsWith(`${botAlias}:`)) {
+        this.assistantProposalPatchDiffs.delete(key);
+      }
+    }
+    for (const key of Array.from(this.assistantProposalPatchMetadata.keys())) {
+      if (key.startsWith(`${botAlias}:`)) {
+        this.assistantProposalPatchMetadata.delete(key);
       }
     }
     for (const key of Array.from(this.assistantProposalApplyLogs.keys())) {

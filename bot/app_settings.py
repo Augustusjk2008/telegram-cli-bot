@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import threading
@@ -15,6 +16,7 @@ _SETTINGS_LOCK = threading.Lock()
 _DEFAULT_SETTINGS = {
     "git_proxy_port": "",
     "bot_avatar_names": {},
+    "main_bot_profile": {},
     "update_enabled": True,
     "update_channel": "release",
     "last_checked_at": "",
@@ -43,6 +45,10 @@ _UPDATE_TEXT_FIELDS = (
     "pending_update_package_kind",
     "update_last_error",
 )
+
+
+def _resolve_settings_file(settings_file: str | Path | None = None) -> Path:
+    return Path(settings_file).expanduser().resolve() if settings_file is not None else APP_SETTINGS_FILE
 
 
 def _normalize_git_proxy_port(value: Any) -> str:
@@ -77,6 +83,31 @@ def _normalize_optional_text(value: Any, *, strip: bool = True) -> str:
     return text.strip() if strip else text
 
 
+def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    normalized: dict[str, Any] = {}
+    cli_type = str(value.get("cli_type") or "").strip().lower()
+    if cli_type in {"claude", "codex"}:
+        normalized["cli_type"] = cli_type
+
+    for key in ("cli_path", "working_dir"):
+        text = str(value.get(key) or "").strip()
+        if text:
+            normalized[key] = text
+
+    bot_mode = str(value.get("bot_mode") or "").strip().lower()
+    if bot_mode in {"cli", "assistant"}:
+        normalized["bot_mode"] = bot_mode
+
+    cli_params = value.get("cli_params")
+    if isinstance(cli_params, dict):
+        normalized["cli_params"] = copy.deepcopy(cli_params)
+
+    return normalized
+
+
 def _sanitize_settings(raw: Any) -> dict[str, Any]:
     settings = dict(_DEFAULT_SETTINGS)
     if not isinstance(raw, dict):
@@ -87,6 +118,7 @@ def _sanitize_settings(raw: Any) -> dict[str, Any]:
     except ValueError:
         settings["git_proxy_port"] = ""
     settings["bot_avatar_names"] = _normalize_bot_avatar_names(raw.get("bot_avatar_names", {}))
+    settings["main_bot_profile"] = _normalize_main_bot_profile(raw.get("main_bot_profile", {}))
     settings["update_enabled"] = _normalize_bool(raw.get("update_enabled"), True)
     settings["update_channel"] = _normalize_optional_text(raw.get("update_channel", "release")) or "release"
     for key in _UPDATE_TEXT_FIELDS:
@@ -111,12 +143,13 @@ def _normalize_bot_avatar_names(value: Any) -> dict[str, str]:
     return normalized
 
 
-def _load_settings() -> dict[str, Any]:
+def _load_settings(settings_file: str | Path | None = None) -> dict[str, Any]:
+    settings_path = _resolve_settings_file(settings_file)
     with _SETTINGS_LOCK:
         try:
-            if not APP_SETTINGS_FILE.exists():
+            if not settings_path.exists():
                 return _sanitize_settings(_DEFAULT_SETTINGS)
-            raw = json.loads(APP_SETTINGS_FILE.read_text(encoding="utf-8"))
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return _sanitize_settings(_DEFAULT_SETTINGS)
         return _sanitize_settings(raw)
@@ -131,6 +164,11 @@ def _serialize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     bot_avatar_names = _normalize_bot_avatar_names(settings.get("bot_avatar_names", {}))
     if bot_avatar_names:
         payload["bot_avatar_names"] = bot_avatar_names
+
+    main_bot_profile = _normalize_main_bot_profile(settings.get("main_bot_profile", {}))
+    if main_bot_profile:
+        payload["main_bot_profile"] = main_bot_profile
+
     update_enabled = _normalize_bool(settings.get("update_enabled"), True)
     if not update_enabled:
         payload["update_enabled"] = False
@@ -148,10 +186,11 @@ def _serialize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _save_settings(settings: dict[str, Any]) -> None:
+def _save_settings(settings: dict[str, Any], settings_file: str | Path | None = None) -> None:
+    settings_path = _resolve_settings_file(settings_file)
     with _SETTINGS_LOCK:
-        APP_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        APP_SETTINGS_FILE.write_text(
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
             json.dumps(_serialize_settings(settings), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -170,69 +209,86 @@ def update_git_proxy_port(port: Any) -> dict[str, str]:
     return {"port": normalized}
 
 
-def get_bot_avatar_name(alias: str) -> str | None:
+def get_bot_avatar_name(alias: str, settings_file: str | Path | None = None) -> str | None:
     normalized_alias = str(alias or "").strip().lower()
     if not normalized_alias:
         return None
-    settings = _load_settings()
+    settings = _load_settings(settings_file)
     avatar_name = settings["bot_avatar_names"].get(normalized_alias)
     if not avatar_name:
         return None
     return str(avatar_name)
 
 
-def list_bot_avatar_names() -> dict[str, str]:
-    settings = _load_settings()
+def list_bot_avatar_names(settings_file: str | Path | None = None) -> dict[str, str]:
+    settings = _load_settings(settings_file)
     return dict(settings["bot_avatar_names"])
 
 
-def update_bot_avatar_name(alias: str, avatar_name: Any) -> str:
+def get_main_bot_profile(settings_file: str | Path | None = None) -> dict[str, Any]:
+    settings = _load_settings(settings_file)
+    return copy.deepcopy(settings["main_bot_profile"])
+
+
+def update_main_bot_profile(profile: dict[str, Any], settings_file: str | Path | None = None) -> dict[str, Any]:
+    normalized_profile = _normalize_main_bot_profile(profile)
+    settings = _load_settings(settings_file)
+    settings["main_bot_profile"] = normalized_profile
+    _save_settings(settings, settings_file)
+    return copy.deepcopy(normalized_profile)
+
+
+def update_bot_avatar_name(alias: str, avatar_name: Any, settings_file: str | Path | None = None) -> str:
     normalized_alias = str(alias or "").strip().lower()
     if not normalized_alias:
         raise ValueError("bot alias 不能为空")
 
     normalized_avatar_name = str(avatar_name or "").strip()
-    settings = _load_settings()
+    settings = _load_settings(settings_file)
     avatar_names = dict(settings["bot_avatar_names"])
     if not normalized_avatar_name:
         avatar_names.pop(normalized_alias, None)
     else:
         avatar_names[normalized_alias] = normalized_avatar_name
     settings["bot_avatar_names"] = avatar_names
-    _save_settings(settings)
+    _save_settings(settings, settings_file)
     return normalized_avatar_name
 
 
-def remove_bot_avatar_name(alias: str) -> None:
+def remove_bot_avatar_name(alias: str, settings_file: str | Path | None = None) -> None:
     normalized_alias = str(alias or "").strip().lower()
     if not normalized_alias:
         return
-    settings = _load_settings()
+    settings = _load_settings(settings_file)
     avatar_names = dict(settings["bot_avatar_names"])
     if normalized_alias not in avatar_names:
         return
     avatar_names.pop(normalized_alias, None)
     settings["bot_avatar_names"] = avatar_names
-    _save_settings(settings)
+    _save_settings(settings, settings_file)
 
 
-def rename_bot_avatar_name(old_alias: str, new_alias: str) -> None:
+def rename_bot_avatar_name(
+    old_alias: str,
+    new_alias: str,
+    settings_file: str | Path | None = None,
+) -> None:
     normalized_old_alias = str(old_alias or "").strip().lower()
     normalized_new_alias = str(new_alias or "").strip().lower()
     if not normalized_old_alias or not normalized_new_alias or normalized_old_alias == normalized_new_alias:
         return
 
-    settings = _load_settings()
+    settings = _load_settings(settings_file)
     avatar_names = dict(settings["bot_avatar_names"])
     avatar_name = avatar_names.pop(normalized_old_alias, None)
     if avatar_name is None:
         settings["bot_avatar_names"] = avatar_names
-        _save_settings(settings)
+        _save_settings(settings, settings_file)
         return
 
     avatar_names[normalized_new_alias] = avatar_name
     settings["bot_avatar_names"] = avatar_names
-    _save_settings(settings)
+    _save_settings(settings, settings_file)
 
 
 def get_git_proxy_url() -> str:
