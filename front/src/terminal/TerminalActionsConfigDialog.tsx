@@ -1,7 +1,11 @@
-import { ArrowDown, ArrowUp, Plus, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, ChevronDown, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { TerminalAction, TerminalActionsConfig, TerminalActionsEditableConfig } from "../services/types";
-import { TERMINAL_ACTION_ICON_OPTIONS, getTerminalActionIcon } from "./terminalActionIcons";
+import {
+  TERMINAL_ACTION_ICON_OPTIONS,
+  getTerminalActionIcon,
+  getTerminalActionIconLabel,
+} from "./terminalActionIcons";
 
 type Props = {
   config: TerminalActionsConfig;
@@ -46,6 +50,7 @@ export function TerminalActionsConfigDialog({
 }: Props) {
   const [actions, setActions] = useState<TerminalAction[]>(() => config.actions.map((action) => ({ ...action })));
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const selected = actions[selectedIndex] ?? null;
 
   const validationMessage = useMemo(() => {
@@ -94,7 +99,12 @@ export function TerminalActionsConfigDialog({
     });
   }
 
+  useEffect(() => {
+    setIconPickerOpen(false);
+  }, [selectedIndex]);
+
   const SelectedIcon = getTerminalActionIcon(selected?.icon);
+  const selectedIconLabel = getTerminalActionIconLabel(selected?.icon);
   const footerError = error || validationMessage;
 
   return (
@@ -199,11 +209,50 @@ export function TerminalActionsConfigDialog({
                   </label>
                   <label className="space-y-1 text-sm">
                     <span className="font-medium text-[var(--text)]">图标</span>
-                    <div className="flex items-center gap-2">
-                      <SelectedIcon className="h-5 w-5 shrink-0" />
-                      <select aria-label="图标" value={selected.icon} onChange={(event) => updateSelected({ icon: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
-                        {TERMINAL_ACTION_ICON_OPTIONS.map((icon) => <option key={icon} value={icon}>{icon}</option>)}
-                      </select>
+                    <div>
+                      <button
+                        type="button"
+                        aria-label="选择图标"
+                        aria-haspopup="listbox"
+                        aria-expanded={iconPickerOpen}
+                        onClick={() => setIconPickerOpen((open) => !open)}
+                        className="flex w-full items-center justify-between rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <SelectedIcon className="h-5 w-5 shrink-0" />
+                          <span className="truncate">{selectedIconLabel}</span>
+                        </span>
+                        <ChevronDown className={`h-4 w-4 shrink-0 text-[var(--muted)] transition-transform ${iconPickerOpen ? "rotate-180" : ""}`} />
+                      </button>
+                      {iconPickerOpen ? (
+                        <div role="listbox" aria-label="图标列表" className="mt-2 max-h-72 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface-strong)] p-3">
+                          <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+                            {TERMINAL_ACTION_ICON_OPTIONS.map((icon) => {
+                              const Icon = getTerminalActionIcon(icon);
+                              const iconLabel = getTerminalActionIconLabel(icon);
+                              const active = icon === selected.icon;
+                              return (
+                                <button
+                                  key={icon}
+                                  type="button"
+                                  role="option"
+                                  aria-label={iconLabel}
+                                  aria-selected={active}
+                                  title={`${iconLabel} (${icon})`}
+                                  onClick={() => {
+                                    updateSelected({ icon });
+                                    setIconPickerOpen(false);
+                                  }}
+                                  className={`flex aspect-square flex-col items-center justify-center gap-2 rounded-md border px-2 py-2 text-center text-xs ${active ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--text)]"}`}
+                                >
+                                  <Icon className="h-5 w-5 shrink-0" />
+                                  <span className="leading-4">{iconLabel}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </label>
                 </div>

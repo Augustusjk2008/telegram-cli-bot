@@ -108,6 +108,35 @@ test("TerminalActionsConfigDialog edits and saves actions", async () => {
   });
 });
 
+test("TerminalActionsConfigDialog shows icon picker and saves selected icon", async () => {
+  const save = vi.fn();
+  const user = userEvent.setup();
+
+  render(<TerminalActionsConfigDialog config={config} saving={false} error="" onSave={save} onClose={vi.fn()} />);
+
+  await user.click(screen.getByRole("button", { name: "选择图标" }));
+  expect(screen.getByRole("listbox", { name: "图标列表" })).toBeInTheDocument();
+  expect(screen.getByText("关机")).toBeInTheDocument();
+  await user.click(screen.getByRole("option", { name: "关机" }));
+  await user.click(screen.getByRole("button", { name: "保存快捷命令" }));
+
+  expect(save).toHaveBeenCalledWith({
+    schemaVersion: 1,
+    actions: [
+      {
+        id: "build",
+        label: "构建",
+        icon: "PowerOff",
+        windowsCommand: "npm run build",
+        linuxCommand: "",
+        cwd: ".",
+        confirm: false,
+        enabled: true,
+      },
+    ],
+  });
+});
+
 test("TerminalActionsConfigDialog can add an action", async () => {
   const save = vi.fn();
   const user = userEvent.setup();

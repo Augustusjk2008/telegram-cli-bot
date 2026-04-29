@@ -4,7 +4,7 @@
     {
       "id": "codex",
       "label": "Codex",
-      "icon": "Zap",
+      "icon": "SquareTerminal",
       "windowsCommand": "codex",
       "linuxCommand": "codex",
       "cwd": ".",
@@ -14,7 +14,7 @@
     {
       "id": "Claude",
       "label": "Claude",
-      "icon": "Zap",
+      "icon": "SquareTerminal",
       "windowsCommand": "claude",
       "linuxCommand": "claude",
       "cwd": ".",
@@ -37,6 +37,16 @@
       "icon": "Rocket",
       "windowsCommand": ".\\scripts\\codex_switch_source.bat",
       "linuxCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "Shutdown",
+      "label": "关机",
+      "icon": "Terminal",
+      "windowsCommand": "",
+      "linuxCommand": "sudo shutdown now",
       "cwd": ".",
       "confirm": false,
       "enabled": true
