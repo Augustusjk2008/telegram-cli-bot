@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -7,6 +8,38 @@ ScheduleType = Literal["daily", "interval"]
 MisfirePolicy = Literal["skip", "once"]
 TaskMode = Literal["standard", "dream"]
 DeliverMode = Literal["chat_handoff", "silent"]
+
+_CRON_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_DAILY_TIME_RE = re.compile(r"^(\d{2}):(\d{2})$")
+
+
+def validate_cron_job_id(value: str) -> str:
+    job_id = str(value or "").strip()
+    if not _CRON_JOB_ID_RE.fullmatch(job_id):
+        raise ValueError("job.id 仅支持 1-64 位字母、数字、下划线或连字符，且必须以字母或数字开头")
+    return job_id
+
+
+def _parse_daily_time(value: Any) -> str:
+    time_value = str(value or "").strip()
+    match = _DAILY_TIME_RE.fullmatch(time_value)
+    if not match:
+        raise ValueError("schedule.time 必须为 HH:MM")
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        raise ValueError("schedule.time 必须为 HH:MM")
+    return time_value
+
+
+def _parse_interval_seconds(value: Any) -> int:
+    try:
+        every_seconds = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schedule.every_seconds 必须是正整数") from exc
+    if every_seconds <= 0:
+        raise ValueError("schedule.every_seconds 必须是正整数")
+    return every_seconds
 
 
 @dataclass(frozen=True)
@@ -26,10 +59,12 @@ class AssistantCronSchedule:
         misfire_policy = str(data.get("misfire_policy") or "skip").strip().lower()
         if misfire_policy not in {"skip", "once"}:
             raise ValueError("misfire_policy 仅支持 skip 或 once")
-        time_value = str(data.get("time") or "").strip() or None
-        every_seconds = data.get("every_seconds")
-        if every_seconds is not None:
-            every_seconds = int(every_seconds)
+        time_value = None
+        every_seconds = None
+        if schedule_type == "daily":
+            time_value = _parse_daily_time(data.get("time"))
+        if schedule_type == "interval":
+            every_seconds = _parse_interval_seconds(data.get("every_seconds"))
         return cls(
             type=schedule_type,
             time=time_value,
@@ -113,9 +148,7 @@ class AssistantCronJob:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AssistantCronJob":
         data = dict(payload or {})
-        job_id = str(data.get("id") or "").strip()
-        if not job_id:
-            raise ValueError("job.id 不能为空")
+        job_id = validate_cron_job_id(str(data.get("id") or ""))
         return cls(
             id=job_id,
             enabled=bool(data.get("enabled", True)),

@@ -869,29 +869,31 @@ def list_assistant_proposals(
     return {"items": list_proposals(home, status=status)}
 
 
-def _assistant_upgrade_patch_candidates(home, proposal_id: str) -> list[Path]:
+def _assistant_upgrade_patch_candidates(home, proposal_id: str) -> list[tuple[str, Path]]:
     return [
-        home.root / "upgrades" / "approved" / f"{proposal_id}.patch",
-        home.root / "upgrades" / "pending" / f"{proposal_id}.patch",
+        ("approved", home.root / "upgrades" / "approved" / f"{proposal_id}.patch"),
+        ("pending", home.root / "upgrades" / "pending" / f"{proposal_id}.patch"),
     ]
 
 
 def _read_assistant_upgrade_diff(home, proposal_id: str) -> dict[str, Any]:
-    for path in _assistant_upgrade_patch_candidates(home, proposal_id):
+    for state, path in _assistant_upgrade_patch_candidates(home, proposal_id):
         if path.exists():
             return {
                 "available": True,
+                "state": state,
                 "source": path.relative_to(home.root).as_posix(),
                 "text": path.read_text(encoding="utf-8"),
             }
-    return {"available": False, "source": "", "text": ""}
+    return {"available": False, "state": "", "source": "", "text": ""}
 
 
 def _read_assistant_apply_state(home, proposal_id: str, *, proposal: dict[str, Any], diff: dict[str, Any]) -> dict[str, Any]:
     applied = read_upgrade_apply_result(home, proposal_id)
     failed = read_upgrade_apply_failure(home, proposal_id)
+    diff_state = str(diff.get("state") or "")
     return {
-        "available": bool(diff.get("available")),
+        "available": bool(diff.get("available")) and diff_state == "approved",
         "applied": proposal.get("status") == "applied" or bool(applied),
         "last_error": str((failed or {}).get("error") or ""),
         "last_error_at": str((failed or {}).get("failed_at") or ""),

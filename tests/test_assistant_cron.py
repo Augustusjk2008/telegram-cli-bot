@@ -58,6 +58,122 @@ def _build_assistant_cron_job(job_id: str, prompt: str, *, misfire_policy: str =
     )
 
 
+def test_cron_job_rejects_unsafe_id_values():
+    invalid_ids = [
+        "../escape",
+        "..\\escape",
+        "nested/job",
+        "nested\\job",
+        "",
+        " ",
+        ".",
+        "..",
+        "job with spaces",
+    ]
+
+    for job_id in invalid_ids:
+        with pytest.raises(ValueError, match="job.id"):
+            AssistantCronJob.from_dict(
+                {
+                    "id": job_id,
+                    "enabled": True,
+                    "title": "bad",
+                    "schedule": {"type": "daily", "time": "12:00"},
+                    "task": {"prompt": "x"},
+                    "execution": {"timeout_seconds": 60},
+                }
+            )
+
+
+def test_cron_store_rejects_unsafe_runtime_ids(tmp_path: Path):
+    from bot.assistant_cron_store import (
+        append_job_run_audit,
+        delete_job_definition,
+        delete_job_run_audit,
+        delete_job_runtime_state,
+        load_job_runtime_state,
+        read_job_definition,
+        read_job_run_audit,
+        save_job_runtime_state,
+    )
+
+    home = bootstrap_assistant_home(tmp_path)
+    unsafe_id = "../escape_store"
+
+    operations = [
+        lambda: read_job_definition(home, unsafe_id),
+        lambda: delete_job_definition(home, unsafe_id),
+        lambda: save_job_runtime_state(home, unsafe_id, AssistantCronJobState()),
+        lambda: load_job_runtime_state(home, unsafe_id),
+        lambda: delete_job_runtime_state(home, unsafe_id),
+        lambda: append_job_run_audit(home, unsafe_id, {"run_id": "run_1"}),
+        lambda: read_job_run_audit(home, unsafe_id),
+        lambda: delete_job_run_audit(home, unsafe_id),
+    ]
+
+    for operation in operations:
+        with pytest.raises(ValueError, match="unsafe cron id"):
+            operation()
+
+    assert not (home.root / "automation" / "escape_store.yaml").exists()
+    assert not (home.root / "state" / "escape_store.json").exists()
+    assert not (home.root / "audit" / "escape_store.jsonl").exists()
+
+
+def test_cron_schedule_rejects_invalid_interval_seconds():
+    for value in [None, "", 0, -1, "0", "abc"]:
+        payload = {
+            "id": f"interval_bad_{str(value).replace('-', 'neg').replace(' ', '_') or 'none'}",
+            "enabled": True,
+            "title": "bad interval",
+            "schedule": {"type": "interval", "every_seconds": value},
+            "task": {"prompt": "x"},
+            "execution": {"timeout_seconds": 60},
+        }
+        with pytest.raises(ValueError, match="every_seconds"):
+            AssistantCronJob.from_dict(payload)
+
+
+def test_cron_schedule_rejects_invalid_daily_time():
+    for value in ["", "25:00", "23:60", "9:00", "09", "09:00:00", "aa:bb"]:
+        payload = {
+            "id": f"daily_bad_{len(value)}_{value.replace(':', '_') or 'empty'}",
+            "enabled": True,
+            "title": "bad daily",
+            "schedule": {"type": "daily", "time": value},
+            "task": {"prompt": "x"},
+            "execution": {"timeout_seconds": 60},
+        }
+        with pytest.raises(ValueError, match="schedule.time"):
+            AssistantCronJob.from_dict(payload)
+
+
+def test_cron_schedule_accepts_valid_daily_and_interval():
+    daily = AssistantCronJob.from_dict(
+        {
+            "id": "daily_valid",
+            "enabled": True,
+            "title": "daily",
+            "schedule": {"type": "daily", "time": "09:30"},
+            "task": {"prompt": "x"},
+            "execution": {"timeout_seconds": 60},
+        }
+    )
+    interval = AssistantCronJob.from_dict(
+        {
+            "id": "interval_valid",
+            "enabled": True,
+            "title": "interval",
+            "schedule": {"type": "interval", "every_seconds": 60},
+            "task": {"prompt": "x"},
+            "execution": {"timeout_seconds": 60},
+        }
+    )
+
+    assert daily.schedule.time == "09:30"
+    assert interval.schedule.every_seconds == 60
+
+
 @pytest.mark.asyncio
 async def test_cron_service_caches_jobs_between_reload_windows(tmp_path: Path):
     home = bootstrap_assistant_home(tmp_path)

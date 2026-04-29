@@ -455,6 +455,7 @@ type RawAssistantProposalDetail = {
   proposal: RawAssistantProposal;
   diff?: {
     available?: boolean;
+    state?: string;
     source?: string;
     text?: string;
   };

@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
+from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState, validate_cron_job_id
 from bot.assistant_home import AssistantHome
 
 
@@ -22,16 +22,30 @@ def _audit_dir(home: AssistantHome) -> Path:
     return home.root / "audit" / "cron"
 
 
+def _safe_item_path(base_dir: Path, item_id: str, suffix: str) -> Path:
+    try:
+        safe_id = validate_cron_job_id(item_id)
+    except ValueError as exc:
+        raise ValueError(f"unsafe cron id: {item_id}") from exc
+    base = base_dir.resolve()
+    path = (base_dir / f"{safe_id}{suffix}").resolve()
+    try:
+        path.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"unsafe cron id: {item_id}") from exc
+    return path
+
+
 def _job_path(home: AssistantHome, job_id: str) -> Path:
-    return _jobs_dir(home) / f"{job_id}.yaml"
+    return _safe_item_path(_jobs_dir(home), job_id, ".yaml")
 
 
 def _state_path(home: AssistantHome, job_id: str) -> Path:
-    return _state_dir(home) / f"{job_id}.json"
+    return _safe_item_path(_state_dir(home), job_id, ".json")
 
 
 def _audit_path(home: AssistantHome, job_id: str) -> Path:
-    return _audit_dir(home) / f"{job_id}.jsonl"
+    return _safe_item_path(_audit_dir(home), job_id, ".jsonl")
 
 
 def save_job_definition(home: AssistantHome, job: AssistantCronJob) -> None:

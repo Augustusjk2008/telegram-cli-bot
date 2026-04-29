@@ -152,6 +152,38 @@ async def test_admin_assistant_proposal_apply_404_for_missing_patch(
 
 
 @pytest.mark.asyncio
+async def test_admin_assistant_proposal_detail_pending_patch_is_not_applyable(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    _add_assistant_profile(web_manager, workdir)
+    home = bootstrap_assistant_home(workdir)
+    proposal = create_proposal(home, kind="code", title="pending patch", body="body")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    patch_path = home.root / "upgrades" / "pending" / f"{proposal['id']}.patch"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text("diff --git a/a.txt b/a.txt\n", encoding="utf-8")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get(
+                f"/api/admin/bots/assistant1/assistant/proposals/{proposal['id']}"
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+            assert payload["data"]["diff"]["available"] is True
+            assert payload["data"]["diff"]["source"] == f"upgrades/pending/{proposal['id']}.patch"
+            assert payload["data"]["diff"]["state"] == "pending"
+            assert payload["data"]["apply"]["available"] is False
+
+
+@pytest.mark.asyncio
 async def test_admin_assistant_proposal_apply_failure_writes_last_error_audit(
     web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
 ):
@@ -273,6 +305,50 @@ async def test_admin_assistant_memory_search_and_invalidate(
 
     rows = AssistantMemoryStore(home).search_lexical(user_id=1001, query_text="默认中文")
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_memory_search_defaults_to_authenticated_user(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 2002)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    _add_assistant_profile(web_manager, workdir)
+    home = bootstrap_assistant_home(workdir)
+    AssistantMemoryStore(home).upsert(
+        MemoryRecordInput(
+            user_id=2002,
+            scope="user",
+            kind="semantic",
+            source_type="test",
+            source_ref="case_2002",
+            title="用户 2002 偏好",
+            summary="只属于 2002 的记忆",
+            body="- only-user-2002",
+            tags=[],
+            entity_keys=[],
+        )
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            default_resp = await client.get(
+                "/api/admin/bots/assistant1/assistant/memory/search?query=only-user-2002"
+            )
+            forced_resp = await client.get(
+                "/api/admin/bots/assistant1/assistant/memory/search?query=only-user-2002&user_id=1001"
+            )
+
+            assert default_resp.status == 200
+            assert forced_resp.status == 200
+            default_payload = await default_resp.json()
+            forced_payload = await forced_resp.json()
+            assert len(default_payload["data"]["items"]) == 1
+            assert forced_payload["data"]["items"] == []
 
 
 @pytest.mark.asyncio

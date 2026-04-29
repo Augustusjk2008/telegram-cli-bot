@@ -163,7 +163,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
     setMemoryLoading(true);
     setError("");
     try {
-      const result = await client.searchAssistantMemories(botAlias, memoryQuery, { userId: 1001, limit: 12 });
+      const result = await client.searchAssistantMemories(botAlias, memoryQuery, { limit: 12 });
       setMemoryItems(result.items);
     } catch (loadError) {
       setError(getErrorMessage(loadError, "搜索 memory 失败"));
@@ -269,7 +269,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
     setMemoryReindexing(true);
     setError("");
     try {
-      const result = await client.reindexAssistantMemory(botAlias, { userId: 1001, force: true });
+      const result = await client.reindexAssistantMemory(botAlias, { force: true });
       setNotice(`已重建索引：working ${result.working.indexedCount}，knowledge ${result.knowledge.indexedCount}`);
       await searchMemories();
       await loadDiagnostics();
@@ -288,7 +288,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
       if (cases.length === 0) {
         throw new Error("至少提供 1 个 case");
       }
-      const result = await client.runAssistantMemoryEval(botAlias, { userId: 1001, cases });
+      const result = await client.runAssistantMemoryEval(botAlias, { cases });
       setNotice(`eval 完成：hit@5=${result.metrics.hitAt5.toFixed(2)}`);
       await loadMemoryReports();
       await loadDiagnostics();
@@ -434,7 +434,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
                         <button
                           type="button"
                           onClick={() => void mutateProposal("apply")}
-                          disabled={proposalActioning !== "" || proposalDetail.proposal.status !== "approved"}
+                          disabled={proposalActioning !== "" || proposalDetail.proposal.status !== "approved" || !proposalDetail.apply.available}
                           className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
                         >
                           <Play className="h-4 w-4" />
