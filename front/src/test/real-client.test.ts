@@ -40,6 +40,93 @@ describe("RealWebBotClient", () => {
     expect(session.currentBotAlias).toBe("");
   });
 
+  test("reads terminal actions config", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          schemaVersion: 1,
+          configPath: "C:/repo/scripts/terminal-actions.json",
+          exists: true,
+          mtimeNs: "123",
+          editable: true,
+          errors: [],
+          actions: [
+            { id: "build", label: "构建", icon: "Hammer", command: "npm run build", cwd: ".", confirm: false, enabled: true },
+          ],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const result = await client.getTerminalActionsConfig("main");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/terminal-actions/config",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result.actions[0].id).toBe("build");
+  });
+
+  test("saves terminal actions config", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          schemaVersion: 1,
+          configPath: "C:/repo/scripts/terminal-actions.json",
+          exists: true,
+          mtimeNs: "124",
+          editable: true,
+          errors: [],
+          actions: [],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    await client.saveTerminalActionsConfig("main", { schemaVersion: 1, actions: [] }, "");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/terminal-actions/config",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ config: { schemaVersion: 1, actions: [] }, expectedMtimeNs: "" }),
+      }),
+    );
+  });
+
+  test("runs terminal action", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          actionId: "build",
+          command: "npm run build",
+          cwd: "C:/repo",
+          startedTerminal: true,
+          snapshot: { started: true, closed: false, cwd: "C:/repo", pty_mode: true, connection_text: "运行中", last_seq: 0 },
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const result = await client.runTerminalAction("main", "build", { ownerId: "owner-1", confirmed: true });
+
+    expect(result.startedTerminal).toBe(true);
+    expect(result.snapshot.ptyMode).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/terminal-actions/build/run",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ownerId: "owner-1", confirmed: true }),
+      }),
+    );
+  });
+
   test("login posts username/password and maps account session fields", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

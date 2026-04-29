@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "id": "install",
+      "label": "安装依赖",
+      "icon": "Download",
+      "command": "npm install",
+      "cwd": "front",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "test.front",
+      "label": "前端测试",
+      "icon": "TestTube2",
+      "command": "npm test -- --run",
+      "cwd": "front",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "build.front",
+      "label": "构建前端",
+      "icon": "Hammer",
+      "command": "npm run build",
+      "cwd": "front",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "clean",
+      "label": "清理临时文件",
+      "icon": "Trash2",
+      "command": ".\\scripts\\clean_temp.bat",
+      "cwd": ".",
+      "confirm": true,
+      "enabled": false
+    }
+  ]
+}

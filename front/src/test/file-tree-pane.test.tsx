@@ -24,6 +24,15 @@ afterEach(() => {
   localStorage.clear();
 });
 
+function mockClipboardWrite() {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  return writeText;
+}
+
 function expectFileIcon(fileName: string, iconKind: string) {
   const button = screen.getByRole("button", { name: `打开 ${fileName}` });
   const iconKinds = Array.from(button.querySelectorAll("[data-icon]")).map((icon) => icon.getAttribute("data-icon"));
@@ -176,6 +185,70 @@ test("file context menu copies a sibling file", async () => {
 
   expect(copyPath).toHaveBeenCalledWith("main", "README.md");
   expect(await screen.findByRole("button", { name: "打开 README 副本.md" })).toBeInTheDocument();
+});
+
+test("file context menu copies the absolute file path", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const writeText = mockClipboardWrite();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "复制路径" }));
+
+  expect(writeText).toHaveBeenCalledWith("/workspace/README.md");
+});
+
+test("directory context menu copies the absolute directory path", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const writeText = mockClipboardWrite();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "docs", isDir: true },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "展开 docs" });
+  fireEvent.contextMenu(screen.getByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "复制路径" }));
+
+  expect(writeText).toHaveBeenCalledWith("/workspace/docs");
 });
 
 test("dragging a file onto a folder moves it into that folder", async () => {

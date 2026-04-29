@@ -3061,6 +3061,115 @@ async def test_terminal_websocket_requires_token(web_manager: MultiBotManager, m
             with pytest.raises(WSServerHandshakeError):
                 await client.ws_connect("/terminal/ws")
 
+
+@pytest.mark.asyncio
+async def test_terminal_actions_routes_read_save_and_run(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    config_path = temp_dir / "scripts" / "terminal-actions.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "actions": [
+                    {
+                        "id": "build",
+                        "label": "构建",
+                        "icon": "Hammer",
+                        "command": "npm run build",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    state: dict[str, object] = {"writes": []}
+
+    class FakeProcess:
+        is_pty = False
+        pid = 8765
+
+        def read(self, timeout: int = 1000) -> bytes:
+            return b""
+
+        def write(self, data: bytes) -> None:
+            cast(list[bytes], state["writes"]).append(data)
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            state["terminated"] = True
+
+        def close(self) -> None:
+            state["closed"] = True
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        state["shell_type"] = shell_type
+        state["cwd"] = cwd
+        state["use_pty"] = use_pty
+        state["initial_size"] = (cols, rows)
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            read_resp = await client.get("/api/bots/main/terminal-actions/config?token=secret")
+            assert read_resp.status == 200
+            read_payload = await read_resp.json()
+            assert read_payload["data"]["actions"][0]["id"] == "build"
+            assert read_payload["data"]["editable"] is True
+
+            save_resp = await client.put(
+                "/api/bots/main/terminal-actions/config?token=secret",
+                json={
+                    "expectedMtimeNs": read_payload["data"]["mtimeNs"],
+                    "config": {
+                        "schemaVersion": 1,
+                        "actions": [
+                            {
+                                "id": "test",
+                                "label": "测试",
+                                "icon": "TestTube2",
+                                "command": "python -m pytest tests -q",
+                            }
+                        ],
+                    },
+                },
+            )
+            assert save_resp.status == 200
+            save_payload = await save_resp.json()
+            assert save_payload["data"]["actions"][0]["id"] == "test"
+
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                run_resp = await client.post(
+                    "/api/bots/main/terminal-actions/test/run?token=secret",
+                    json={"ownerId": "owner-1", "confirmed": True},
+                )
+            assert run_resp.status == 200
+            run_payload = await run_resp.json()
+            assert run_payload["data"]["command"] == "python -m pytest tests -q"
+            assert run_payload["data"]["startedTerminal"] is True
+            assert state["cwd"] == str(temp_dir.resolve())
+            assert state["shell_type"] == "bash"
+            assert state["writes"] == [b"python -m pytest tests -q\r\n"]
+
+
 @pytest.mark.asyncio
 async def test_terminal_session_routes_and_websocket_attach(
     web_manager: MultiBotManager,

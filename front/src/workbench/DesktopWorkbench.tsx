@@ -934,6 +934,8 @@ export function DesktopWorkbench({
               >
                 <TerminalPane
                   authToken={authToken}
+                  botAlias={botAlias}
+                  client={client}
                   preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
                   pendingWorkingDir={pendingTerminalOverride?.cwd}
                   themeName={themeName}

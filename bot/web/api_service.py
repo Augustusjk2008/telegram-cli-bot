@@ -104,8 +104,16 @@ from bot.utils import is_dangerous_command
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
-from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_VIEW_PLUGINS, MEMBER_CAPABILITIES
+from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_TERMINAL_EXEC, CAP_VIEW_PLUGINS, CAP_WRITE_FILES, MEMBER_CAPABILITIES
 from bot.web import workspace_index_service
+from bot.web.terminal_actions import (
+    TerminalActionConfigConflict,
+    TerminalActionValidationError,
+    load_terminal_actions_config,
+    resolve_terminal_action,
+    save_terminal_actions_config,
+    serialize_terminal_actions_config,
+)
 
 logger = logging.getLogger(__name__)
 UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
@@ -4030,6 +4038,54 @@ def _build_raster_image_preview(
 def _get_system_scripts_dir(manager: MultiBotManager, alias: str) -> Path:
     profile = get_profile_or_raise(manager, alias)
     return get_scripts_dir(profile.working_dir)
+
+
+def get_terminal_actions_config(manager: MultiBotManager, alias: str, auth: AuthContext) -> dict[str, Any]:
+    _require_capability(auth, CAP_TERMINAL_EXEC)
+    profile = get_profile_or_raise(manager, alias)
+    result = load_terminal_actions_config(profile.working_dir)
+    return serialize_terminal_actions_config(result, editable=CAP_WRITE_FILES in auth.capabilities)
+
+
+def save_terminal_actions_config_for_bot(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_WRITE_FILES)
+    profile = get_profile_or_raise(manager, alias)
+    try:
+        result = save_terminal_actions_config(
+            profile.working_dir,
+            dict(payload.get("config") or {}),
+            expected_mtime_ns=str(payload.get("expectedMtimeNs") or ""),
+        )
+    except TerminalActionConfigConflict as exc:
+        _raise(409, "terminal_actions_conflict", str(exc))
+    except TerminalActionValidationError as exc:
+        _raise(400, "invalid_terminal_actions_config", str(exc))
+    return serialize_terminal_actions_config(result, editable=True)
+
+
+def resolve_terminal_action_for_bot(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    action_id: str,
+    *,
+    confirmed: bool,
+):
+    _require_capability(auth, CAP_TERMINAL_EXEC)
+    profile = get_profile_or_raise(manager, alias)
+    try:
+        return resolve_terminal_action(profile.working_dir, action_id, confirmed=confirmed)
+    except KeyError as exc:
+        _raise(404, "terminal_action_not_found", str(exc))
+    except TerminalActionValidationError as exc:
+        if "需要确认" in str(exc):
+            _raise(409, "terminal_action_confirmation_required", str(exc))
+        _raise(400, "invalid_terminal_action", str(exc))
 
 
 def list_system_scripts(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

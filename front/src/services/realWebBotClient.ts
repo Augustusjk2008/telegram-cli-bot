@@ -83,6 +83,10 @@ import type {
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TerminalActionRunInput,
+  TerminalActionRunResult,
+  TerminalActionsConfig,
+  TerminalActionsEditableConfig,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
@@ -249,6 +253,23 @@ type RawSystemScript = {
   display_name: string;
   description: string;
   path: string;
+};
+
+type RawPersistentTerminalSnapshot = {
+  started: boolean;
+  closed: boolean;
+  cwd: string;
+  pty_mode?: boolean | null;
+  connection_text?: string;
+  last_seq?: number;
+};
+
+type RawTerminalActionRunResult = {
+  actionId: string;
+  command: string;
+  cwd: string;
+  startedTerminal: boolean;
+  snapshot: RawPersistentTerminalSnapshot;
 };
 
 type RawRunningReply = {
@@ -770,6 +791,27 @@ function mapSystemScript(raw: RawSystemScript): SystemScript {
     displayName: raw.display_name,
     description: raw.description,
     path: raw.path,
+  };
+}
+
+function mapPersistentTerminalSnapshot(raw: RawPersistentTerminalSnapshot): PersistentTerminalSnapshot {
+  return {
+    started: Boolean(raw.started),
+    closed: Boolean(raw.closed),
+    cwd: String(raw.cwd || ""),
+    ptyMode: typeof raw.pty_mode === "boolean" ? raw.pty_mode : null,
+    connectionText: String(raw.connection_text || ""),
+    lastSeq: Number(raw.last_seq || 0),
+  };
+}
+
+function mapTerminalActionRunResult(raw: RawTerminalActionRunResult): TerminalActionRunResult {
+  return {
+    actionId: String(raw.actionId || ""),
+    command: String(raw.command || ""),
+    cwd: String(raw.cwd || ""),
+    startedTerminal: Boolean(raw.startedTerminal),
+    snapshot: mapPersistentTerminalSnapshot(raw.snapshot),
   };
 }
 
@@ -2005,33 +2047,12 @@ export class RealWebBotClient implements WebBotClient {
 
   async getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
     const params = new URLSearchParams({ owner_id: ownerId });
-    const data = await this.requestJson<{
-      started: boolean;
-      closed: boolean;
-      cwd: string;
-      pty_mode?: boolean | null;
-      connection_text?: string;
-      last_seq?: number;
-    }>(`/api/terminal/session?${params.toString()}`);
-    return {
-      started: Boolean(data.started),
-      closed: Boolean(data.closed),
-      cwd: String(data.cwd || ""),
-      ptyMode: typeof data.pty_mode === "boolean" ? data.pty_mode : null,
-      connectionText: String(data.connection_text || ""),
-      lastSeq: Number(data.last_seq || 0),
-    };
+    const data = await this.requestJson<RawPersistentTerminalSnapshot>(`/api/terminal/session?${params.toString()}`);
+    return mapPersistentTerminalSnapshot(data);
   }
 
   async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
-    const data = await this.requestJson<{
-      started: boolean;
-      closed: boolean;
-      cwd: string;
-      pty_mode?: boolean | null;
-      connection_text?: string;
-      last_seq?: number;
-    }>("/api/terminal/session/rebuild", {
+    const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/rebuild", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2042,25 +2063,11 @@ export class RealWebBotClient implements WebBotClient {
         shell,
       }),
     });
-    return {
-      started: Boolean(data.started),
-      closed: Boolean(data.closed),
-      cwd: String(data.cwd || ""),
-      ptyMode: typeof data.pty_mode === "boolean" ? data.pty_mode : null,
-      connectionText: String(data.connection_text || ""),
-      lastSeq: Number(data.last_seq || 0),
-    };
+    return mapPersistentTerminalSnapshot(data);
   }
 
   async closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
-    const data = await this.requestJson<{
-      started: boolean;
-      closed: boolean;
-      cwd: string;
-      pty_mode?: boolean | null;
-      connection_text?: string;
-      last_seq?: number;
-    }>("/api/terminal/session/close", {
+    const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/close", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2069,14 +2076,49 @@ export class RealWebBotClient implements WebBotClient {
         owner_id: ownerId,
       }),
     });
-    return {
-      started: Boolean(data.started),
-      closed: Boolean(data.closed),
-      cwd: String(data.cwd || ""),
-      ptyMode: typeof data.pty_mode === "boolean" ? data.pty_mode : null,
-      connectionText: String(data.connection_text || ""),
-      lastSeq: Number(data.last_seq || 0),
-    };
+    return mapPersistentTerminalSnapshot(data);
+  }
+
+  async getTerminalActionsConfig(botAlias: string): Promise<TerminalActionsConfig> {
+    return this.requestJson<TerminalActionsConfig>(
+      `/api/bots/${encodeURIComponent(botAlias)}/terminal-actions/config`,
+      { method: "GET" },
+    );
+  }
+
+  async saveTerminalActionsConfig(
+    botAlias: string,
+    config: TerminalActionsEditableConfig,
+    expectedMtimeNs: string,
+  ): Promise<TerminalActionsConfig> {
+    return this.requestJson<TerminalActionsConfig>(
+      `/api/bots/${encodeURIComponent(botAlias)}/terminal-actions/config`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ config, expectedMtimeNs }),
+      },
+    );
+  }
+
+  async runTerminalAction(
+    botAlias: string,
+    actionId: string,
+    input: TerminalActionRunInput,
+  ): Promise<TerminalActionRunResult> {
+    const data = await this.requestJson<RawTerminalActionRunResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/terminal-actions/${encodeURIComponent(actionId)}/run`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+      },
+    );
+    return mapTerminalActionRunResult(data);
   }
 
   async getCurrentPath(botAlias: string): Promise<string> {

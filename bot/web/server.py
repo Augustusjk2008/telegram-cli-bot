@@ -103,6 +103,7 @@ from .api_service import (
     get_history_trace,
     get_assistant_diagnostics,
     get_overview,
+    get_terminal_actions_config,
     list_avatar_assets,
     list_assistant_memory_eval_reports,
     list_assistant_proposals,
@@ -128,6 +129,7 @@ from .api_service import (
     reject_assistant_proposal,
     reset_user_session,
     reset_cli_params,
+    resolve_terminal_action_for_bot,
     run_chat,
     run_assistant_memory_eval_task,
     run_assistant_cron_job_now,
@@ -139,6 +141,7 @@ from .api_service import (
     reveal_directory_tree,
     save_chat_attachment,
     save_uploaded_file,
+    save_terminal_actions_config_for_bot,
     start_managed_bot,
     stop_managed_bot,
     stream_system_script,
@@ -1080,6 +1083,63 @@ class WebApiServer:
         owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
         data = await self._terminal_manager.close(auth.user_id, owner_id)
         return _json({"ok": True, "data": data})
+
+    async def get_terminal_actions_config(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        alias = self._manager_alias(request)
+        data = get_terminal_actions_config(self.manager, alias, auth)
+        return _json({"ok": True, "data": data})
+
+    async def put_terminal_actions_config(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = save_terminal_actions_config_for_bot(self.manager, alias, auth, dict(body or {}))
+        return _json({"ok": True, "data": data})
+
+    async def post_run_terminal_action(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        alias = self._manager_alias(request)
+        action_id = request.match_info.get("action_id", "").strip()
+        body = await self._parse_json(request)
+        owner_id = self._resolve_terminal_owner_id(body.get("ownerId") or body.get("owner_id"))
+        action = resolve_terminal_action_for_bot(
+            self.manager,
+            alias,
+            auth,
+            action_id,
+            confirmed=bool(body.get("confirmed", False)),
+        )
+        snapshot = await self._terminal_manager.get_snapshot(auth.user_id, owner_id)
+        started_terminal = False
+        if not snapshot.get("started"):
+            default_shell = get_default_shell()
+            shell_type = str(body.get("shell") or default_shell).strip() or default_shell
+            if shell_type == "auto":
+                shell_type = default_shell
+            size = _parse_terminal_size(body)
+            snapshot = await self._terminal_manager.rebuild(
+                auth.user_id,
+                owner_id,
+                cwd=action.resolved_cwd,
+                shell_type=shell_type,
+                cols=size[0] if size else None,
+                rows=size[1] if size else None,
+            )
+            started_terminal = True
+        await self._terminal_manager.write_input(auth.user_id, owner_id, f"{action.command}\r\n".encode("utf-8"))
+        return _json(
+            {
+                "ok": True,
+                "data": {
+                    "actionId": action.id,
+                    "command": action.command,
+                    "cwd": action.resolved_cwd,
+                    "startedTerminal": started_terminal,
+                    "snapshot": snapshot,
+                },
+            }
+        )
 
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
@@ -2587,6 +2647,9 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
         app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
         app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
+        app.router.add_get("/api/bots/{alias}/terminal-actions/config", self.get_terminal_actions_config)
+        app.router.add_put("/api/bots/{alias}/terminal-actions/config", self.put_terminal_actions_config)
+        app.router.add_post("/api/bots/{alias}/terminal-actions/{action_id}/run", self.post_run_terminal_action)
         app.router.add_get("/api/terminal/session", self.get_terminal_session)
         app.router.add_post("/api/terminal/session/rebuild", self.post_terminal_rebuild)
         app.router.add_post("/api/terminal/session/close", self.post_terminal_close)

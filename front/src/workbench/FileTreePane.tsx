@@ -64,7 +64,7 @@ function joinAbsoluteTreePath(rootPath: string, path: string) {
 }
 
 function resolveContextMenuPosition(x: number, y: number, isDir: boolean) {
-  const estimatedHeight = isDir ? 96 : 192;
+  const estimatedHeight = isDir ? 128 : 224;
   return {
     x: clamp(x, TREE_CONTEXT_MENU_PADDING_PX, window.innerWidth - TREE_CONTEXT_MENU_WIDTH_PX - TREE_CONTEXT_MENU_PADDING_PX),
     y: clamp(y, TREE_CONTEXT_MENU_PADDING_PX, window.innerHeight - estimatedHeight - TREE_CONTEXT_MENU_PADDING_PX),
@@ -1014,6 +1014,18 @@ export function FileTreePane({
     }
   }
 
+  async function handleCopyPath(path: string) {
+    setActionError("");
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("当前环境不支持剪贴板复制");
+      }
+      await navigator.clipboard.writeText(path);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "复制路径失败");
+    }
+  }
+
   async function handleMoveFile(path: string, targetParentPath: string) {
     if (!canMoveTreeEntryToDirectory(path, targetParentPath)) {
       return;
@@ -1361,16 +1373,28 @@ export function FileTreePane({
             }}
           >
             {contextMenu.entry.isDir ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onRequestSetWorkdir(contextMenu.absolutePath);
-                  closeContextMenu();
-                }}
-                className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-              >
-                设为工作目录
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleCopyPath(contextMenu.absolutePath);
+                    closeContextMenu();
+                  }}
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  复制路径
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRequestSetWorkdir(contextMenu.absolutePath);
+                    closeContextMenu();
+                  }}
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  设为工作目录
+                </button>
+              </>
             ) : (
               <>
                 <button
@@ -1404,6 +1428,17 @@ export function FileTreePane({
                   className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                 >
                   改名
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const path = contextMenu.absolutePath;
+                    closeContextMenu();
+                    void handleCopyPath(path);
+                  }}
+                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  复制路径
                 </button>
                 <button
                   type="button"

@@ -48,6 +48,7 @@ import type {
   FileCopyResult,
   FileCreateResult,
   FileEntry,
+  FileReadResult,
   GitActionResult,
   GitBlamePayload,
   GitBranchList,
@@ -77,6 +78,10 @@ import type {
   SessionState,
   SystemScript,
   SystemScriptResult,
+  TerminalActionRunInput,
+  TerminalActionRunResult,
+  TerminalActionsConfig,
+  TerminalActionsEditableConfig,
   TreeViewPayload,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
@@ -851,6 +856,18 @@ export class MockWebBotClient implements WebBotClient {
   private pluginArtifacts = new Map<string, { filename: string; content: string }>();
   private pluginArtifactCounter = 0;
   private workdirOverrides = new Map<string, string>();
+  private terminalActionsConfig: TerminalActionsConfig = {
+    schemaVersion: 1,
+    configPath: `${DEMO_MAIN_WORKDIR}\\scripts\\terminal-actions.json`,
+    exists: true,
+    mtimeNs: "1",
+    editable: true,
+    errors: [],
+    actions: [
+      { id: "build", label: "构建", icon: "Hammer", command: "npm run build", cwd: ".", confirm: false, enabled: true },
+      { id: "test", label: "测试", icon: "TestTube2", command: "python -m pytest tests -q", cwd: ".", confirm: false, enabled: true },
+    ],
+  };
   private gitOverviews = new Map<string, GitOverview>([
     [
       "main",
@@ -1993,6 +2010,58 @@ export class MockWebBotClient implements WebBotClient {
     return snapshot;
   }
 
+  async getTerminalActionsConfig(_botAlias: string): Promise<TerminalActionsConfig> {
+    return {
+      ...this.terminalActionsConfig,
+      actions: this.terminalActionsConfig.actions.map((action) => ({ ...action })),
+      errors: [...this.terminalActionsConfig.errors],
+    };
+  }
+
+  async saveTerminalActionsConfig(
+    _botAlias: string,
+    config: TerminalActionsEditableConfig,
+    _expectedMtimeNs: string,
+  ): Promise<TerminalActionsConfig> {
+    this.terminalActionsConfig = {
+      ...this.terminalActionsConfig,
+      ...config,
+      exists: true,
+      mtimeNs: String(Number(this.terminalActionsConfig.mtimeNs || "0") + 1),
+      actions: config.actions.map((action) => ({ ...action })),
+      errors: [],
+    };
+    return this.getTerminalActionsConfig(_botAlias);
+  }
+
+  async runTerminalAction(
+    _botAlias: string,
+    actionId: string,
+    _input: TerminalActionRunInput,
+  ): Promise<TerminalActionRunResult> {
+    const action = this.terminalActionsConfig.actions.find((item) => item.id === actionId);
+    if (!action) {
+      throw new Error("快捷命令不存在");
+    }
+    const current = readMockPersistentTerminalSnapshot();
+    const snapshot: PersistentTerminalSnapshot = {
+      ...current,
+      started: true,
+      closed: false,
+      cwd: current.cwd || DEMO_MAIN_WORKDIR,
+      ptyMode: current.ptyMode ?? true,
+      connectionText: "运行中",
+    };
+    writeMockPersistentTerminalSnapshot(snapshot);
+    return {
+      actionId,
+      command: action.command,
+      cwd: snapshot.cwd,
+      startedTerminal: !current.started,
+      snapshot,
+    };
+  }
+
   async sendMessage(
     botAlias: string,
     text: string,
@@ -2215,7 +2284,7 @@ export class MockWebBotClient implements WebBotClient {
     }
   }
 
-  async readFile(botAlias: string, filename: string) {
+  async readFile(botAlias: string, filename: string): Promise<FileReadResult> {
     const browserPath = this.getBrowserPath(botAlias);
     const content = this.getFileContent(botAlias, browserPath, filename);
     return {
@@ -2227,7 +2296,7 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async readFileFull(botAlias: string, filename: string) {
+  async readFileFull(botAlias: string, filename: string): Promise<FileReadResult> {
     const browserPath = this.getBrowserPath(botAlias);
     const content = this.getFileContent(botAlias, browserPath, filename);
     return {

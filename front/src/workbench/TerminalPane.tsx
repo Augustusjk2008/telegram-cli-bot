@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "./workbenchTypes";
 
@@ -8,6 +9,8 @@ const TerminalScreen = lazy(() =>
 
 type Props = {
   authToken: string;
+  botAlias: string;
+  client: WebBotClient;
   preferredWorkingDir: string;
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
@@ -21,6 +24,8 @@ type Props = {
 
 export function TerminalPane({
   authToken,
+  botAlias,
+  client,
   preferredWorkingDir,
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
@@ -35,6 +40,8 @@ export function TerminalPane({
     <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
       <TerminalScreen
         authToken={authToken}
+        botAlias={botAlias}
+        client={client}
         isVisible={visible}
         preferredWorkingDir={preferredWorkingDir}
         pendingWorkingDir={pendingWorkingDir}

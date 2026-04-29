@@ -68,6 +68,10 @@ import type {
   PersistentTerminalSnapshot,
   SystemScript,
   SystemScriptResult,
+  TerminalActionRunInput,
+  TerminalActionRunResult,
+  TerminalActionsConfig,
+  TerminalActionsEditableConfig,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   WorkspaceDefinitionResult,
@@ -108,6 +112,9 @@ export interface WebBotClient {
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
   rebuildTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
   closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
+  getTerminalActionsConfig(botAlias: string): Promise<TerminalActionsConfig>;
+  saveTerminalActionsConfig(botAlias: string, config: TerminalActionsEditableConfig, expectedMtimeNs: string): Promise<TerminalActionsConfig>;
+  runTerminalAction(botAlias: string, actionId: string, input: TerminalActionRunInput): Promise<TerminalActionRunResult>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
   revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult>;

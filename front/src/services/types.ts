@@ -193,6 +193,45 @@ export type SystemScriptResult = {
   output: string;
 };
 
+export type TerminalAction = {
+  id: string;
+  label: string;
+  icon: string;
+  command: string;
+  cwd: string;
+  confirm: boolean;
+  enabled: boolean;
+};
+
+export type TerminalActionsEditableConfig = {
+  schemaVersion: 1;
+  actions: TerminalAction[];
+};
+
+export type TerminalActionsConfig = TerminalActionsEditableConfig & {
+  configPath: string;
+  exists: boolean;
+  mtimeNs: string;
+  editable: boolean;
+  errors: string[];
+};
+
+export type TerminalActionRunInput = {
+  ownerId: string;
+  confirmed?: boolean;
+  cols?: number;
+  rows?: number;
+  shell?: string;
+};
+
+export type TerminalActionRunResult = {
+  actionId: string;
+  command: string;
+  cwd: string;
+  startedTerminal: boolean;
+  snapshot: PersistentTerminalSnapshot;
+};
+
 export type FileEntry = {
   name: string;
   isDir: boolean;

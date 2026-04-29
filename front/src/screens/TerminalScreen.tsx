@@ -1,13 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
+import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
+import type { TerminalAction, TerminalActionsConfig, TerminalActionsEditableConfig } from "../services/types";
+import type { WebBotClient } from "../services/webBotClient";
+import { TerminalActionsBar } from "../terminal/TerminalActionsBar";
+import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDialog";
 import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
 
 type Props = {
   authToken: string;
+  botAlias: string;
+  client?: WebBotClient;
   isVisible: boolean;
   preferredWorkingDir: string;
   pendingWorkingDir?: string;
@@ -61,6 +68,8 @@ function getTerminalFontSize() {
 
 export function TerminalScreen({
   authToken,
+  botAlias,
+  client = new MockWebBotClient(),
   isVisible,
   preferredWorkingDir,
   pendingWorkingDir,
@@ -97,7 +106,14 @@ export function TerminalScreen({
   const [isFollowing, setIsFollowing] = useState(true);
   const [ptyMode, setPtyMode] = useState<boolean | null>(null);
   const [error, setError] = useState("");
+  const [actionsConfig, setActionsConfig] = useState<TerminalActionsConfig | null>(null);
+  const [actionsError, setActionsError] = useState("");
+  const [runningActionId, setRunningActionId] = useState("");
+  const [showActionsConfig, setShowActionsConfig] = useState(false);
+  const [savingActionsConfig, setSavingActionsConfig] = useState(false);
+  const [actionsConfigError, setActionsConfigError] = useState("");
   const terminalFontSize = getTerminalFontSize();
+  const enabledActions = actionsConfig?.actions.filter((action) => action.enabled) ?? [];
   const runningWorkingDir = terminal.snapshot.cwd.trim();
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
   const preferredTerminalDir = preferredWorkingDir.trim();
@@ -107,6 +123,24 @@ export function TerminalScreen({
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
+
+  useEffect(() => {
+    let cancelled = false;
+    client.getTerminalActionsConfig(botAlias)
+      .then((next) => {
+        if (cancelled) return;
+        setActionsConfig(next);
+        setActionsError(next.errors[0] || "");
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setActionsConfig(null);
+        setActionsError(err instanceof Error ? err.message : "加载快捷命令失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [botAlias, client]);
 
   function setFollowing(nextValue: boolean) {
     isFollowingRef.current = nextValue;
@@ -257,6 +291,44 @@ export function TerminalScreen({
     await terminal.close();
   }
 
+  async function runTerminalAction(action: TerminalAction) {
+    if (action.confirm && !window.confirm(`执行命令？\n\n${action.command}`)) {
+      return;
+    }
+    setRunningActionId(action.id);
+    setActionsError("");
+    try {
+      await client.runTerminalAction(botAlias, action.id, {
+        ownerId: terminal.ownerId,
+        confirmed: true,
+      });
+      await terminal.refreshSnapshot();
+      setFollowing(true);
+    } catch (err) {
+      setActionsError(err instanceof Error ? err.message : "执行快捷命令失败");
+    } finally {
+      setRunningActionId("");
+    }
+  }
+
+  async function saveTerminalActionsConfig(nextConfig: TerminalActionsEditableConfig) {
+    if (!actionsConfig) {
+      return;
+    }
+    setSavingActionsConfig(true);
+    setActionsConfigError("");
+    try {
+      const saved = await client.saveTerminalActionsConfig(botAlias, nextConfig, actionsConfig.mtimeNs);
+      setActionsConfig(saved);
+      setActionsError(saved.errors[0] || "");
+      setShowActionsConfig(false);
+    } catch (err) {
+      setActionsConfigError(err instanceof Error ? err.message : "保存快捷命令失败");
+    } finally {
+      setSavingActionsConfig(false);
+    }
+  }
+
   useEffect(() => {
     if (terminal.snapshot.started || sessionRef.current === null) {
       return;
@@ -404,7 +476,7 @@ export function TerminalScreen({
     };
   }, []);
 
-  const effectiveError = error || terminal.error;
+  const effectiveError = error || terminal.error || actionsError;
   const connectionText = effectiveError
     ? "连接失败"
     : isConnected
@@ -447,6 +519,16 @@ export function TerminalScreen({
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <TerminalActionsBar
+              actions={[]}
+              canEdit={Boolean(actionsConfig?.editable)}
+              runningActionId=""
+              onRunAction={() => {}}
+              onOpenConfig={() => {
+                setActionsConfigError("");
+                setShowActionsConfig(true);
+              }}
+            />
             {embedded && onToggleFocus ? (
               <button
                 type="button"
@@ -534,6 +616,21 @@ export function TerminalScreen({
         ) : null}
       </section>
 
+      {enabledActions.length > 0 ? (
+        <div
+          data-testid="terminal-actions-panel"
+          className="border-t border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+        >
+          <TerminalActionsBar
+            actions={enabledActions}
+            canEdit={false}
+            runningActionId={runningActionId}
+            onRunAction={(action) => void runTerminalAction(action)}
+            onOpenConfig={() => {}}
+          />
+        </div>
+      ) : null}
+
       {!embedded && isVisible && onToggleImmersive ? (
         <button
           type="button"
@@ -604,6 +701,15 @@ export function TerminalScreen({
             →
           </button>
         </div>
+      ) : null}
+      {showActionsConfig && actionsConfig ? (
+        <TerminalActionsConfigDialog
+          config={actionsConfig}
+          saving={savingActionsConfig}
+          error={actionsConfigError}
+          onSave={(nextConfig) => void saveTerminalActionsConfig(nextConfig)}
+          onClose={() => setShowActionsConfig(false)}
+        />
       ) : null}
     </main>
   );

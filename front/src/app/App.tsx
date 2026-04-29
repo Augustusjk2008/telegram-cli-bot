@@ -705,6 +705,8 @@ export function App() {
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
           <TerminalScreen
             authToken={readStoredToken()}
+            botAlias={currentBot}
+            client={client}
             isVisible
             preferredWorkingDir={currentBotSummary?.workingDir || ""}
             themeName={themeName}
