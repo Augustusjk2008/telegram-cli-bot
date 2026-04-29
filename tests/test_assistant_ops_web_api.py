@@ -433,3 +433,210 @@ async def test_admin_assistant_memory_eval_run_and_reports(
             assert reports_resp.status == 200
             reports_payload = await reports_resp.json()
             assert reports_payload["data"]["items"][0]["metrics"]["hit_at_5"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_diagnostics_filters_and_summarizes(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    _add_assistant_profile(web_manager, workdir)
+    home = bootstrap_assistant_home(workdir)
+
+    from bot.assistant_perf import write_perf_record
+
+    write_perf_record(
+        home,
+        run_id="run_ok",
+        bot_alias="assistant1",
+        source="web",
+        task_mode="standard",
+        interactive=True,
+        user_id=1001,
+        status="completed",
+        stage_durations={"cli_ms": 100, "recall_ms": 20},
+        elapsed_ms=150,
+    )
+    write_perf_record(
+        home,
+        run_id="run_failed",
+        bot_alias="assistant1",
+        source="cron",
+        task_mode="dream",
+        interactive=False,
+        user_id=1002,
+        status="failed",
+        stage_durations={"cli_ms": 1200, "db_ms": 30},
+        elapsed_ms=1300,
+        error="patch does not apply",
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get(
+                "/api/admin/bots/assistant1/assistant/diagnostics/perf?status=failed&source=cron&user_id=1002&limit=20"
+            )
+            assert resp.status == 200
+            payload = await resp.json()
+
+    data = payload["data"]
+    assert [item["run_id"] for item in data["items"]] == ["run_failed"]
+    assert data["summary"]["total"] == 1
+    assert data["summary"]["failed"] == 1
+    assert data["summary"]["by_source"]["cron"] == 1
+    assert data["summary"]["by_status"]["failed"] == 1
+    assert data["summary"]["slow_stages"][0]["stage"] == "cli_ms"
+    assert data["summary"]["error_groups"][0]["message"] == "patch does not apply"
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_memory_filters_include_invalidated_and_bulk_invalidate(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    _add_assistant_profile(web_manager, workdir)
+    home = bootstrap_assistant_home(workdir)
+    store = AssistantMemoryStore(home)
+    semantic_id = store.upsert(
+        MemoryRecordInput(
+            user_id=1001,
+            scope="user",
+            kind="semantic",
+            source_type="test",
+            source_ref="s1",
+            title="默认语言",
+            summary="默认中文",
+            body="默认中文",
+            tags=[],
+            entity_keys=[],
+        )
+    )
+    procedural_id = store.upsert(
+        MemoryRecordInput(
+            user_id=1001,
+            scope="project",
+            kind="procedural",
+            source_type="test",
+            source_ref="p1",
+            title="操作步骤",
+            summary="重启流程",
+            body="重启流程",
+            tags=[],
+            entity_keys=[],
+        )
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            filtered = await client.get(
+                "/api/admin/bots/assistant1/assistant/memory/search"
+                "?query=默认中文&user_id=1001&kinds=semantic&scopes=user"
+            )
+            assert filtered.status == 200
+            filtered_payload = await filtered.json()
+            assert [item["id"] for item in filtered_payload["data"]["items"]] == [semantic_id]
+
+            bulk = await client.post(
+                "/api/admin/bots/assistant1/assistant/memory/bulk-invalidate",
+                json={"memory_ids": [semantic_id, procedural_id, "missing"], "reason": "bulk_web_admin"},
+            )
+            assert bulk.status == 200
+            bulk_payload = await bulk.json()
+            assert bulk_payload["data"]["invalidated"] == 2
+            assert bulk_payload["data"]["missing"] == ["missing"]
+
+            hidden = await client.get(
+                "/api/admin/bots/assistant1/assistant/memory/search?query=默认中文&user_id=1001"
+            )
+            visible = await client.get(
+                "/api/admin/bots/assistant1/assistant/memory/search"
+                "?query=默认中文&user_id=1001&include_invalidated=true"
+            )
+            assert (await hidden.json())["data"]["items"] == []
+            assert (await visible.json())["data"]["items"][0]["id"] == semantic_id
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_proposal_detail_has_files_and_dry_run(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    _add_assistant_profile(web_manager, workdir)
+    home = bootstrap_assistant_home(workdir)
+    proposal = create_proposal(home, kind="code", title="patch", body="body")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    patch_path = home.root / "upgrades" / "approved" / f"{proposal['id']}.patch"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text(
+        "diff --git a/docs/example.md b/docs/example.md\n"
+        "new file mode 100644\n"
+        "index 0000000..1111111\n"
+        "--- /dev/null\n"
+        "+++ b/docs/example.md\n"
+        "@@ -0,0 +1 @@\n"
+        "+hello\n",
+        encoding="utf-8",
+    )
+
+    def fake_run(args, cwd, check, capture_output, text):
+        assert args[:3] == ["git", "apply", "--check"]
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("bot.assistant_upgrade_diff.subprocess.run", fake_run)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            detail_resp = await client.get(
+                f"/api/admin/bots/assistant1/assistant/proposals/{proposal['id']}"
+            )
+            dry_resp = await client.post(
+                f"/api/admin/bots/assistant1/assistant/upgrades/{proposal['id']}/dry-run"
+            )
+            detail = await detail_resp.json()
+            dry = await dry_resp.json()
+    assert detail["data"]["diff"]["files"][0]["path"] == "docs/example.md"
+    assert detail["data"]["diff"]["files"][0]["status"] == "added"
+    assert detail["data"]["diff"]["files"][0]["additions"] == 1
+    assert dry["data"]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_audit_records_mutations_and_lists_them(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    workdir = temp_dir / "assistant-root"
+    workdir.mkdir()
+    _add_assistant_profile(web_manager, workdir)
+    home = bootstrap_assistant_home(workdir)
+    proposal = create_proposal(home, kind="code", title="audit proposal", body="body")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            approve_resp = await client.post(
+                f"/api/admin/bots/assistant1/assistant/proposals/{proposal['id']}/approve"
+            )
+            assert approve_resp.status == 200
+            audit_resp = await client.get("/api/admin/bots/assistant1/assistant/audit?limit=20")
+            assert audit_resp.status == 200
+            payload = await audit_resp.json()
+
+    item = payload["data"]["items"][0]
+    assert item["action"] == "assistant.proposal.approve"
+    assert item["target"]["bot_alias"] == "assistant1"
+    assert item["target"]["resource_id"] == proposal["id"]
+    assert item["ok"] is True
+    assert item["status_code"] == 200

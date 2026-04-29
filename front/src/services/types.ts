@@ -1072,12 +1072,22 @@ export type AssistantUpgradeApplyState = {
   lastErrorLogPath: string;
 };
 
+export type AssistantProposalDiffFile = {
+  path: string;
+  oldPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "unknown";
+  additions: number;
+  deletions: number;
+  text: string;
+};
+
 export type AssistantProposalDetail = {
   proposal: AssistantProposal;
   diff: {
     available: boolean;
     source: string;
     text: string;
+    files: AssistantProposalDiffFile[];
   };
   apply: AssistantUpgradeApplyState;
 };
@@ -1100,6 +1110,15 @@ export type AssistantUpgradeApplyLog = {
   error?: string;
 };
 
+export type AssistantUpgradeDryRunResult = {
+  ok: boolean;
+  checkedAt: string;
+  stdout: string;
+  stderr: string;
+  patchPath: string;
+  repoRoot: string;
+};
+
 export type AssistantMemorySearchItem = {
   id: string;
   kind: string;
@@ -1118,9 +1137,23 @@ export type AssistantMemorySearchResult = {
   items: AssistantMemorySearchItem[];
 };
 
+export type AssistantMemorySearchOptions = {
+  userId?: number;
+  limit?: number;
+  kinds?: string[];
+  scopes?: string[];
+  includeInvalidated?: boolean;
+};
+
 export type AssistantMemoryInvalidateResult = {
   memoryId: string;
   invalidated: boolean;
+  reason: string;
+};
+
+export type AssistantMemoryBulkInvalidateResult = {
+  invalidated: number;
+  missing: string[];
   reason: string;
 };
 
@@ -1197,8 +1230,30 @@ export type AssistantPerfRecord = {
   error?: string;
 };
 
+export type AssistantPerfSummary = {
+  total: number;
+  success: number;
+  failed: number;
+  avgElapsedMs: number;
+  p95ElapsedMs: number;
+  bySource: Record<string, number>;
+  byStatus: Record<string, number>;
+  slowStages: Array<{ stage: string; totalMs: number; avgMs: number }>;
+  errorGroups: Array<{ message: string; count: number; latestAt: string }>;
+};
+
+export type AssistantDiagnosticsFilters = {
+  source?: string;
+  status?: string;
+  userId?: number;
+  from?: string;
+  to?: string;
+  limit?: number;
+};
+
 export type AssistantPerfDiagnostics = {
   items: AssistantPerfRecord[];
+  summary: AssistantPerfSummary;
 };
 
 export type AssistantCronScheduleType = "daily" | "interval";
@@ -1282,4 +1337,26 @@ export type AssistantCronRunRequestResult = {
   status: string;
   taskMode?: AssistantCronTaskMode;
   deliverMode?: AssistantCronDeliverMode;
+};
+
+export type AssistantAdminAuditItem = {
+  id: string;
+  createdAt: string;
+  accountId: string;
+  userId: number;
+  username: string;
+  method: string;
+  path: string;
+  action: string;
+  target: { botAlias?: string; resource?: string; resourceId?: string };
+  requestSummary: Record<string, unknown>;
+  statusCode: number;
+  ok: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  elapsedMs: number;
+};
+
+export type AssistantAdminAuditResult = {
+  items: AssistantAdminAuditItem[];
 };

@@ -7,10 +7,14 @@ import type {
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
+  AssistantAdminAuditResult,
+  AssistantDiagnosticsFilters,
+  AssistantMemoryBulkInvalidateResult,
   AssistantMemoryEvalReport,
   AssistantMemoryEvalRun,
   AssistantMemoryInvalidateResult,
   AssistantMemoryReindexResult,
+  AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
@@ -20,6 +24,7 @@ import type {
   AssistantRuntimeSnapshot,
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
+  AssistantUpgradeDryRunResult,
   Capability,
   CreateAssistantCronJobInput,
   GitActionResult,
@@ -458,6 +463,14 @@ type RawAssistantProposalDetail = {
     state?: string;
     source?: string;
     text?: string;
+    files?: Array<{
+      path?: string;
+      old_path?: string;
+      status?: string;
+      additions?: number;
+      deletions?: number;
+      text?: string;
+    }>;
   };
   apply?: RawAssistantUpgradeApplyState;
 };
@@ -478,6 +491,15 @@ type RawAssistantUpgradeApplyLog = {
   applied_at?: string;
   failed_at?: string;
   error?: string;
+};
+
+type RawAssistantUpgradeDryRunResult = {
+  ok?: boolean;
+  checked_at?: string;
+  stdout?: string;
+  stderr?: string;
+  patch_path?: string;
+  repo_root?: string;
 };
 
 type RawAssistantMemorySearchItem = {
@@ -537,6 +559,18 @@ type RawAssistantPerfRecord = {
   tool_call_count?: number;
   process_count?: number;
   error?: string;
+};
+
+type RawAssistantPerfSummary = {
+  total?: number;
+  success?: number;
+  failed?: number;
+  avg_elapsed_ms?: number;
+  p95_elapsed_ms?: number;
+  by_source?: Record<string, number>;
+  by_status?: Record<string, number>;
+  slow_stages?: Array<{ stage?: string; total_ms?: number; avg_ms?: number }>;
+  error_groups?: Array<{ message?: string; count?: number; latest_at?: string }>;
 };
 
 type RawAssistantCronSchedule = {
@@ -610,6 +644,28 @@ type RawAssistantRuntimeSnapshot = {
   queued_count?: number;
   active?: RawAssistantRuntimePendingRun | null;
   queue?: RawAssistantRuntimePendingRun[];
+};
+
+type RawAssistantAdminAuditItem = {
+  id?: string;
+  created_at?: string;
+  account_id?: string;
+  user_id?: number;
+  username?: string;
+  method?: string;
+  path?: string;
+  action?: string;
+  target?: {
+    bot_alias?: string;
+    resource?: string;
+    resource_id?: string;
+  };
+  request_summary?: Record<string, unknown>;
+  status_code?: number;
+  ok?: boolean;
+  error_code?: string;
+  error_message?: string;
+  elapsed_ms?: number;
 };
 
 type StreamEvent =
@@ -1135,6 +1191,19 @@ function mapAssistantProposalDetail(raw: RawAssistantProposalDetail): AssistantP
       available: Boolean(raw.diff?.available),
       source: raw.diff?.source || "",
       text: raw.diff?.text || "",
+      files: (raw.diff?.files || []).map((item) => ({
+        path: String(item.path || ""),
+        ...(item.old_path ? { oldPath: String(item.old_path) } : {}),
+        status: (
+          item.status === "added"
+          || item.status === "modified"
+          || item.status === "deleted"
+          || item.status === "renamed"
+        ) ? item.status : "unknown",
+        additions: Number(item.additions || 0),
+        deletions: Number(item.deletions || 0),
+        text: String(item.text || ""),
+      })),
     },
     apply: {
       available: Boolean(raw.apply?.available),
@@ -1165,6 +1234,17 @@ function mapAssistantUpgradeApplyLog(raw: RawAssistantUpgradeApplyLog): Assistan
     appliedAt: raw.applied_at || "",
     failedAt: raw.failed_at || "",
     error: raw.error || "",
+  };
+}
+
+function mapAssistantUpgradeDryRunResult(raw: RawAssistantUpgradeDryRunResult): AssistantUpgradeDryRunResult {
+  return {
+    ok: Boolean(raw.ok),
+    checkedAt: raw.checked_at || "",
+    stdout: raw.stdout || "",
+    stderr: raw.stderr || "",
+    patchPath: raw.patch_path || "",
+    repoRoot: raw.repo_root || "",
   };
 }
 
@@ -1274,6 +1354,35 @@ function mapAssistantPerfRecord(raw: RawAssistantPerfRecord): AssistantPerfRecor
   };
 }
 
+function mapAssistantPerfDiagnostics(raw: {
+  items?: RawAssistantPerfRecord[];
+  summary?: RawAssistantPerfSummary;
+}): AssistantPerfDiagnostics {
+  const summary = raw.summary || {};
+  return {
+    items: (raw.items || []).map(mapAssistantPerfRecord),
+    summary: {
+      total: Number(summary.total || 0),
+      success: Number(summary.success || 0),
+      failed: Number(summary.failed || 0),
+      avgElapsedMs: Number(summary.avg_elapsed_ms || 0),
+      p95ElapsedMs: Number(summary.p95_elapsed_ms || 0),
+      bySource: summary.by_source || {},
+      byStatus: summary.by_status || {},
+      slowStages: (summary.slow_stages || []).map((item) => ({
+        stage: String(item.stage || ""),
+        totalMs: Number(item.total_ms || 0),
+        avgMs: Number(item.avg_ms || 0),
+      })),
+      errorGroups: (summary.error_groups || []).map((item) => ({
+        message: String(item.message || ""),
+        count: Number(item.count || 0),
+        latestAt: String(item.latest_at || ""),
+      })),
+    },
+  };
+}
+
 function mapAssistantCronJob(raw: RawAssistantCronJob): AssistantCronJob {
   return {
     id: raw.id,
@@ -1354,6 +1463,32 @@ function mapAssistantRuntimeSnapshot(raw?: RawAssistantRuntimeSnapshot | null): 
     queue: (raw.queue || [])
       .map((item) => mapAssistantRuntimePendingRun(item))
       .filter((item): item is AssistantRuntimePendingRun => Boolean(item)),
+  };
+}
+
+function mapAssistantAdminAuditResult(raw: { items?: RawAssistantAdminAuditItem[] }): AssistantAdminAuditResult {
+  return {
+    items: (raw.items || []).map((item) => ({
+      id: String(item.id || ""),
+      createdAt: String(item.created_at || ""),
+      accountId: String(item.account_id || ""),
+      userId: Number(item.user_id || 0),
+      username: String(item.username || ""),
+      method: String(item.method || ""),
+      path: String(item.path || ""),
+      action: String(item.action || ""),
+      target: {
+        ...(item.target?.bot_alias ? { botAlias: String(item.target.bot_alias) } : {}),
+        ...(item.target?.resource ? { resource: String(item.target.resource) } : {}),
+        ...(item.target?.resource_id ? { resourceId: String(item.target.resource_id) } : {}),
+      },
+      requestSummary: item.request_summary || {},
+      statusCode: Number(item.status_code || 0),
+      ok: Boolean(item.ok),
+      errorCode: String(item.error_code || ""),
+      errorMessage: String(item.error_message || ""),
+      elapsedMs: Number(item.elapsed_ms || 0),
+    })),
   };
 }
 
@@ -2808,10 +2943,20 @@ export class RealWebBotClient implements WebBotClient {
     return mapAssistantUpgradeApplyResult(data);
   }
 
+  async dryRunAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeDryRunResult> {
+    const data = await this.requestJson<RawAssistantUpgradeDryRunResult>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/upgrades/${encodeURIComponent(proposalId)}/dry-run`,
+      {
+        method: "POST",
+      },
+    );
+    return mapAssistantUpgradeDryRunResult(data);
+  }
+
   async searchAssistantMemories(
     botAlias: string,
     query: string,
-    options: { userId?: number; limit?: number } = {},
+    options: AssistantMemorySearchOptions = {},
   ): Promise<AssistantMemorySearchResult> {
     const params = new URLSearchParams({
       query,
@@ -2822,10 +2967,41 @@ export class RealWebBotClient implements WebBotClient {
     if (typeof options.limit === "number") {
       params.set("limit", String(options.limit));
     }
+    if (options.kinds?.length) {
+      params.set("kinds", options.kinds.join(","));
+    }
+    if (options.scopes?.length) {
+      params.set("scopes", options.scopes.join(","));
+    }
+    if (options.includeInvalidated) {
+      params.set("include_invalidated", "true");
+    }
     const data = await this.requestJson<{ items: RawAssistantMemorySearchItem[] }>(
       `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/memory/search?${params.toString()}`,
     );
     return mapAssistantMemorySearchResult(data);
+  }
+
+  async bulkInvalidateAssistantMemories(
+    botAlias: string,
+    memoryIds: string[],
+    reason: string,
+  ): Promise<AssistantMemoryBulkInvalidateResult> {
+    const data = await this.requestJson<{ invalidated?: number; missing?: string[]; reason?: string }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/memory/bulk-invalidate`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ memory_ids: memoryIds, reason }),
+      },
+    );
+    return {
+      invalidated: Number(data.invalidated || 0),
+      missing: data.missing || [],
+      reason: data.reason || "",
+    };
   }
 
   async invalidateAssistantMemory(
@@ -2901,16 +3077,35 @@ export class RealWebBotClient implements WebBotClient {
     return (data.items || []).map(mapAssistantMemoryEvalReport);
   }
 
-  async getAssistantDiagnostics(botAlias: string, limit = 20): Promise<AssistantPerfDiagnostics> {
-    const params = new URLSearchParams({
-      limit: String(limit),
-    });
-    const data = await this.requestJson<{ items: RawAssistantPerfRecord[] }>(
+  async getAssistantDiagnostics(
+    botAlias: string,
+    filters: AssistantDiagnosticsFilters = {},
+  ): Promise<AssistantPerfDiagnostics> {
+    const params = new URLSearchParams();
+    if (typeof filters.limit === "number") {
+      params.set("limit", String(filters.limit));
+    } else {
+      params.set("limit", "20");
+    }
+    if (filters.source) {
+      params.set("source", filters.source);
+    }
+    if (filters.status) {
+      params.set("status", filters.status);
+    }
+    if (typeof filters.userId === "number") {
+      params.set("user_id", String(filters.userId));
+    }
+    if (filters.from) {
+      params.set("from", filters.from);
+    }
+    if (filters.to) {
+      params.set("to", filters.to);
+    }
+    const data = await this.requestJson<{ items?: RawAssistantPerfRecord[]; summary?: RawAssistantPerfSummary }>(
       `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/diagnostics/perf?${params.toString()}`,
     );
-    return {
-      items: (data.items || []).map(mapAssistantPerfRecord),
-    };
+    return mapAssistantPerfDiagnostics(data);
   }
 
   async listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]> {
@@ -3048,6 +3243,30 @@ export class RealWebBotClient implements WebBotClient {
       `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/cron/jobs/${encodeURIComponent(jobId)}/runs?${params.toString()}`,
     );
     return (data.items || []).map(mapAssistantCronRun);
+  }
+
+  async listAssistantAdminAudit(
+    botAlias: string,
+    filters: { limit?: number; action?: string; resource?: string; status?: "ok" | "failed" | "" } = {},
+  ): Promise<AssistantAdminAuditResult> {
+    const params = new URLSearchParams();
+    if (typeof filters.limit === "number") {
+      params.set("limit", String(filters.limit));
+    }
+    if (filters.action) {
+      params.set("action", filters.action);
+    }
+    if (filters.resource) {
+      params.set("resource", filters.resource);
+    }
+    if (filters.status) {
+      params.set("status", filters.status);
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<{ items?: RawAssistantAdminAuditItem[] }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/audit${suffix}`,
+    );
+    return mapAssistantAdminAuditResult(data);
   }
 
   async addBot(input: CreateBotInput): Promise<BotSummary> {

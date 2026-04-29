@@ -2808,13 +2808,26 @@ describe("RealWebBotClient", () => {
                 process_count: 1,
               },
             ],
+            summary: {
+              total: 1,
+              success: 1,
+              failed: 0,
+              avg_elapsed_ms: 1100,
+              p95_elapsed_ms: 1100,
+              by_source: { web: 1 },
+              by_status: { completed: 1 },
+              slow_stages: [
+                { stage: "cli", total_ms: 1000, avg_ms: 1000 },
+              ],
+              error_groups: [],
+            },
           },
         }),
       });
 
     const client = new RealWebBotClient();
     await client.login("secret-token");
-    const result = await client.getAssistantDiagnostics("assistant1", 5);
+    const result = await client.getAssistantDiagnostics("assistant1", { limit: 5 });
 
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/admin/bots/assistant1/assistant/diagnostics/perf?limit=5",
@@ -2829,5 +2842,6 @@ describe("RealWebBotClient", () => {
       traceMs: 15,
       pluginMs: 0,
     });
+    expect(result.summary.p95ElapsedMs).toBe(1100);
   });
 });

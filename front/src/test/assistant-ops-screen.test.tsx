@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { test, expect } from "vitest";
+import { test, expect, vi } from "vitest";
 import { AssistantOpsScreen } from "../screens/AssistantOpsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import type { CreateAssistantCronJobInput } from "../services/types";
 
 async function buildAssistantClient() {
   const client = new MockWebBotClient();
@@ -17,7 +18,7 @@ async function buildAssistantClient() {
   return client;
 }
 
-test("assistant ops screen approves and applies proposal", async () => {
+test("assistant ops screen approves, dry-runs and applies proposal", async () => {
   const user = userEvent.setup();
   const client = await buildAssistantClient();
 
@@ -30,6 +31,8 @@ test("assistant ops screen approves and applies proposal", async () => {
   await user.click(await screen.findByRole("button", { name: "批准" }));
 
   expect(await screen.findByText("proposal 已批准")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dry-run" }));
+  expect(await screen.findByText("dry-run 通过")).toBeInTheDocument();
 
   await waitFor(() => {
     expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
@@ -51,7 +54,7 @@ test("assistant ops screen manages memory and diagnostics", async () => {
   await user.type(await screen.findByLabelText("memory 查询"), "cron");
   await user.click(screen.getByRole("button", { name: "搜索" }));
 
-  expect(await screen.findByText("cron 根因")).toBeInTheDocument();
+  expect((await screen.findAllByText("cron 根因")).length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "Invalidate" }));
   expect(await screen.findByText("memory 已失效")).toBeInTheDocument();
 
@@ -63,8 +66,31 @@ test("assistant ops screen manages memory and diagnostics", async () => {
   expect(await screen.findAllByText(/hit@5 1\.00 · stale 0\.00/)).not.toHaveLength(0);
 
   await user.click(screen.getByRole("tab", { name: "Diagnostics" }));
-  expect(await screen.findByText("run_perf_1")).toBeInTheDocument();
+  expect((await screen.findAllByText("run_perf_1")).length).toBeGreaterThan(0);
+  expect(screen.getByText("慢阶段排行")).toBeInTheDocument();
+  expect(screen.getByText("错误聚合")).toBeInTheDocument();
   expect(screen.getByText(/sync 18ms · index 11ms · recall 24ms · cli 1320ms/)).toBeInTheDocument();
+});
+
+test("assistant ops supports bulk invalidate and audit", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(screen.getByRole("tab", { name: "Memory / Knowledge" }));
+  await user.type(await screen.findByLabelText("memory 查询"), "默认");
+  await user.click(screen.getByRole("button", { name: "搜索" }));
+  await user.click(await screen.findByLabelText("选择 memory 回复偏好"));
+  await user.click(screen.getByRole("button", { name: "批量 Invalidate" }));
+
+  expect(await screen.findByText("已失效 1 条")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: "Audit" }));
+  expect(await screen.findByText("assistant.memory.bulk_invalidate")).toBeInTheDocument();
+  expect((await screen.findAllByText("ok")).length).toBeGreaterThan(0);
+  await user.click(screen.getByRole("button", { name: "查看审计详情" }));
+  expect(await screen.findByText(/"resourceId": "bulk"/)).toBeInTheDocument();
 });
 
 test("assistant ops disables apply when detail says patch is not applyable", async () => {
@@ -136,4 +162,101 @@ test("assistant ops memory actions do not hardcode user id", async () => {
   expect(searchOptions[0]).toEqual({ limit: 12 });
   expect(reindexOptions[0]).toEqual({ force: true });
   expect(evalInputs[0]).toEqual({ userId: undefined });
+});
+
+test("assistant ops owns automation queue cron and runs", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+
+  await client.createAssistantCronJob("assistant1", {
+    id: "daily_repo_review",
+    enabled: true,
+    title: "Daily Repo Review",
+    schedule: {
+      type: "daily",
+      time: "09:00",
+      timezone: "Asia/Shanghai",
+      misfirePolicy: "once",
+    },
+    task: {
+      prompt: "检查当前仓库状态并输出日报",
+      mode: "standard",
+      deliverMode: "chat_handoff",
+    },
+    execution: { timeoutSeconds: 600 },
+  } satisfies CreateAssistantCronJobInput);
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(await screen.findByRole("tab", { name: "Queue" }));
+  expect(await screen.findByText("当前队列")).toBeInTheDocument();
+  expect(await screen.findByText("暂无排队任务")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: "Cron" }));
+  expect(await screen.findByRole("heading", { name: "Automation 定时任务" })).toBeInTheDocument();
+  expect(await screen.findByText("Daily Repo Review")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "立即运行 Daily Repo Review" }));
+  expect(await screen.findByText(/任务已投递到聊天会话: run_/)).toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: "Queue" }));
+  expect((await screen.findAllByText(/run_/)).length).toBeGreaterThan(0);
+
+  await user.click(screen.getByRole("tab", { name: "Runs" }));
+  expect(await screen.findByText("daily_repo_review")).toBeInTheDocument();
+});
+
+test("assistant ops automation dispatches a chat handoff event", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+  await client.createAssistantCronJob("assistant1", {
+    id: "email_recvbox_check",
+    enabled: true,
+    title: "收件箱检查",
+    schedule: {
+      type: "interval",
+      everySeconds: 300,
+      timezone: "Asia/Shanghai",
+      misfirePolicy: "skip",
+    },
+    task: {
+      prompt: "检查最近邮件并总结重点",
+    },
+    execution: {
+      timeoutSeconds: 600,
+    },
+  } satisfies CreateAssistantCronJobInput);
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(await screen.findByRole("tab", { name: "Cron" }));
+  await user.click(await screen.findByRole("button", { name: "立即运行 收件箱检查" }));
+
+  await waitFor(() => {
+    expect(dispatchSpy).toHaveBeenCalled();
+  });
+
+  const event = dispatchSpy.mock.calls.find(([value]) => value instanceof CustomEvent)?.[0] as CustomEvent | undefined;
+  expect(event?.type).toBe("assistant-cron-run-enqueued");
+  expect(event?.detail).toMatchObject({
+    botAlias: "assistant1",
+    runId: expect.stringMatching(/^run_/),
+    prompt: "检查最近邮件并总结重点",
+  });
+});
+
+test("assistant ops cron shows dream fields when mode switches to dream", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(await screen.findByRole("tab", { name: "Cron" }));
+  await user.selectOptions(await screen.findByLabelText("任务模式"), "dream");
+
+  expect(screen.getByLabelText("回看小时数")).toBeInTheDocument();
+  expect(screen.getByLabelText("聊天历史条数")).toBeInTheDocument();
+  expect(screen.getByLabelText("Capture 条数")).toBeInTheDocument();
+  expect(screen.getByLabelText("投递方式")).toHaveValue("silent");
 });

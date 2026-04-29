@@ -33,6 +33,7 @@ from bot.assistant_cron_store import (
 )
 from bot.assistant_dream import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
 from bot.assistant_cron_types import AssistantCronJob
+from bot.assistant_diagnostics import get_perf_diagnostics
 from bot.assistant_compaction import (
     finalize_compaction,
     is_compaction_prompt_active,
@@ -51,6 +52,7 @@ from bot.assistant_memory_writer import write_hot_path_memories
 from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
 from bot.assistant_docs import sync_managed_prompt_files
 from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant_upgrade_diff import parse_patch_files, run_upgrade_dry_run
 from bot.assistant_proposals import get_proposal, list_proposals, set_proposal_status
 from bot.assistant_runtime import AssistantRunRequest
 from bot.assistant_upgrade import (
@@ -371,6 +373,11 @@ def _deep_merge_dict(base: dict[str, Any], patch_payload: dict[str, Any]) -> dic
         else:
             merged[key] = value
     return merged
+
+
+def _split_csv_query(value: str | None) -> list[str] | None:
+    items = [item.strip() for item in str(value or "").split(",") if item.strip()]
+    return items or None
 
 
 def _build_assistant_cron_job_item(job: AssistantCronJob, *, state: Any) -> dict[str, Any]:
@@ -879,13 +886,15 @@ def _assistant_upgrade_patch_candidates(home, proposal_id: str) -> list[tuple[st
 def _read_assistant_upgrade_diff(home, proposal_id: str) -> dict[str, Any]:
     for state, path in _assistant_upgrade_patch_candidates(home, proposal_id):
         if path.exists():
+            text = path.read_text(encoding="utf-8")
             return {
                 "available": True,
                 "state": state,
                 "source": path.relative_to(home.root).as_posix(),
-                "text": path.read_text(encoding="utf-8"),
+                "text": text,
+                "files": parse_patch_files(text),
             }
-    return {"available": False, "state": "", "source": "", "text": ""}
+    return {"available": False, "state": "", "source": "", "text": "", "files": []}
 
 
 def _read_assistant_apply_state(home, proposal_id: str, *, proposal: dict[str, Any], diff: dict[str, Any]) -> dict[str, Any]:
@@ -995,6 +1004,20 @@ async def apply_assistant_upgrade(
         _raise(500, "assistant_upgrade_failed", detail or "应用 upgrade 失败")
 
 
+async def dry_run_assistant_upgrade(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        patch_path = resolve_approved_upgrade_patch_path(home, proposal_id)
+    except FileNotFoundError as exc:
+        _raise(404, "upgrade_patch_not_found", str(exc))
+    return run_upgrade_dry_run(repo_root=repo_root, patch_path=patch_path)
+
+
 def _assistant_memory_score(row: MemorySearchRow) -> float:
     lexical_component = 1.0 / (1.0 + max(0.0, abs(float(row.lexical_score))))
     score = (lexical_component * 0.35) + (row.importance * 0.25) + (row.confidence * 0.25) + (row.freshness * 0.15)
@@ -1012,6 +1035,9 @@ def search_assistant_memories(
     user_id: int,
     query_text: str,
     limit: int = 10,
+    kinds: list[str] | None = None,
+    scopes: list[str] | None = None,
+    include_invalidated: bool = False,
 ) -> dict[str, Any]:
     home = _assistant_home_or_raise(manager, alias)
     store = AssistantMemoryStore(home)
@@ -1019,7 +1045,14 @@ def search_assistant_memories(
     started_at = time.perf_counter()
     with activate_perf_capture(stage_durations):
         recall_started_at = time.perf_counter()
-        rows = store.search_lexical(user_id=user_id, query_text=query_text, limit=limit)
+        rows = store.search_lexical(
+            user_id=user_id,
+            query_text=query_text,
+            kinds=kinds,
+            scopes=scopes,
+            include_invalidated=include_invalidated,
+            limit=limit,
+        )
         stage_durations["recall_ms"] += max(0, int(round((time.perf_counter() - recall_started_at) * 1000)))
     items = [
         {
@@ -1086,6 +1119,46 @@ def invalidate_assistant_memory(
         prompt_chars=len(memory_id),
     )
     return {"memory_id": memory_id, "invalidated": True, "reason": reason}
+
+
+def bulk_invalidate_assistant_memories(
+    manager: MultiBotManager,
+    alias: str,
+    *,
+    memory_ids: list[str],
+    reason: str,
+    user_id: int,
+) -> dict[str, Any]:
+    home = _assistant_home_or_raise(manager, alias)
+    store = AssistantMemoryStore(home)
+    stage_durations = new_stage_durations()
+    started_at = time.perf_counter()
+    invalidated = 0
+    missing: list[str] = []
+    with activate_perf_capture(stage_durations):
+        for memory_id in memory_ids:
+            clean_id = str(memory_id or "").strip()
+            if not clean_id:
+                continue
+            if store.invalidate(clean_id, reason=reason):
+                invalidated += 1
+            else:
+                missing.append(clean_id)
+    elapsed_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
+    write_perf_record(
+        home,
+        run_id=f"memory-bulk-invalidate-{uuid.uuid4().hex[:8]}",
+        bot_alias=alias,
+        source="memory_bulk_invalidate",
+        task_mode="admin",
+        interactive=False,
+        user_id=user_id,
+        status="completed",
+        stage_durations=stage_durations,
+        elapsed_ms=elapsed_ms,
+        prompt_chars=sum(len(str(item)) for item in memory_ids),
+    )
+    return {"invalidated": invalidated, "missing": missing, "reason": reason}
 
 
 def reindex_assistant_memory(
@@ -1239,9 +1312,22 @@ def get_assistant_diagnostics(
     alias: str,
     *,
     limit: int = 20,
+    source: str = "",
+    status: str = "",
+    user_id: int | None = None,
+    from_value: str = "",
+    to_value: str = "",
 ) -> dict[str, Any]:
     home = _assistant_home_or_raise(manager, alias)
-    return {"items": list_perf_records(home, limit=limit)}
+    return get_perf_diagnostics(
+        home,
+        limit=limit,
+        source=source,
+        status=status,
+        user_id=user_id,
+        from_value=from_value,
+        to_value=to_value,
+    )
 
 
 def list_assistant_cron_jobs(manager: MultiBotManager, alias: str) -> dict[str, Any]:

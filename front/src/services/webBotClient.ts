@@ -5,6 +5,9 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  AssistantAdminAuditResult,
+  AssistantDiagnosticsFilters,
+  AssistantMemoryBulkInvalidateResult,
   AssistantProposal,
   AssistantProposalDetail,
   AssistantPerfDiagnostics,
@@ -13,9 +16,11 @@ import type {
   AssistantMemoryEvalRun,
   AssistantMemoryInvalidateResult,
   AssistantMemoryReindexResult,
+  AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
+  AssistantUpgradeDryRunResult,
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
@@ -189,7 +194,9 @@ export interface WebBotClient {
   approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
   rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
   applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult>;
-  searchAssistantMemories(botAlias: string, query: string, options?: { userId?: number; limit?: number }): Promise<AssistantMemorySearchResult>;
+  dryRunAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeDryRunResult>;
+  searchAssistantMemories(botAlias: string, query: string, options?: AssistantMemorySearchOptions): Promise<AssistantMemorySearchResult>;
+  bulkInvalidateAssistantMemories(botAlias: string, memoryIds: string[], reason: string): Promise<AssistantMemoryBulkInvalidateResult>;
   invalidateAssistantMemory(
     botAlias: string,
     memoryId: string,
@@ -201,13 +208,17 @@ export interface WebBotClient {
     input: { userId?: number; cases: AssistantMemoryEvalCase[] },
   ): Promise<AssistantMemoryEvalRun>;
   listAssistantMemoryEvalReports(botAlias: string, limit?: number): Promise<AssistantMemoryEvalReport[]>;
-  getAssistantDiagnostics(botAlias: string, limit?: number): Promise<AssistantPerfDiagnostics>;
+  getAssistantDiagnostics(botAlias: string, filters?: AssistantDiagnosticsFilters): Promise<AssistantPerfDiagnostics>;
   listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]>;
   createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob>;
   updateAssistantCronJob(botAlias: string, jobId: string, input: UpdateAssistantCronJobInput): Promise<AssistantCronJob>;
   deleteAssistantCronJob(botAlias: string, jobId: string): Promise<void>;
   runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult>;
   listAssistantCronRuns(botAlias: string, jobId: string, limit?: number): Promise<AssistantCronRun[]>;
+  listAssistantAdminAudit(
+    botAlias: string,
+    filters?: { limit?: number; action?: string; resource?: string; status?: "ok" | "failed" | "" },
+  ): Promise<AssistantAdminAuditResult>;
   listAvatarAssets(): Promise<AvatarAsset[]>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;

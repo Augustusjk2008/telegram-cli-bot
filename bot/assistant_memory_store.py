@@ -228,7 +228,16 @@ class AssistantMemoryStore:
                     expanded.append(gram)
         return " OR ".join(expanded[:24])
 
-    def search_lexical(self, *, user_id: int, query_text: str, kinds: list[str] | None = None, scopes: list[str] | None = None, limit: int = 5) -> list[MemorySearchRow]:
+    def search_lexical(
+        self,
+        *,
+        user_id: int,
+        query_text: str,
+        kinds: list[str] | None = None,
+        scopes: list[str] | None = None,
+        include_invalidated: bool = False,
+        limit: int = 5,
+    ) -> list[MemorySearchRow]:
         query = self._fts_query(query_text)
         if not query:
             return []
@@ -236,12 +245,13 @@ class AssistantMemoryStore:
         scope_values = scopes or ["user", "project", "global"]
         kind_placeholders = ",".join("?" for _ in kind_values)
         scope_placeholders = ",".join("?" for _ in scope_values)
+        invalidated_clause = "" if include_invalidated else "AND m.invalidated_at IS NULL"
         sql = f"""
             SELECT m.*, bm25(memory_fts) AS lexical_score
             FROM memory_fts JOIN memories m ON m.id = memory_fts.memory_id
             WHERE memory_fts MATCH ? AND m.user_id IN (?, 0)
               AND m.kind IN ({kind_placeholders}) AND m.scope IN ({scope_placeholders})
-              AND m.invalidated_at IS NULL
+              {invalidated_clause}
               AND (m.valid_until IS NULL OR m.valid_until = '' OR m.valid_until > ?)
             ORDER BY lexical_score ASC, m.pinned DESC, m.importance DESC, m.updated_at DESC
             LIMIT ?

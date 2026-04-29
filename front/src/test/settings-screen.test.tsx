@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AppUpdateStatus, CliParamsPayload, CreateAssistantCronJobInput, DirectoryListing } from "../services/types";
+import type { AppUpdateStatus, CliParamsPayload, DirectoryListing } from "../services/types";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
 
@@ -141,7 +141,7 @@ test("assistant settings do not render assistant ops console", async () => {
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "Proposal" })).not.toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Automation 定时任务" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Automation 定时任务" })).not.toBeInTheDocument();
 });
 
 test("settings can browse and pick a workdir before saving", async () => {
@@ -297,77 +297,6 @@ test("settings CLI reset preserves none model", async () => {
   await waitFor(() => {
     expect(updateCliParam).toHaveBeenCalledWith("main", "model", "none", "codex");
   });
-});
-
-test("manual assistant automation dispatches a chat handoff event", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-
-  await client.addBot({
-    alias: "assistant1",
-    botMode: "assistant",
-    cliType: "codex",
-    cliPath: "codex",
-    workingDir: "C:\\workspace\\assistant1",
-    avatarName: "avatar_01.png",
-  });
-  await client.createAssistantCronJob("assistant1", {
-    id: "email_recvbox_check",
-    enabled: true,
-    title: "收件箱检查",
-    schedule: {
-      type: "interval",
-      everySeconds: 300,
-      timezone: "Asia/Shanghai",
-      misfirePolicy: "skip",
-    },
-    task: {
-      prompt: "检查最近邮件并总结重点",
-    },
-    execution: {
-      timeoutSeconds: 600,
-    },
-  } satisfies CreateAssistantCronJobInput);
-
-  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
-
-  await user.click(await screen.findByRole("button", { name: "立即运行 收件箱检查" }));
-
-  await waitFor(() => {
-    expect(dispatchSpy).toHaveBeenCalled();
-  });
-
-  const event = dispatchSpy.mock.calls.find(([value]) => value instanceof CustomEvent)?.[0] as CustomEvent | undefined;
-  expect(event?.type).toBe("assistant-cron-run-enqueued");
-  expect(event?.detail).toMatchObject({
-    botAlias: "assistant1",
-    runId: expect.stringMatching(/^run_/),
-    prompt: "检查最近邮件并总结重点",
-  });
-});
-
-test("settings screen shows dream fields when cron mode switches to dream", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-
-  await client.addBot({
-    alias: "assistant1",
-    botMode: "assistant",
-    cliType: "codex",
-    cliPath: "codex",
-    workingDir: "C:\\workspace\\assistant1",
-    avatarName: "avatar_01.png",
-  });
-
-  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
-
-  await user.selectOptions(await screen.findByLabelText("任务模式"), "dream");
-
-  expect(screen.getByLabelText("回看小时数")).toBeInTheDocument();
-  expect(screen.getByLabelText("聊天历史条数")).toBeInTheDocument();
-  expect(screen.getByLabelText("Capture 条数")).toBeInTheDocument();
-  expect(screen.getByLabelText("投递方式")).toHaveValue("silent");
 });
 
 test("main settings show update log modal and restart guidance after download", async () => {

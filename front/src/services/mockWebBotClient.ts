@@ -1,24 +1,33 @@
 import { WebApiClientError } from "./types";
 import type {
+  AssistantAdminAuditItem,
+  AssistantAdminAuditResult,
   Capability,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   AssistantCronJob,
   AssistantCronRun,
   AssistantCronRunRequestResult,
+  AssistantDiagnosticsFilters,
   AssistantMemoryEvalCase,
   AssistantMemoryEvalReport,
   AssistantMemoryEvalRun,
+  AssistantMemoryBulkInvalidateResult,
   AssistantMemoryInvalidateResult,
   AssistantMemoryReindexResult,
   AssistantMemorySearchItem,
+  AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
+  AssistantPerfSummary,
   AssistantProposal,
+  AssistantProposalDiffFile,
   AssistantProposalDetail,
+  AssistantRuntimeSnapshot,
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
+  AssistantUpgradeDryRunResult,
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
@@ -197,6 +206,106 @@ function resolveMemberCapabilities(username: string) {
   return username.trim() === "127.0.0.1"
     ? [...SUPER_ADMIN_CAPABILITIES]
     : [...MEMBER_CAPABILITIES];
+}
+
+function parseMockAssistantDiffFiles(diffText: string): AssistantProposalDiffFile[] {
+  const text = diffText.trim();
+  if (!text) {
+    return [];
+  }
+  const matches = Array.from(text.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm));
+  if (matches.length === 0) {
+    return [{
+      path: "patch.diff",
+      status: "unknown",
+      additions: (text.match(/^\+(?!\+\+)/gm) || []).length,
+      deletions: (text.match(/^-(?!--)/gm) || []).length,
+      text,
+    }];
+  }
+  return matches.map((match, index) => {
+    const start = match.index || 0;
+    const end = index + 1 < matches.length ? (matches[index + 1].index || text.length) : text.length;
+    const chunk = text.slice(start, end).trim();
+    const path = (chunk.match(/^rename to (.+)$/m)?.[1] || match[2] || match[1]).trim();
+    const oldPath = chunk.match(/^rename from (.+)$/m)?.[1]?.trim() || match[1];
+    const status = chunk.includes("new file mode")
+      ? "added"
+      : chunk.includes("deleted file mode")
+        ? "deleted"
+        : chunk.includes("rename from") || oldPath !== path
+          ? "renamed"
+          : "modified";
+    return {
+      path,
+      oldPath: status === "renamed" ? oldPath : undefined,
+      status,
+      additions: (chunk.match(/^\+(?!\+\+)/gm) || []).length,
+      deletions: (chunk.match(/^-(?!--)/gm) || []).length,
+      text: chunk,
+    } satisfies AssistantProposalDiffFile;
+  });
+}
+
+function summarizeMockAssistantDiagnostics(records: AssistantPerfRecord[]): AssistantPerfSummary {
+  const total = records.length;
+  const success = records.filter((item) => item.status === "completed").length;
+  const failed = total - success;
+  const avgElapsedMs = total ? Math.round(records.reduce((sum, item) => sum + item.elapsedMs, 0) / total) : 0;
+  const sortedElapsed = records.map((item) => item.elapsedMs).sort((left, right) => left - right);
+  const p95Index = sortedElapsed.length ? Math.max(0, Math.ceil(sortedElapsed.length * 0.95) - 1) : 0;
+  const p95ElapsedMs = sortedElapsed[p95Index] || 0;
+  const bySource: Record<string, number> = {};
+  const byStatus: Record<string, number> = {};
+  const stageTotals = {
+    syncMs: 0,
+    indexMs: 0,
+    recallMs: 0,
+    cliMs: 0,
+    dbMs: 0,
+    traceMs: 0,
+    pluginMs: 0,
+  };
+  const errorGroups = new Map<string, { count: number; latestAt: string }>();
+  for (const record of records) {
+    bySource[record.source] = (bySource[record.source] || 0) + 1;
+    byStatus[record.status] = (byStatus[record.status] || 0) + 1;
+    stageTotals.syncMs += record.stageDurations.syncMs;
+    stageTotals.indexMs += record.stageDurations.indexMs;
+    stageTotals.recallMs += record.stageDurations.recallMs;
+    stageTotals.cliMs += record.stageDurations.cliMs;
+    stageTotals.dbMs += record.stageDurations.dbMs;
+    stageTotals.traceMs += record.stageDurations.traceMs;
+    stageTotals.pluginMs += record.stageDurations.pluginMs;
+    if (record.error) {
+      const current = errorGroups.get(record.error);
+      errorGroups.set(record.error, {
+        count: (current?.count || 0) + 1,
+        latestAt: !current || record.createdAt > current.latestAt ? record.createdAt : current.latestAt,
+      });
+    }
+  }
+  const slowStages = Object.entries(stageTotals)
+    .map(([stage, totalMs]) => ({
+      stage: stage.replace(/Ms$/, ""),
+      totalMs,
+      avgMs: total ? Math.round(totalMs / total) : 0,
+    }))
+    .sort((left, right) => right.totalMs - left.totalMs)
+    .slice(0, 5);
+  return {
+    total,
+    success,
+    failed,
+    avgElapsedMs,
+    p95ElapsedMs,
+    bySource,
+    byStatus,
+    slowStages,
+    errorGroups: Array.from(errorGroups.entries())
+      .map(([message, info]) => ({ message, count: info.count, latestAt: info.latestAt }))
+      .sort((left, right) => right.count - left.count || right.latestAt.localeCompare(left.latestAt)),
+  };
 }
 
 function buildMockWaveformTracks(): WaveformTrack[] {
@@ -1024,6 +1133,7 @@ export class MockWebBotClient implements WebBotClient {
   private assistantMemories = new Map<string, AssistantMemorySearchItem[]>();
   private assistantMemoryEvalReports = new Map<string, AssistantMemoryEvalReport[]>();
   private assistantPerfRecords = new Map<string, AssistantPerfRecord[]>();
+  private assistantAdminAudit = new Map<string, AssistantAdminAuditItem[]>();
   private fileContents = new Map<string, string>();
   private fileVersions = new Map<string, number>();
   private registerCodes: RegisterCodeItem[] = [
@@ -1045,6 +1155,8 @@ export class MockWebBotClient implements WebBotClient {
     currentPath: "/",
     isLoggedIn: true,
     token: "mock-session-member",
+    userId: 1001,
+    accountId: "demo",
     username: "demo",
     role: "member",
     capabilities: [...MEMBER_CAPABILITIES],
@@ -1247,6 +1359,48 @@ export class MockWebBotClient implements WebBotClient {
     return `${botAlias}:${proposalId}`;
   }
 
+  private pushAssistantAdminAudit(
+    botAlias: string,
+    input: {
+      action: string;
+      resource: string;
+      resourceId?: string;
+      requestSummary?: Record<string, unknown>;
+      ok?: boolean;
+      statusCode?: number;
+      errorCode?: string;
+      errorMessage?: string;
+      method?: string;
+      path?: string;
+      elapsedMs?: number;
+    },
+  ) {
+    const current = this.assistantAdminAudit.get(botAlias) || [];
+    const ok = input.ok !== false;
+    const createdAt = new Date().toISOString();
+    this.assistantAdminAudit.set(botAlias, [{
+      id: `audit_${Date.now()}_${current.length + 1}`,
+      createdAt,
+      accountId: this.session.accountId || this.session.username || "demo",
+      userId: this.session.userId || 1001,
+      username: this.session.username || "demo",
+      method: input.method || "POST",
+      path: input.path || `/api/admin/bots/${botAlias}/assistant/${input.resource}`,
+      action: input.action,
+      target: {
+        botAlias,
+        resource: input.resource,
+        resourceId: input.resourceId || "",
+      },
+      requestSummary: input.requestSummary || {},
+      statusCode: input.statusCode || (ok ? 200 : 400),
+      ok,
+      errorCode: input.errorCode,
+      errorMessage: input.errorMessage,
+      elapsedMs: input.elapsedMs || 12,
+    }, ...current]);
+  }
+
   private fileKey(botAlias: string, browserPath: string, filename: string): string {
     return `${botAlias}:${browserPath}:${filename}`;
   }
@@ -1300,11 +1454,39 @@ export class MockWebBotClient implements WebBotClient {
       this.assistantProposals.set(botAlias, proposals);
       this.assistantProposalDiffs.set(
         this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"),
-        "diff --git a/bot/assistant_upgrade.py b/bot/assistant_upgrade.py\n+def apply_approved_upgrade(...):\n+    pass\n",
+        [
+          "diff --git a/bot/assistant_upgrade.py b/bot/assistant_upgrade.py",
+          "@@ -10,3 +10,7 @@",
+          " def apply_upgrade(...):",
+          "-    return run_patch()",
+          "+    assert proposal.status == 'approved'",
+          "+    return run_patch()",
+          "+",
+          "+def dry_run_upgrade(...):",
+          "+    return check_patch()",
+          "",
+          "diff --git a/tests/test_assistant_upgrade.py b/tests/test_assistant_upgrade.py",
+          "@@ -1,2 +1,6 @@",
+          "+def test_apply_requires_approved():",
+          "+    assert True",
+          "",
+        ].join("\n"),
       );
       this.assistantProposalDiffs.set(
         this.assistantProposalKey(botAlias, "pr_sync_memory_index"),
-        "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py\n+def recall_assistant_memories(...):\n+    pass\n",
+        [
+          "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py",
+          "@@ -20,3 +20,8 @@",
+          " def recall_assistant_memories(...):",
+          "+    emit_audit('memory_recall')",
+          "+    return []",
+          "",
+          "diff --git a/bot/assistant_memory_store.py b/bot/assistant_memory_store.py",
+          "@@ -40,2 +40,5 @@",
+          "+def record_recall_trace(...):",
+          "+    return None",
+          "",
+        ].join("\n"),
       );
     }
     if (!this.assistantMemories.has(botAlias)) {
@@ -1332,6 +1514,19 @@ export class MockWebBotClient implements WebBotClient {
           sourceType: "dream",
           sourceRef: "dream_1",
           updatedAt: "2026-04-28T07:40:00+08:00",
+        },
+        {
+          id: "mem_playbook_release",
+          kind: "procedural",
+          scope: "global",
+          title: "发版惯例",
+          summary: "先 dry-run 再 apply",
+          body: "- 先 dry-run\n- 冲突先停\n- 审计必留",
+          score: 0.74,
+          sourceType: "manual",
+          sourceRef: "kb_release",
+          updatedAt: "2026-04-27T09:30:00+08:00",
+          invalidatedAt: "2026-04-27T10:00:00+08:00",
         },
       ]);
     }
@@ -1383,7 +1578,62 @@ export class MockWebBotClient implements WebBotClient {
           toolCallCount: 2,
           processCount: 3,
         },
+        {
+          runId: "run_perf_2",
+          createdAt: "2026-04-28T10:16:00+08:00",
+          botAlias,
+          source: "cron",
+          taskMode: "dream",
+          interactive: false,
+          userId: 1001,
+          status: "failed",
+          stageDurations: {
+            syncMs: 24,
+            indexMs: 18,
+            recallMs: 31,
+            cliMs: 2480,
+            dbMs: 20,
+            traceMs: 16,
+            pluginMs: 0,
+          },
+          elapsedMs: 2688,
+          promptChars: 860,
+          outputChars: 0,
+          traceCount: 5,
+          toolCallCount: 1,
+          processCount: 2,
+          error: "CLI timeout",
+        },
+        {
+          runId: "run_perf_3",
+          createdAt: "2026-04-28T10:20:00+08:00",
+          botAlias,
+          source: "web",
+          taskMode: "standard",
+          interactive: true,
+          userId: 1002,
+          status: "failed",
+          stageDurations: {
+            syncMs: 12,
+            indexMs: 15,
+            recallMs: 28,
+            cliMs: 980,
+            dbMs: 12,
+            traceMs: 120,
+            pluginMs: 85,
+          },
+          elapsedMs: 1320,
+          promptChars: 1140,
+          outputChars: 120,
+          traceCount: 8,
+          toolCallCount: 4,
+          processCount: 3,
+          error: "plugin render failed",
+        },
       ]);
+    }
+    if (!this.assistantAdminAudit.has(botAlias)) {
+      this.assistantAdminAudit.set(botAlias, []);
     }
   }
 
@@ -1411,6 +1661,41 @@ export class MockWebBotClient implements WebBotClient {
     return [...(this.assistantPerfRecords.get(botAlias) || [])];
   }
 
+  private getAssistantAdminAudit(botAlias: string): AssistantAdminAuditItem[] {
+    this.ensureAssistantOpsState(botAlias);
+    return [...(this.assistantAdminAudit.get(botAlias) || [])];
+  }
+
+  private buildAssistantRuntime(botAlias: string): AssistantRuntimeSnapshot | null {
+    const bot = this.bots.get(botAlias);
+    if (!bot || bot.botMode !== "assistant") {
+      return null;
+    }
+    const queue = this.getAssistantCronJobs(botAlias)
+      .filter((job) => job.pending && job.pendingRunId)
+      .map((job) => {
+        const run = (this.assistantCronRuns.get(this.cronRunKey(botAlias, job.id)) || [])
+          .find((item) => item.runId === job.pendingRunId);
+        return {
+          runId: job.pendingRunId,
+          source: "manual" as const,
+          status: "queued" as const,
+          taskMode: job.task.mode || "standard",
+          interactive: false,
+          jobId: job.id,
+          jobTitle: job.title,
+          visibleText: job.task.prompt,
+          enqueuedAt: run?.enqueuedAt || "",
+        };
+      });
+    return {
+      pendingCount: queue.length,
+      queuedCount: queue.length,
+      active: null,
+      queue,
+    };
+  }
+
   async getPublicHostInfo(): Promise<PublicHostInfo> {
     return {
       username: "demo",
@@ -1434,6 +1719,8 @@ export class MockWebBotClient implements WebBotClient {
       currentPath: "/",
       isLoggedIn: true,
       token: legacyToken || "mock-session-member",
+      userId: 1001,
+      accountId: username,
       username,
       role: "member",
       capabilities: resolveMemberCapabilities(username),
@@ -1447,6 +1734,8 @@ export class MockWebBotClient implements WebBotClient {
       currentPath: "/",
       isLoggedIn: true,
       token: "mock-session-member",
+      userId: 1001,
+      accountId: input.username,
       username: input.username,
       role: "member",
       capabilities: resolveMemberCapabilities(input.username),
@@ -1460,6 +1749,8 @@ export class MockWebBotClient implements WebBotClient {
       currentPath: "/",
       isLoggedIn: true,
       token: "mock-session-guest",
+      userId: 0,
+      accountId: "guest",
       username: "guest",
       role: "guest",
       capabilities: [...GUEST_CAPABILITIES],
@@ -1477,6 +1768,8 @@ export class MockWebBotClient implements WebBotClient {
       currentPath: "",
       isLoggedIn: false,
       token: "",
+      userId: undefined,
+      accountId: "",
       username: "",
       role: "guest",
       capabilities: [],
@@ -1608,6 +1901,7 @@ export class MockWebBotClient implements WebBotClient {
       messageCount: mockChatMessages[bot.alias]?.length || 0,
       historyCount: mockChatMessages[bot.alias]?.length || 0,
       isProcessing: false,
+      assistantRuntime: this.buildAssistantRuntime(botAlias),
     };
   }
 
@@ -3049,12 +3343,14 @@ export class MockWebBotClient implements WebBotClient {
     }
     const key = this.assistantProposalKey(botAlias, proposalId);
     const log = this.assistantProposalApplyLogs.get(key);
+    const diffText = this.assistantProposalDiffs.get(key) || "";
     return {
       proposal,
       diff: {
         available: this.assistantProposalDiffs.has(key),
         source: this.assistantProposalDiffs.has(key) ? `upgrades/approved/${proposalId}.patch` : "",
-        text: this.assistantProposalDiffs.get(key) || "",
+        text: diffText,
+        files: parseMockAssistantDiffFiles(diffText),
       },
       apply: {
         available: this.assistantProposalDiffs.has(key),
@@ -3092,6 +3388,13 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
     }
     this.assistantProposals.set(botAlias, next);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.proposal.approve",
+      resource: "proposal",
+      resourceId: proposalId,
+      requestSummary: { proposalId },
+      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/approve`,
+    });
     return updated;
   }
 
@@ -3112,6 +3415,13 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
     }
     this.assistantProposals.set(botAlias, next);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.proposal.reject",
+      resource: "proposal",
+      resourceId: proposalId,
+      requestSummary: { proposalId },
+      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/reject`,
+    });
     return updated;
   }
 
@@ -3136,6 +3446,13 @@ export class MockWebBotClient implements WebBotClient {
       patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
       appliedAt,
     });
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.upgrade.apply",
+      resource: "proposal",
+      resourceId: proposalId,
+      requestSummary: { proposalId },
+      path: `/api/admin/bots/${botAlias}/assistant/upgrades/${proposalId}/apply`,
+    });
     return {
       id: proposalId,
       status: "applied",
@@ -3145,16 +3462,92 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  async dryRunAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeDryRunResult> {
+    const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
+    if (!proposal) {
+      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
+    }
+    const checkedAt = new Date().toISOString();
+    const result: AssistantUpgradeDryRunResult = {
+      ok: proposal.status === "approved",
+      checkedAt,
+      stdout: proposal.status === "approved" ? "Patch cleanly applies" : "",
+      stderr: proposal.status === "approved" ? "" : "proposal 尚未批准",
+      patchPath: `.assistant/upgrades/approved/${proposalId}.patch`,
+      repoRoot: "C:\\workspace\\assistant1",
+    };
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.upgrade.dry_run",
+      resource: "proposal",
+      resourceId: proposalId,
+      requestSummary: { proposalId },
+      ok: result.ok,
+      statusCode: result.ok ? 200 : 409,
+      errorCode: result.ok ? undefined : "proposal_not_approved",
+      errorMessage: result.ok ? undefined : result.stderr,
+      path: `/api/admin/bots/${botAlias}/assistant/upgrades/${proposalId}/dry-run`,
+    });
+    return result;
+  }
+
   async searchAssistantMemories(
     botAlias: string,
     query: string,
-    options: { userId?: number; limit?: number } = {},
+    options: AssistantMemorySearchOptions = {},
   ): Promise<AssistantMemorySearchResult> {
     const needle = query.trim().toLowerCase();
     const items = this.getAssistantMemories(botAlias)
+      .filter((item) => options.includeInvalidated || !item.invalidatedAt)
+      .filter((item) => !options.kinds?.length || options.kinds.includes(item.kind))
+      .filter((item) => !options.scopes?.length || options.scopes.includes(item.scope))
+      .filter((item) => {
+        if (typeof options.userId !== "number") {
+          return true;
+        }
+        return item.sourceRef?.includes(String(options.userId)) || options.userId === 1001;
+      })
       .filter((item) => !needle || `${item.title}\n${item.summary}\n${item.body}`.toLowerCase().includes(needle))
       .slice(0, options.limit || 10);
     return { items };
+  }
+
+  async bulkInvalidateAssistantMemories(
+    botAlias: string,
+    memoryIds: string[],
+    reason: string,
+  ): Promise<AssistantMemoryBulkInvalidateResult> {
+    const now = new Date().toISOString();
+    const items = this.getAssistantMemories(botAlias);
+    const wanted = new Set(memoryIds);
+    let invalidated = 0;
+    const missing: string[] = [];
+    for (const memoryId of memoryIds) {
+      if (!items.some((item) => item.id === memoryId)) {
+        missing.push(memoryId);
+      }
+    }
+    this.assistantMemories.set(botAlias, items.map((item) => {
+      if (!wanted.has(item.id) || item.invalidatedAt) {
+        return item;
+      }
+      invalidated += 1;
+      return {
+        ...item,
+        invalidatedAt: now,
+      };
+    }));
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.memory.bulk_invalidate",
+      resource: "memory",
+      resourceId: "bulk",
+      requestSummary: { memoryIds, reason },
+      path: `/api/admin/bots/${botAlias}/assistant/memory/bulk-invalidate`,
+    });
+    return {
+      invalidated,
+      missing,
+      reason,
+    };
   }
 
   async invalidateAssistantMemory(
@@ -3172,6 +3565,13 @@ export class MockWebBotClient implements WebBotClient {
       botAlias,
       items.map((item) => (item.id === memoryId ? { ...item, invalidatedAt: now } : item)),
     );
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.memory.invalidate",
+      resource: "memory",
+      resourceId: memoryId,
+      requestSummary: { memoryId, reason },
+      path: `/api/admin/bots/${botAlias}/assistant/memory/${memoryId}/invalidate`,
+    });
     return {
       memoryId,
       invalidated: true,
@@ -3184,6 +3584,13 @@ export class MockWebBotClient implements WebBotClient {
     _options: { userId?: number; force?: boolean } = {},
   ): Promise<AssistantMemoryReindexResult> {
     this.ensureAssistantOpsState(botAlias);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.memory.reindex",
+      resource: "memory",
+      resourceId: "index",
+      requestSummary: { ..._options },
+      path: `/api/admin/bots/${botAlias}/assistant/memory/reindex`,
+    });
     return {
       working: {
         indexedCount: 4,
@@ -3218,6 +3625,13 @@ export class MockWebBotClient implements WebBotClient {
       })),
     };
     this.assistantMemoryEvalReports.set(botAlias, [report, ...this.getAssistantMemoryEvalReports(botAlias)]);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.memory.eval",
+      resource: "eval",
+      resourceId: "memory",
+      requestSummary: { userId: input.userId, cases: input.cases.length },
+      path: `/api/admin/bots/${botAlias}/assistant/evals/memory/run`,
+    });
     return {
       metrics: report.metrics,
       reportPath,
@@ -3228,9 +3642,20 @@ export class MockWebBotClient implements WebBotClient {
     return this.getAssistantMemoryEvalReports(botAlias).slice(0, limit);
   }
 
-  async getAssistantDiagnostics(botAlias: string, limit = 20): Promise<AssistantPerfDiagnostics> {
+  async getAssistantDiagnostics(
+    botAlias: string,
+    filters: AssistantDiagnosticsFilters = {},
+  ): Promise<AssistantPerfDiagnostics> {
+    const items = this.getAssistantPerfRecords(botAlias)
+      .filter((item) => !filters.source || item.source === filters.source)
+      .filter((item) => !filters.status || item.status === filters.status)
+      .filter((item) => typeof filters.userId !== "number" || item.userId === filters.userId)
+      .filter((item) => !filters.from || item.createdAt >= filters.from)
+      .filter((item) => !filters.to || item.createdAt <= filters.to)
+      .slice(0, filters.limit || 20);
     return {
-      items: this.getAssistantPerfRecords(botAlias).slice(0, limit),
+      items,
+      summary: summarizeMockAssistantDiagnostics(items),
     };
   }
 
@@ -3262,6 +3687,13 @@ export class MockWebBotClient implements WebBotClient {
       coalescedCount: 0,
     };
     this.assistantCronJobs.set(botAlias, [...current.filter((item) => item.id !== job.id), job]);
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.cron.create",
+      resource: "cron",
+      resourceId: job.id,
+      requestSummary: { jobId: job.id, title: job.title },
+      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs`,
+    });
     return job;
   }
 
@@ -3303,6 +3735,14 @@ export class MockWebBotClient implements WebBotClient {
       botAlias,
       current.map((item) => (item.id === jobId ? updated : item)),
     );
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.cron.update",
+      resource: "cron",
+      resourceId: jobId,
+      requestSummary: { jobId },
+      method: "PATCH",
+      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs/${jobId}`,
+    });
     return updated;
   }
 
@@ -3312,6 +3752,14 @@ export class MockWebBotClient implements WebBotClient {
       this.getAssistantCronJobs(botAlias).filter((item) => item.id !== jobId),
     );
     this.assistantCronRuns.delete(this.cronRunKey(botAlias, jobId));
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.cron.delete",
+      resource: "cron",
+      resourceId: jobId,
+      requestSummary: { jobId },
+      method: "DELETE",
+      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs/${jobId}`,
+    });
   }
 
   async runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult> {
@@ -3345,6 +3793,13 @@ export class MockWebBotClient implements WebBotClient {
           : item,
       ),
     );
+    this.pushAssistantAdminAudit(botAlias, {
+      action: "assistant.cron.run",
+      resource: "cron",
+      resourceId: jobId,
+      requestSummary: { jobId, runId },
+      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs/${jobId}/run`,
+    });
     return {
       runId,
       status: "queued",
@@ -3355,6 +3810,18 @@ export class MockWebBotClient implements WebBotClient {
 
   async listAssistantCronRuns(botAlias: string, jobId: string, limit = 5): Promise<AssistantCronRun[]> {
     return (this.assistantCronRuns.get(this.cronRunKey(botAlias, jobId)) || []).slice(0, limit);
+  }
+
+  async listAssistantAdminAudit(
+    botAlias: string,
+    filters: { limit?: number; action?: string; resource?: string; status?: "ok" | "failed" | "" } = {},
+  ): Promise<AssistantAdminAuditResult> {
+    const items = this.getAssistantAdminAudit(botAlias)
+      .filter((item) => !filters.action || item.action === filters.action)
+      .filter((item) => !filters.resource || item.target.resource === filters.resource)
+      .filter((item) => !filters.status || item.ok === (filters.status === "ok"))
+      .slice(0, filters.limit || 20);
+    return { items };
   }
 
   async addBot(input: CreateBotInput): Promise<BotSummary> {
@@ -3397,6 +3864,7 @@ export class MockWebBotClient implements WebBotClient {
     this.moveKey(this.assistantMemories, botAlias, alias);
     this.moveKey(this.assistantMemoryEvalReports, botAlias, alias);
     this.moveKey(this.assistantPerfRecords, botAlias, alias);
+    this.moveKey(this.assistantAdminAudit, botAlias, alias);
     for (const [key, value] of Array.from(this.assistantProposalDiffs.entries())) {
       if (!key.startsWith(`${botAlias}:`)) {
         continue;
@@ -3434,6 +3902,7 @@ export class MockWebBotClient implements WebBotClient {
     this.assistantMemories.delete(botAlias);
     this.assistantMemoryEvalReports.delete(botAlias);
     this.assistantPerfRecords.delete(botAlias);
+    this.assistantAdminAudit.delete(botAlias);
     for (const key of Array.from(this.assistantProposalDiffs.keys())) {
       if (key.startsWith(`${botAlias}:`)) {
         this.assistantProposalDiffs.delete(key);
