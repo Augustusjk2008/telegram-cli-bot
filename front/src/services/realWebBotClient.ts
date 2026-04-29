@@ -23,10 +23,13 @@ import type {
   Capability,
   CreateAssistantCronJobInput,
   GitActionResult,
+  GitBlamePayload,
+  GitBranchList,
   GitCommitSummary,
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  GitStashList,
   GitTreeStatus,
   BotOverview,
   BotStatus,
@@ -357,6 +360,46 @@ type RawGitDiffPayload = {
 type RawGitActionResult = {
   message: string;
   overview: RawGitOverview;
+};
+
+type RawGitBranchSummary = {
+  name: string;
+  current: boolean;
+  upstream?: string;
+  short_hash?: string;
+  subject?: string;
+};
+
+type RawGitBranchList = {
+  current_branch?: string;
+  branches?: RawGitBranchSummary[];
+};
+
+type RawGitStashEntry = {
+  ref: string;
+  hash?: string;
+  created_at?: string;
+  message?: string;
+};
+
+type RawGitStashList = {
+  items?: RawGitStashEntry[];
+};
+
+type RawGitBlameLine = {
+  line: number;
+  commit?: string;
+  short_commit?: string;
+  author_name?: string;
+  author_mail?: string;
+  authored_at?: string;
+  summary?: string;
+  content?: string;
+};
+
+type RawGitBlamePayload = {
+  path?: string;
+  lines?: RawGitBlameLine[];
 };
 
 type RawGitProxySettings = {
@@ -992,6 +1035,46 @@ function mapGitActionResult(raw: RawGitActionResult): GitActionResult {
   return {
     message: raw.message || "",
     overview: mapGitOverview(raw.overview),
+  };
+}
+
+function mapGitBranchList(raw: RawGitBranchList): GitBranchList {
+  return {
+    currentBranch: raw.current_branch || "",
+    branches: (raw.branches || []).map((item) => ({
+      name: item.name,
+      current: Boolean(item.current),
+      upstream: item.upstream || "",
+      shortHash: item.short_hash || "",
+      subject: item.subject || "",
+    })),
+  };
+}
+
+function mapGitStashList(raw: RawGitStashList): GitStashList {
+  return {
+    items: (raw.items || []).map((item) => ({
+      ref: item.ref,
+      hash: item.hash || "",
+      createdAt: item.created_at || "",
+      message: item.message || "",
+    })),
+  };
+}
+
+function mapGitBlamePayload(raw: RawGitBlamePayload): GitBlamePayload {
+  return {
+    path: raw.path || "",
+    lines: (raw.lines || []).map((item) => ({
+      line: Number(item.line || 0),
+      commit: item.commit || "",
+      shortCommit: item.short_commit || "",
+      authorName: item.author_name || "",
+      authorMail: item.author_mail || "",
+      authoredAt: item.authored_at || "",
+      summary: item.summary || "",
+      content: item.content || "",
+    })),
   };
 }
 
@@ -2566,6 +2649,66 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapGitActionResult(data);
+  }
+
+  async listGitBranches(botAlias: string): Promise<GitBranchList> {
+    const data = await this.requestJson<RawGitBranchList>(`/api/bots/${encodeURIComponent(botAlias)}/git/branches`);
+    return mapGitBranchList(data);
+  }
+
+  async createGitBranch(botAlias: string, name: string, startPoint = ""): Promise<GitBranchList> {
+    const data = await this.requestJson<RawGitBranchList>(`/api/bots/${encodeURIComponent(botAlias)}/git/branches`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name, start_point: startPoint }),
+    });
+    return mapGitBranchList(data);
+  }
+
+  async switchGitBranch(botAlias: string, name: string): Promise<GitBranchList> {
+    const data = await this.requestJson<RawGitBranchList>(`/api/bots/${encodeURIComponent(botAlias)}/git/branches/switch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    });
+    return mapGitBranchList(data);
+  }
+
+  async listGitStashes(botAlias: string): Promise<GitStashList> {
+    const data = await this.requestJson<RawGitStashList>(`/api/bots/${encodeURIComponent(botAlias)}/git/stashes`);
+    return mapGitStashList(data);
+  }
+
+  async applyGitStash(botAlias: string, ref: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/stashes/apply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ref }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async dropGitStash(botAlias: string, ref: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/stashes/drop`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ref }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async getGitBlame(botAlias: string, path: string): Promise<GitBlamePayload> {
+    const params = new URLSearchParams({ path });
+    const data = await this.requestJson<RawGitBlamePayload>(`/api/bots/${encodeURIComponent(botAlias)}/git/blame?${params.toString()}`);
+    return mapGitBlamePayload(data);
   }
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {

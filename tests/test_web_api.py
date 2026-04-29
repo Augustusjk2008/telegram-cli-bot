@@ -76,14 +76,21 @@ from bot.web import api_service
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.git_service import (
+    apply_git_stash,
     commit_git_changes,
+    create_git_branch,
     discard_all_git_changes,
     discard_git_paths,
+    drop_git_stash,
+    get_git_blame,
     get_git_diff,
     get_git_overview,
     get_git_tree_status,
     init_git_repository,
+    list_git_branches,
+    list_git_stashes,
     stage_git_paths,
+    switch_git_branch,
 )
 from bot.web.native_history_locator import LocatedTranscript
 from bot.assistant_proposals import create_proposal
@@ -1646,6 +1653,108 @@ def test_git_diff_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_di
     assert diff["path"] == "tracked.txt"
     assert "+after" in diff["diff"]
 
+
+def test_git_branch_service_lists_creates_and_switches_branches(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("line 1\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    default_branch = list_git_branches(web_manager, "main", 1001)["current_branch"]
+    created = create_git_branch(web_manager, "main", 1001, "feature/git-panel")
+    assert created["current_branch"] == default_branch
+    assert any(item["name"] == "feature/git-panel" for item in created["branches"])
+
+    switched = switch_git_branch(web_manager, "main", 1001, "feature/git-panel")
+    assert switched["current_branch"] == "feature/git-panel"
+    assert any(item["name"] == "feature/git-panel" and item["current"] for item in switched["branches"])
+
+    listed = list_git_branches(web_manager, "main", 1001)
+    assert listed["current_branch"] == "feature/git-panel"
+    assert any(item["name"] == default_branch for item in listed["branches"])
+
+
+def test_git_branch_service_rejects_invalid_branch_name(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("line 1\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    with pytest.raises(WebApiError) as create_error:
+        create_git_branch(web_manager, "main", 1001, "-bad")
+    assert create_error.value.code == "invalid_git_branch"
+
+    with pytest.raises(WebApiError) as switch_error:
+        switch_git_branch(web_manager, "main", 1001, "bad branch")
+    assert switch_error.value.code == "invalid_git_branch"
+
+
+def test_git_stash_service_lists_applies_and_drops_stashes(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "stash", "push", "-m", "manual stash")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    stashes = list_git_stashes(web_manager, "main", 1001)
+    assert stashes["items"][0]["ref"] == "stash@{0}"
+    assert "manual stash" in stashes["items"][0]["message"]
+
+    applied = apply_git_stash(web_manager, "main", 1001, "stash@{0}")
+    assert any(item["path"] == "tracked.txt" for item in applied["changed_files"])
+
+    drop_git_stash(web_manager, "main", 1001, "stash@{0}")
+    assert list_git_stashes(web_manager, "main", 1001)["items"] == []
+
+
+def test_git_blame_service_returns_line_metadata(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("first\nsecond\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init tracked")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    blame = get_git_blame(web_manager, "main", 1001, "tracked.txt")
+
+    assert blame["path"] == "tracked.txt"
+    assert blame["lines"][0]["line"] == 1
+    assert blame["lines"][0]["author_name"] == "Web Bot Test"
+    assert blame["lines"][0]["summary"] == "init tracked"
+    assert blame["lines"][0]["content"] == "first"
+
+
+def test_git_stash_and_blame_reject_unsafe_inputs(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("line\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    with pytest.raises(WebApiError) as stash_error:
+        apply_git_stash(web_manager, "main", 1001, "stash@{0}; rm -rf .")
+    assert stash_error.value.code == "invalid_git_stash_ref"
+
+    with pytest.raises(WebApiError) as blame_error:
+        get_git_blame(web_manager, "main", 1001, "../tracked.txt")
+    assert blame_error.value.code == "unsafe_git_path"
+
 def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     settings_file = temp_dir / ".web_admin_settings.json"
     monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
@@ -2420,6 +2529,58 @@ async def test_git_tree_status_route_returns_decoration_payload(
         "tracked.txt": "modified",
         "scratch.tmp": "ignored",
     }
+
+
+@pytest.mark.asyncio
+async def test_git_workflow_routes_return_branches_stashes_and_blame(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "stash", "push", "-m", "route stash")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            branches_resp = await client.get("/api/bots/main/git/branches")
+            assert branches_resp.status == 200
+            branches_payload = await branches_resp.json()
+            assert any(item["name"] for item in branches_payload["data"]["branches"])
+
+            create_resp = await client.post("/api/bots/main/git/branches", json={"name": "feature/routes"})
+            assert create_resp.status == 200
+
+            switch_resp = await client.post("/api/bots/main/git/branches/switch", json={"name": "feature/routes"})
+            assert switch_resp.status == 200
+            switch_payload = await switch_resp.json()
+            assert switch_payload["data"]["current_branch"] == "feature/routes"
+
+            stashes_resp = await client.get("/api/bots/main/git/stashes")
+            assert stashes_resp.status == 200
+            stashes_payload = await stashes_resp.json()
+            assert stashes_payload["data"]["items"][0]["ref"] == "stash@{0}"
+
+            blame_resp = await client.get("/api/bots/main/git/blame?path=tracked.txt")
+            assert blame_resp.status == 200
+            blame_payload = await blame_resp.json()
+            assert blame_payload["data"]["lines"][0]["summary"] == "init"
+
+            drop_resp = await client.post("/api/bots/main/git/stashes/drop", json={"ref": "stash@{0}"})
+            assert drop_resp.status == 200
 
 @pytest.mark.asyncio
 async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):

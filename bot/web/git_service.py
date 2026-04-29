@@ -35,6 +35,35 @@ def _normalize_repo_relative_path(path: str) -> str:
     return value
 
 
+def _normalize_branch_name(name: str) -> str:
+    value = (name or "").strip()
+    if not value:
+        _raise(400, "invalid_git_branch", "分支名不能为空")
+    if len(value) > 120 or value.startswith("-") or any(ch.isspace() for ch in value):
+        _raise(400, "invalid_git_branch", "分支名不合法")
+    if "\\" in value or value.endswith("/") or value.endswith("."):
+        _raise(400, "invalid_git_branch", "分支名不合法")
+    return value
+
+
+def _assert_valid_branch_name(repo_root: str, name: str) -> str:
+    branch_name = _normalize_branch_name(name)
+    result = _run_git(repo_root, ["check-ref-format", "--branch", branch_name], check=False)
+    if result.returncode != 0:
+        _raise(400, "invalid_git_branch", "分支名不合法")
+    return branch_name
+
+
+_STASH_REF_RE = re.compile(r"^stash@\{\d+\}$")
+
+
+def _normalize_stash_ref(ref: str) -> str:
+    value = (ref or "").strip()
+    if not _STASH_REF_RE.match(value):
+        _raise(400, "invalid_git_stash_ref", "stash 引用不合法")
+    return value
+
+
 def _build_git_command(args: list[str]) -> list[str]:
     # H:/ 等非系统盘上的 fsmonitor 可能让 status/diff 长时间卡住，Web Git 统一禁用。
     return ["git", "-c", "core.fsmonitor=false", *get_git_proxy_config_args(), *args]
@@ -249,6 +278,100 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
     return items
 
 
+def _parse_branch_lines(lines: list[str]) -> list[dict[str, Any]]:
+    branches: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        name, head_marker, upstream, short_hash, subject = (line.split("\x00") + ["", "", "", "", ""])[:5]
+        branches.append(
+            {
+                "name": name,
+                "current": head_marker == "*",
+                "upstream": upstream,
+                "short_hash": short_hash,
+                "subject": subject,
+            }
+        )
+    return branches
+
+
+def _list_git_branches_for_repo(repo_root: str) -> dict[str, Any]:
+    result = _run_git(
+        repo_root,
+        [
+            "branch",
+            "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(objectname:short)%00%(contents:subject)",
+        ],
+    )
+    branches = _parse_branch_lines((result.stdout or "").splitlines())
+    current = next((item["name"] for item in branches if item["current"]), "")
+    return {
+        "current_branch": current,
+        "branches": branches,
+    }
+
+
+def _parse_stash_lines(lines: list[str]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        ref, full_hash, created_at, message = (line.split("\x1f") + ["", "", "", ""])[:4]
+        items.append(
+            {
+                "ref": ref,
+                "hash": full_hash[:12],
+                "created_at": created_at,
+                "message": message,
+            }
+        )
+    return items
+
+
+def _format_git_author_time(value: str) -> str:
+    try:
+        return datetime.fromtimestamp(int(value)).isoformat()
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _parse_blame_porcelain(output: str) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in output.splitlines():
+        if not raw_line:
+            continue
+        if re.match(r"^[0-9a-f]{40} ", raw_line):
+            parts = raw_line.split()
+            current = {
+                "commit": parts[0],
+                "short_commit": parts[0][:7],
+                "line": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else len(lines) + 1,
+                "author_name": "",
+                "author_mail": "",
+                "authored_at": "",
+                "summary": "",
+                "content": "",
+            }
+            continue
+        if current is None:
+            continue
+        if raw_line.startswith("author "):
+            current["author_name"] = raw_line.removeprefix("author ").strip()
+        elif raw_line.startswith("author-mail "):
+            current["author_mail"] = raw_line.removeprefix("author-mail ").strip().strip("<>")
+        elif raw_line.startswith("author-time "):
+            current["authored_at"] = _format_git_author_time(raw_line.removeprefix("author-time ").strip())
+        elif raw_line.startswith("summary "):
+            current["summary"] = raw_line.removeprefix("summary ").strip()
+        elif raw_line.startswith("\t"):
+            current["content"] = raw_line[1:]
+            lines.append(current)
+            current = None
+    return lines
+
+
 def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str, Any]:
     if not repo_root:
         return {
@@ -349,6 +472,46 @@ def _require_repo_root(manager: MultiBotManager, alias: str, user_id: int) -> tu
     if not repo_root:
         _raise(409, "not_git_repo", "当前目录不在 Git 仓库中")
     return working_dir, repo_root
+
+
+def list_git_branches(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    _, repo_root = _require_repo_root(manager, alias, user_id)
+    try:
+        return _list_git_branches_for_repo(repo_root)
+    except GitCommandError as exc:
+        _raise(400, "git_branch_list_failed", str(exc))
+
+
+def create_git_branch(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    name: str,
+    start_point: str = "",
+) -> dict[str, Any]:
+    _, repo_root = _require_repo_root(manager, alias, user_id)
+    branch_name = _assert_valid_branch_name(repo_root, name)
+    args = ["branch", branch_name]
+    if (start_point or "").strip():
+        args.append(_assert_valid_branch_name(repo_root, start_point))
+    try:
+        _run_git(repo_root, args)
+        return _list_git_branches_for_repo(repo_root)
+    except GitCommandError as exc:
+        _raise(400, "git_branch_create_failed", str(exc))
+
+
+def switch_git_branch(manager: MultiBotManager, alias: str, user_id: int, name: str) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    branch_name = _assert_valid_branch_name(repo_root, name)
+    try:
+        _run_git(repo_root, ["switch", branch_name])
+        return {
+            "branches": _list_git_branches_for_repo(repo_root)["branches"],
+            "current_branch": _build_git_overview(working_dir, repo_root)["current_branch"],
+        }
+    except GitCommandError as exc:
+        _raise(400, "git_branch_switch_failed", str(exc))
 
 
 def _get_status_entries(repo_root: str, paths: list[str] | None = None) -> list[dict[str, Any]]:
@@ -619,6 +782,38 @@ def stash_git_changes(manager: MultiBotManager, alias: str, user_id: int) -> dic
     )
 
 
+def list_git_stashes(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    _, repo_root = _require_repo_root(manager, alias, user_id)
+    try:
+        result = _run_git(
+            repo_root,
+            ["stash", "list", "--format=%gd%x1f%H%x1f%ci%x1f%gs"],
+        )
+    except GitCommandError as exc:
+        _raise(400, "git_stash_list_failed", str(exc))
+    return {"items": _parse_stash_lines((result.stdout or "").splitlines())}
+
+
+def apply_git_stash(manager: MultiBotManager, alias: str, user_id: int, ref: str) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    stash_ref = _normalize_stash_ref(ref)
+    try:
+        _run_git(repo_root, ["stash", "apply", stash_ref])
+    except GitCommandError as exc:
+        _raise(400, "git_stash_apply_failed", str(exc))
+    return _build_git_overview(working_dir, repo_root)
+
+
+def drop_git_stash(manager: MultiBotManager, alias: str, user_id: int, ref: str) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    stash_ref = _normalize_stash_ref(ref)
+    try:
+        _run_git(repo_root, ["stash", "drop", stash_ref])
+    except GitCommandError as exc:
+        _raise(400, "git_stash_drop_failed", str(exc))
+    return _build_git_overview(working_dir, repo_root)
+
+
 def pop_git_stash(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
     return _run_git_action(
         manager,
@@ -628,3 +823,16 @@ def pop_git_stash(manager: MultiBotManager, alias: str, user_id: int) -> dict[st
         error_code="git_stash_pop_failed",
         error_message="恢复暂存失败",
     )
+
+
+def get_git_blame(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
+    _, repo_root = _require_repo_root(manager, alias, user_id)
+    relative_path = _normalize_repo_relative_path(path)
+    try:
+        result = _run_git(repo_root, ["blame", "--line-porcelain", "--", relative_path])
+    except GitCommandError as exc:
+        _raise(400, "git_blame_failed", str(exc))
+    return {
+        "path": relative_path,
+        "lines": _parse_blame_porcelain(result.stdout or ""),
+    }

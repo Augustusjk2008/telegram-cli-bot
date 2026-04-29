@@ -2518,6 +2518,121 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("git workflow client maps branches stashes and blame", async () => {
+    const rawOverview = {
+      repo_found: true,
+      can_init: false,
+      working_dir: "C:\\workspace\\repo",
+      repo_path: "C:\\workspace\\repo",
+      repo_name: "repo",
+      current_branch: "main",
+      is_clean: false,
+      ahead_count: 0,
+      behind_count: 0,
+      changed_files: [],
+      recent_commits: [],
+    };
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { user_id: 1001 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            current_branch: "main",
+            branches: [{ name: "main", current: true, upstream: "origin/main", short_hash: "abc1234", subject: "init" }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            current_branch: "main",
+            branches: [{ name: "feature/new", current: false, upstream: "", short_hash: "abc1234", subject: "created" }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            current_branch: "feature/new",
+            branches: [{ name: "feature/new", current: true, upstream: "", short_hash: "abc1234", subject: "created" }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [{ ref: "stash@{0}", hash: "abc1234", created_at: "2026-04-28", message: "On main: stash" }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { message: "已应用 stash", overview: rawOverview } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { message: "已删除 stash", overview: rawOverview } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            path: "tracked.txt",
+            lines: [
+              {
+                line: 1,
+                commit: "abcdef",
+                short_commit: "abcdef0",
+                author_name: "Web Bot",
+                author_mail: "web@example.com",
+                authored_at: "2026-04-28",
+                summary: "init",
+                content: "line",
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(client.listGitBranches("main")).resolves.toMatchObject({ currentBranch: "main" });
+    await expect(client.createGitBranch("main", "feature/new", "")).resolves.toMatchObject({ branches: [{ name: "feature/new" }] });
+    await expect(client.switchGitBranch("main", "feature/new")).resolves.toMatchObject({ currentBranch: "feature/new" });
+    await expect(client.listGitStashes("main")).resolves.toMatchObject({ items: [{ ref: "stash@{0}" }] });
+    await expect(client.applyGitStash("main", "stash@{0}")).resolves.toMatchObject({ message: "已应用 stash" });
+    await expect(client.dropGitStash("main", "stash@{0}")).resolves.toMatchObject({ message: "已删除 stash" });
+    await expect(client.getGitBlame("main", "tracked.txt")).resolves.toMatchObject({
+      path: "tracked.txt",
+      lines: [{ line: 1, authorName: "Web Bot" }],
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/bots/main/git/branches/switch",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/git/blame?path=tracked.txt",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer secret-token" }),
+      }),
+    );
+  });
+
   test("initGitRepository posts to the init endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

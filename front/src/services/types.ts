@@ -979,6 +979,46 @@ export type GitActionResult = {
   overview: GitOverview;
 };
 
+export type GitBranchSummary = {
+  name: string;
+  current: boolean;
+  upstream: string;
+  shortHash: string;
+  subject: string;
+};
+
+export type GitBranchList = {
+  currentBranch: string;
+  branches: GitBranchSummary[];
+};
+
+export type GitStashEntry = {
+  ref: string;
+  hash: string;
+  createdAt: string;
+  message: string;
+};
+
+export type GitStashList = {
+  items: GitStashEntry[];
+};
+
+export type GitBlameLine = {
+  line: number;
+  commit: string;
+  shortCommit: string;
+  authorName: string;
+  authorMail: string;
+  authoredAt: string;
+  summary: string;
+  content: string;
+};
+
+export type GitBlamePayload = {
+  path: string;
+  lines: GitBlameLine[];
+};
+
 export type GitProxySettings = {
   port: string;
 };

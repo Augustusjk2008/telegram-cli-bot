@@ -7,8 +7,11 @@ import {
   ChevronRight,
   CheckCircle2,
   DownloadCloud,
+  Eye,
   FileDiff,
   GitBranch,
+  GitFork,
+  GitPullRequest,
   Minus,
   Plus,
   RefreshCw,
@@ -18,7 +21,7 @@ import {
 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { GitOverview } from "../services/types";
+import type { GitBlamePayload, GitBranchList, GitOverview, GitStashList } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -82,6 +85,14 @@ export function GitScreen({
   const [notice, setNotice] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [actionLoading, setActionLoading] = useState("");
+  const [branches, setBranches] = useState<GitBranchList>({ currentBranch: "", branches: [] });
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchDraft, setBranchDraft] = useState("");
+  const [selectedBranch, setSelectedBranch] = useState("");
+  const [stashes, setStashes] = useState<GitStashList>({ items: [] });
+  const [stashesLoading, setStashesLoading] = useState(false);
+  const [blame, setBlame] = useState<GitBlamePayload | null>(null);
+  const [blameLoadingPath, setBlameLoadingPath] = useState("");
   const [changesCollapsed, setChangesCollapsed] = useState(false);
   const [commitsCollapsed, setCommitsCollapsed] = useState(false);
   const groups = useMemo(() => groupedFiles(overview), [overview]);
@@ -119,6 +130,18 @@ export function GitScreen({
     void loadOverview();
   }, [botAlias, client]);
 
+  useEffect(() => {
+    if (overview?.repoFound) {
+      void loadBranches();
+      void loadStashes();
+    } else {
+      setBranches({ currentBranch: "", branches: [] });
+      setSelectedBranch("");
+      setStashes({ items: [] });
+      setBlame(null);
+    }
+  }, [botAlias, client, overview?.repoFound]);
+
   async function runAction(
     key: string,
     fn: () => Promise<{ message: string; overview: GitOverview }>,
@@ -138,6 +161,99 @@ export function GitScreen({
       setError(err instanceof Error ? err.message : "Git 操作失败");
     } finally {
       setActionLoading("");
+    }
+  }
+
+  async function loadBranches() {
+    setBranchesLoading(true);
+    try {
+      const next = await client.listGitBranches(botAlias);
+      setBranches(next);
+      setSelectedBranch(next.currentBranch || next.branches[0]?.name || "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载分支失败");
+    } finally {
+      setBranchesLoading(false);
+    }
+  }
+
+  async function loadStashes() {
+    setStashesLoading(true);
+    try {
+      setStashes(await client.listGitStashes(botAlias));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载 stash 失败");
+    } finally {
+      setStashesLoading(false);
+    }
+  }
+
+  async function createBranch() {
+    const name = branchDraft.trim();
+    if (!name) {
+      setError("分支名不能为空");
+      return;
+    }
+    setActionLoading("branch-create");
+    setError("");
+    setNotice("");
+    try {
+      const next = await client.createGitBranch(botAlias, name, "");
+      setBranches(next);
+      setSelectedBranch(name);
+      setBranchDraft("");
+      setNotice("分支已创建");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建分支失败");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  async function switchBranch() {
+    if (!selectedBranch) {
+      setError("请选择要切换的分支");
+      return;
+    }
+    setActionLoading("branch-switch");
+    setError("");
+    setNotice("");
+    try {
+      const next = await client.switchGitBranch(botAlias, selectedBranch);
+      setBranches(next);
+      await loadOverview();
+      setNotice(`已切换到 ${selectedBranch}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "切换分支失败");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  async function stashChanges() {
+    await runAction("stash", () => client.stashGitChanges(botAlias));
+    await loadStashes();
+  }
+
+  async function applyStash(ref: string) {
+    await runAction(`stash-apply:${ref}`, () => client.applyGitStash(botAlias, ref));
+    await loadStashes();
+  }
+
+  async function dropStash(ref: string) {
+    await runAction(`stash-drop:${ref}`, () => client.dropGitStash(botAlias, ref));
+    await loadStashes();
+  }
+
+  async function loadBlame(path: string) {
+    setBlameLoadingPath(path);
+    setError("");
+    try {
+      setBlame(await client.getGitBlame(botAlias, path));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载 blame 失败");
+    } finally {
+      setBlameLoadingPath("");
     }
   }
 
@@ -326,6 +442,16 @@ export function GitScreen({
                                     </button>
                                     <button
                                       type="button"
+                                      aria-label={`查看 blame ${item.path}`}
+                                      title={`查看 blame ${item.path}`}
+                                      onClick={() => void loadBlame(item.path)}
+                                      disabled={blameLoadingPath !== ""}
+                                      className={iconButtonClass()}
+                                    >
+                                      <Eye className="h-3 w-3" />
+                                    </button>
+                                    <button
+                                      type="button"
                                       aria-label={`在编辑器打开 ${item.path}`}
                                       title={`在编辑器打开 ${item.path}`}
                                       onClick={() => void openChangedDiff(item.path, item.staged && !item.unstaged)}
@@ -344,6 +470,34 @@ export function GitScreen({
                   </div>
                 ) : null}
               </aside>
+
+              {blame ? (
+                <aside className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="min-w-0 truncate text-sm font-semibold">{blame.path} blame</h2>
+                    <button type="button" onClick={() => setBlame(null)} className={buttonClass()}>
+                      关闭
+                    </button>
+                  </div>
+                  <div className="mt-3 max-h-80 overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)]">
+                    {blame.lines.map((line) => (
+                      <div
+                        key={`${line.line}-${line.commit}`}
+                        className="grid min-w-[520px] grid-cols-[48px_88px_minmax(100px,160px)_minmax(160px,1fr)] gap-2 border-b border-[var(--border)] px-2 py-1.5 text-xs last:border-b-0"
+                      >
+                        <span className="text-right font-mono text-[var(--muted)]">{line.line}</span>
+                        <span className="font-mono text-[var(--text)]">{line.shortCommit}</span>
+                        <span className="truncate text-[var(--muted)]" title={`${line.authorName} · ${line.summary}`}>
+                          {line.authorName}
+                        </span>
+                        <span className="min-w-0 truncate font-mono text-[var(--text)]" title={line.content}>
+                          {line.content}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </aside>
+              ) : null}
 
               <aside
                 data-testid="git-commit-panel"
@@ -377,6 +531,77 @@ export function GitScreen({
                   </div>
                 </div>
 
+                <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--bg)] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold">分支</h2>
+                    <button type="button" onClick={() => void loadBranches()} className={buttonClass()}>
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      刷新
+                    </button>
+                  </div>
+                  {branchesLoading ? <p className="text-xs text-[var(--muted)]">加载分支...</p> : null}
+                  <div className="flex flex-wrap gap-2">
+                    <label className="min-w-[180px] flex-1">
+                      <span className="sr-only">切换分支</span>
+                      <select
+                        aria-label="切换分支"
+                        value={selectedBranch}
+                        onChange={(event) => setSelectedBranch(event.target.value)}
+                        className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-xs"
+                      >
+                        {branches.branches.map((branch) => (
+                          <option key={branch.name} value={branch.name}>
+                            {branch.current ? "当前：" : ""}{branch.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void switchBranch()}
+                      disabled={actionLoading !== "" || !selectedBranch}
+                      className={buttonClass()}
+                    >
+                      <GitPullRequest className="h-3.5 w-3.5" />
+                      切换
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <label className="min-w-[180px] flex-1">
+                      <span className="sr-only">新建分支名</span>
+                      <input
+                        aria-label="新建分支名"
+                        value={branchDraft}
+                        onChange={(event) => setBranchDraft(event.target.value)}
+                        placeholder="feature/name"
+                        className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-xs"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void createBranch()}
+                      disabled={actionLoading !== "" || !branchDraft.trim()}
+                      className={buttonClass()}
+                    >
+                      <GitFork className="h-3.5 w-3.5" />
+                      新建分支
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    {branches.branches.map((branch) => (
+                      <div key={branch.name} className="rounded border border-[var(--border)] px-2 py-1.5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">{branch.name}</span>
+                          <span className="shrink-0 text-[var(--muted)]">{branch.shortHash || "-"}</span>
+                        </div>
+                        <div className="mt-1 truncate text-[var(--muted)]">
+                          {branch.upstream || "无 upstream"} · {branch.subject || "-"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -407,22 +632,67 @@ export function GitScreen({
                   </button>
                   <button
                     type="button"
-                    onClick={() => void runAction("stash", () => client.stashGitChanges(botAlias))}
+                    onClick={() => void stashChanges()}
                     disabled={actionLoading !== ""}
                     className={buttonClass()}
                   >
                     <Archive className="h-3.5 w-3.5" />
                     Stash Push
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void runAction("stash-pop", () => client.popGitStash(botAlias))}
-                    disabled={actionLoading !== ""}
-                    className={buttonClass()}
-                  >
-                    <ArchiveRestore className="h-3.5 w-3.5" />
-                    Stash Pop
-                  </button>
+                </div>
+
+                <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--bg)] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold">Stash</h2>
+                    <button type="button" onClick={() => void loadStashes()} className={buttonClass()}>
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      刷新
+                    </button>
+                  </div>
+                  {stashesLoading ? <p className="text-xs text-[var(--muted)]">加载 stash...</p> : null}
+                  {stashes.items.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]">
+                      暂无 stash
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {stashes.items.map((stash) => (
+                        <div key={stash.ref} className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-mono text-xs font-medium text-[var(--text)]">{stash.ref}</div>
+                              <div className="mt-1 break-all text-xs text-[var(--muted)]">{stash.message}</div>
+                              <div className="mt-1 text-[11px] text-[var(--muted)]">
+                                {stash.hash || "-"} · {stash.createdAt || "-"}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 gap-1">
+                              <button
+                                type="button"
+                                aria-label={`应用 ${stash.ref}`}
+                                title={`应用 ${stash.ref}`}
+                                onClick={() => void applyStash(stash.ref)}
+                                disabled={actionLoading !== ""}
+                                className={iconButtonClass()}
+                              >
+                                <ArchiveRestore className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`删除 ${stash.ref}`}
+                                title={`删除 ${stash.ref}`}
+                                onClick={() => void dropStash(stash.ref)}
+                                disabled={actionLoading !== ""}
+                                className={iconButtonClass()}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">

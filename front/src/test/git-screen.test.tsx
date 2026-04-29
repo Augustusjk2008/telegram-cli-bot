@@ -446,3 +446,100 @@ test("opens changed file diff in the editor instead of rendering diff in git", a
   expect(screen.queryByTestId("git-diff-panel")).not.toBeInTheDocument();
   expect(screen.queryByTestId("git-inline-diff")).not.toBeInTheDocument();
 });
+
+test("git screen creates and switches branches", async () => {
+  const user = userEvent.setup();
+  const listGitBranches = vi.fn(async () => ({
+    currentBranch: "main",
+    branches: [
+      { name: "main", current: true, upstream: "origin/main", shortHash: "abc1234", subject: "init" },
+      { name: "feature/existing", current: false, upstream: "", shortHash: "def5678", subject: "existing" },
+    ],
+  }));
+  const createGitBranch = vi.fn(async () => ({
+    currentBranch: "main",
+    branches: [
+      { name: "main", current: true, upstream: "origin/main", shortHash: "abc1234", subject: "init" },
+      { name: "feature/new", current: false, upstream: "", shortHash: "abc1234", subject: "created" },
+    ],
+  }));
+  const switchGitBranch = vi.fn(async () => ({
+    currentBranch: "feature/new",
+    branches: [
+      { name: "main", current: false, upstream: "origin/main", shortHash: "abc1234", subject: "init" },
+      { name: "feature/new", current: true, upstream: "", shortHash: "abc1234", subject: "created" },
+    ],
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ listGitBranches, createGitBranch, switchGitBranch })}
+    />,
+  );
+
+  expect((await screen.findAllByText("feature/existing")).length).toBeGreaterThan(0);
+  await user.type(screen.getByLabelText("新建分支名"), "feature/new");
+  await user.click(screen.getByRole("button", { name: "新建分支" }));
+  expect(createGitBranch).toHaveBeenCalledWith("main", "feature/new", "");
+
+  await user.selectOptions(screen.getByLabelText("切换分支"), "feature/new");
+  await user.click(screen.getByRole("button", { name: "切换" }));
+  expect(switchGitBranch).toHaveBeenCalledWith("main", "feature/new");
+});
+
+test("git screen applies and drops selected stashes", async () => {
+  const user = userEvent.setup();
+  const applyGitStash = vi.fn(async () => ({ message: "已应用 stash", overview: buildRepoOverview() }));
+  const dropGitStash = vi.fn(async () => ({ message: "已删除 stash", overview: buildRepoOverview() }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        listGitStashes: async () => ({
+          items: [{ ref: "stash@{0}", hash: "abc1234", createdAt: "2026-04-28 10:30:00 +0800", message: "On main: Web Bot stash" }],
+        }),
+        applyGitStash,
+        dropGitStash,
+      })}
+    />,
+  );
+
+  expect(await screen.findByText("stash@{0}")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "应用 stash@{0}" }));
+  expect(applyGitStash).toHaveBeenCalledWith("main", "stash@{0}");
+
+  await user.click(screen.getByRole("button", { name: "删除 stash@{0}" }));
+  expect(dropGitStash).toHaveBeenCalledWith("main", "stash@{0}");
+});
+
+test("git screen loads blame for a changed file", async () => {
+  const user = userEvent.setup();
+  const getGitBlame = vi.fn(async () => ({
+    path: "tracked.txt",
+    lines: [
+      {
+        line: 1,
+        commit: "abcdef0123456789",
+        shortCommit: "abcdef0",
+        authorName: "Web Bot",
+        authorMail: "web-bot@example.com",
+        authoredAt: "2026-04-28T02:30:00",
+        summary: "feat: initial commit",
+        content: "before",
+      },
+    ],
+  }));
+
+  render(<GitScreen botAlias="main" client={createClient({ getGitBlame })} />);
+
+  await user.click(await screen.findByLabelText("查看 blame tracked.txt"));
+
+  expect(getGitBlame).toHaveBeenCalledWith("main", "tracked.txt");
+  const blameTitle = await screen.findByText("tracked.txt blame");
+  const blamePanel = blameTitle.closest("aside");
+  expect(blamePanel).not.toBeNull();
+  expect(within(blamePanel as HTMLElement).getByText("abcdef0")).toBeInTheDocument();
+  expect(within(blamePanel as HTMLElement).getByText("before")).toBeInTheDocument();
+});

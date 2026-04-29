@@ -153,19 +153,26 @@ from .api_service import (
     write_file_content,
 )
 from .git_service import (
+    apply_git_stash,
     commit_git_changes,
+    create_git_branch,
     discard_all_git_changes,
     discard_git_paths,
+    drop_git_stash,
     fetch_git_remote,
+    get_git_blame,
     get_git_diff,
     get_git_overview,
     get_git_tree_status,
     init_git_repository,
+    list_git_branches,
+    list_git_stashes,
     pop_git_stash,
     pull_git_remote,
     push_git_remote,
     stage_git_paths,
     stash_git_changes,
+    switch_git_branch,
     unstage_git_paths,
 )
 from .workspace_search_service import (
@@ -1372,6 +1379,56 @@ class WebApiServer:
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_git_tree_status(self.manager, alias, auth.user_id)})
 
+    async def get_git_branches_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": list_git_branches(self.manager, alias, auth.user_id)})
+
+    async def post_git_branch_create(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = create_git_branch(
+            self.manager,
+            alias,
+            auth.user_id,
+            str(body.get("name") or ""),
+            str(body.get("start_point") or body.get("startPoint") or ""),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def post_git_branch_switch(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = switch_git_branch(self.manager, alias, auth.user_id, str(body.get("name") or ""))
+        return _json({"ok": True, "data": data})
+
+    async def get_git_stashes_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": list_git_stashes(self.manager, alias, auth.user_id)})
+
+    async def post_git_stash_apply(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        overview = apply_git_stash(self.manager, alias, auth.user_id, str(body.get("ref") or ""))
+        return _json({"ok": True, "data": {"message": "已应用 stash", "overview": overview}})
+
+    async def post_git_stash_drop(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        overview = drop_git_stash(self.manager, alias, auth.user_id, str(body.get("ref") or ""))
+        return _json({"ok": True, "data": {"message": "已删除 stash", "overview": overview}})
+
+    async def get_git_blame_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        path = request.query.get("path", "")
+        return _json({"ok": True, "data": get_git_blame(self.manager, alias, auth.user_id, path)})
+
     async def post_git_init(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
@@ -2106,6 +2163,13 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)
         app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
         app.router.add_get("/api/bots/{alias}/git/tree-status", self.get_git_tree_status_view)
+        app.router.add_get("/api/bots/{alias}/git/branches", self.get_git_branches_view)
+        app.router.add_post("/api/bots/{alias}/git/branches", self.post_git_branch_create)
+        app.router.add_post("/api/bots/{alias}/git/branches/switch", self.post_git_branch_switch)
+        app.router.add_get("/api/bots/{alias}/git/stashes", self.get_git_stashes_view)
+        app.router.add_post("/api/bots/{alias}/git/stashes/apply", self.post_git_stash_apply)
+        app.router.add_post("/api/bots/{alias}/git/stashes/drop", self.post_git_stash_drop)
+        app.router.add_get("/api/bots/{alias}/git/blame", self.get_git_blame_view)
         app.router.add_post("/api/bots/{alias}/git/init", self.post_git_init)
         app.router.add_get("/api/bots/{alias}/git/diff", self.get_git_diff_view)
         app.router.add_post("/api/bots/{alias}/git/stage", self.post_git_stage)

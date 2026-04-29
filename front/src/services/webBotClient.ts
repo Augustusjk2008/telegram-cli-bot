@@ -38,9 +38,12 @@ import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   GitActionResult,
+  GitBlamePayload,
+  GitBranchList,
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  GitStashList,
   GitTreeStatus,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
@@ -165,6 +168,13 @@ export interface WebBotClient {
   pushGitRemote(botAlias: string): Promise<GitActionResult>;
   stashGitChanges(botAlias: string): Promise<GitActionResult>;
   popGitStash(botAlias: string): Promise<GitActionResult>;
+  listGitBranches(botAlias: string): Promise<GitBranchList>;
+  createGitBranch(botAlias: string, name: string, startPoint?: string): Promise<GitBranchList>;
+  switchGitBranch(botAlias: string, name: string): Promise<GitBranchList>;
+  listGitStashes(botAlias: string): Promise<GitStashList>;
+  applyGitStash(botAlias: string, ref: string): Promise<GitActionResult>;
+  dropGitStash(botAlias: string, ref: string): Promise<GitActionResult>;
+  getGitBlame(botAlias: string, path: string): Promise<GitBlamePayload>;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;

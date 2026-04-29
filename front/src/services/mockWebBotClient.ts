@@ -40,9 +40,12 @@ import type {
   FileCreateResult,
   FileEntry,
   GitActionResult,
+  GitBlamePayload,
+  GitBranchList,
   GitDiffPayload,
   GitProxySettings,
   GitOverview,
+  GitStashList,
   GitTreeStatus,
   FileMoveResult,
   FileRenameResult,
@@ -799,6 +802,22 @@ export class MockWebBotClient implements WebBotClient {
             authorName: "Web Bot",
             authoredAt: "2026-04-09 13:00:00 +0800",
             subject: "docs: add web tunnel and cli settings design",
+          },
+        ],
+      },
+    ],
+  ]);
+  private gitBranches = new Map<string, GitBranchList>();
+  private gitStashes = new Map<string, GitStashList>([
+    [
+      "main",
+      {
+        items: [
+          {
+            ref: "stash@{0}",
+            hash: "abc1234",
+            createdAt: "2026-04-28 10:30:00 +0800",
+            message: "On main: Web Bot stash 2026-04-28 10:30:00",
           },
         ],
       },
@@ -2855,6 +2874,115 @@ export class MockWebBotClient implements WebBotClient {
         },
       ],
     }));
+  }
+
+  private async getGitBranchListState(botAlias: string): Promise<GitBranchList> {
+    const cached = this.gitBranches.get(botAlias);
+    if (cached) {
+      return cached;
+    }
+    const overview = await this.getGitOverview(botAlias);
+    const currentBranch = overview.currentBranch || "main";
+    const branches: GitBranchList = {
+      currentBranch,
+      branches: [
+        {
+          name: currentBranch,
+          current: true,
+          upstream: "origin/main",
+          shortHash: overview.recentCommits[0]?.shortHash || "abc1234",
+          subject: overview.recentCommits[0]?.subject || "feat: initial commit",
+        },
+        {
+          name: "feature/git-panel",
+          current: false,
+          upstream: "",
+          shortHash: "def5678",
+          subject: "wip: git panel",
+        },
+      ],
+    };
+    this.gitBranches.set(botAlias, branches);
+    return branches;
+  }
+
+  async listGitBranches(botAlias: string): Promise<GitBranchList> {
+    return this.getGitBranchListState(botAlias);
+  }
+
+  async createGitBranch(botAlias: string, name: string, _startPoint = ""): Promise<GitBranchList> {
+    const current = await this.getGitBranchListState(botAlias);
+    const next = {
+      currentBranch: current.currentBranch,
+      branches: [
+        ...current.branches.filter((item) => item.name !== name),
+        {
+          name,
+          current: false,
+          upstream: "",
+          shortHash: "abc1234",
+          subject: "created from current branch",
+        },
+      ],
+    };
+    this.gitBranches.set(botAlias, next);
+    return next;
+  }
+
+  async switchGitBranch(botAlias: string, name: string): Promise<GitBranchList> {
+    const current = await this.getGitBranchListState(botAlias);
+    const overview = await this.getGitOverview(botAlias);
+    this.gitOverviews.set(botAlias, { ...overview, currentBranch: name });
+    const knownBranches = current.branches.some((item) => item.name === name)
+      ? current.branches
+      : [...current.branches, { name, current: false, upstream: "", shortHash: "abc1234", subject: "" }];
+    const next = {
+      currentBranch: name,
+      branches: knownBranches.map((item) => ({ ...item, current: item.name === name })),
+    };
+    this.gitBranches.set(botAlias, next);
+    return next;
+  }
+
+  async listGitStashes(botAlias: string): Promise<GitStashList> {
+    return this.gitStashes.get(botAlias) || { items: [] };
+  }
+
+  async applyGitStash(botAlias: string, ref: string): Promise<GitActionResult> {
+    const result = await this.actionWithOverview(botAlias, "已应用 stash", (overview) => ({
+      ...overview,
+      isClean: false,
+      changedFiles: [{ path: "restored.txt", status: " M", staged: false, unstaged: true, untracked: false }],
+    }));
+    this.gitStashes.set(botAlias, {
+      items: (this.gitStashes.get(botAlias)?.items || []).filter((item) => item.ref !== ref),
+    });
+    return result;
+  }
+
+  async dropGitStash(botAlias: string, ref: string): Promise<GitActionResult> {
+    this.gitStashes.set(botAlias, {
+      items: (this.gitStashes.get(botAlias)?.items || []).filter((item) => item.ref !== ref),
+    });
+    return this.actionWithOverview(botAlias, "已删除 stash");
+  }
+
+  async getGitBlame(_botAlias: string, path: string): Promise<GitBlamePayload> {
+    return {
+      path,
+      lines: [
+        {
+          line: 1,
+          commit: "abcdef0123456789",
+          shortCommit: "abcdef0",
+          authorName: "Web Bot",
+          authorMail: "web-bot@example.com",
+          authoredAt: "2026-04-28T02:30:00",
+          summary: "feat: initial commit",
+          content: "mock line",
+        },
+      ],
+    };
   }
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
