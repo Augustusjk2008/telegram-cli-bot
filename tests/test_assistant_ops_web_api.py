@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
+import time
 from functools import partial
 from pathlib import Path
 from unittest.mock import patch
@@ -12,9 +14,14 @@ from aiohttp.test_utils import TestClient, TestServer
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
 from bot.assistant_proposals import create_proposal
+from bot.assistant_runtime import AssistantRunRequest
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
-from bot.web.api_service import execute_assistant_run_request, stream_assistant_run_request
+from bot.web.api_service import (
+    _stream_assistant_proposal_patch_request,
+    execute_assistant_run_request,
+    stream_assistant_run_request,
+)
 from bot.web.server import WebApiServer
 
 
@@ -226,6 +233,18 @@ async def test_admin_assistant_proposal_detail_failed_patch_generation_reports_f
         ),
         encoding="utf-8",
     )
+    log_path = home.root / "upgrades" / "logs" / f"{proposal['id']}.generate.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"event": "started", "created_at": "2026-04-30T00:00:00+00:00"}, ensure_ascii=False),
+                json.dumps({"event": "failed", "created_at": "2026-04-30T00:01:00+00:00", "error": "cli failed"}, ensure_ascii=False),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
@@ -239,6 +258,9 @@ async def test_admin_assistant_proposal_detail_failed_patch_generation_reports_f
             assert payload["data"]["upgrade"]["generation_status"] == "failed"
             assert payload["data"]["upgrade"]["can_approve_patch"] is False
             assert payload["data"]["apply"]["available"] is False
+            assert payload["data"]["generation_log"]["available"] is True
+            assert payload["data"]["generation_log"]["items"][0]["event"] == "started"
+            assert payload["data"]["generation_log"]["items"][-1]["error"] == "cli failed"
 
 
 @pytest.mark.asyncio
@@ -401,6 +423,51 @@ async def test_admin_assistant_upgrade_targets_list_git_repos(
     assert target["available"] is True
     assert target["repo_root"] == str(repo.resolve())
     assert len(target["head"]) >= 7
+
+
+@pytest.mark.asyncio
+async def test_admin_assistant_generate_patch_rejects_dirty_target(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    assistant_dir = temp_dir / "assistant-root"
+    assistant_dir.mkdir()
+    repo = temp_dir / "target"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "a.txt").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "a.txt").write_text("dirty\n", encoding="utf-8")
+    _add_assistant_profile(web_manager, assistant_dir)
+    web_manager.managed_profiles["target1"] = BotProfile(
+        alias="target1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(repo),
+        enabled=True,
+        bot_mode="cli",
+    )
+    home = bootstrap_assistant_home(assistant_dir)
+    proposal = create_proposal(home, kind="code", title="patch", body="body")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post(
+                f"/api/admin/bots/assistant1/assistant/proposals/{proposal['id']}/patch",
+                json={"target_alias": "target1"},
+            )
+            payload = await resp.json()
+
+    assert resp.status == 409
+    assert payload["error"]["code"] == "upgrade_target_dirty"
+    assert "a.txt" in "\n".join(payload["error"]["data"]["dirty_paths"])
 
 
 @pytest.mark.asyncio
@@ -672,6 +739,96 @@ async def test_assistant_chat_patch_handoff_stream_updates_history_and_ops_detai
 
 
 @pytest.mark.asyncio
+async def test_assistant_chat_patch_stream_disconnect_does_not_mark_interrupted(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
+):
+    _enable_local_admin(monkeypatch)
+    assistant_dir = temp_dir / "assistant-root"
+    assistant_dir.mkdir()
+    repo = temp_dir / "target"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "a.txt").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    _add_assistant_profile(web_manager, assistant_dir)
+    web_manager.managed_profiles["target1"] = BotProfile(
+        alias="target1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(repo),
+        enabled=True,
+        bot_mode="cli",
+    )
+    home = bootstrap_assistant_home(assistant_dir)
+    proposal = create_proposal(home, kind="code", title="patch", body="change a")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def fake_generate_pending_patch(*args, event_callback=None, **kwargs):
+        if event_callback:
+            event_callback({"type": "status", "phase": "setup", "message": "准备生成", "lifecycle": "running"})
+        time.sleep(0.1)
+        return {
+            "id": proposal["id"],
+            "proposal_id": proposal["id"],
+            "state": "pending",
+            "lifecycle": "pending",
+            "target_alias": "target1",
+            "target_working_dir": str(repo),
+            "target_repo_root": str(repo),
+            "base_commit": "deadbeef",
+            "worktree_path": str(home.root / "upgrades" / "worktrees" / proposal["id"]),
+            "patch_path": f"upgrades/pending/{proposal['id']}.patch",
+            "generated_at": "2026-04-30T00:00:00+00:00",
+            "generated_by": "1001",
+            "generator": {"cli_type": "codex", "cli_path": "codex", "status": "succeeded", "elapsed_seconds": 1},
+            "dry_run": {"ok": False, "checked_at": "", "stdout": "", "stderr": "", "patch_path": "", "repo_root": ""},
+            "sensitive_hits": [],
+            "changed_files": ["a.txt"],
+            "additions": 1,
+            "deletions": 0,
+        }
+
+    monkeypatch.setattr("bot.web.api_service.generate_pending_patch", fake_generate_pending_patch)
+    request = AssistantRunRequest(
+        run_id="run_patch_disconnect",
+        source="web",
+        bot_alias="assistant1",
+        user_id=1001,
+        text="为已批准 proposal 生成 patch",
+        visible_text="为已批准 proposal 生成 patch",
+        interactive=True,
+        task_mode="proposal_patch",
+        task_payload={"proposal_id": proposal["id"], "target_alias": "target1"},
+    )
+    stream = _stream_assistant_proposal_patch_request(web_manager, request)
+    first_event = await anext(stream)
+    assert first_event["type"] == "status"
+    await stream.aclose()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            history_items = []
+            for _ in range(20):
+                await asyncio.sleep(0.05)
+                history_resp = await client.get("/api/bots/assistant1/history")
+                assert history_resp.status == 200
+                history_payload = await history_resp.json()
+                history_items = history_payload["data"]["items"]
+                if any(item["role"] == "assistant" and "patch 已生成" in item["content"] for item in history_items):
+                    break
+
+    assistant_texts = [item["content"] for item in history_items if item["role"] == "assistant"]
+    assert any("patch 已生成" in text for text in assistant_texts)
+    assert not any("patch_generation_interrupted" in text or "中断" in text for text in assistant_texts)
+
+
+@pytest.mark.asyncio
 async def test_admin_assistant_dry_run_uses_metadata_target_repo(
     web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path
 ):
@@ -707,8 +864,15 @@ async def test_admin_assistant_dry_run_uses_metadata_target_repo(
         async with TestClient(test_server) as client:
             resp = await client.post(f"/api/admin/bots/assistant1/assistant/upgrades/{proposal['id']}/dry-run")
             assert resp.status == 200
+            detail_resp = await client.get(
+                f"/api/admin/bots/assistant1/assistant/proposals/{proposal['id']}"
+            )
+            assert detail_resp.status == 200
+            detail_payload = await detail_resp.json()
 
     assert seen["repo_root"] == target_repo.resolve()
+    assert detail_payload["data"]["upgrade"]["dry_run"]["ok"] is True
+    assert detail_payload["data"]["upgrade"]["dry_run"]["repo_root"] == str(target_repo.resolve())
 
 
 @pytest.mark.asyncio

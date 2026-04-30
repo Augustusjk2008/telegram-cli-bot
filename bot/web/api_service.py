@@ -65,6 +65,7 @@ from bot.assistant_upgrade import (
     resolve_approved_upgrade_patch_path,
     resolve_approved_upgrade_repo_root,
     write_upgrade_apply_failure,
+    write_upgrade_dry_run_result,
     write_upgrade_metadata,
 )
 from bot.assistant_upgrade_targets import list_upgrade_targets, resolve_upgrade_target
@@ -915,6 +916,21 @@ def _read_assistant_upgrade_diff(home, proposal_id: str) -> dict[str, Any]:
     return {"available": False, "state": "", "source": "", "text": "", "files": []}
 
 
+def _read_assistant_generation_log(home, proposal_id: str, *, limit: int = 100) -> dict[str, Any]:
+    path = home.root / "upgrades" / "logs" / f"{proposal_id}.generate.jsonl"
+    if not path.exists():
+        return {"available": False, "source": "", "items": []}
+    items: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            payload = {"event": "unparsed", "message": line}
+        if isinstance(payload, dict):
+            items.append(payload)
+    return {"available": True, "source": path.relative_to(home.root).as_posix(), "items": items}
+
+
 def _read_assistant_apply_state(home, proposal_id: str, *, proposal: dict[str, Any], diff: dict[str, Any]) -> dict[str, Any]:
     applied = read_upgrade_apply_result(home, proposal_id)
     failed = read_upgrade_apply_failure(home, proposal_id)
@@ -959,6 +975,7 @@ def _read_assistant_upgrade_state(home, proposal_id: str, *, proposal: dict[str,
         "generation_status": str((metadata.get("generator") or {}).get("status") or pending_lifecycle or ""),
         "chat_conclusion": str(metadata.get("chat_conclusion") or ""),
         "sensitive_hits": sensitive_hits,
+        "dry_run": dict(metadata.get("dry_run") or {}),
         "can_generate": can_generate,
         "can_approve_patch": can_approve_patch,
         "can_dry_run": can_dry_run,
@@ -982,6 +999,7 @@ def get_assistant_proposal_detail(
         "diff": diff,
         "apply": _read_assistant_apply_state(home, proposal_id, proposal=proposal, diff=diff),
         "upgrade": _read_assistant_upgrade_state(home, proposal_id, proposal=proposal),
+        "generation_log": _read_assistant_generation_log(home, proposal_id),
     }
 
 
@@ -1029,6 +1047,13 @@ async def reject_assistant_proposal(
 
 
 def _raise_patch_generation_error(exc: Exception) -> None:
+    if isinstance(exc, RuntimeError) and str(exc).startswith("upgrade_target_dirty"):
+        _raise(
+            409,
+            "upgrade_target_dirty",
+            "目标工程有未提交改动，请清理后再生成 patch",
+            data={"dirty_status": str(exc)},
+        )
     if isinstance(exc, PermissionError):
         if str(exc) == "proposal_not_approved":
             _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
@@ -1047,6 +1072,19 @@ def _raise_patch_generation_error(exc: Exception) -> None:
         ) or str(exc)
         _raise(500, "patch_generation_failed", str(detail).strip() or "生成 patch 失败")
     raise exc
+
+
+def _raise_unavailable_upgrade_target(target: dict[str, Any]) -> None:
+    reason = str(target.get("reason") or "upgrade_target_unavailable")
+    dirty_paths = [str(item) for item in target.get("dirty_paths") or [] if str(item)]
+    if reason == "upgrade_target_dirty":
+        _raise(
+            409,
+            reason,
+            "目标工程有未提交改动，请清理后再生成 patch",
+            data={"dirty_paths": dirty_paths},
+        )
+    _raise(409, reason, "目标工程不可用", data={"dirty_paths": dirty_paths})
 
 
 async def generate_assistant_proposal_patch(
@@ -1070,7 +1108,7 @@ async def generate_assistant_proposal_patch(
     except KeyError:
         _raise(404, "upgrade_target_not_found", target_alias)
     if not target.get("available"):
-        _raise(409, str(target.get("reason") or "upgrade_target_unavailable"), "目标工程不可用")
+        _raise_unavailable_upgrade_target(target)
     try:
         return generate_pending_patch(
             home,
@@ -1104,7 +1142,7 @@ async def stream_generate_assistant_proposal_patch(
     except KeyError:
         _raise(404, "upgrade_target_not_found", target_alias)
     if not target.get("available"):
-        _raise(409, str(target.get("reason") or "upgrade_target_unavailable"), "目标工程不可用")
+        _raise_unavailable_upgrade_target(target)
 
     event_queue: queue.Queue[Any] = queue.Queue()
     worker_done = threading.Event()
@@ -1125,6 +1163,12 @@ async def stream_generate_assistant_proposal_patch(
             event_queue.put({"type": "done", "metadata": metadata})
         except Exception as exc:  # pragma: no cover - event body is asserted at stream boundary
             logger.warning("assistant patch stream failed: alias=%s proposal=%s err=%s", alias, proposal_id, exc)
+            event_queue.put({
+                "type": "error",
+                "code": "patch_generation_failed",
+                "message": _normalize_error_message(exc).strip() or "patch_generation_failed",
+                "metadata": read_upgrade_metadata(home, proposal_id, "pending"),
+            })
         finally:
             worker_done.set()
 
@@ -1178,6 +1222,27 @@ async def apply_assistant_upgrade(
         raise
     except FileNotFoundError as exc:
         _raise(404, "upgrade_patch_not_found", str(exc))
+    except RuntimeError as exc:
+        detail = str(exc)
+        if detail.startswith("upgrade_target_dirty"):
+            try:
+                patch_path = resolve_approved_upgrade_patch_path(home, proposal_id)
+            except FileNotFoundError:
+                patch_path = home.root / "upgrades" / "approved" / f"{proposal_id}.patch"
+            write_upgrade_apply_failure(
+                home,
+                proposal_id,
+                repo_root=repo_root,
+                patch_path=patch_path,
+                error=detail,
+            )
+            _raise(
+                409,
+                "upgrade_target_dirty",
+                "目标工程有未提交改动，请清理后再 apply",
+                data={"dirty_status": detail},
+            )
+        raise
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
         try:
@@ -1209,7 +1274,9 @@ async def dry_run_assistant_upgrade(
         proposal_id,
         fallback_repo_root=Path(__file__).resolve().parents[2],
     )
-    return run_upgrade_dry_run(repo_root=repo_root, patch_path=patch_path)
+    result = run_upgrade_dry_run(repo_root=repo_root, patch_path=patch_path)
+    write_upgrade_dry_run_result(home, proposal_id, result)
+    return result
 
 
 def _assistant_memory_score(row: MemorySearchRow) -> float:
@@ -4142,7 +4209,7 @@ async def _stream_assistant_proposal_patch_request(
     except KeyError:
         _raise(404, "upgrade_target_not_found", target_alias)
     if not target.get("available"):
-        _raise(409, str(target.get("reason") or "upgrade_target_unavailable"), "目标工程不可用")
+        _raise_unavailable_upgrade_target(target)
 
     service = _get_chat_history_service(session)
     turn_handle = service.start_turn(
@@ -4154,7 +4221,7 @@ async def _stream_assistant_proposal_patch_request(
         managed_prompt_hash=session.managed_prompt_hash_seen,
         prompt_surface_version="v1",
     )
-    started_at = asyncio.get_running_loop().time()
+    started_at = time.perf_counter()
     event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     worker_done = threading.Event()
     preview_text = ""
@@ -4172,13 +4239,50 @@ async def _stream_assistant_proposal_patch_request(
                 regenerate=regenerate,
                 event_callback=on_event,
             )
-            event_queue.put({"type": "done", "metadata": metadata})
-        except Exception as exc:
+            summary = _build_patch_generation_summary(metadata)
+            done_message = service.complete_turn(
+                turn_handle,
+                content=summary,
+                completion_state="completed",
+            )
+            persisted = _persist_patch_chat_conclusion(
+                home,
+                proposal_id,
+                metadata,
+                summary=summary,
+                message_id=str(done_message.get("id") or ""),
+            )
             event_queue.put({
-                "type": "error",
-                "code": "patch_generation_failed",
-                "message": _normalize_error_message(exc).strip() or "patch_generation_failed",
-                "metadata": read_upgrade_metadata(home, proposal_id, "pending"),
+                "type": "done",
+                "metadata": persisted or metadata,
+                "output": summary,
+                "message": done_message,
+                "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
+            })
+        except Exception as exc:
+            error_message = _normalize_error_message(exc).strip() or "patch_generation_failed"
+            metadata_dict = read_upgrade_metadata(home, proposal_id, "pending")
+            summary = _build_patch_generation_summary(metadata_dict, error_message=error_message)
+            done_message = service.complete_turn(
+                turn_handle,
+                content=summary,
+                completion_state="failed",
+                error_code="patch_generation_failed",
+                error_message=error_message,
+            )
+            persisted = _persist_patch_chat_conclusion(
+                home,
+                proposal_id,
+                metadata_dict,
+                summary=summary,
+                message_id=str(done_message.get("id") or ""),
+            )
+            event_queue.put({
+                "type": "done",
+                "metadata": persisted or metadata_dict or {},
+                "output": summary,
+                "message": done_message,
+                "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
             })
         finally:
             worker_done.set()
@@ -4212,26 +4316,12 @@ async def _stream_assistant_proposal_patch_request(
             yield item
             continue
         if item_type == "done":
-            metadata = dict(item.get("metadata") or {})
-            summary = _build_patch_generation_summary(metadata)
-            done_message = service.complete_turn(
-                turn_handle,
-                content=summary,
-                completion_state="completed",
-            )
-            persisted = _persist_patch_chat_conclusion(
-                home,
-                proposal_id,
-                metadata,
-                summary=summary,
-                message_id=str(done_message.get("id") or ""),
-            )
             yield {
                 "type": "done",
-                "metadata": persisted or metadata,
-                "output": summary,
-                "message": done_message,
-                "elapsed_seconds": _calculate_elapsed_seconds(asyncio.get_running_loop(), started_at),
+                "metadata": dict(item.get("metadata") or {}),
+                "output": str(item.get("output") or ""),
+                "message": item.get("message"),
+                "elapsed_seconds": int(item.get("elapsed_seconds") or round(max(time.perf_counter() - started_at, 0))),
             }
             return
         if item_type == "error":
@@ -4258,25 +4348,10 @@ async def _stream_assistant_proposal_patch_request(
                 "metadata": persisted or metadata_dict or {},
                 "output": summary,
                 "message": done_message,
-                "elapsed_seconds": _calculate_elapsed_seconds(asyncio.get_running_loop(), started_at),
+                "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
             }
             return
-
-    summary = _build_patch_generation_summary(None, error_message="patch 生成已中断")
-    done_message = service.complete_turn(
-        turn_handle,
-        content=summary,
-        completion_state="failed",
-        error_code="patch_generation_interrupted",
-        error_message="patch 生成已中断",
-    )
-    yield {
-        "type": "done",
-        "metadata": read_upgrade_metadata(home, proposal_id, "pending") or {},
-        "output": summary,
-        "message": done_message,
-        "elapsed_seconds": _calculate_elapsed_seconds(asyncio.get_running_loop(), started_at),
-    }
+    return
 
 
 async def execute_assistant_run_request(manager: MultiBotManager, request: AssistantRunRequest) -> dict[str, Any]:

@@ -2715,6 +2715,7 @@ describe("RealWebBotClient", () => {
                 repo_root: "C:\\workspace\\target1",
                 head: "deadbeef",
                 dirty: false,
+                dirty_paths: [],
                 bot_mode: "cli",
                 cli_type: "codex",
                 cli_path: "codex",
@@ -2869,10 +2870,30 @@ describe("RealWebBotClient", () => {
               patch_source: "upgrades/approved/pr_1.patch",
               generation_status: "succeeded",
               sensitive_hits: [],
+              dry_run: {
+                ok: true,
+                checked_at: "2026-04-28T01:12:00Z",
+                stdout: "Patch cleanly applies",
+                stderr: "",
+                patch_path: "upgrades/approved/pr_1.patch",
+                repo_root: "C:\\workspace\\target1",
+              },
               can_generate: true,
               can_approve_patch: false,
               can_dry_run: true,
               can_apply: true,
+            },
+            generation_log: {
+              available: true,
+              source: "upgrades/logs/pr_1.generate.jsonl",
+              items: [
+                {
+                  event: "failed",
+                  created_at: "2026-04-28T01:00:00Z",
+                  code: "TimeoutExpired",
+                  error: "timed out",
+                },
+              ],
             },
           },
         }),
@@ -2941,6 +2962,7 @@ describe("RealWebBotClient", () => {
       alias: "target1",
       repoRoot: "C:\\workspace\\target1",
       available: true,
+      dirtyPaths: [],
     }));
     expect(pendingDetail.upgrade.state).toBe("pending");
     expect(pendingPatch.targetAlias).toBe("target1");
@@ -2948,6 +2970,12 @@ describe("RealWebBotClient", () => {
     expect(detail.diff.available).toBe(true);
     expect(detail.apply.available).toBe(true);
     expect(detail.upgrade.canDryRun).toBe(true);
+    expect(detail.upgrade.dryRun.stdout).toBe("Patch cleanly applies");
+    expect(detail.generationLog.items[0]).toEqual(expect.objectContaining({
+      event: "failed",
+      code: "TimeoutExpired",
+      error: "timed out",
+    }));
   });
 
   test("assistant patch stream forwards status trace log and returns metadata", async () => {

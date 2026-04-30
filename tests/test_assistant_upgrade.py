@@ -13,6 +13,27 @@ def _init_git_repo(repo: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=repo, text=True).strip()
 
 
+def test_describe_upgrade_repo_marks_dirty_repo_unavailable(tmp_path):
+    from bot.assistant_upgrade_targets import describe_upgrade_repo
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "tracked.txt").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "tracked.txt").write_text("new\n", encoding="utf-8")
+    (repo / "untracked.txt").write_text("new\n", encoding="utf-8")
+
+    result = describe_upgrade_repo(repo)
+
+    assert result["available"] is False
+    assert result["dirty"] is True
+    assert result["reason"] == "upgrade_target_dirty"
+    assert "tracked.txt" in "\n".join(result["dirty_paths"])
+    assert "untracked.txt" in "\n".join(result["dirty_paths"])
+
+
 def test_apply_approved_upgrade_runs_git_apply_check_and_marks_applied(tmp_path, monkeypatch):
     from bot.assistant_upgrade import apply_approved_upgrade
 
@@ -43,8 +64,39 @@ def test_apply_approved_upgrade_runs_git_apply_check_and_marks_applied(tmp_path,
     result = apply_approved_upgrade(home, proposal["id"], repo_root=repo)
 
     assert result["status"] == "applied"
-    assert calls[1][:3] == ["git", "apply", "--check"]
-    assert calls[2][:2] == ["git", "apply"]
+    assert any(call[:3] == ["git", "apply", "--check"] for call in calls)
+    assert any(call[:2] == ["git", "apply"] and "--check" not in call for call in calls)
+
+
+def test_apply_approved_upgrade_rejects_dirty_target(tmp_path):
+    from bot.assistant_upgrade import apply_approved_upgrade
+
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "a.txt").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "a.txt").write_text("dirty\n", encoding="utf-8")
+    home = bootstrap_assistant_home(workdir)
+    proposal = create_proposal(home, kind="code", title="patch", body="body")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    patch_path = home.root / "upgrades" / "approved" / f"{proposal['id']}.patch"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text("diff --git a/a.txt b/a.txt\n", encoding="utf-8")
+
+    try:
+        apply_approved_upgrade(home, proposal["id"], repo_root=repo)
+    except RuntimeError as exc:
+        assert str(exc).startswith("upgrade_target_dirty")
+        assert "a.txt" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected dirty target rejection")
 
 
 def test_apply_approved_upgrade_rejects_non_approved_proposal(tmp_path, monkeypatch):
@@ -97,6 +149,34 @@ def test_write_upgrade_apply_failure_persists_audit(tmp_path):
     audit_path = home.root / "upgrades" / "applied" / f"{proposal['id']}.last-error.json"
     assert audit_path.exists()
     assert "patch does not apply" in audit_path.read_text(encoding="utf-8")
+
+
+def test_write_upgrade_dry_run_result_updates_approved_metadata(tmp_path):
+    from bot.assistant_upgrade import read_upgrade_metadata, write_upgrade_dry_run_result, write_upgrade_metadata
+
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    proposal = create_proposal(home, kind="code", title="patch", body="body")
+    write_upgrade_metadata(home, proposal["id"], "approved", {"target_repo_root": str(tmp_path / "repo")})
+
+    saved = write_upgrade_dry_run_result(
+        home,
+        proposal["id"],
+        {
+            "ok": False,
+            "checked_at": "2026-04-30T00:00:00+00:00",
+            "stdout": "",
+            "stderr": "patch does not apply",
+            "repo_root": "C:/repo",
+            "patch_path": "C:/patch.diff",
+        },
+    )
+
+    loaded = read_upgrade_metadata(home, proposal["id"], "approved")
+    assert saved["dry_run"]["ok"] is False
+    assert loaded["dry_run"]["stderr"] == "patch does not apply"
+    assert loaded["dry_run"]["repo_root"] == "C:/repo"
 
 
 def test_upgrade_metadata_round_trip_and_approved_resolution(tmp_path):
@@ -296,6 +376,54 @@ def test_generate_pending_patch_exports_diff_and_metadata(tmp_path, monkeypatch)
     assert result["target_repo_root"] == str(repo)
     assert result["base_commit"] == head
     assert result["changed_files"] == ["a.txt"]
+
+
+def test_generate_pending_patch_writes_lf_patch_bytes(tmp_path, monkeypatch):
+    from bot.assistant_patch_generation import generate_pending_patch
+
+    assistant_dir = tmp_path / "assistant-root"
+    assistant_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "a.txt").write_text("old\n", encoding="utf-8", newline="\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    home = bootstrap_assistant_home(assistant_dir)
+    proposal = create_proposal(home, kind="code", title="patch", body="change a")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    proposal["status"] = "approved"
+
+    def fake_cli(worktree_path: Path, prompt: str, metadata: dict):
+        (worktree_path / "a.txt").write_text("new\n", encoding="utf-8", newline="\n")
+        return {"status": "succeeded", "elapsed_seconds": 1, "stdout_tail": "", "stderr_tail": ""}
+
+    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+
+    generate_pending_patch(
+        home,
+        proposal,
+        target={
+            "alias": "target1",
+            "working_dir": str(repo),
+            "repo_root": str(repo),
+            "head": head,
+            "cli_type": "codex",
+            "cli_path": "codex",
+        },
+        generated_by="1001",
+        regenerate=False,
+    )
+
+    patch_path = home.root / "upgrades" / "pending" / f"{proposal['id']}.patch"
+    data = patch_path.read_bytes()
+    assert b"\r\n" not in data
+    assert b"\n" in data
+    subprocess.run(["git", "apply", "--check", str(patch_path)], cwd=repo, check=True)
 
 
 def test_generate_pending_patch_marks_sensitive_hits(tmp_path, monkeypatch):

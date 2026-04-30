@@ -34,6 +34,49 @@ def _profiles(manager: MultiBotManager) -> list[BotProfile]:
     return unique
 
 
+def _status_lines(repo_root: Path) -> list[str]:
+    status = _run_git(repo_root, ["status", "--porcelain"])
+    if status.returncode != 0:
+        return []
+    return [line for line in status.stdout.splitlines() if line.strip()]
+
+
+def describe_upgrade_repo(working_dir: Path) -> dict[str, Any]:
+    working_dir = Path(working_dir).expanduser()
+    item: dict[str, Any] = {
+        "repo_root": "",
+        "head": "",
+        "dirty": False,
+        "dirty_paths": [],
+        "available": False,
+        "reason": "",
+    }
+    if not working_dir.exists():
+        item["reason"] = "working_dir_not_found"
+        return item
+    root = _run_git(working_dir, ["rev-parse", "--show-toplevel"])
+    if root.returncode != 0:
+        item["reason"] = "upgrade_target_not_git_repo"
+        return item
+    repo_root = Path(root.stdout.strip()).resolve()
+    item["repo_root"] = str(repo_root)
+    head = _run_git(repo_root, ["rev-parse", "HEAD"])
+    if head.returncode != 0:
+        item["reason"] = "upgrade_target_no_head"
+        return item
+    dirty_paths = _status_lines(repo_root)
+    item.update(
+        {
+            "head": head.stdout.strip(),
+            "dirty": bool(dirty_paths),
+            "dirty_paths": dirty_paths[:20],
+            "available": not bool(dirty_paths),
+            "reason": "upgrade_target_dirty" if dirty_paths else "",
+        }
+    )
+    return item
+
+
 def list_upgrade_targets(manager: MultiBotManager) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for profile in _profiles(manager):
@@ -44,38 +87,14 @@ def list_upgrade_targets(manager: MultiBotManager) -> list[dict[str, Any]]:
             "repo_root": "",
             "head": "",
             "dirty": False,
+            "dirty_paths": [],
             "bot_mode": str(profile.bot_mode or "cli"),
             "cli_type": str(profile.cli_type or ""),
             "cli_path": str(profile.cli_path or ""),
             "available": False,
             "reason": "",
         }
-        if not working_dir.exists():
-            item["reason"] = "working_dir_not_found"
-            items.append(item)
-            continue
-        root = _run_git(working_dir, ["rev-parse", "--show-toplevel"])
-        if root.returncode != 0:
-            item["reason"] = "upgrade_target_not_git_repo"
-            items.append(item)
-            continue
-        repo_root = Path(root.stdout.strip()).resolve()
-        head = _run_git(repo_root, ["rev-parse", "HEAD"])
-        if head.returncode != 0:
-            item["repo_root"] = str(repo_root)
-            item["reason"] = "upgrade_target_no_head"
-            items.append(item)
-            continue
-        status = _run_git(repo_root, ["status", "--porcelain"])
-        item.update(
-            {
-                "repo_root": str(repo_root),
-                "head": head.stdout.strip(),
-                "dirty": bool(status.stdout.strip()),
-                "available": True,
-                "reason": "",
-            }
-        )
+        item.update(describe_upgrade_repo(working_dir))
         items.append(item)
     return items
 

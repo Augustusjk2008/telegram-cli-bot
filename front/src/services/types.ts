@@ -1116,6 +1116,7 @@ export type AssistantUpgradeTarget = {
   repoRoot: string;
   head: string;
   dirty: boolean;
+  dirtyPaths: string[];
   botMode: string;
   cliType: string;
   cliPath: string;
@@ -1132,6 +1133,7 @@ export type AssistantUpgradeState = {
   generationStatus: string;
   chatConclusion: string;
   sensitiveHits: string[];
+  dryRun: AssistantUpgradeDryRunResult;
   canGenerate: boolean;
   canApprovePatch: boolean;
   canDryRun: boolean;
@@ -1164,7 +1166,10 @@ export type AssistantPatchMetadata = {
   dryRun: {
     ok: boolean;
     checkedAt: string;
+    stdout: string;
     stderr: string;
+    patchPath: string;
+    repoRoot: string;
   };
   sensitiveHits: string[];
   changedFiles: string[];
@@ -1203,6 +1208,23 @@ export type AssistantProposalDetail = {
   };
   apply: AssistantUpgradeApplyState;
   upgrade: AssistantUpgradeState;
+  generationLog: AssistantGenerationLog;
+};
+
+export type AssistantGenerationLogItem = {
+  event: string;
+  createdAt: string;
+  status: string;
+  message: string;
+  error: string;
+  code: string;
+  raw: Record<string, unknown>;
+};
+
+export type AssistantGenerationLog = {
+  available: boolean;
+  source: string;
+  items: AssistantGenerationLogItem[];
 };
 
 export type AssistantUpgradeApplyResult = {

@@ -111,6 +111,38 @@ test("assistant ops screen dispatches patch request to chat and shows completion
   });
 
   expect(await screen.findByText(/patch 已生成\s*目标工程: main\s*变更文件: 2/)).toBeInTheDocument();
+  expect(await screen.findByText("生成日志")).toBeInTheDocument();
+  expect(await screen.findByText("upgrades/logs/pr_sync_memory_index.generate.jsonl")).toBeInTheDocument();
+});
+
+test("assistant ops blocks dirty upgrade target and shows paths", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(await screen.findByText("补 memory index 审计"));
+  await user.click(await screen.findByRole("button", { name: "批准" }));
+  await user.selectOptions(await screen.findByLabelText("目标工程"), "assistant1");
+
+  expect(await screen.findByText("目标仓库不干净，patch 生成/apply 已禁用。")).toBeInTheDocument();
+  expect(screen.getByText("M bot/assistant_memory_recall.py")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "聊天里生成" })).toBeDisabled();
+});
+
+test("assistant ops uses persisted dry-run result after reload", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+  await client.dryRunAssistantUpgrade("assistant1", "pr_apply_upgrade_guard");
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(await screen.findByText("apply 前强校验 approved"));
+
+  expect(await screen.findByText("Patch cleanly applies")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+  });
 });
 
 test("assistant ops screen rejects chat patch request while chat is busy", async () => {

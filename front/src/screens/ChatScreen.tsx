@@ -16,6 +16,7 @@ import type {
   ChatMessage,
   ChatMessageMetaInfo,
   ChatSendOptions,
+  ChatStatusUpdate,
   CliParamsPayload,
   ChatTraceEvent,
   FileReadResult,

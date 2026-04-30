@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from bot.assistant_home import AssistantHome
-from bot.assistant_upgrade import read_upgrade_metadata, write_upgrade_metadata
+from bot.assistant_upgrade import ensure_upgrade_repo_clean, read_upgrade_metadata, write_upgrade_metadata
 from bot.assistant_upgrade_diff import parse_patch_files
 from bot.cli import build_cli_command, normalize_cli_type, resolve_cli_executable
 from bot.cli_params import CliParamsConfig
@@ -56,6 +56,11 @@ def _run_git(cwd: Path, args: list[str], *, check: bool = True) -> subprocess.Co
             stderr=completed.stderr,
         )
     return completed
+
+
+def _write_lf_text(path: Path, text: str) -> None:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    path.write_bytes(normalized.encode("utf-8"))
 
 
 def _emit_event(
@@ -415,6 +420,7 @@ def generate_pending_patch(
     base_commit = str(target.get("head") or "").strip()
     if not base_commit:
         raise ValueError("upgrade_target_no_head")
+    ensure_upgrade_repo_clean(target_repo_root)
 
     worktree_path = home.root / "upgrades" / "worktrees" / proposal_id
     pending_patch = home.root / "upgrades" / "pending" / f"{proposal_id}.patch"
@@ -557,7 +563,7 @@ def generate_pending_patch(
             raise ValueError("patch_file_limit")
 
         pending_patch.parent.mkdir(parents=True, exist_ok=True)
-        pending_patch.write_text(diff_text, encoding="utf-8")
+        _write_lf_text(pending_patch, diff_text)
         saved = write_upgrade_metadata(
             home,
             proposal_id,

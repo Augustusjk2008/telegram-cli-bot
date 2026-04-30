@@ -1399,17 +1399,19 @@ export class MockWebBotClient implements WebBotClient {
 
   private buildMockUpgradeTarget(botAlias: string): AssistantUpgradeTarget {
     const bot = this.getBotSummary(botAlias);
+    const dirty = bot.alias === "assistant1";
     return {
       alias: bot.alias,
       workingDir: bot.workingDir,
       repoRoot: bot.workingDir,
       head: bot.alias === "main" ? "a1b2c3d4" : "b2c3d4e5",
-      dirty: bot.alias === "assistant1",
+      dirty,
+      dirtyPaths: dirty ? [" M bot/assistant_memory_recall.py"] : [],
       botMode: bot.botMode || "cli",
       cliType: bot.cliType || "",
       cliPath: bot.cliPath || "",
-      available: Boolean(bot.workingDir),
-      reason: bot.workingDir ? "" : "working_dir_not_found",
+      available: Boolean(bot.workingDir) && !dirty,
+      reason: !bot.workingDir ? "working_dir_not_found" : (dirty ? "upgrade_target_dirty" : ""),
     };
   }
 
@@ -1441,6 +1443,14 @@ export class MockWebBotClient implements WebBotClient {
       generationStatus: metadata?.generator.status || "",
       chatConclusion: String((metadata as Record<string, unknown> | null)?.chatConclusion || ""),
       sensitiveHits: metadata?.sensitiveHits || [],
+      dryRun: metadata?.dryRun || {
+        ok: false,
+        checkedAt: "",
+        stdout: "",
+        stderr: "",
+        patchPath: "",
+        repoRoot: "",
+      },
       canGenerate: proposal.status === "approved",
       canApprovePatch: metadata?.state === "pending" && lifecycle !== "failed" && (metadata.sensitiveHits?.length || 0) === 0,
       canDryRun: metadata?.state === "approved",
@@ -1588,7 +1598,10 @@ export class MockWebBotClient implements WebBotClient {
         dryRun: {
           ok: false,
           checkedAt: "",
+          stdout: "",
           stderr: "",
+          patchPath: "upgrades/approved/pr_apply_upgrade_guard.patch",
+          repoRoot: "C:\\workspace\\main",
         },
         sensitiveHits: [],
         changedFiles: [
@@ -3615,6 +3628,30 @@ export class MockWebBotClient implements WebBotClient {
         lastErrorLogPath: log?.status === "failed" ? `upgrades/applied/${proposalId}.last-error.json` : "",
       },
       upgrade,
+      generationLog: {
+        available: Boolean(patchMetadata),
+        source: patchMetadata ? `upgrades/logs/${proposalId}.generate.jsonl` : "",
+        items: patchMetadata ? [
+          {
+            event: "started",
+            createdAt: patchMetadata.generatedAt,
+            status: "",
+            message: "",
+            error: "",
+            code: "",
+            raw: { event: "started", created_at: patchMetadata.generatedAt, proposal_id: proposalId },
+          },
+          {
+            event: patchMetadata.generator.status === "failed" ? "failed" : "succeeded",
+            createdAt: patchMetadata.generatedAt,
+            status: patchMetadata.generator.status,
+            message: "",
+            error: "",
+            code: "",
+            raw: { event: patchMetadata.generator.status === "failed" ? "failed" : "succeeded", status: patchMetadata.generator.status },
+          },
+        ] : [],
+      },
     };
   }
 
@@ -3667,6 +3704,16 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("proposal 尚未批准", { status: 409, code: "proposal_not_approved" });
     }
     const target = this.buildMockUpgradeTarget(input.targetAlias);
+    if (!target.available) {
+      throw new WebApiClientError(
+        target.reason === "upgrade_target_dirty" ? "目标仓库不干净，先提交或清理改动" : "目标工程不可用",
+        {
+          status: 409,
+          code: target.reason || "upgrade_target_unavailable",
+          data: { dirtyPaths: target.dirtyPaths },
+        },
+      );
+    }
     const key = this.assistantProposalKey(botAlias, proposalId);
     const diffText = [
       "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py",
@@ -3709,7 +3756,10 @@ export class MockWebBotClient implements WebBotClient {
       dryRun: {
         ok: false,
         checkedAt: "",
+        stdout: "",
         stderr: "",
+        patchPath: "",
+        repoRoot: "",
       },
       sensitiveHits: [],
       changedFiles: [
@@ -3866,6 +3916,12 @@ export class MockWebBotClient implements WebBotClient {
       patchPath: patch?.patchPath || "",
       repoRoot: patch?.targetRepoRoot || "",
     };
+    if (patch) {
+      this.assistantProposalPatchMetadata.set(this.assistantProposalKey(botAlias, proposalId), {
+        ...patch,
+        dryRun: result,
+      });
+    }
     this.pushAssistantAdminAudit(botAlias, {
       action: "assistant.upgrade.dry_run",
       resource: "proposal",

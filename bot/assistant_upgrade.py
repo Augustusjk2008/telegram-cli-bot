@@ -81,6 +81,28 @@ def _git_rev_parse(repo_root: Path, ref: str) -> str:
     return completed.stdout.strip() if completed.returncode == 0 else ""
 
 
+def dirty_status_lines(repo_root: Path) -> list[str]:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        return []
+    return [line for line in completed.stdout.splitlines() if line.strip()]
+
+
+def ensure_upgrade_repo_clean(repo_root: Path) -> None:
+    dirty = dirty_status_lines(Path(repo_root).resolve())
+    if dirty:
+        preview = "\n".join(dirty[:20])
+        raise RuntimeError(f"upgrade_target_dirty\n{preview}")
+
+
 def resolve_approved_upgrade_repo_root(
     home: AssistantHome,
     proposal_id: str,
@@ -138,6 +160,19 @@ def write_upgrade_apply_failure(
     return result
 
 
+def write_upgrade_dry_run_result(home: AssistantHome, proposal_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    metadata = read_upgrade_metadata(home, proposal_id, "approved") or {}
+    metadata["dry_run"] = {
+        "ok": bool(result.get("ok")),
+        "checked_at": str(result.get("checked_at") or ""),
+        "stdout": str(result.get("stdout") or ""),
+        "stderr": str(result.get("stderr") or ""),
+        "repo_root": str(result.get("repo_root") or ""),
+        "patch_path": str(result.get("patch_path") or ""),
+    }
+    return write_upgrade_metadata(home, proposal_id, "approved", metadata)
+
+
 def apply_approved_upgrade(home: AssistantHome, proposal_id: str, *, repo_root: Path) -> dict:
     proposal = get_proposal(home, proposal_id)
     if proposal.get("status") != "approved":
@@ -146,6 +181,7 @@ def apply_approved_upgrade(home: AssistantHome, proposal_id: str, *, repo_root: 
     repo_root = resolve_approved_upgrade_repo_root(home, proposal_id, fallback_repo_root=repo_root)
     approved_metadata = read_upgrade_metadata(home, proposal_id, "approved") or {}
     applied_commit_before = _git_rev_parse(repo_root, "HEAD")
+    ensure_upgrade_repo_clean(repo_root)
 
     subprocess.run(
         ["git", "apply", "--check", str(patch_path)],

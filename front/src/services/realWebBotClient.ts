@@ -480,11 +480,21 @@ type RawAssistantUpgradeTarget = {
   repo_root?: string;
   head?: string;
   dirty?: boolean;
+  dirty_paths?: string[];
   bot_mode?: string;
   cli_type?: string;
   cli_path?: string;
   available?: boolean;
   reason?: string;
+};
+
+type RawAssistantDryRun = {
+  ok?: boolean;
+  checked_at?: string;
+  stdout?: string;
+  stderr?: string;
+  patch_path?: string;
+  repo_root?: string;
 };
 
 type RawAssistantUpgradeState = {
@@ -496,6 +506,7 @@ type RawAssistantUpgradeState = {
   generation_status?: string;
   chat_conclusion?: string;
   sensitive_hits?: string[];
+  dry_run?: RawAssistantDryRun;
   can_generate?: boolean;
   can_approve_patch?: boolean;
   can_dry_run?: boolean;
@@ -523,15 +534,17 @@ type RawAssistantPatchMetadata = {
     status?: string;
     elapsed_seconds?: number;
   };
-  dry_run?: {
-    ok?: boolean;
-    checked_at?: string;
-    stderr?: string;
-  };
+  dry_run?: RawAssistantDryRun;
   sensitive_hits?: string[];
   changed_files?: string[];
   additions?: number;
   deletions?: number;
+};
+
+type RawAssistantGenerationLog = {
+  available?: boolean;
+  source?: string;
+  items?: Array<Record<string, unknown>>;
 };
 
 type RawAssistantProposalDetail = {
@@ -552,6 +565,7 @@ type RawAssistantProposalDetail = {
   };
   apply?: RawAssistantUpgradeApplyState;
   upgrade?: RawAssistantUpgradeState;
+  generation_log?: RawAssistantGenerationLog;
 };
 
 type RawAssistantUpgradeApplyResult = {
@@ -1292,11 +1306,23 @@ function mapAssistantUpgradeTarget(raw: RawAssistantUpgradeTarget): AssistantUpg
     repoRoot: raw.repo_root || "",
     head: raw.head || "",
     dirty: Boolean(raw.dirty),
+    dirtyPaths: (raw.dirty_paths || []).map((item) => String(item)),
     botMode: raw.bot_mode || "",
     cliType: raw.cli_type || "",
     cliPath: raw.cli_path || "",
     available: Boolean(raw.available),
     reason: raw.reason || "",
+  };
+}
+
+function mapAssistantDryRun(raw: RawAssistantDryRun | undefined): AssistantUpgradeDryRunResult {
+  return {
+    ok: Boolean(raw?.ok),
+    checkedAt: raw?.checked_at || "",
+    stdout: raw?.stdout || "",
+    stderr: raw?.stderr || "",
+    patchPath: raw?.patch_path || "",
+    repoRoot: raw?.repo_root || "",
   };
 }
 
@@ -1310,6 +1336,7 @@ function mapAssistantUpgradeState(raw: RawAssistantUpgradeState | undefined): As
     generationStatus: raw?.generation_status || "",
     chatConclusion: raw?.chat_conclusion || "",
     sensitiveHits: (raw?.sensitive_hits || []).map((item) => String(item)),
+    dryRun: mapAssistantDryRun(raw?.dry_run),
     canGenerate: Boolean(raw?.can_generate),
     canApprovePatch: Boolean(raw?.can_approve_patch),
     canDryRun: Boolean(raw?.can_dry_run),
@@ -1339,15 +1366,27 @@ function mapAssistantPatchMetadata(raw: RawAssistantPatchMetadata): AssistantPat
       status: raw.generator?.status || "",
       elapsedSeconds: Number(raw.generator?.elapsed_seconds || 0),
     },
-    dryRun: {
-      ok: Boolean(raw.dry_run?.ok),
-      checkedAt: raw.dry_run?.checked_at || "",
-      stderr: raw.dry_run?.stderr || "",
-    },
+    dryRun: mapAssistantDryRun(raw.dry_run),
     sensitiveHits: (raw.sensitive_hits || []).map((item) => String(item)),
     changedFiles: (raw.changed_files || []).map((item) => String(item)),
     additions: Number(raw.additions || 0),
     deletions: Number(raw.deletions || 0),
+  };
+}
+
+function mapAssistantGenerationLog(raw: RawAssistantGenerationLog | undefined) {
+  return {
+    available: Boolean(raw?.available),
+    source: raw?.source || "",
+    items: (raw?.items || []).map((item) => ({
+      event: String(item.event || ""),
+      createdAt: String(item.created_at || item.createdAt || ""),
+      status: String(item.status || ""),
+      message: String(item.message || ""),
+      error: String(item.error || ""),
+      code: String(item.code || ""),
+      raw: item,
+    })),
   };
 }
 
@@ -1380,6 +1419,7 @@ function mapAssistantProposalDetail(raw: RawAssistantProposalDetail): AssistantP
       lastErrorLogPath: raw.apply?.last_error_log_path || "",
     },
     upgrade: mapAssistantUpgradeState(raw.upgrade),
+    generationLog: mapAssistantGenerationLog(raw.generation_log),
   };
 }
 
@@ -3200,7 +3240,7 @@ export class RealWebBotClient implements WebBotClient {
     }
 
     if (!finalMetadata) {
-      throw new Error("patch 生成已中断");
+      throw new Error("patch 生成连接已断开，请到 Proposal 详情查看生成状态");
     }
     return finalMetadata;
   }

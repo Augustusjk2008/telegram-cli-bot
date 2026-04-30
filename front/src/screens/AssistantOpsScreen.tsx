@@ -4,6 +4,7 @@ import { AutomationTabs, type AutomationSubTab } from "./assistantOps/Automation
 import type {
   AssistantAdminAuditItem,
   AssistantDiagnosticsFilters,
+  AssistantGenerationLogItem,
   AssistantMemoryEvalCase,
   AssistantMemoryEvalReport,
   AssistantMemorySearchItem,
@@ -94,6 +95,10 @@ function stageText(record: AssistantPerfRecord) {
     `trace ${stages.traceMs}ms`,
     `plugin ${stages.pluginMs}ms`,
   ].join(" · ");
+}
+
+function generationLogText(item: AssistantGenerationLogItem) {
+  return item.error || item.message || item.status || JSON.stringify(item.raw);
 }
 
 function toggleValue(values: string[], value: string) {
@@ -603,11 +608,18 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
     }
   }
 
+  const displayedDryRun = proposalDryRunResult || proposalDetail?.upgrade.dryRun || null;
+  const hasDisplayedDryRun = Boolean(
+    displayedDryRun?.checkedAt || displayedDryRun?.stdout || displayedDryRun?.stderr || displayedDryRun?.ok,
+  );
+  const selectedTargetDirty = Boolean(
+    selectedUpgradeTarget?.dirty || selectedUpgradeTarget?.reason === "upgrade_target_dirty",
+  );
   const canApplyProposal = Boolean(
     proposalDetail
     && proposalDetail.proposal.status === "approved"
     && proposalDetail.upgrade.canApply
-    && proposalDryRunResult?.ok,
+    && displayedDryRun?.ok,
   );
 
   return (
@@ -818,6 +830,14 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
                           <p><span className="text-[var(--text)]">dirty:</span> {selectedUpgradeTarget ? (selectedUpgradeTarget.dirty ? "是" : "否") : "-"}</p>
                         </div>
                       </div>
+                      {selectedTargetDirty ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                          <div>目标仓库不干净，patch 生成/apply 已禁用。</div>
+                          {selectedUpgradeTarget?.dirtyPaths.length ? (
+                            <pre className="mt-2 whitespace-pre-wrap text-xs">{selectedUpgradeTarget.dirtyPaths.join("\n")}</pre>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {proposalDetail.upgrade.sensitiveHits.length > 0 ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                           敏感路径：{proposalDetail.upgrade.sensitiveHits.join(", ")}
@@ -826,6 +846,30 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
                       {proposalDetail.upgrade.chatConclusion ? (
                         <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] whitespace-pre-wrap">
                           {proposalDetail.upgrade.chatConclusion}
+                        </div>
+                      ) : null}
+                      {proposalDetail.generationLog.available || proposalDetail.generationLog.items.length > 0 ? (
+                        <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-[var(--text)]">生成日志</span>
+                            <span className="text-xs text-[var(--muted)]">{proposalDetail.generationLog.source || "-"}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {proposalDetail.generationLog.items.length > 0 ? proposalDetail.generationLog.items.map((item, index) => (
+                              <div key={`${item.createdAt}-${item.event}-${index}`} className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-xs">
+                                <div className="flex flex-wrap gap-2 text-[var(--muted)]">
+                                  <span>{item.createdAt || "-"}</span>
+                                  <span>{item.event || "-"}</span>
+                                  {item.code ? <span>{item.code}</span> : null}
+                                </div>
+                                {generationLogText(item) ? (
+                                  <pre className="mt-1 whitespace-pre-wrap text-[var(--text)]">{generationLogText(item)}</pre>
+                                ) : null}
+                              </div>
+                            )) : (
+                              <p className="text-xs text-[var(--muted)]">暂无日志行</p>
+                            )}
+                          </div>
                         </div>
                       ) : null}
                     </div>
@@ -879,19 +923,19 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
                     <div className="space-y-2 text-sm text-[var(--text)]">
                       <div className="font-medium">Dry-run</div>
                       <div className="grid gap-2 text-xs text-[var(--muted)] sm:grid-cols-2">
-                        <p><span className="text-[var(--text)]">状态:</span> {proposalDryRunResult ? (proposalDryRunResult.ok ? "ok" : "failed") : "未执行"}</p>
-                        <p><span className="text-[var(--text)]">时间:</span> {proposalDryRunResult?.checkedAt || "-"}</p>
-                        <p><span className="text-[var(--text)]">repo:</span> {proposalDryRunResult?.repoRoot || "-"}</p>
-                        <p><span className="text-[var(--text)]">patch:</span> {proposalDryRunResult?.patchPath || "-"}</p>
+                        <p><span className="text-[var(--text)]">状态:</span> {hasDisplayedDryRun ? (displayedDryRun?.ok ? "ok" : "failed") : "未执行"}</p>
+                        <p><span className="text-[var(--text)]">时间:</span> {displayedDryRun?.checkedAt || "-"}</p>
+                        <p><span className="text-[var(--text)]">repo:</span> {displayedDryRun?.repoRoot || "-"}</p>
+                        <p><span className="text-[var(--text)]">patch:</span> {displayedDryRun?.patchPath || "-"}</p>
                       </div>
-                      {proposalDryRunResult?.stdout ? (
+                      {displayedDryRun?.stdout ? (
                         <pre className="whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-xs text-[var(--text)]">
-                          {proposalDryRunResult.stdout}
+                          {displayedDryRun.stdout}
                         </pre>
                       ) : null}
-                      {proposalDryRunResult?.stderr ? (
+                      {displayedDryRun?.stderr ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                          {proposalDryRunResult.stderr}
+                          {displayedDryRun.stderr}
                         </div>
                       ) : null}
                     </div>
