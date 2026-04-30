@@ -69,7 +69,7 @@ from bot.web.api_service import (
     update_bot_workdir,
     write_file_content,
 )
-from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
+from bot.app_settings import get_git_proxy_settings, update_git_proxy_address, update_git_proxy_port
 from bot.web import api_service
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
@@ -1718,14 +1718,27 @@ def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeyp
     settings_file = temp_dir / ".web_admin_settings.json"
     monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
 
-    assert get_git_proxy_settings() == {"port": ""}
+    assert get_git_proxy_settings() == {"address": "", "port": ""}
 
-    saved = update_git_proxy_port("7897")
+    saved = update_git_proxy_address("192.168.1.10:7897")
 
-    assert saved == {"port": "7897"}
-    assert get_git_proxy_settings() == {"port": "7897"}
+    assert saved == {"address": "192.168.1.10:7897", "port": "7897"}
+    assert get_git_proxy_settings() == {"address": "192.168.1.10:7897", "port": "7897"}
     assert json.loads(settings_file.read_text(encoding="utf-8")) == {
-        "git_proxy_port": "7897",
+        "git_proxy_address": "192.168.1.10:7897",
+    }
+
+
+def test_git_proxy_port_only_defaults_to_loopback(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    settings_file = temp_dir / ".web_admin_settings.json"
+    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
+
+    saved = update_git_proxy_address("7897")
+
+    assert saved == {"address": "127.0.0.1:7897", "port": "7897"}
+    assert get_git_proxy_settings() == {"address": "127.0.0.1:7897", "port": "7897"}
+    assert json.loads(settings_file.read_text(encoding="utf-8")) == {
+        "git_proxy_address": "127.0.0.1:7897",
     }
 
 def test_git_commands_explicitly_disable_proxy_when_port_is_empty(
@@ -1760,14 +1773,14 @@ def test_git_commands_explicitly_disable_proxy_when_port_is_empty(
     assert calls[0][:7] == ["git", "-c", "core.fsmonitor=false", "-c", "http.proxy=", "-c", "https.proxy="]
     assert calls[1][:7] == ["git", "-c", "core.fsmonitor=false", "-c", "http.proxy=", "-c", "https.proxy="]
 
-def test_git_commands_use_local_proxy_port_when_configured(
+def test_git_commands_use_proxy_address_when_configured(
     web_manager: MultiBotManager,
     temp_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     settings_file = temp_dir / ".web_admin_settings.json"
     monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
-    update_git_proxy_port("7897")
+    update_git_proxy_address("192.168.1.10:7897")
 
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -1794,18 +1807,18 @@ def test_git_commands_use_local_proxy_port_when_configured(
         "-c",
         "core.fsmonitor=false",
         "-c",
-        "http.proxy=http://127.0.0.1:7897",
+        "http.proxy=http://192.168.1.10:7897",
         "-c",
-        "https.proxy=http://127.0.0.1:7897",
+        "https.proxy=http://192.168.1.10:7897",
     ]
     assert calls[1][:7] == [
         "git",
         "-c",
         "core.fsmonitor=false",
         "-c",
-        "http.proxy=http://127.0.0.1:7897",
+        "http.proxy=http://192.168.1.10:7897",
         "-c",
-        "https.proxy=http://127.0.0.1:7897",
+        "https.proxy=http://192.168.1.10:7897",
     ]
 
 @pytest.mark.asyncio
@@ -3733,17 +3746,17 @@ async def test_admin_git_proxy_routes_support_get_and_patch(
             resp = await client.get("/api/admin/git-proxy")
             assert resp.status == 200
             payload = await resp.json()
-            assert payload["data"] == {"port": ""}
+            assert payload["data"] == {"address": "", "port": ""}
 
-            resp = await client.patch("/api/admin/git-proxy", json={"port": "7897"})
+            resp = await client.patch("/api/admin/git-proxy", json={"address": "7897"})
             assert resp.status == 200
             payload = await resp.json()
-            assert payload["data"] == {"port": "7897"}
+            assert payload["data"] == {"address": "127.0.0.1:7897", "port": "7897"}
 
             resp = await client.get("/api/admin/git-proxy")
             assert resp.status == 200
             payload = await resp.json()
-            assert payload["data"] == {"port": "7897"}
+            assert payload["data"] == {"address": "127.0.0.1:7897", "port": "7897"}
 
 @pytest.mark.asyncio
 async def test_admin_git_proxy_route_rejects_invalid_port(
@@ -3759,7 +3772,7 @@ async def test_admin_git_proxy_route_rejects_invalid_port(
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            resp = await client.patch("/api/admin/git-proxy", json={"port": "70000"})
+            resp = await client.patch("/api/admin/git-proxy", json={"address": "192.168.1.10:70000"})
             assert resp.status == 400
             payload = await resp.json()
             assert payload["error"]["code"] == "invalid_git_proxy_port"

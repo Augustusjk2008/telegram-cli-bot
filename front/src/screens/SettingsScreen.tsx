@@ -67,6 +67,23 @@ type BuildLogStatus = "idle" | "running" | "success" | "error";
 const CHAT_CONTROLLED_CLI_PARAM_KEYS = new Set(["model"]);
 const MODEL_OPTION_NONE = "none";
 
+function isValidGitProxyAddress(value: string) {
+  const address = value.trim();
+  if (!address) return true;
+  const port = /^\d+$/.test(address) ? address : address.split(":").pop() || "";
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    return false;
+  }
+  if (/^\d+$/.test(address)) {
+    return true;
+  }
+  return /^[A-Za-z0-9.-]+:\d+$/.test(address) || /^\[[^\]\s]+\]:\d+$/.test(address);
+}
+
+function gitProxyStatusText(settings: GitProxySettings | null) {
+  return settings?.address ? settings.address : "直连";
+}
+
 function fieldLabel(key: string, field: CliParamField) {
   return field.description || key;
 }
@@ -179,7 +196,7 @@ export function SettingsScreen({
   const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
-  const [gitProxyPortDraft, setGitProxyPortDraft] = useState("");
+  const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -263,7 +280,7 @@ export function SettingsScreen({
         setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setTunnel(tunnelData);
         setGitProxySettings(gitProxyData);
-        setGitProxyPortDraft(gitProxyData?.port || "");
+        setGitProxyAddressDraft(gitProxyData?.address || (gitProxyData?.port ? `127.0.0.1:${gitProxyData.port}` : ""));
         setUpdateStatus(updateData);
         setLoading(false);
       })
@@ -489,9 +506,9 @@ export function SettingsScreen({
   };
 
   const saveGitProxy = async () => {
-    const nextPort = gitProxyPortDraft.trim();
-    if (nextPort && (!/^\d+$/.test(nextPort) || Number(nextPort) < 1 || Number(nextPort) > 65535)) {
-      setError("代理端口必须是 1 到 65535 之间的整数");
+    const nextAddress = gitProxyAddressDraft.trim();
+    if (!isValidGitProxyAddress(nextAddress)) {
+      setError("代理地址必须是 host:port，或 1 到 65535 之间的端口");
       return;
     }
 
@@ -499,9 +516,9 @@ export function SettingsScreen({
     setError("");
     setNotice("");
     try {
-      const nextSettings = await client.updateGitProxySettings(nextPort);
+      const nextSettings = await client.updateGitProxySettings(nextAddress);
       setGitProxySettings(nextSettings);
-      setGitProxyPortDraft(nextSettings.port);
+      setGitProxyAddressDraft(nextSettings.address);
       setNotice("Git 代理设置已保存");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存 Git 代理失败");
@@ -997,12 +1014,12 @@ export function SettingsScreen({
               <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
               <div className="flex items-center gap-2">
                 <input
-                  aria-label="Git 代理端口"
+                  aria-label="Git 代理地址"
                   type="text"
-                  inputMode="numeric"
-                  value={gitProxyPortDraft}
-                  onChange={(event) => setGitProxyPortDraft(event.target.value)}
-                  placeholder="例如 7897"
+                  inputMode="text"
+                  value={gitProxyAddressDraft}
+                  onChange={(event) => setGitProxyAddressDraft(event.target.value)}
+                  placeholder="例如 192.168.1.10:7897 或 7897"
                   className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                 />
                 <button
@@ -1016,7 +1033,7 @@ export function SettingsScreen({
                 </button>
               </div>
               <p className="text-xs text-[var(--muted)]">
-                当前状态: {gitProxySettings?.port ? `127.0.0.1:${gitProxySettings.port}` : "直连"}
+                当前状态: {gitProxyStatusText(gitProxySettings)}
               </p>
             </div>
           </>

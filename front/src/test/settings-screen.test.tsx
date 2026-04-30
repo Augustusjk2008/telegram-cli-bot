@@ -233,6 +233,33 @@ test("main settings merge update controls into the main bot operations card", as
   expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
 });
 
+test("main settings saves Git proxy address and port shortcut", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateGitProxySettings = vi.spyOn(client, "updateGitProxySettings");
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  const input = await screen.findByLabelText("Git 代理地址");
+  await user.clear(input);
+  await user.type(input, "192.168.1.10:7897");
+  await user.click(screen.getByRole("button", { name: "保存 Git 代理" }));
+
+  await waitFor(() => {
+    expect(updateGitProxySettings).toHaveBeenLastCalledWith("192.168.1.10:7897");
+  });
+  expect(await screen.findByText("当前状态: 192.168.1.10:7897")).toBeInTheDocument();
+
+  await user.clear(input);
+  await user.type(input, "7898");
+  await user.click(screen.getByRole("button", { name: "保存 Git 代理" }));
+
+  await waitFor(() => {
+    expect(updateGitProxySettings).toHaveBeenLastCalledWith("7898");
+  });
+  expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
+});
+
 test("settings CLI params hide model and exclude it from normal saves", async () => {
   const user = userEvent.setup();
   const updateCliParam = vi.fn(async (_botAlias: string, key: string, value: unknown) => (

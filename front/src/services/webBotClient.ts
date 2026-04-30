@@ -160,7 +160,7 @@ export interface WebBotClient {
   killTask(botAlias: string): Promise<string>;
   restartService(): Promise<void>;
   getGitProxySettings(): Promise<GitProxySettings>;
-  updateGitProxySettings(port: string): Promise<GitProxySettings>;
+  updateGitProxySettings(address: string): Promise<GitProxySettings>;
   getUpdateStatus(): Promise<AppUpdateStatus>;
   setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus>;
   checkForUpdate(): Promise<AppUpdateStatus>;

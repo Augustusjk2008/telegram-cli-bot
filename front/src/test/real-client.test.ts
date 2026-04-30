@@ -1579,6 +1579,7 @@ describe("RealWebBotClient", () => {
         json: async () => ({
           ok: true,
           data: {
+            address: "192.168.1.10:7897",
             port: "7897",
           },
         }),
@@ -1596,7 +1597,7 @@ describe("RealWebBotClient", () => {
         }),
       }),
     );
-    expect(settings).toEqual({ port: "7897" });
+    expect(settings).toEqual({ address: "192.168.1.10:7897", port: "7897" });
   });
 
   test("updateGitProxySettings patches admin git proxy endpoint", async () => {
@@ -1615,14 +1616,15 @@ describe("RealWebBotClient", () => {
         json: async () => ({
           ok: true,
           data: {
-            port: "",
+            address: "127.0.0.1:7897",
+            port: "7897",
           },
         }),
       });
 
     const client = new RealWebBotClient();
     await client.login("secret-token");
-    const settings = await client.updateGitProxySettings("");
+    const settings = await client.updateGitProxySettings("7897");
 
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/admin/git-proxy",
@@ -1632,10 +1634,10 @@ describe("RealWebBotClient", () => {
           Authorization: "Bearer secret-token",
           "Content-Type": "application/json",
         }),
-        body: JSON.stringify({ port: "" }),
+        body: JSON.stringify({ address: "7897" }),
       }),
     );
-    expect(settings).toEqual({ port: "" });
+    expect(settings).toEqual({ address: "127.0.0.1:7897", port: "7897" });
   });
 
   test("getUpdateStatus maps backend update payload", async () => {

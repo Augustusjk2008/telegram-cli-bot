@@ -1049,6 +1049,7 @@ export type GitBlamePayload = {
 };
 
 export type GitProxySettings = {
+  address: string;
   port: string;
 };
 

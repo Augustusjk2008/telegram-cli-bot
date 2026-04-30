@@ -966,7 +966,7 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   ]);
-  private gitProxySettings: GitProxySettings = { port: "" };
+  private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
     currentPackageKind: "installer",
@@ -3087,9 +3087,12 @@ export class MockWebBotClient implements WebBotClient {
     return { ...this.gitProxySettings };
   }
 
-  async updateGitProxySettings(port: string): Promise<GitProxySettings> {
+  async updateGitProxySettings(address: string): Promise<GitProxySettings> {
+    const trimmed = (address || "").trim();
+    const normalizedAddress = /^\d+$/.test(trimmed) ? `127.0.0.1:${trimmed}` : trimmed;
     this.gitProxySettings = {
-      port: (port || "").trim(),
+      address: normalizedAddress,
+      port: normalizedAddress ? normalizedAddress.split(":").pop() || "" : "",
     };
     return { ...this.gitProxySettings };
   }

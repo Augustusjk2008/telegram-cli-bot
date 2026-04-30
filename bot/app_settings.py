@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from bot.config import MANAGED_BOTS_FILE
 APP_SETTINGS_FILE = Path(MANAGED_BOTS_FILE).resolve().parent / ".web_admin_settings.json"
 _SETTINGS_LOCK = threading.Lock()
 _DEFAULT_SETTINGS = {
+    "git_proxy_address": "",
     "git_proxy_port": "",
     "bot_avatar_names": {},
     "main_bot_profile": {},
@@ -31,6 +33,8 @@ _DEFAULT_SETTINGS = {
     "update_last_error": "",
 }
 _PORT_ERROR_MESSAGE = "代理端口必须是 1 到 65535 之间的整数"
+_PROXY_ADDRESS_ERROR_MESSAGE = "代理地址必须是 host:port，或 1 到 65535 之间的端口"
+_PROXY_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 
 _UPDATE_TEXT_FIELDS = (
     "update_channel",
@@ -62,6 +66,52 @@ def _normalize_git_proxy_port(value: Any) -> str:
     if not 1 <= port_number <= 65535:
         raise ValueError(_PORT_ERROR_MESSAGE)
     return str(port_number)
+
+
+def _normalize_git_proxy_host(host: Any) -> str:
+    normalized = str(host or "").strip()
+    if not normalized:
+        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
+    if any(char.isspace() for char in normalized):
+        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
+    if not _PROXY_HOST_RE.fullmatch(normalized):
+        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
+    return normalized
+
+
+def _normalize_git_proxy_address(value: Any) -> str:
+    address = str(value or "").strip()
+    if not address:
+        return ""
+    if address.isdigit():
+        return f"127.0.0.1:{_normalize_git_proxy_port(address)}"
+    if address.startswith("["):
+        bracket_end = address.find("]")
+        if bracket_end <= 1 or address[bracket_end + 1: bracket_end + 2] != ":":
+            raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
+        host = address[1:bracket_end].strip()
+        port = _normalize_git_proxy_port(address[bracket_end + 2:])
+        if not host or any(char.isspace() for char in host):
+            raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
+        return f"[{host}]:{port}"
+    if address.count(":") != 1:
+        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
+    host, port = address.rsplit(":", 1)
+    return f"{_normalize_git_proxy_host(host)}:{_normalize_git_proxy_port(port)}"
+
+
+def _git_proxy_port_from_address(address: str) -> str:
+    normalized = str(address or "").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("["):
+        bracket_end = normalized.find("]")
+        if bracket_end > 0 and normalized[bracket_end + 1: bracket_end + 2] == ":":
+            return normalized[bracket_end + 2:]
+        return ""
+    if ":" not in normalized:
+        return ""
+    return normalized.rsplit(":", 1)[1]
 
 
 def _normalize_bool(value: Any, default: bool) -> bool:
@@ -114,8 +164,13 @@ def _sanitize_settings(raw: Any) -> dict[str, Any]:
         return settings
 
     try:
-        settings["git_proxy_port"] = _normalize_git_proxy_port(raw.get("git_proxy_port", ""))
+        if "git_proxy_address" in raw:
+            settings["git_proxy_address"] = _normalize_git_proxy_address(raw.get("git_proxy_address", ""))
+        else:
+            settings["git_proxy_address"] = _normalize_git_proxy_address(raw.get("git_proxy_port", ""))
+        settings["git_proxy_port"] = _git_proxy_port_from_address(settings["git_proxy_address"])
     except ValueError:
+        settings["git_proxy_address"] = ""
         settings["git_proxy_port"] = ""
     settings["bot_avatar_names"] = _normalize_bot_avatar_names(raw.get("bot_avatar_names", {}))
     settings["main_bot_profile"] = _normalize_main_bot_profile(raw.get("main_bot_profile", {}))
@@ -157,9 +212,11 @@ def _load_settings(settings_file: str | Path | None = None) -> dict[str, Any]:
 
 def _serialize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
-    git_proxy_port = _normalize_git_proxy_port(settings.get("git_proxy_port", ""))
-    if git_proxy_port:
-        payload["git_proxy_port"] = git_proxy_port
+    git_proxy_address = _normalize_git_proxy_address(
+        settings.get("git_proxy_address", "") or settings.get("git_proxy_port", "")
+    )
+    if git_proxy_address:
+        payload["git_proxy_address"] = git_proxy_address
 
     bot_avatar_names = _normalize_bot_avatar_names(settings.get("bot_avatar_names", {}))
     if bot_avatar_names:
@@ -198,15 +255,21 @@ def _save_settings(settings: dict[str, Any], settings_file: str | Path | None = 
 
 def get_git_proxy_settings() -> dict[str, str]:
     settings = _load_settings()
-    return {"port": settings["git_proxy_port"]}
+    address = settings["git_proxy_address"]
+    return {"address": address, "port": _git_proxy_port_from_address(address)}
+
+
+def update_git_proxy_address(address: Any) -> dict[str, str]:
+    normalized = _normalize_git_proxy_address(address)
+    settings = _load_settings()
+    settings["git_proxy_address"] = normalized
+    settings["git_proxy_port"] = _git_proxy_port_from_address(normalized)
+    _save_settings(settings)
+    return {"address": normalized, "port": settings["git_proxy_port"]}
 
 
 def update_git_proxy_port(port: Any) -> dict[str, str]:
-    normalized = _normalize_git_proxy_port(port)
-    settings = _load_settings()
-    settings["git_proxy_port"] = normalized
-    _save_settings(settings)
-    return {"port": normalized}
+    return update_git_proxy_address(port)
 
 
 def get_bot_avatar_name(alias: str, settings_file: str | Path | None = None) -> str | None:
@@ -292,10 +355,10 @@ def rename_bot_avatar_name(
 
 
 def get_git_proxy_url() -> str:
-    port = get_git_proxy_settings()["port"]
-    if not port:
+    address = get_git_proxy_settings()["address"]
+    if not address:
         return ""
-    return f"http://127.0.0.1:{port}"
+    return f"http://{address}"
 
 
 def get_git_proxy_config_args() -> list[str]:

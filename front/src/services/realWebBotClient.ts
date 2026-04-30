@@ -423,6 +423,7 @@ type RawGitBlamePayload = {
 };
 
 type RawGitProxySettings = {
+  address?: string;
   port?: string;
 };
 
@@ -1229,7 +1230,9 @@ function mapGitBlamePayload(raw: RawGitBlamePayload): GitBlamePayload {
 }
 
 function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
+  const address = raw.address || (raw.port ? `127.0.0.1:${raw.port}` : "");
   return {
+    address,
     port: raw.port || "",
   };
 }
@@ -2731,13 +2734,13 @@ export class RealWebBotClient implements WebBotClient {
     return mapGitProxySettings(data);
   }
 
-  async updateGitProxySettings(port: string): Promise<GitProxySettings> {
+  async updateGitProxySettings(address: string): Promise<GitProxySettings> {
     const data = await this.requestJson<RawGitProxySettings>("/api/admin/git-proxy", {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ port }),
+      body: JSON.stringify({ address }),
     });
     return mapGitProxySettings(data);
   }

@@ -21,7 +21,7 @@ from aiohttp.client_exceptions import ClientConnectionResetError
 from aiohttp.http import WSCloseCode, WSMsgType
 from aiohttp import web
 
-from bot.app_settings import get_git_proxy_settings, update_git_proxy_port
+from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
 from bot.config import (
     ALLOWED_USER_IDS,
     WEB_ALLOWED_ORIGINS,
@@ -1950,7 +1950,7 @@ class WebApiServer:
         await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
         try:
-            data = update_git_proxy_port(body.get("port", ""))
+            data = update_git_proxy_address(body["address"] if "address" in body else body.get("port", ""))
         except ValueError as exc:
             raise WebApiError(400, "invalid_git_proxy_port", str(exc)) from exc
         return _json({"ok": True, "data": data})
