@@ -45,6 +45,7 @@ import type {
   BotSummary,
   ChatAttachmentDeleteResult,
   ChatAttachmentUploadResult,
+  ChatSendOptions,
   ChatMessage,
   ChatTraceDetails,
   ChatMessageMetaInfo,
@@ -493,6 +494,7 @@ type RawAssistantUpgradeState = {
   base_commit?: string;
   patch_source?: string;
   generation_status?: string;
+  chat_conclusion?: string;
   sensitive_hits?: string[];
   can_generate?: boolean;
   can_approve_patch?: boolean;
@@ -708,7 +710,7 @@ type RawAssistantRuntimePendingRun = {
   run_id?: string;
   source?: "web" | "cron" | "manual";
   status?: "queued" | "running";
-  task_mode?: "standard" | "dream";
+  task_mode?: string;
   interactive?: boolean;
   job_id?: string;
   job_title?: string;
@@ -1306,6 +1308,7 @@ function mapAssistantUpgradeState(raw: RawAssistantUpgradeState | undefined): As
     baseCommit: raw?.base_commit || "",
     patchSource: raw?.patch_source || "",
     generationStatus: raw?.generation_status || "",
+    chatConclusion: raw?.chat_conclusion || "",
     sensitiveHits: (raw?.sensitive_hits || []).map((item) => String(item)),
     canGenerate: Boolean(raw?.can_generate),
     canApprovePatch: Boolean(raw?.can_approve_patch),
@@ -2021,13 +2024,19 @@ export class RealWebBotClient implements WebBotClient {
     onChunk: (chunk: string) => void,
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
+    options?: ChatSendOptions,
   ): Promise<ChatMessage> {
     const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`, {
       method: "POST",
       headers: this.headers({
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({
+        message: text,
+        ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
+        ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
+        ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
+      }),
     });
 
     if (!response.ok || !response.body) {

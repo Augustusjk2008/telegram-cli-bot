@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, Check, Database, Play, RefreshCw, Search, Shield, X } from "lucide-react";
 import { AutomationTabs, type AutomationSubTab } from "./assistantOps/AutomationTabs";
-import { PatchGenerationTranscript } from "./assistantOps/PatchGenerationTranscript";
 import type {
   AssistantAdminAuditItem,
   AssistantDiagnosticsFilters,
   AssistantMemoryEvalCase,
   AssistantMemoryEvalReport,
-  AssistantPatchGenerationStatus,
   AssistantMemorySearchItem,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
@@ -16,24 +14,22 @@ import type {
   AssistantUpgradeApplyLog,
   AssistantUpgradeDryRunResult,
   AssistantUpgradeTarget,
-  ChatTraceEvent,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import {
+  ASSISTANT_PROPOSAL_PATCH_COMPLETED_EVENT,
+  dispatchAssistantProposalPatchRequested,
+  isAssistantProposalPatchCompletedEvent,
+} from "../utils/assistantProposalPatchEvents";
 
 type Props = {
   botAlias: string;
   client: WebBotClient;
+  chatBusy?: boolean;
+  onRevealChat?: () => void;
 };
 
 type AssistantOpsTab = "proposals" | "memory" | "diagnostics" | "audit" | AutomationSubTab;
-type PatchTranscriptState = {
-  createdAt: string;
-  status: AssistantPatchGenerationStatus;
-  logs: string[];
-  trace: ChatTraceEvent[];
-  running: boolean;
-  error: string;
-};
 
 const DEFAULT_MEMORY_EVAL_CASES = JSON.stringify(
   [
@@ -124,7 +120,7 @@ function chooseUpgradeTargetAlias(items: AssistantUpgradeTarget[], ...preferredA
   return items.find((item) => item.available)?.alias || items[0]?.alias || "";
 }
 
-export function AssistantOpsScreen({ botAlias, client }: Props) {
+export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevealChat }: Props) {
   const [tab, setTab] = useState<AssistantOpsTab>("proposals");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -144,7 +140,6 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
   const [upgradeTargets, setUpgradeTargets] = useState<AssistantUpgradeTarget[]>([]);
   const [upgradeTargetsLoading, setUpgradeTargetsLoading] = useState(false);
   const [selectedUpgradeTargetAlias, setSelectedUpgradeTargetAlias] = useState("");
-  const [patchTranscript, setPatchTranscript] = useState<PatchTranscriptState | null>(null);
 
   const [memoryQuery, setMemoryQuery] = useState("");
   const [memoryUserId, setMemoryUserId] = useState("");
@@ -383,8 +378,29 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
   }, [loadUpgradeTargets, tab]);
 
   useEffect(() => {
-    setPatchTranscript(null);
-  }, [selectedProposalId]);
+    const handlePatchCompleted = (event: Event) => {
+      if (!isAssistantProposalPatchCompletedEvent(event)) {
+        return;
+      }
+      const detail = event.detail;
+      if (!detail || detail.botAlias !== botAlias) {
+        return;
+      }
+      setNotice(detail.ok ? "patch 已生成" : (detail.error || "patch 生成失败"));
+      if (detail.proposalId === selectedProposalId) {
+        void loadProposalDetail(detail.proposalId, true);
+      }
+      void loadProposals(proposalStatus, selectedProposalId || detail.proposalId);
+      if (tab === "audit") {
+        void loadAudit();
+      }
+    };
+
+    window.addEventListener(ASSISTANT_PROPOSAL_PATCH_COMPLETED_EVENT, handlePatchCompleted);
+    return () => {
+      window.removeEventListener(ASSISTANT_PROPOSAL_PATCH_COMPLETED_EVENT, handlePatchCompleted);
+    };
+  }, [botAlias, loadAudit, loadProposalDetail, loadProposals, proposalStatus, selectedProposalId, tab]);
 
   useEffect(() => {
     if (tab === "memory") {
@@ -439,90 +455,23 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
     if (!selectedProposalId || !selectedUpgradeTargetAlias) {
       return;
     }
-    setProposalActioning("generate-patch");
     setError("");
-    const startedAt = new Date().toISOString();
-    setPatchTranscript({
-      createdAt: startedAt,
-      status: { phase: "setup", message: "准备生成", lifecycle: "running" },
-      logs: [],
-      trace: [],
-      running: true,
-      error: "",
-    });
-    try {
-      const result = await client.generateAssistantProposalPatchStream(
-        botAlias,
-        selectedProposalId,
-        {
-          targetAlias: selectedUpgradeTargetAlias,
-        },
-        {
-          onStatus: (event) => {
-            setPatchTranscript((current) => (current
-              ? {
-                ...current,
-                status: event,
-                running: event.lifecycle === "running",
-                error: event.lifecycle === "failed" ? current.error : "",
-              }
-              : current));
-          },
-          onLog: (text) => {
-            setPatchTranscript((current) => (current
-              ? { ...current, logs: [...current.logs, text] }
-              : current));
-          },
-          onTrace: (event) => {
-            setPatchTranscript((current) => (current
-              ? { ...current, trace: [...current.trace, event] }
-              : current));
-          },
-        },
-      );
-      setPatchTranscript((current) => (current
-        ? {
-          ...current,
-          running: false,
-          error: "",
-          status: {
-            ...current.status,
-            lifecycle: result.lifecycle || result.state || current.status.lifecycle,
-          },
-        }
-        : current));
-      setSelectedUpgradeTargetAlias(result.targetAlias || selectedUpgradeTargetAlias);
-      setProposalDryRunResult(null);
-      setNotice(result.sensitiveHits.length ? "patch 已生成，含敏感路径" : "patch 已生成");
-      await loadProposalDetail(selectedProposalId, true);
-      if (tab === "audit") {
-        await loadAudit();
-      }
-    } catch (actionError) {
-      const message = getErrorMessage(actionError, "生成 patch 失败");
-      setPatchTranscript((current) => (current
-        ? {
-          ...current,
-          running: false,
-          error: message,
-          status: {
-            ...current.status,
-            lifecycle: "failed",
-            message: current.status.message || "patch 生成失败",
-          },
-        }
-        : {
-          createdAt: startedAt,
-          status: { message: "patch 生成失败", lifecycle: "failed" },
-          logs: [],
-          trace: [],
-          running: false,
-          error: message,
-        }));
-      setError(message);
-    } finally {
-      setProposalActioning("");
+    if (chatBusy) {
+      setError("聊天正忙，等会再试");
+      return;
     }
+    const title = proposalDetail?.proposal.title || selectedProposalId;
+    const visibleText = `为已批准 proposal《${title}》在目标工程 ${selectedUpgradeTargetAlias} 生成 patch`;
+    onRevealChat?.();
+    dispatchAssistantProposalPatchRequested({
+      botAlias,
+      proposalId: selectedProposalId,
+      proposalTitle: title,
+      targetAlias: selectedUpgradeTargetAlias,
+      visibleText,
+    });
+    setProposalDryRunResult(null);
+    setNotice("已发到聊天");
   }
 
   async function approveProposalPatch() {
@@ -848,7 +797,7 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
                               }
                               className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                             >
-                              生成 Patch
+                              聊天里生成
                             </button>
                             <button
                               type="button"
@@ -874,16 +823,10 @@ export function AssistantOpsScreen({ botAlias, client }: Props) {
                           敏感路径：{proposalDetail.upgrade.sensitiveHits.join(", ")}
                         </div>
                       ) : null}
-                      {patchTranscript ? (
-                        <PatchGenerationTranscript
-                          proposalId={proposalDetail.proposal.id || selectedProposalId}
-                          createdAt={patchTranscript.createdAt}
-                          status={patchTranscript.status}
-                          logs={patchTranscript.logs}
-                          trace={patchTranscript.trace}
-                          running={patchTranscript.running}
-                          error={patchTranscript.error}
-                        />
+                      {proposalDetail.upgrade.chatConclusion ? (
+                        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] whitespace-pre-wrap">
+                          {proposalDetail.upgrade.chatConclusion}
+                        </div>
                       ) : null}
                     </div>
 

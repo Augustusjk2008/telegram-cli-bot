@@ -1023,13 +1023,30 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""))
+        task_mode = str(body.get("task_mode") or "").strip()
+        task_payload = body.get("task_payload")
+        visible_text = body.get("visible_text")
+        if task_mode or isinstance(task_payload, dict) or visible_text is not None:
+            data = await run_chat(
+                self.manager,
+                alias,
+                auth.user_id,
+                body.get("message", ""),
+                task_mode=task_mode or "standard",
+                task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
+                visible_text=str(visible_text) if visible_text is not None else None,
+            )
+        else:
+            data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""))
         return _json({"ok": True, "data": data})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
+        task_mode = str(body.get("task_mode") or "").strip()
+        task_payload = body.get("task_payload")
+        visible_text = body.get("visible_text")
 
         response = web.StreamResponse(
             status=200,
@@ -1042,7 +1059,19 @@ class WebApiServer:
         await response.prepare(request)
 
         client_disconnected = False
-        async for event in stream_chat(self.manager, alias, auth.user_id, body.get("message", "")):
+        if task_mode or isinstance(task_payload, dict) or visible_text is not None:
+            event_stream = stream_chat(
+                self.manager,
+                alias,
+                auth.user_id,
+                body.get("message", ""),
+                task_mode=task_mode or "standard",
+                task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
+                visible_text=str(visible_text) if visible_text is not None else None,
+            )
+        else:
+            event_stream = stream_chat(self.manager, alias, auth.user_id, body.get("message", ""))
+        async for event in event_stream:
             if client_disconnected:
                 continue
             try:

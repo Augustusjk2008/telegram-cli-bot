@@ -65,6 +65,7 @@ from bot.assistant_upgrade import (
     resolve_approved_upgrade_patch_path,
     resolve_approved_upgrade_repo_root,
     write_upgrade_apply_failure,
+    write_upgrade_metadata,
 )
 from bot.assistant_upgrade_targets import list_upgrade_targets, resolve_upgrade_target
 from bot.assistant_state import (
@@ -956,6 +957,7 @@ def _read_assistant_upgrade_state(home, proposal_id: str, *, proposal: dict[str,
         "base_commit": str(metadata.get("base_commit") or ""),
         "patch_source": str(metadata.get("patch_path") or ""),
         "generation_status": str((metadata.get("generator") or {}).get("status") or pending_lifecycle or ""),
+        "chat_conclusion": str(metadata.get("chat_conclusion") or ""),
         "sensitive_hits": sensitive_hits,
         "can_generate": can_generate,
         "can_approve_patch": can_approve_patch,
@@ -2327,6 +2329,68 @@ def _normalize_assistant_prompt_preparation(
 
 def _is_dream_request(request: AssistantRunRequest | None) -> bool:
     return bool(request is not None and request.task_mode == "dream")
+
+
+def _is_proposal_patch_request(request: AssistantRunRequest | None) -> bool:
+    return bool(request is not None and request.task_mode == "proposal_patch")
+
+
+def _proposal_patch_request_payload(request: AssistantRunRequest) -> tuple[str, str, bool]:
+    payload = dict(request.task_payload or {})
+    proposal_id = str(payload.get("proposal_id") or payload.get("proposalId") or "").strip()
+    target_alias = str(payload.get("target_alias") or payload.get("targetAlias") or "").strip()
+    regenerate = bool(payload.get("regenerate"))
+    return proposal_id, target_alias, regenerate
+
+
+def _build_patch_generation_summary(metadata: dict[str, Any] | None, *, error_message: str = "") -> str:
+    if error_message:
+        return "\n".join([
+            "patch 生成失败",
+            f"原因: {error_message}",
+        ])
+    data = dict(metadata or {})
+    files = [str(item) for item in data.get("changed_files") or [] if str(item)]
+    summary = [
+        "patch 已生成",
+        f"目标工程: {str(data.get('target_alias') or '-')}",
+        f"变更: {len(files)} 文件 · +{int(data.get('additions') or 0)} / -{int(data.get('deletions') or 0)}",
+    ]
+    if files:
+        preview = ", ".join(files[:3])
+        if len(files) > 3:
+            preview += " ..."
+        summary.append(f"文件: {preview}")
+    sensitive_hits = [str(item) for item in data.get("sensitive_hits") or [] if str(item)]
+    if sensitive_hits:
+        summary.append(f"敏感路径: {', '.join(sensitive_hits)}")
+    return "\n".join(summary)
+
+
+def _persist_patch_chat_conclusion(
+    home,
+    proposal_id: str,
+    metadata: dict[str, Any] | None,
+    *,
+    summary: str,
+    message_id: str = "",
+) -> dict[str, Any] | None:
+    if metadata is None:
+        return None
+    next_metadata = dict(metadata)
+    next_metadata["chat_conclusion"] = summary
+    if message_id:
+        next_metadata["chat_message_id"] = message_id
+    write_upgrade_metadata(home, proposal_id, str(next_metadata.get("state") or "pending"), next_metadata)
+    return next_metadata
+
+
+def _append_patch_preview_text(current: str, message: str) -> str:
+    parts = [part for part in (current.strip(), str(message or "").strip()) if part]
+    if not parts:
+        return ""
+    merged = "\n".join(parts[-8:])
+    return merged[-800:]
 
 
 def _prepare_dream_assistant_prompt(
@@ -3903,25 +3967,61 @@ async def run_cli_chat(
             session.is_processing = False
 
 
-async def run_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> dict[str, Any]:
+async def run_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     if profile.bot_mode == "assistant":
         if manager.assistant_runtime is None:
             _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
-        request = build_assistant_run_request(alias, user_id, user_text)
+        if task_mode == "proposal_patch":
+            _ensure_proposal_patch_chat_available(manager, alias, user_id)
+        request = build_assistant_run_request(
+            alias,
+            user_id,
+            user_text,
+            task_mode=task_mode,
+            task_payload=task_payload,
+            visible_text=visible_text,
+        )
         return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
         return await run_cli_chat(manager, alias, user_id, user_text)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
 
-async def stream_chat(manager: MultiBotManager, alias: str, user_id: int, user_text: str) -> AsyncIterator[dict[str, Any]]:
+async def stream_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
         if profile.bot_mode == "assistant":
             if manager.assistant_runtime is None:
                 _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
-            request = build_assistant_run_request(alias, user_id, user_text)
+            if task_mode == "proposal_patch":
+                _ensure_proposal_patch_chat_available(manager, alias, user_id)
+            request = build_assistant_run_request(
+                alias,
+                user_id,
+                user_text,
+                task_mode=task_mode,
+                task_payload=task_payload,
+                visible_text=visible_text,
+            )
             async for event in manager.assistant_runtime.stream_interactive(request):
                 yield event
             return
@@ -3980,7 +4080,15 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
     }
 
 
-def build_assistant_run_request(alias: str, user_id: int, user_text: str) -> AssistantRunRequest:
+def build_assistant_run_request(
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+) -> AssistantRunRequest:
     return AssistantRunRequest(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         source="web",
@@ -3988,11 +4096,195 @@ def build_assistant_run_request(alias: str, user_id: int, user_text: str) -> Ass
         user_id=user_id,
         text=user_text,
         interactive=True,
-        visible_text=user_text,
+        visible_text=visible_text if visible_text is not None else user_text,
+        task_mode=task_mode if task_mode in {"standard", "dream", "proposal_patch"} else "standard",
+        task_payload=task_payload,
     )
 
 
+def _ensure_proposal_patch_chat_available(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+) -> None:
+    session = get_session_for_alias(manager, alias, user_id)
+    with session._lock:
+        if session.is_processing:
+            _raise(409, "session_busy", "聊天正忙，等会再试")
+    runtime = manager.assistant_runtime
+    if runtime is None:
+        return
+    snapshot = runtime.snapshot_for_bot(alias)
+    if int(snapshot.get("pending_count") or 0) > 0:
+        _raise(409, "session_busy", "聊天正忙，等会再试")
+
+
+async def _stream_assistant_proposal_patch_request(
+    manager: MultiBotManager,
+    request: AssistantRunRequest,
+) -> AsyncIterator[dict[str, Any]]:
+    profile = get_profile_or_raise(manager, request.bot_alias)
+    session = get_session_for_alias(manager, request.bot_alias, request.user_id)
+    home = _assistant_home_or_raise(manager, request.bot_alias)
+    proposal_id, target_alias, regenerate = _proposal_patch_request_payload(request)
+    if not proposal_id:
+        _raise(400, "missing_proposal_id", "缺少 proposal_id")
+    if not target_alias:
+        _raise(400, "missing_target_alias", "缺少 target_alias")
+    try:
+        proposal = get_proposal(home, proposal_id)
+    except FileNotFoundError as exc:
+        _raise(404, "proposal_not_found", str(exc))
+    if proposal.get("status") != "approved":
+        _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
+    try:
+        target = resolve_upgrade_target(manager, target_alias)
+    except KeyError:
+        _raise(404, "upgrade_target_not_found", target_alias)
+    if not target.get("available"):
+        _raise(409, str(target.get("reason") or "upgrade_target_unavailable"), "目标工程不可用")
+
+    service = _get_chat_history_service(session)
+    turn_handle = service.start_turn(
+        profile=profile,
+        session=session,
+        user_text=str(request.visible_text or request.text or "").strip(),
+        native_provider=profile.cli_type,
+        assistant_home=str(home.root),
+        managed_prompt_hash=session.managed_prompt_hash_seen,
+        prompt_surface_version="v1",
+    )
+    started_at = asyncio.get_running_loop().time()
+    event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    worker_done = threading.Event()
+    preview_text = ""
+
+    def on_event(event: dict[str, Any]) -> None:
+        event_queue.put(dict(event))
+
+    def run_generation() -> None:
+        try:
+            metadata = generate_pending_patch(
+                home,
+                proposal,
+                target=target,
+                generated_by=str(request.user_id),
+                regenerate=regenerate,
+                event_callback=on_event,
+            )
+            event_queue.put({"type": "done", "metadata": metadata})
+        except Exception as exc:
+            event_queue.put({
+                "type": "error",
+                "code": "patch_generation_failed",
+                "message": _normalize_error_message(exc).strip() or "patch_generation_failed",
+                "metadata": read_upgrade_metadata(home, proposal_id, "pending"),
+            })
+        finally:
+            worker_done.set()
+
+    threading.Thread(target=run_generation, daemon=True).start()
+
+    while not worker_done.is_set() or not event_queue.empty():
+        try:
+            item = event_queue.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+
+        item_type = str(item.get("type") or "")
+        if item_type == "trace":
+            event = dict(item.get("event") or {})
+            if event:
+                service.append_trace_event(turn_handle, event)
+            yield item
+            continue
+        if item_type == "log":
+            preview_text = _append_patch_preview_text(preview_text, str(item.get("text") or ""))
+            if preview_text:
+                service.replace_assistant_preview(turn_handle, preview_text)
+            yield item
+            continue
+        if item_type == "status":
+            preview_text = _append_patch_preview_text(preview_text, str(item.get("message") or ""))
+            if preview_text:
+                service.replace_assistant_preview(turn_handle, preview_text)
+            yield item
+            continue
+        if item_type == "done":
+            metadata = dict(item.get("metadata") or {})
+            summary = _build_patch_generation_summary(metadata)
+            done_message = service.complete_turn(
+                turn_handle,
+                content=summary,
+                completion_state="completed",
+            )
+            persisted = _persist_patch_chat_conclusion(
+                home,
+                proposal_id,
+                metadata,
+                summary=summary,
+                message_id=str(done_message.get("id") or ""),
+            )
+            yield {
+                "type": "done",
+                "metadata": persisted or metadata,
+                "output": summary,
+                "message": done_message,
+                "elapsed_seconds": _calculate_elapsed_seconds(asyncio.get_running_loop(), started_at),
+            }
+            return
+        if item_type == "error":
+            error_message = str(item.get("message") or "patch_generation_failed").strip() or "patch_generation_failed"
+            metadata = item.get("metadata")
+            metadata_dict = dict(metadata) if isinstance(metadata, dict) else read_upgrade_metadata(home, proposal_id, "pending")
+            summary = _build_patch_generation_summary(metadata_dict, error_message=error_message)
+            done_message = service.complete_turn(
+                turn_handle,
+                content=summary,
+                completion_state="failed",
+                error_code=str(item.get("code") or "patch_generation_failed"),
+                error_message=error_message,
+            )
+            persisted = _persist_patch_chat_conclusion(
+                home,
+                proposal_id,
+                metadata_dict,
+                summary=summary,
+                message_id=str(done_message.get("id") or ""),
+            )
+            yield {
+                "type": "done",
+                "metadata": persisted or metadata_dict or {},
+                "output": summary,
+                "message": done_message,
+                "elapsed_seconds": _calculate_elapsed_seconds(asyncio.get_running_loop(), started_at),
+            }
+            return
+
+    summary = _build_patch_generation_summary(None, error_message="patch 生成已中断")
+    done_message = service.complete_turn(
+        turn_handle,
+        content=summary,
+        completion_state="failed",
+        error_code="patch_generation_interrupted",
+        error_message="patch 生成已中断",
+    )
+    yield {
+        "type": "done",
+        "metadata": read_upgrade_metadata(home, proposal_id, "pending") or {},
+        "output": summary,
+        "message": done_message,
+        "elapsed_seconds": _calculate_elapsed_seconds(asyncio.get_running_loop(), started_at),
+    }
+
+
 async def execute_assistant_run_request(manager: MultiBotManager, request: AssistantRunRequest) -> dict[str, Any]:
+    if _is_proposal_patch_request(request):
+        async for event in _stream_assistant_proposal_patch_request(manager, request):
+            if str(event.get("type") or "") == "done":
+                return {key: value for key, value in event.items() if key != "type"}
+        return {"output": "", "message": None, "metadata": None}
     result = await run_cli_chat(
         manager,
         request.bot_alias,
@@ -4009,6 +4301,10 @@ async def stream_assistant_run_request(
     manager: MultiBotManager,
     request: AssistantRunRequest,
 ) -> AsyncIterator[dict[str, Any]]:
+    if _is_proposal_patch_request(request):
+        async for event in _stream_assistant_proposal_patch_request(manager, request):
+            yield event
+        return
     async for event in _stream_cli_chat(
         manager,
         request.bot_alias,

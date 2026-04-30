@@ -470,6 +470,13 @@ export function DesktopWorkbench({
     void loadPreview(path, "preview");
   }, [loadPreview]);
 
+  const revealChatPane = useCallback(() => {
+    if (layoutState.chatCollapsed) {
+      toggleChat();
+    }
+    setFocusedPane(null);
+  }, [layoutState.chatCollapsed, toggleChat]);
+
   const resolvedChatPaneContent = typeof chatPaneContent === "function"
     ? chatPaneContent({
         requestPreview: handleRequestPreview,
@@ -860,7 +867,12 @@ export function DesktopWorkbench({
                 className="desktop-workbench-pane min-h-0 overflow-hidden"
               >
                 {showAssistantOpsWorkspace ? (
-                  <AssistantOpsScreen botAlias={botAlias} client={client} />
+                  <AssistantOpsScreen
+                    botAlias={botAlias}
+                    client={client}
+                    chatBusy={Boolean((externalChatStatus || localChatStatus).processing)}
+                    onRevealChat={revealChatPane}
+                  />
                 ) : (
                   <EditorPane
                     botAlias={botAlias}

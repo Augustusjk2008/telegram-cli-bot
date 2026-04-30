@@ -2332,6 +2332,71 @@ describe("RealWebBotClient", () => {
     ]);
   });
 
+  test("sendMessage posts task options for assistant proposal patch handoff", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"patch 已生成\",\"elapsed_seconds\":4}\n\n"));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    await client.sendMessage(
+      "assistant1",
+      "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
+      () => undefined,
+      undefined,
+      undefined,
+      {
+        taskMode: "proposal_patch",
+        taskPayload: {
+          proposalId: "pr_sync_memory_index",
+          targetAlias: "main",
+          regenerate: false,
+        },
+        visibleText: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/assistant1/chat/stream",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          message: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
+          task_mode: "proposal_patch",
+          task_payload: {
+            proposalId: "pr_sync_memory_index",
+            targetAlias: "main",
+            regenerate: false,
+          },
+          visible_text: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
+        }),
+      }),
+    );
+  });
+
   test("getGitOverview maps git workspace payload", async () => {
     fetchMock
       .mockResolvedValueOnce({

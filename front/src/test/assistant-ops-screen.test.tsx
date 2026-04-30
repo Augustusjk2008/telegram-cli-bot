@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 import { AssistantOpsScreen } from "../screens/AssistantOpsScreen";
@@ -21,6 +21,7 @@ async function buildAssistantClient() {
 test("assistant ops screen approves, generates patch, dry-runs and applies proposal", async () => {
   const user = userEvent.setup();
   const client = await buildAssistantClient();
+  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
@@ -33,7 +34,25 @@ test("assistant ops screen approves, generates patch, dry-runs and applies propo
   expect(await screen.findByText("proposal 已批准")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Dry-run" })).toBeDisabled();
   await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
-  await user.click(screen.getByRole("button", { name: "生成 Patch" }));
+  dispatchSpy.mockClear();
+  await user.click(screen.getByRole("button", { name: "聊天里生成" }));
+  await waitFor(() => {
+    expect(dispatchSpy).toHaveBeenCalled();
+  });
+  await act(async () => {
+    await client.generateAssistantProposalPatch("assistant1", "pr_sync_memory_index", {
+      targetAlias: "main",
+    });
+    window.dispatchEvent(new CustomEvent("assistant-proposal-patch-completed", {
+      detail: {
+        botAlias: "assistant1",
+        proposalId: "pr_sync_memory_index",
+        ok: true,
+        targetAlias: "main",
+        summary: "patch 已生成\n目标工程: main",
+      },
+    }));
+  });
   expect(await screen.findByText("patch 已生成")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "批准 Patch" }));
   expect(await screen.findByText("patch 已批准")).toBeInTheDocument();
@@ -54,41 +73,63 @@ test("assistant ops screen approves, generates patch, dry-runs and applies propo
   expect(await screen.findByText(/"status": "applied"/)).toBeInTheDocument();
 });
 
-test("assistant ops screen shows patch transcript", async () => {
+test("assistant ops screen dispatches patch request to chat and shows completion summary", async () => {
   const user = userEvent.setup();
   const client = await buildAssistantClient();
-  const generatePatch = client.generateAssistantProposalPatch.bind(client);
-
-  client.generateAssistantProposalPatchStream = async (botAlias, proposalId, input, handlers) => {
-    handlers?.onStatus?.({ phase: "setup", message: "准备生成", lifecycle: "running" });
-    handlers?.onLog?.("开始生成 patch");
-    handlers?.onTrace?.({
-      kind: "tool_call",
-      summary: "git worktree add",
-      toolName: "git",
-      callId: "call_git_add",
-    });
-    handlers?.onTrace?.({
-      kind: "tool_result",
-      summary: "Exit code: 0\nWall time: 1s",
-      toolName: "git",
-      callId: "call_git_add",
-    });
-    return generatePatch(botAlias, proposalId, input);
-  };
+  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
   await user.click(await screen.findByText("补 memory index 审计"));
   await user.click(await screen.findByRole("button", { name: "批准" }));
   await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
-  await user.click(screen.getByRole("button", { name: "生成 Patch" }));
+  dispatchSpy.mockClear();
+  await user.click(screen.getByRole("button", { name: "聊天里生成" }));
 
-  expect(await screen.findByText("开始生成 patch")).toBeInTheDocument();
-  expect(await screen.findByText("展开过程详情")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
-  expect(await screen.findByText("git worktree add")).toBeInTheDocument();
-  expect(await screen.findByText("patch 已生成")).toBeInTheDocument();
+  const requestEvent = dispatchSpy.mock.calls
+    .map(([value]) => value)
+    .find((value) => value instanceof CustomEvent && value.type === "assistant-proposal-patch-requested") as CustomEvent | undefined;
+  expect(requestEvent?.detail).toMatchObject({
+    botAlias: "assistant1",
+    proposalId: "pr_sync_memory_index",
+    targetAlias: "main",
+  });
+
+  await act(async () => {
+    await client.generateAssistantProposalPatch("assistant1", "pr_sync_memory_index", {
+      targetAlias: "main",
+    });
+    window.dispatchEvent(new CustomEvent("assistant-proposal-patch-completed", {
+      detail: {
+        botAlias: "assistant1",
+        proposalId: "pr_sync_memory_index",
+        ok: true,
+        targetAlias: "main",
+        summary: "patch 已生成\n目标工程: main\n变更文件: 2",
+      },
+    }));
+  });
+
+  expect(await screen.findByText(/patch 已生成\s*目标工程: main\s*变更文件: 2/)).toBeInTheDocument();
+});
+
+test("assistant ops screen rejects chat patch request while chat is busy", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} chatBusy />);
+
+  await user.click(await screen.findByText("补 memory index 审计"));
+  await user.click(await screen.findByRole("button", { name: "批准" }));
+  await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
+  dispatchSpy.mockClear();
+  await user.click(screen.getByRole("button", { name: "聊天里生成" }));
+
+  expect(await screen.findByText("聊天正忙，等会再试")).toBeInTheDocument();
+  expect(
+    dispatchSpy.mock.calls.some(([value]) => value instanceof CustomEvent && value.type === "assistant-proposal-patch-requested"),
+  ).toBe(false);
 });
 
 test("assistant ops screen manages memory and diagnostics", async () => {
@@ -284,13 +325,16 @@ test("assistant ops automation dispatches a chat handoff event", async () => {
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
   await user.click(await screen.findByRole("tab", { name: "Cron" }));
+  dispatchSpy.mockClear();
   await user.click(await screen.findByRole("button", { name: "立即运行 收件箱检查" }));
 
   await waitFor(() => {
     expect(dispatchSpy).toHaveBeenCalled();
   });
 
-  const event = dispatchSpy.mock.calls.find(([value]) => value instanceof CustomEvent)?.[0] as CustomEvent | undefined;
+  const event = dispatchSpy.mock.calls
+    .map(([value]) => value)
+    .find((value) => value instanceof CustomEvent && value.type === "assistant-cron-run-enqueued") as CustomEvent | undefined;
   expect(event?.type).toBe("assistant-cron-run-enqueued");
   expect(event?.detail).toMatchObject({
     botAlias: "assistant1",

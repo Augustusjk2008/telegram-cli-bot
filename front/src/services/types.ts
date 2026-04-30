@@ -93,7 +93,7 @@ export type AssistantRuntimePendingRun = {
   runId: string;
   source: "web" | "cron" | "manual";
   status: "queued" | "running";
-  taskMode: "standard" | "dream";
+  taskMode: ChatTaskMode | string;
   interactive: boolean;
   jobId?: string;
   jobTitle?: string;
@@ -177,6 +177,14 @@ export type HistoryDeltaResult = {
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;
+};
+
+export type ChatTaskMode = "standard" | "dream" | "proposal_patch";
+
+export type ChatSendOptions = {
+  taskMode?: ChatTaskMode;
+  taskPayload?: Record<string, unknown>;
+  visibleText?: string;
 };
 
 export type TerminalRuntimePlatform = "windows" | "linux";
@@ -1122,6 +1130,7 @@ export type AssistantUpgradeState = {
   baseCommit: string;
   patchSource: string;
   generationStatus: string;
+  chatConclusion: string;
   sensitiveHits: string[];
   canGenerate: boolean;
   canApprovePatch: boolean;
@@ -1134,6 +1143,8 @@ export type AssistantPatchMetadata = {
   proposalId: string;
   state: string;
   lifecycle?: string;
+  chatConclusion?: string;
+  chatMessageId?: string;
   targetAlias: string;
   targetWorkingDir: string;
   targetRepoRoot: string;

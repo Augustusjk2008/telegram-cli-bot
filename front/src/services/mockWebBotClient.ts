@@ -31,6 +31,7 @@ import type {
   AssistantUpgradeApplyResult,
   AssistantUpgradeDryRunResult,
   AssistantUpgradeTarget,
+  ChatSendOptions,
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
@@ -1416,6 +1417,13 @@ export class MockWebBotClient implements WebBotClient {
     return this.assistantProposalPatchMetadata.get(this.assistantProposalKey(botAlias, proposalId)) || null;
   }
 
+  private appendChatMessage(botAlias: string, message: ChatMessage) {
+    if (!mockChatMessages[botAlias]) {
+      mockChatMessages[botAlias] = [];
+    }
+    mockChatMessages[botAlias].push(message);
+  }
+
   private buildAssistantUpgradeState(botAlias: string, proposal: AssistantProposal) {
     const metadata = this.getAssistantPatchMetadata(botAlias, proposal.id);
     const key = this.assistantProposalKey(botAlias, proposal.id);
@@ -1431,6 +1439,7 @@ export class MockWebBotClient implements WebBotClient {
       baseCommit: metadata?.baseCommit || "",
       patchSource: hasPatch && metadata ? `upgrades/${metadata.state}/${proposal.id}.patch` : "",
       generationStatus: metadata?.generator.status || "",
+      chatConclusion: String((metadata as Record<string, unknown> | null)?.chatConclusion || ""),
       sensitiveHits: metadata?.sensitiveHits || [],
       canGenerate: proposal.status === "approved",
       canApprovePatch: metadata?.state === "pending" && lifecycle !== "failed" && (metadata.sensitiveHits?.length || 0) === 0,
@@ -2171,7 +2180,64 @@ export class MockWebBotClient implements WebBotClient {
     onChunk: (chunk: string) => void,
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
+    options?: ChatSendOptions,
   ): Promise<ChatMessage> {
+    const createdAt = new Date().toISOString();
+    const userText = options?.visibleText || text;
+    this.appendChatMessage(botAlias, {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: userText,
+      createdAt,
+      state: "done",
+    });
+
+    if (options?.taskMode === "proposal_patch") {
+      onStatus?.({ elapsedSeconds: 1, previewText: "开始生成 patch" });
+      onTrace?.({
+        kind: "tool_call",
+        summary: "git worktree add",
+        toolName: "git",
+        callId: "call_git_worktree_add",
+      });
+      const proposalId = String(options.taskPayload?.proposalId || options.taskPayload?.proposal_id || "").trim();
+      const targetAlias = String(options.taskPayload?.targetAlias || options.taskPayload?.target_alias || "").trim();
+      const metadata = await this.generateAssistantProposalPatch(botAlias, proposalId, {
+        targetAlias,
+        regenerate: Boolean(options.taskPayload?.regenerate),
+      });
+      const summary = [
+        "patch 已生成",
+        `目标工程: ${metadata.targetAlias}`,
+        `变更文件: ${metadata.changedFiles.length}`,
+      ].join("\n");
+      this.assistantProposalPatchMetadata.set(this.assistantProposalKey(botAlias, proposalId), {
+        ...metadata,
+        chatConclusion: summary,
+      } as AssistantPatchMetadata);
+      const assistantMessage: ChatMessage = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: summary,
+        createdAt: new Date().toISOString(),
+        elapsedSeconds: 1,
+        state: "done",
+        meta: {
+          traceCount: 1,
+          toolCallCount: 1,
+          processCount: 0,
+          trace: [{
+            kind: "tool_call",
+            summary: "git worktree add",
+            toolName: "git",
+            callId: "call_git_worktree_add",
+          }],
+        },
+      };
+      this.appendChatMessage(botAlias, assistantMessage);
+      return assistantMessage;
+    }
+
     let streamed = "";
     await streamAssistantReply((chunk) => {
       streamed += chunk;
@@ -2180,14 +2246,16 @@ export class MockWebBotClient implements WebBotClient {
         elapsedSeconds: streamed.length > 0 ? 1 : 0,
       });
     });
-    return {
+    const assistantMessage = {
       id: Date.now().toString(),
       role: "assistant",
       text: streamed || "Mock response",
       createdAt: new Date().toISOString(),
       elapsedSeconds: 1,
       state: "done"
-    };
+    } satisfies ChatMessage;
+    this.appendChatMessage(botAlias, assistantMessage);
+    return assistantMessage;
   }
 
   async getCurrentPath(botAlias: string): Promise<string> {
@@ -3619,6 +3687,11 @@ export class MockWebBotClient implements WebBotClient {
       proposalId,
       state: "pending",
       lifecycle: "pending",
+      chatConclusion: [
+        "patch 已生成",
+        `目标工程: ${target.alias}`,
+        "变更文件: 2",
+      ].join("\n"),
       targetAlias: target.alias,
       targetWorkingDir: target.workingDir,
       targetRepoRoot: target.repoRoot,

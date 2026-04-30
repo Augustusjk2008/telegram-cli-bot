@@ -1980,6 +1980,94 @@ test("assistant chat immediately shows manual cron prompts after the settings ha
   expect(screen.getByText("正在读取最近邮件")).toBeInTheDocument();
 });
 
+test("assistant proposal patch request event sends structured chat task and dispatches completion", async () => {
+  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+  const sendMessage = vi.fn(async (
+    _botAlias: string,
+    _text: string,
+    _onChunk: (chunk: string) => void,
+    _onStatus?: unknown,
+    onTrace?: (trace: unknown) => void,
+    _options?: unknown,
+  ) => {
+    onTrace?.({
+      kind: "tool_call",
+      summary: "git worktree add",
+      toolName: "git",
+      callId: "call_git_worktree_add",
+    });
+    return {
+      id: "assistant-patch-1",
+      role: "assistant",
+      text: "patch 已生成\n目标工程: main",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    } satisfies ChatMessage;
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "assistant1",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+    }),
+    listMessages: async () => [],
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+  dispatchSpy.mockClear();
+
+  await act(async () => {
+    window.dispatchEvent(new CustomEvent("assistant-proposal-patch-requested", {
+      detail: {
+        botAlias: "assistant1",
+        proposalId: "pr_sync_memory_index",
+        proposalTitle: "补 memory index 审计",
+        targetAlias: "main",
+        regenerate: false,
+        visibleText: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
+      },
+    }));
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalled();
+  });
+
+  const sendArgs = sendMessage.mock.calls[0];
+  expect(sendArgs?.[1]).toBe("为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch");
+  expect(sendArgs?.[5]).toEqual({
+    taskMode: "proposal_patch",
+    taskPayload: {
+      proposalId: "pr_sync_memory_index",
+      targetAlias: "main",
+      regenerate: false,
+    },
+    visibleText: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
+  });
+  expect(await screen.findByText("为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch")).toBeInTheDocument();
+  expect(await screen.findByText(/patch 已生成\s*目标工程: main/)).toBeInTheDocument();
+
+  const completeEvent = dispatchSpy.mock.calls
+    .map(([value]) => value)
+    .find((value) => value instanceof CustomEvent && value.type === "assistant-proposal-patch-completed") as CustomEvent | undefined;
+  expect(completeEvent?.detail).toMatchObject({
+    botAlias: "assistant1",
+    proposalId: "pr_sync_memory_index",
+    ok: true,
+    targetAlias: "main",
+    summary: "patch 已生成\n目标工程: main",
+  });
+});
+
 test("assistant chat shows explicit runtime queue banner for background tasks", async () => {
   const client = createClient({
     getBotOverview: async () => ({

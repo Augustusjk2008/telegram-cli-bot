@@ -55,6 +55,7 @@ import type {
   GitTreeStatus,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
+  ChatSendOptions,
   HistoryDeltaResult,
   PublicHostInfo,
   PluginViewWindowRequest,
@@ -107,6 +108,7 @@ export interface WebBotClient {
     onChunk: (chunk: string) => void,
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
+    options?: ChatSendOptions,
   ): Promise<ChatMessage>;
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;

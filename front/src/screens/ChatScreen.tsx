@@ -15,6 +15,7 @@ import type {
   ChatAttachmentUploadResult,
   ChatMessage,
   ChatMessageMetaInfo,
+  ChatSendOptions,
   CliParamsPayload,
   ChatTraceEvent,
   FileReadResult,
@@ -25,6 +26,11 @@ import {
   isAssistantCronRunEnqueuedEvent,
   type AssistantCronRunEnqueuedDetail,
 } from "../utils/assistantCronEvents";
+import {
+  ASSISTANT_PROPOSAL_PATCH_REQUESTED_EVENT,
+  dispatchAssistantProposalPatchCompleted,
+  isAssistantProposalPatchRequestedEvent,
+} from "../utils/assistantProposalPatchEvents";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import {
   getFilePreviewStatusText,
@@ -93,6 +99,9 @@ function summarizeRuntimeText(text: string | undefined, limit = 28) {
 }
 
 function assistantRuntimeSourceLabel(run: AssistantRuntimePendingRun) {
+  if (run.taskMode === "proposal_patch") {
+    return run.interactive ? "生成 Patch" : "后台生成 Patch";
+  }
   if (run.source === "cron") {
     return run.taskMode === "dream" ? "定时 dream" : "定时任务";
   }
@@ -734,7 +743,11 @@ export function ChatScreen({
     overview: BotOverview,
     pendingRuns: AssistantCronRunEnqueuedDetail[],
   ) => {
-    const runtimeActive = Boolean(overview.isProcessing || pendingRuns.length > 0);
+    const runtimeActive = Boolean(
+      overview.isProcessing
+      || pendingRuns.length > 0
+      || (overview.assistantRuntime?.pendingCount || 0) > 0
+    );
     const nextItems = normalizeInactiveStreamingRows(mergePendingCronRuns(messages, pendingRuns), runtimeActive);
     const hasStreamingRow = runtimeActive
       && nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
@@ -864,6 +877,7 @@ export function ChatScreen({
 
       const shouldRefreshMessages = Boolean(
         overview.isProcessing
+        || (overview.assistantRuntime?.pendingCount || 0) > 0
         || overview.runningReply
         || nextPendingRuns.length > 0
         || hasStreamingAssistant
@@ -1345,8 +1359,17 @@ export function ChatScreen({
     }
   }, [botAlias, client]);
 
-  const handleSend = useCallback(async (text: string) => {
-    const composedText = buildComposedMessageText(text, pendingAttachments);
+  const sendMessageInternal = useCallback(async (
+    text: string,
+    options: {
+      attachments?: PendingChatAttachment[];
+      clearPendingAttachments?: boolean;
+      sendOptions?: ChatSendOptions;
+      onSuccess?: (message: ChatMessage) => void;
+      onError?: (message: string) => void;
+    } = {},
+  ) => {
+    const composedText = buildComposedMessageText(text, options.attachments || []);
     if (!composedText) {
       return;
     }
@@ -1354,10 +1377,11 @@ export function ChatScreen({
     const localStartedAtMs = Date.now();
     assistantSendVersionRef.current += 1;
     const sendVersion = assistantSendVersionRef.current;
+    const displayUserText = options.sendOptions?.visibleText || composedText;
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
-      text: composedText,
+      text: displayUserText,
       createdAt: new Date().toISOString(),
       state: "done",
     };
@@ -1371,7 +1395,9 @@ export function ChatScreen({
     };
 
     setError("");
-    setPendingAttachments([]);
+    if (options.clearPendingAttachments) {
+      setPendingAttachments([]);
+    }
     stopAssistantPoll();
     stopSseRecoveryWatch();
     forceAutoScrollRef.current = true;
@@ -1384,53 +1410,52 @@ export function ChatScreen({
 
     try {
       let usingPreviewReplace = false;
-      const finalMessage = await client.sendMessage(
-        botAlias,
-        composedText,
-        (chunk) => {
-          if (sendVersion !== assistantSendVersionRef.current) {
-            return;
-          }
-          markSseActivity();
-          if (usingPreviewReplace) {
-            return;
-          }
+      const onChunk = (chunk: string) => {
+        if (sendVersion !== assistantSendVersionRef.current) {
+          return;
+        }
+        markSseActivity();
+        if (usingPreviewReplace) {
+          return;
+        }
+        setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
+          ...item,
+          text: item.text + chunk,
+          state: "streaming",
+        })));
+      };
+      const onStatus = (status: ChatStatusUpdate) => {
+        if (sendVersion !== assistantSendVersionRef.current) {
+          return;
+        }
+        markSseActivity();
+        if (typeof status.elapsedSeconds === "number") {
+          setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
+        }
+        if (status.previewText) {
+          usingPreviewReplace = true;
           setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
-            text: item.text + chunk,
+            text: status.previewText || item.text,
             state: "streaming",
           })));
-        },
-        (status) => {
-          if (sendVersion !== assistantSendVersionRef.current) {
-            return;
-          }
-          markSseActivity();
-          if (typeof status.elapsedSeconds === "number") {
-            setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
-          }
-          if (status.previewText) {
-            usingPreviewReplace = true;
-            setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
-              ...item,
-              text: status.previewText || item.text,
-              state: "streaming",
-            })));
-          }
-        },
-        (traceEvent) => {
-          if (sendVersion !== assistantSendVersionRef.current) {
-            return;
-          }
-          markSseActivity();
-          setItems((prev) => updateLatestAssistantMessage(
-            prev,
-            assistantId,
-            localStartedAtMs,
-            (item) => appendTraceToMessage(item, traceEvent),
-          ));
-        },
-      );
+        }
+      };
+      const onTrace = (traceEvent: ChatTraceEvent) => {
+        if (sendVersion !== assistantSendVersionRef.current) {
+          return;
+        }
+        markSseActivity();
+        setItems((prev) => updateLatestAssistantMessage(
+          prev,
+          assistantId,
+          localStartedAtMs,
+          (item) => appendTraceToMessage(item, traceEvent),
+        ));
+      };
+      const finalMessage = options.sendOptions
+        ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, options.sendOptions)
+        : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace);
 
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
@@ -1448,6 +1473,7 @@ export function ChatScreen({
         ...finalizedMessage,
         meta: mergeMessageMeta(item.meta, finalizedMessage.meta),
       })));
+      options.onSuccess?.(finalizedMessage);
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
       }
@@ -1462,6 +1488,7 @@ export function ChatScreen({
         text: message,
         state: "error",
       })));
+      options.onError?.(message);
     } finally {
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
@@ -1472,7 +1499,76 @@ export function ChatScreen({
       setStreamMode("");
       setStreamStartedAtMs(null);
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pendingAttachments, stopAssistantPoll, stopSseRecoveryWatch]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, stopAssistantPoll, stopSseRecoveryWatch]);
+
+  const handleSend = useCallback(async (text: string) => {
+    await sendMessageInternal(text, {
+      attachments: pendingAttachments,
+      clearPendingAttachments: true,
+    });
+  }, [pendingAttachments, sendMessageInternal]);
+
+  useEffect(() => {
+    const handleAssistantProposalPatchRequested = (event: Event) => {
+      if (!isAssistantProposalPatchRequestedEvent(event)) {
+        return;
+      }
+
+      const detail = event.detail;
+      if (!detail || detail.botAlias !== botAlias) {
+        return;
+      }
+      if (loadingRef.current || isStreamingRef.current) {
+        const message = "聊天正忙，等会再试";
+        setError(message);
+        dispatchAssistantProposalPatchCompleted({
+          botAlias,
+          proposalId: detail.proposalId,
+          ok: false,
+          targetAlias: detail.targetAlias,
+          summary: message,
+          error: message,
+        });
+        return;
+      }
+
+      void sendMessageInternal(detail.visibleText, {
+        sendOptions: {
+          taskMode: "proposal_patch",
+          taskPayload: {
+            proposalId: detail.proposalId,
+            targetAlias: detail.targetAlias,
+            regenerate: Boolean(detail.regenerate),
+          },
+          visibleText: detail.visibleText,
+        },
+        onSuccess: (message) => {
+          dispatchAssistantProposalPatchCompleted({
+            botAlias,
+            proposalId: detail.proposalId,
+            ok: true,
+            targetAlias: detail.targetAlias,
+            summary: message.text,
+          });
+        },
+        onError: (message) => {
+          dispatchAssistantProposalPatchCompleted({
+            botAlias,
+            proposalId: detail.proposalId,
+            ok: false,
+            targetAlias: detail.targetAlias,
+            summary: message,
+            error: message,
+          });
+        },
+      });
+    };
+
+    window.addEventListener(ASSISTANT_PROPOSAL_PATCH_REQUESTED_EVENT, handleAssistantProposalPatchRequested);
+    return () => {
+      window.removeEventListener(ASSISTANT_PROPOSAL_PATCH_REQUESTED_EVENT, handleAssistantProposalPatchRequested);
+    };
+  }, [botAlias, sendMessageInternal]);
 
   async function handleResetSession() {
     setActionLoading("reset");
