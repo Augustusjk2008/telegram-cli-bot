@@ -1006,6 +1006,13 @@ function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>): Chat
   return merged.length > 0 ? merged : undefined;
 }
 
+function maxDefinedNumber(...values: Array<number | undefined>) {
+  const definedValues = values.filter((value): value is number => (
+    typeof value === "number" && Number.isFinite(value)
+  ));
+  return definedValues.length > 0 ? Math.max(...definedValues) : undefined;
+}
+
 function mergeMessageMeta(
   base?: ChatMessageMetaInfo,
   incoming?: ChatMessageMetaInfo,
@@ -1017,9 +1024,9 @@ function mergeMessageMeta(
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: incoming?.traceCount ?? base?.traceCount ?? traceSummary?.traceCount,
-    toolCallCount: incoming?.toolCallCount ?? base?.toolCallCount ?? traceSummary?.toolCallCount,
-    processCount: incoming?.processCount ?? base?.processCount ?? traceSummary?.processCount,
+    traceCount: maxDefinedNumber(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
+    toolCallCount: maxDefinedNumber(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
+    processCount: maxDefinedNumber(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     trace,
   };

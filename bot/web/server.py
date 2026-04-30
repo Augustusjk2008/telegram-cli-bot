@@ -588,6 +588,7 @@ class WebApiServer:
         self._site: web.TCPSite | None = None
         self._restart_task: asyncio.Task[None] | None = None
         self._update_task: asyncio.Task[None] | None = None
+        self._tunnel_ready_task: asyncio.Task[None] | None = None
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
         self._terminal_manager = TerminalSessionManager()
@@ -869,6 +870,33 @@ class WebApiServer:
             logger.info("已复制 Web 公网地址到剪贴板 reason=%s url=%s", reason, public_url)
         qr_printed = self._print_public_url_qr(public_url)
         return copied or qr_printed
+
+    def _schedule_tunnel_ready_notification(self, snapshot: dict[str, Any], *, reason: str) -> None:
+        if snapshot.get("status") != "starting":
+            return
+        if snapshot.get("source") != "quick_tunnel":
+            return
+        if not str(snapshot.get("public_url") or "").strip():
+            return
+        if self._tunnel_ready_task is not None and not self._tunnel_ready_task.done():
+            self._tunnel_ready_task.cancel()
+
+        async def wait_and_notify() -> None:
+            try:
+                ready_snapshot = await self._tunnel_service.wait_until_public_ready()
+                await self._notify_tunnel_public_url(ready_snapshot, reason=f"{reason}_ready")
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("等待 Web tunnel 公网地址就绪失败: %s", exc)
+
+        self._tunnel_ready_task = asyncio.create_task(wait_and_notify())
+
+    async def _notify_or_schedule_tunnel_public_url(self, snapshot: dict[str, Any], *, reason: str) -> None:
+        if snapshot.get("status") == "running":
+            await self._notify_tunnel_public_url(snapshot, reason=reason)
+            return
+        self._schedule_tunnel_ready_notification(snapshot, reason=reason)
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -1991,7 +2019,7 @@ class WebApiServer:
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         snapshot = await self._tunnel_service.start()
-        await self._notify_tunnel_public_url(snapshot, reason="manual_tunnel_start")
+        await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_start")
         return _json({"ok": True, "data": snapshot})
 
     async def admin_tunnel_stop(self, request: web.Request) -> web.Response:
@@ -2001,7 +2029,7 @@ class WebApiServer:
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         snapshot = await self._tunnel_service.restart()
-        await self._notify_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
+        await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
         return _json({"ok": True, "data": snapshot})
 
     async def admin_single_bot(self, request: web.Request) -> web.Response:
@@ -2903,7 +2931,7 @@ class WebApiServer:
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
         if self._tunnel_service.should_autostart():
             tunnel_snapshot = await self._tunnel_service.start()
-            await self._notify_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
+            await self._notify_or_schedule_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
             logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
         local_url = TunnelService._build_local_url(self._host, self._port)
         logger.info(
@@ -2925,6 +2953,10 @@ class WebApiServer:
             self._update_task.cancel()
             await asyncio.gather(self._update_task, return_exceptions=True)
             self._update_task = None
+        if self._tunnel_ready_task is not None:
+            self._tunnel_ready_task.cancel()
+            await asyncio.gather(self._tunnel_ready_task, return_exceptions=True)
+            self._tunnel_ready_task = None
         terminal_tasks = list(self._terminal_tasks)
         self._terminal_tasks.clear()
         for task in terminal_tasks:

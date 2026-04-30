@@ -4185,6 +4185,89 @@ async def test_web_server_start_copies_public_url_on_autostart(web_manager: Mult
 
     server._copy_text_to_clipboard.assert_called_once_with("https://startup.trycloudflare.com")
 
+
+@pytest.mark.asyncio
+async def test_web_server_autostart_notifies_after_lagging_tunnel_becomes_ready(
+    web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch
+):
+    class FakeTunnelService:
+        def __init__(self):
+            self.waited = False
+
+        def should_autostart(self):
+            return True
+
+        async def start(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "starting",
+                "source": "quick_tunnel",
+                "public_url": "https://lagging.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "公网地址仍在传播: https://lagging.trycloudflare.com",
+                "pid": 1234,
+            }
+
+        async def wait_until_public_ready(self, *, timeout=90.0):
+            self.waited = True
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://lagging.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+        async def stop(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+    class FakeRunner:
+        async def setup(self):
+            return None
+
+        async def cleanup(self):
+            return None
+
+    class FakeSite:
+        def __init__(self, runner, host, port):
+            self.runner = runner
+            self.host = host
+            self.port = port
+
+        async def start(self):
+            return None
+
+    monkeypatch.setattr("bot.web.server.web.AppRunner", lambda app: FakeRunner())
+    monkeypatch.setattr("bot.web.server.web.TCPSite", FakeSite)
+
+    fake_tunnel = FakeTunnelService()
+    server = WebApiServer(web_manager, tunnel_service=fake_tunnel)
+    notifications: list[tuple[str, str]] = []
+
+    async def fake_notify(snapshot, *, reason: str):
+        notifications.append((reason, snapshot["public_url"]))
+        return True
+
+    server._notify_tunnel_public_url = fake_notify
+    await server.start()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    await server.stop()
+
+    assert fake_tunnel.waited is True
+    assert notifications == [("web_server_start_ready", "https://lagging.trycloudflare.com")]
+
+
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_web_server_start_logs_bracketed_ipv6_url(
