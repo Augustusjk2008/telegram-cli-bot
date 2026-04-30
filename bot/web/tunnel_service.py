@@ -57,7 +57,7 @@ class TunnelService:
         state_file: str = ".web_tunnel_state.json",
         startup_timeout: float = 10.0,
         local_health_timeout: float = 5.0,
-        public_health_timeout: float = 15.0,
+        public_health_timeout: float = 60.0,
     ):
         normalized_mode = (mode or "disabled").strip().lower()
         if public_url.strip():
@@ -256,7 +256,7 @@ class TunnelService:
         except Exception as exc:
             logger.warning("删除 tunnel 状态文件失败 %s: %s", self._state_file, exc)
 
-    def _persist_running_state(self) -> None:
+    def _persist_active_tunnel_state(self, *, allowed_statuses: set[str]) -> None:
         if self._manual_public_url or self._mode != "cloudflare_quick":
             self._clear_state_file()
             return
@@ -266,19 +266,27 @@ class TunnelService:
 
         pid = self._coerce_pid(snapshot.get("pid"))
         public_url = _normalize_quick_public_url(str(snapshot.get("public_url") or ""))
-        if snapshot.get("status") != "running" or snapshot.get("source") != "quick_tunnel" or not public_url or pid <= 0:
+        status = str(snapshot.get("status") or "")
+        if status not in allowed_statuses or snapshot.get("source") != "quick_tunnel" or not public_url or pid <= 0:
             self._clear_state_file()
             return
 
         self._write_state_file(
             {
                 "mode": "cloudflare_quick",
+                "status": status,
                 "source": "quick_tunnel",
                 "public_url": public_url,
                 "local_url": self._local_url,
                 "pid": pid,
             }
         )
+
+    def _persist_running_state(self) -> None:
+        self._persist_active_tunnel_state(allowed_statuses={"running"})
+
+    def _persist_starting_state(self) -> None:
+        self._persist_active_tunnel_state(allowed_statuses={"starting", "running"})
 
     def _query_process_name(self, pid: int) -> str:
         if pid <= 0:
@@ -329,23 +337,27 @@ class TunnelService:
         with self._state_lock:
             process = self._process
             pid = self._coerce_pid(self._snapshot.get("pid"))
+            if process is not None and pid <= 0:
+                pid = self._coerce_pid(getattr(process, "pid", 0))
             status = str(self._snapshot.get("status") or "")
 
-        if process is not None or pid <= 0 or status != "running":
+        if process is not None or pid <= 0 or status not in {"running", "starting"}:
             return
         if self._is_cloudflared_process(pid):
             return
 
         with self._state_lock:
+            current_status = str(self._snapshot.get("status") or "")
             if self._process is None and self._coerce_pid(self._snapshot.get("pid")) == pid:
                 self._snapshot.update(
                     {
                         "status": "error",
                         "last_error": "cloudflared 进程已退出",
                         "pid": None,
-                        "public_url": "",
                     }
                 )
+                if current_status == "running":
+                    self._snapshot["public_url"] = ""
         self._clear_state_file()
 
     def _try_restore_persisted_tunnel(self) -> bool:
@@ -377,17 +389,21 @@ class TunnelService:
             self._clear_state_file()
             return False
 
+        persisted_status = str(data.get("status") or "running").strip()
+        restored_status = "starting" if persisted_status == "starting" else "running"
+        restored_error = f"公网地址仍在传播: {public_url}" if restored_status == "starting" else ""
+
         with self._state_lock:
             self._process = None
             self._expected_stop = False
             self._snapshot.update(
                 {
                     "mode": "cloudflare_quick",
-                    "status": "running",
+                    "status": restored_status,
                     "source": "quick_tunnel",
                     "public_url": public_url,
                     "local_url": self._local_url,
-                    "last_error": "",
+                    "last_error": restored_error,
                     "pid": pid,
                 }
             )
@@ -420,7 +436,7 @@ class TunnelService:
             if not ready_event.is_set():
                 ready_event.set()
 
-            if is_current and not expected_stop:
+            if is_current and not expected_stop and returncode is not None:
                 error_message = f"cloudflared 已退出 (exit={returncode})"
                 with self._state_lock:
                     self._process = None
@@ -592,12 +608,51 @@ class TunnelService:
 
         public_ready = await asyncio.to_thread(self._wait_for_health, public_url, timeout=self._public_health_timeout)
         if not public_ready:
-            with self._state_lock:
-                self._expected_stop = True
-            await self._terminate_process(process, clear_public_url=True, status="error", last_error=f"公网地址未就绪: {public_url}")
+            self._set_snapshot(
+                status="starting",
+                public_url=public_url,
+                last_error=f"公网地址仍在传播: {public_url}",
+                pid=process.pid,
+            )
+            self._persist_starting_state()
             return self.snapshot()
 
         self._set_snapshot(status="running", public_url=public_url, last_error="", pid=process.pid)
+        self._persist_running_state()
+        return self.snapshot()
+
+    async def wait_until_public_ready(self, *, timeout: float = 90.0) -> dict[str, Any]:
+        if self._manual_public_url or self._mode != "cloudflare_quick":
+            return self.snapshot()
+
+        snapshot = self.snapshot()
+        if snapshot.get("status") == "running":
+            return snapshot
+
+        public_url = str(snapshot.get("public_url") or "").strip()
+        if not public_url:
+            return snapshot
+
+        with self._state_lock:
+            process = self._process
+            pid = self._coerce_pid(self._snapshot.get("pid"))
+
+        if process is not None and process.poll() is not None:
+            self._set_snapshot(status="error", last_error="cloudflared 进程已退出", pid=None)
+            self._clear_state_file()
+            return self.snapshot()
+        if process is None and pid > 0 and not self._is_cloudflared_process(pid):
+            self._set_snapshot(status="error", last_error="cloudflared 进程已退出", pid=None)
+            self._clear_state_file()
+            return self.snapshot()
+
+        public_ready = await asyncio.to_thread(self._wait_for_health, public_url, timeout=timeout)
+        if not public_ready:
+            self._set_snapshot(status="starting", last_error=f"公网地址仍在传播: {public_url}")
+            self._persist_starting_state()
+            return self.snapshot()
+
+        self._set_snapshot(status="running", public_url=public_url, last_error="", pid=pid or None)
         self._persist_running_state()
         return self.snapshot()
 

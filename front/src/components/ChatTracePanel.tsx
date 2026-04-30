@@ -55,7 +55,8 @@ function ChatTracePanelInner({
   const groupedEntries = useMemo(() => groupChatTraceEntries(events), [events]);
 
   useEffect(() => {
-    if (!expanded || events.length > 0 || summary.traceCount <= 0 || isLoading || Boolean(loadError) || !onLoadTrace) {
+    const hasCompleteTrace = events.length > 0 && events.length >= summary.traceCount;
+    if (!expanded || hasCompleteTrace || summary.traceCount <= 0 || isLoading || Boolean(loadError) || !onLoadTrace) {
       return;
     }
     onLoadTrace();

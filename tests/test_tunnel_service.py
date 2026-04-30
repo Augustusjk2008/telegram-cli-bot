@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -185,7 +186,79 @@ async def test_tunnel_service_start_waits_for_local_health_before_spawning_cloud
 
 
 @pytest.mark.asyncio
-async def test_tunnel_service_start_requires_public_health_before_running(tmp_path: Path):
+async def test_tunnel_service_start_keeps_slow_public_tunnel_starting(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+        startup_timeout=0.01,
+        local_health_timeout=0.01,
+        public_health_timeout=0.01,
+    )
+
+    class FakeStdout:
+        def __init__(self):
+            self._first = True
+
+        def readline(self):
+            if self._first:
+                self._first = False
+                return "https://fresh.trycloudflare.com\n"
+            time.sleep(1.0)
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.pid = 5555
+            self.stdout = FakeStdout()
+            self.terminated = False
+            self.killed = False
+            self.waited = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+            return None
+
+        def wait(self, timeout=None):
+            self.waited = True
+            return 0
+
+        def kill(self):
+            self.killed = True
+            return None
+
+    health_calls: list[str] = []
+
+    def fake_wait_for_health(base_url: str, *, timeout: float) -> bool:
+        health_calls.append(base_url)
+        return base_url == "http://127.0.0.1:8765"
+
+    process = FakeProcess()
+
+    with patch.object(service, "_wait_for_health", side_effect=fake_wait_for_health), \
+         patch("bot.web.tunnel_service.subprocess.Popen", return_value=process):
+        snapshot = await service.start()
+
+    assert health_calls == ["http://127.0.0.1:8765", "https://fresh.trycloudflare.com"]
+    assert snapshot["status"] == "starting"
+    assert snapshot["public_url"] == "https://fresh.trycloudflare.com"
+    assert snapshot["pid"] == 5555
+    assert "公网地址仍在传播" in snapshot["last_error"]
+    assert process.terminated is False
+    assert process.waited is False
+    assert process.killed is False
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert persisted["public_url"] == "https://fresh.trycloudflare.com"
+    assert persisted["pid"] == 5555
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_wait_until_public_ready_marks_running(tmp_path: Path):
     service = TunnelService(
         host="127.0.0.1",
         port=8765,
@@ -198,10 +271,14 @@ async def test_tunnel_service_start_requires_public_health_before_running(tmp_pa
 
     class FakeStdout:
         def __init__(self):
-            self._lines = ["https://fresh.trycloudflare.com\n", ""]
+            self._first = True
 
         def readline(self):
-            return self._lines.pop(0)
+            if self._first:
+                self._first = False
+                return "https://fresh.trycloudflare.com\n"
+            time.sleep(1.0)
+            return ""
 
     class FakeProcess:
         pid = 5555
@@ -216,33 +293,25 @@ async def test_tunnel_service_start_requires_public_health_before_running(tmp_pa
         def wait(self, timeout=None):
             return 0
 
-    health_calls: list[str] = []
+        def kill(self):
+            return None
+
+    public_checks = [False, True]
 
     def fake_wait_for_health(base_url: str, *, timeout: float) -> bool:
-        health_calls.append(base_url)
-        return base_url == "http://127.0.0.1:8765"
-
-    class ImmediateThread:
-        def __init__(self, target, args=(), daemon=None):
-            self._target = target
-            self._args = args
-
-        def start(self):
-            self._target(*self._args)
-
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
+        if base_url == "http://127.0.0.1:8765":
+            return True
+        return public_checks.pop(0)
 
     with patch.object(service, "_wait_for_health", side_effect=fake_wait_for_health), \
-         patch("bot.web.tunnel_service.subprocess.Popen", return_value=FakeProcess()), \
-         patch("bot.web.tunnel_service.threading.Thread", ImmediateThread), \
-         patch("bot.web.tunnel_service.asyncio.to_thread", side_effect=fake_to_thread):
-        snapshot = await service.start()
+         patch("bot.web.tunnel_service.subprocess.Popen", return_value=FakeProcess()):
+        starting = await service.start()
+        ready = await service.wait_until_public_ready(timeout=0.01)
 
-    assert health_calls == ["http://127.0.0.1:8765", "https://fresh.trycloudflare.com"]
-    assert snapshot["status"] == "error"
-    assert snapshot["public_url"] == ""
-    assert "公网地址未就绪" in snapshot["last_error"]
+    assert starting["status"] == "starting"
+    assert ready["status"] == "running"
+    assert ready["public_url"] == "https://fresh.trycloudflare.com"
+    assert ready["last_error"] == ""
 
 
 @pytest.mark.asyncio

@@ -166,6 +166,14 @@ function countPersistedHistoryItems(items: ChatMessage[]) {
   return items.filter((item) => !item.id.startsWith("assistant-cron-")).length;
 }
 
+function hasPersistedStreamingAssistant(items: ChatMessage[]) {
+  return items.some((item) => (
+    !item.id.startsWith("assistant-cron-")
+    && item.role === "assistant"
+    && item.state === "streaming"
+  ));
+}
+
 function resolvePendingCronRuns(
   pendingRuns: AssistantCronRunEnqueuedDetail[],
   items: ChatMessage[],
@@ -222,15 +230,30 @@ function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>) {
   return merged.length > 0 ? merged : undefined;
 }
 
+function maxDefinedNumber(...values: Array<number | undefined>) {
+  const definedValues = values.filter((value): value is number => (
+    typeof value === "number" && Number.isFinite(value)
+  ));
+  return definedValues.length > 0 ? Math.max(...definedValues) : undefined;
+}
+
 function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
   const trace = mergeTraceEvents(base?.trace, incoming?.trace);
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: incoming?.traceCount ?? base?.traceCount ?? trace?.length,
-    toolCallCount: incoming?.toolCallCount ?? base?.toolCallCount ?? trace?.filter((event) => event.kind === "tool_call").length,
-    processCount: incoming?.processCount ?? base?.processCount ?? trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length,
+    traceCount: maxDefinedNumber(incoming?.traceCount, base?.traceCount, trace?.length),
+    toolCallCount: maxDefinedNumber(
+      incoming?.toolCallCount,
+      base?.toolCallCount,
+      trace?.filter((event) => event.kind === "tool_call").length,
+    ),
+    processCount: maxDefinedNumber(
+      incoming?.processCount,
+      base?.processCount,
+      trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length,
+    ),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     trace,
   };
@@ -829,6 +852,7 @@ export function ChatScreen({
       setWorkingDir(overview.workingDir || "");
       const previousItems = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
       const previousCount = countPersistedHistoryItems(itemsRef.current);
+      const hasStreamingAssistant = hasPersistedStreamingAssistant(previousItems);
 
       const nextPendingRuns = resolvePendingCronRuns(
         pendingCronRunsRef.current,
@@ -842,13 +866,16 @@ export function ChatScreen({
         overview.isProcessing
         || overview.runningReply
         || nextPendingRuns.length > 0
+        || hasStreamingAssistant
         || (typeof overview.historyCount === "number" && overview.historyCount !== previousCount),
       );
 
       let messages = previousItems;
       if (shouldRefreshMessages) {
         const afterId = previousItems[previousItems.length - 1]?.id || "";
-        if (afterId) {
+        if (hasStreamingAssistant) {
+          messages = await client.listMessages(botAlias);
+        } else if (afterId) {
           const delta = await client.listMessageDelta(botAlias, afterId, 50);
           messages = delta.reset ? delta.items : [...previousItems, ...delta.items];
         } else {
@@ -1199,7 +1226,9 @@ export function ChatScreen({
       return;
     }
     const messageClientStateKey = getMessageClientStateKey(currentMessage);
-    if ((currentMessage.meta?.trace || []).length > 0) {
+    const loadedTraceCount = (currentMessage.meta?.trace || []).length;
+    const expectedTraceCount = currentMessage.meta?.traceCount || 0;
+    if (expectedTraceCount > 0 && loadedTraceCount >= expectedTraceCount) {
       return;
     }
     if ((traceLoadStateRef.current[messageClientStateKey]?.loading)) {

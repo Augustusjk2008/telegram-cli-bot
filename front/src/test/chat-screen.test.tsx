@@ -560,6 +560,79 @@ test("renders empty tool call payloads with readable fallback instead of raw emp
   expect(screen.queryByText("{}")).not.toBeInTheDocument();
 });
 
+test("streamed trace count grows beyond the first process event", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      _onChunk: (chunk: string) => void,
+      _onStatus,
+      onTrace,
+    ) => {
+      onTrace?.({ kind: "commentary", summary: "第一条过程" } as never);
+      onTrace?.({ kind: "commentary", summary: "第二条过程" } as never);
+      return {
+        id: "assistant-final",
+        role: "assistant",
+        text: "最终结果",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      };
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "执行");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("最终结果")).toBeInTheDocument();
+  expect(screen.getByText("2 条过程")).toBeInTheDocument();
+});
+
+test("expanding a partially loaded trace fetches full trace details", async () => {
+  const user = userEvent.setup();
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      { kind: "commentary", summary: "第一条过程" },
+      { kind: "commentary", summary: "第二条过程" },
+      { kind: "commentary", summary: "第三条过程" },
+    ],
+    traceCount: 3,
+    toolCallCount: 0,
+    processCount: 3,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "最终结果",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          trace: [{ kind: "commentary", summary: "第一条过程" }],
+          traceCount: 3,
+          toolCallCount: 0,
+          processCount: 3,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("最终结果")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+  expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1");
+  expect(await screen.findByText("第二条过程")).toBeInTheDocument();
+  expect(screen.getByText("第三条过程")).toBeInTheDocument();
+});
+
 test("lazy-loads trace details and groups tool call/result into one trace card", async () => {
   const user = userEvent.setup();
   const getMessageTrace = vi.fn(async () => ({
@@ -1069,6 +1142,87 @@ test("assistant send does not let an old idle poll replace the finishing reply w
   expect(screen.queryByText("轮询中的旧预览")).not.toBeInTheDocument();
   expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
   expect(screen.queryByText(/已等待 \d+ 秒/)).not.toBeInTheDocument();
+});
+
+test("assistant poll reloads full history for existing streaming assistant row when count is unchanged", async () => {
+  vi.useFakeTimers();
+
+  const initialMessages: ChatMessage[] = [
+    {
+      id: "user-1",
+      role: "user",
+      text: "继续",
+      createdAt: "2026-04-30T01:00:00.000Z",
+      state: "done",
+    },
+    {
+      id: "assistant-1",
+      role: "assistant",
+      text: "旧过程预览",
+      createdAt: "2026-04-30T01:00:01.000Z",
+      state: "streaming",
+    },
+  ];
+  const finalMessages: ChatMessage[] = [
+    initialMessages[0],
+    {
+      id: "assistant-1",
+      role: "assistant",
+      text: "最终结果",
+      createdAt: "2026-04-30T01:00:01.000Z",
+      state: "done",
+    },
+  ];
+
+  let overviewCalls = 0;
+  let historyCalls = 0;
+  const getBotOverview = vi.fn(async () => {
+    overviewCalls += 1;
+    return {
+      alias: "assistant1",
+      cliType: "codex" as const,
+      status: overviewCalls === 1 ? "busy" as const : "running" as const,
+      workingDir: "C:\\workspace",
+      botMode: "assistant" as const,
+      isProcessing: overviewCalls === 1,
+      historyCount: 2,
+    };
+  });
+  const listMessages = vi.fn(async () => {
+    historyCalls += 1;
+    return historyCalls === 1 ? initialMessages : finalMessages;
+  });
+  const listMessageDelta = vi.fn(async () => ({
+    items: [],
+    reset: false,
+  }));
+  const client = createClient({
+    getBotOverview,
+    listMessages: listMessages as never,
+  }) as WebBotClient & { listMessageDelta: typeof listMessageDelta };
+  client.listMessageDelta = listMessageDelta;
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("旧过程预览")).toBeInTheDocument();
+  expect(screen.getByText("正在输出")).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1100);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("最终结果")).toBeInTheDocument();
+  expect(screen.queryByText("旧过程预览")).not.toBeInTheDocument();
+  expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
+  expect(listMessageDelta).not.toHaveBeenCalled();
+  expect(listMessages).toHaveBeenCalledTimes(2);
 });
 
 test("assistant sse recovery resolves stale runningReply when overview is idle", async () => {
