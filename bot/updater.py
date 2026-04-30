@@ -24,6 +24,7 @@ PROTECTED_UPDATE_PATHS = {
     "managed_bots.json",
     ".session_store.json",
     ".web_admin_settings.json",
+    ".web_tunnel_state.json",
     ".assistant",
     ".claude",
     ".git",
@@ -199,10 +200,22 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
     repo_root = Path(repo_root).resolve()
     settings = app_settings._load_settings()
     pending_path = str(settings.get("pending_update_path") or "").strip()
+    pending_version = _normalize_tag_name(settings.get("pending_update_version"))
+    current_version = _normalize_tag_name(APP_VERSION)
+    if pending_version and pending_version == current_version:
+        _clear_pending_update(settings)
+        settings["update_last_error"] = ""
+        app_settings._save_settings(settings)
+        _emit_apply_log(log_callback, f"当前版本已是 {current_version}，跳过待更新包。")
+        return {
+            "applied": False,
+            "skipped": True,
+            "reason": "already_current_version",
+            "version": current_version,
+        }
     if not pending_path:
         _emit_apply_log(log_callback, "没有待应用的更新。")
         return {"applied": False, "reason": "no_pending_update"}
-    pending_version = _normalize_tag_name(settings.get("pending_update_version"))
     if pending_version:
         _emit_apply_log(log_callback, f"开始应用待更新版本: {pending_version}")
     else:
@@ -638,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "apply-pending":
         result = apply_pending_update(Path(args.repo_root).resolve(), log_callback=print)
-        return 0 if result.get("applied") or result.get("reason") == "no_pending_update" else 1
+        return 0 if result.get("applied") or result.get("reason") in {"no_pending_update", "already_current_version"} else 1
     return 1
 
 

@@ -11,6 +11,7 @@ def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
 
     assert "managed_bots.json" in ignore
     assert ".web_admin_settings.json" in ignore
+    assert ".web_tunnel_state.json" in ignore
     assert ".updates/" in ignore
     assert ".release-local/" in ignore
 

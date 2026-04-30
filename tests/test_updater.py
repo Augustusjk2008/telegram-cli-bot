@@ -389,6 +389,10 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
 
     (repo_root / ".env").write_text("WEB_API_TOKEN=keep-me\n", encoding="utf-8")
+    (repo_root / ".web_tunnel_state.json").write_text(
+        json.dumps({"public_url": "https://keep.trycloudflare.com"}),
+        encoding="utf-8",
+    )
     settings_file.write_text(json.dumps({"pending_update_version": "1.0.1"}), encoding="utf-8")
 
     package_path = tmp_path / "release.zip"
@@ -396,6 +400,7 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
         archive.writestr("README.md", "# updated\n")
         archive.writestr(".env", "WEB_API_TOKEN=replace-me\n")
         archive.writestr(".web_admin_settings.json", "{\"bad\":true}")
+        archive.writestr(".web_tunnel_state.json", "{\"public_url\":\"https://replace.trycloudflare.com\"}")
 
     current_settings = app_settings._load_settings()
     current_settings["pending_update_version"] = "1.0.1"
@@ -408,6 +413,9 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
     assert result["applied"] is True
     assert (repo_root / "README.md").read_text(encoding="utf-8") == "# updated\n"
     assert (repo_root / ".env").read_text(encoding="utf-8") == "WEB_API_TOKEN=keep-me\n"
+    assert json.loads((repo_root / ".web_tunnel_state.json").read_text(encoding="utf-8")) == {
+        "public_url": "https://keep.trycloudflare.com"
+    }
     assert app_settings._load_settings()["pending_update_version"] == ""
 
 
@@ -528,3 +536,51 @@ def test_apply_pending_update_reports_progress_logs(monkeypatch, tmp_path: Path)
     assert any("正在更新: README.md" in line for line in log_lines)
     assert any("正在重建前端资源" in line for line in log_lines)
     assert any("前端资源重建完成" in line for line in log_lines)
+
+
+def test_apply_pending_update_skips_when_current_version_matches_pending(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = APP_VERSION
+    current_settings["pending_update_path"] = str(tmp_path / "missing.zip")
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    monkeypatch.setattr(
+        updater,
+        "_build_updated_frontend",
+        lambda path: (_ for _ in ()).throw(AssertionError("should not build frontend when version already matches")),
+    )
+
+    log_lines: list[str] = []
+    result = updater.apply_pending_update(repo_root, log_callback=log_lines.append)
+    saved_settings = app_settings._load_settings()
+
+    assert result == {
+        "applied": False,
+        "skipped": True,
+        "reason": "already_current_version",
+        "version": APP_VERSION,
+    }
+    assert saved_settings["pending_update_version"] == ""
+    assert saved_settings["pending_update_path"] == ""
+    assert any(f"当前版本已是 {APP_VERSION}" in line for line in log_lines)
+
+
+def test_updater_main_treats_matching_pending_version_as_success(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = APP_VERSION
+    current_settings["pending_update_path"] = str(tmp_path / "missing.zip")
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    assert updater.main(["apply-pending", "--repo-root", str(repo_root)]) == 0
