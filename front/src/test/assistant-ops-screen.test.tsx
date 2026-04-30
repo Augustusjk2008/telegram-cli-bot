@@ -54,6 +54,43 @@ test("assistant ops screen approves, generates patch, dry-runs and applies propo
   expect(await screen.findByText(/"status": "applied"/)).toBeInTheDocument();
 });
 
+test("assistant ops screen shows patch transcript", async () => {
+  const user = userEvent.setup();
+  const client = await buildAssistantClient();
+  const generatePatch = client.generateAssistantProposalPatch.bind(client);
+
+  client.generateAssistantProposalPatchStream = async (botAlias, proposalId, input, handlers) => {
+    handlers?.onStatus?.({ phase: "setup", message: "准备生成", lifecycle: "running" });
+    handlers?.onLog?.("开始生成 patch");
+    handlers?.onTrace?.({
+      kind: "tool_call",
+      summary: "git worktree add",
+      toolName: "git",
+      callId: "call_git_add",
+    });
+    handlers?.onTrace?.({
+      kind: "tool_result",
+      summary: "Exit code: 0\nWall time: 1s",
+      toolName: "git",
+      callId: "call_git_add",
+    });
+    return generatePatch(botAlias, proposalId, input);
+  };
+
+  render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
+
+  await user.click(await screen.findByText("补 memory index 审计"));
+  await user.click(await screen.findByRole("button", { name: "批准" }));
+  await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
+  await user.click(screen.getByRole("button", { name: "生成 Patch" }));
+
+  expect(await screen.findByText("开始生成 patch")).toBeInTheDocument();
+  expect(await screen.findByText("展开过程详情")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+  expect(await screen.findByText("git worktree add")).toBeInTheDocument();
+  expect(await screen.findByText("patch 已生成")).toBeInTheDocument();
+});
+
 test("assistant ops screen manages memory and diagnostics", async () => {
   const user = userEvent.setup();
   const client = await buildAssistantClient();

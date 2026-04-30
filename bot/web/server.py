@@ -157,6 +157,7 @@ from .api_service import (
     update_bot_workdir,
     write_file_content,
     generate_assistant_proposal_patch,
+    stream_generate_assistant_proposal_patch,
 )
 from bot.assistant_admin_audit import list_admin_audit, summarize_request, write_admin_audit
 from .git_service import (
@@ -2171,6 +2172,87 @@ class WebApiServer:
                 elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
             )
 
+    async def admin_assistant_proposal_patch_generate_stream(self, request: web.Request) -> web.StreamResponse:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        proposal_id = request.match_info["proposal_id"]
+        body = await self._parse_json(request)
+        started_at = time.perf_counter()
+        ok = False
+        status_code = 200
+        error_code = ""
+        error_message = ""
+        event_stream = stream_generate_assistant_proposal_patch(
+            self.manager,
+            alias,
+            proposal_id,
+            target_alias=str(body.get("target_alias") or ""),
+            regenerate=bool(body.get("regenerate")),
+            generated_by=str(auth.user_id),
+        )
+        event_iterator = event_stream.__aiter__()
+        first_event = await event_iterator.__anext__()
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        client_disconnected = False
+        try:
+            for event in [first_event]:
+                if event.get("type") == "done":
+                    ok = True
+                    status_code = 200
+                elif event.get("type") == "error":
+                    status_code = 500
+                    error_code = str(event.get("code") or "patch_generation_failed")
+                    error_message = str(event.get("message") or "生成 patch 失败")
+                try:
+                    await response.write(_format_sse(str(event.get("type") or "message"), event))
+                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                    client_disconnected = True
+                    logger.info("assistant patch SSE 客户端已断开: alias=%s proposal=%s", alias, proposal_id)
+            async for event in event_iterator:
+                if event.get("type") == "done":
+                    ok = True
+                    status_code = 200
+                elif event.get("type") == "error":
+                    status_code = 500
+                    error_code = str(event.get("code") or "patch_generation_failed")
+                    error_message = str(event.get("message") or "生成 patch 失败")
+                if client_disconnected:
+                    continue
+                try:
+                    await response.write(_format_sse(str(event.get("type") or "message"), event))
+                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                    client_disconnected = True
+                    logger.info("assistant patch SSE 客户端已断开: alias=%s proposal=%s", alias, proposal_id)
+        except WebApiError:
+            raise
+        finally:
+            if not client_disconnected:
+                try:
+                    await response.write_eof()
+                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                    logger.info("assistant patch SSE 客户端在结束前断开: alias=%s proposal=%s", alias, proposal_id)
+            self._write_assistant_admin_audit(
+                request,
+                auth,
+                body,
+                ok=ok,
+                status_code=status_code,
+                error_code=error_code,
+                error_message=error_message,
+                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
+            )
+        return response
+
     async def admin_assistant_proposal_patch_approve(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
@@ -2814,6 +2896,10 @@ class WebApiServer:
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch",
             self.admin_assistant_proposal_patch_generate,
+        )
+        app.router.add_post(
+            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch/stream",
+            self.admin_assistant_proposal_patch_generate_stream,
         )
         app.router.add_post(
             "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch/approve",

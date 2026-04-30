@@ -342,6 +342,149 @@ def test_generate_pending_patch_marks_sensitive_hits(tmp_path, monkeypatch):
     assert result["sensitive_hits"] == [".env"]
 
 
+def test_generate_pending_patch_recovers_stale_running_metadata_and_worktree(tmp_path, monkeypatch):
+    from bot.assistant_patch_generation import generate_pending_patch
+
+    assistant_dir = tmp_path / "assistant-root"
+    assistant_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "a.txt").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    home = bootstrap_assistant_home(assistant_dir)
+    proposal = create_proposal(home, kind="code", title="patch", body="change a")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    proposal["status"] = "approved"
+
+    pending_dir = home.root / "upgrades" / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    stale_metadata_path = pending_dir / f"{proposal['id']}.json"
+    stale_metadata_path.write_text(
+        json.dumps(
+            {
+                "id": proposal["id"],
+                "proposal_id": proposal["id"],
+                "state": "pending",
+                "lifecycle": "running",
+                "target_alias": "target1",
+                "target_repo_root": str(repo),
+                "base_commit": head,
+                "worktree_path": str(home.root / "upgrades" / "worktrees" / proposal["id"]),
+                "patch_path": f"upgrades/pending/{proposal['id']}.patch",
+                "generated_at": "2026-04-29T00:00:00+00:00",
+                "generated_by": "1001",
+                "generator": {"cli_type": "codex", "cli_path": "codex", "status": "running", "elapsed_seconds": 0},
+                "dry_run": {"ok": False, "checked_at": "", "stderr": ""},
+                "sensitive_hits": [],
+                "changed_files": [],
+                "additions": 0,
+                "deletions": 0,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    stale_worktree = home.root / "upgrades" / "worktrees" / proposal["id"]
+    stale_worktree.mkdir(parents=True, exist_ok=True)
+    (stale_worktree / "stale.txt").write_text("stale\n", encoding="utf-8")
+
+    def fake_cli(worktree_path: Path, prompt: str, metadata: dict):
+        assert worktree_path.exists()
+        assert "Proposal:" in prompt
+        assert not (worktree_path / "stale.txt").exists()
+        (worktree_path / "a.txt").write_text("new\n", encoding="utf-8")
+        return {
+            "status": "succeeded",
+            "elapsed_seconds": 1,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "assistant_text": "done",
+        }
+
+    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+
+    result = generate_pending_patch(
+        home,
+        proposal,
+        target={
+            "alias": "target1",
+            "working_dir": str(repo),
+            "repo_root": str(repo),
+            "head": head,
+            "cli_type": "codex",
+            "cli_path": "codex",
+        },
+        generated_by="1001",
+        regenerate=False,
+    )
+
+    assert result["state"] == "pending"
+    assert result["lifecycle"] == "pending"
+    assert (home.root / "upgrades" / "pending" / f"{proposal['id']}.patch").exists()
+    assert not stale_worktree.exists()
+
+
+def test_generate_pending_patch_writes_failed_metadata_on_cli_error(tmp_path, monkeypatch):
+    from bot.assistant_patch_generation import generate_pending_patch
+    from bot.assistant_upgrade import read_upgrade_metadata
+
+    assistant_dir = tmp_path / "assistant-root"
+    assistant_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "a.txt").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    home = bootstrap_assistant_home(assistant_dir)
+    proposal = create_proposal(home, kind="code", title="patch", body="change a")
+    proposal_path = home.root / "proposals" / f"{proposal['id']}.json"
+    saved = json.loads(proposal_path.read_text(encoding="utf-8"))
+    saved["status"] = "approved"
+    proposal_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    proposal["status"] = "approved"
+
+    def fake_cli(worktree_path: Path, prompt: str, metadata: dict):
+        raise subprocess.CalledProcessError(1, ["codex"], output="", stderr="cli failed")
+
+    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+
+    try:
+        generate_pending_patch(
+            home,
+            proposal,
+            target={
+                "alias": "target1",
+                "working_dir": str(repo),
+                "repo_root": str(repo),
+                "head": head,
+                "cli_type": "codex",
+                "cli_path": "codex",
+            },
+            generated_by="1001",
+            regenerate=False,
+        )
+    except subprocess.CalledProcessError as exc:
+        assert exc.stderr == "cli failed"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected CalledProcessError")
+
+    metadata = read_upgrade_metadata(home, proposal["id"], "pending")
+    assert metadata is not None
+    assert metadata["lifecycle"] == "failed"
+    assert metadata["generator"]["status"] == "failed"
+    assert metadata["error"] == "cli failed"
+    assert not (home.root / "upgrades" / "worktrees" / proposal["id"]).exists()
+
+
 def test_approve_pending_upgrade_patch_rejects_sensitive_paths(tmp_path):
     from bot.assistant_upgrade import approve_pending_upgrade_patch
 

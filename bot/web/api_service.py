@@ -936,17 +936,18 @@ def _read_assistant_upgrade_state(home, proposal_id: str, *, proposal: dict[str,
     approved_patch = home.root / "upgrades" / "approved" / f"{proposal_id}.patch"
     pending_patch = home.root / "upgrades" / "pending" / f"{proposal_id}.patch"
     metadata = approved or pending or {}
+    pending_lifecycle = str((pending or {}).get("lifecycle") or "").strip()
     if applied:
         state = "applied"
     elif approved is not None or approved_patch.exists():
         state = "approved"
     elif pending is not None or pending_patch.exists():
-        state = "pending"
+        state = pending_lifecycle if pending_lifecycle in {"running", "failed"} else "pending"
     else:
         state = "none"
     sensitive_hits = [str(item) for item in metadata.get("sensitive_hits") or [] if str(item)]
     can_generate = proposal.get("status") == "approved"
-    can_approve_patch = pending is not None and not sensitive_hits
+    can_approve_patch = state == "pending" and pending is not None and not sensitive_hits
     can_dry_run = approved is not None or approved_patch.exists()
     return {
         "state": state,
@@ -954,7 +955,7 @@ def _read_assistant_upgrade_state(home, proposal_id: str, *, proposal: dict[str,
         "target_repo_root": str(metadata.get("target_repo_root") or ""),
         "base_commit": str(metadata.get("base_commit") or ""),
         "patch_source": str(metadata.get("patch_path") or ""),
-        "generation_status": str((metadata.get("generator") or {}).get("status") or ""),
+        "generation_status": str((metadata.get("generator") or {}).get("status") or pending_lifecycle or ""),
         "sensitive_hits": sensitive_hits,
         "can_generate": can_generate,
         "can_approve_patch": can_approve_patch,
@@ -1025,6 +1026,27 @@ async def reject_assistant_proposal(
         _raise(404, "proposal_not_found", str(exc))
 
 
+def _raise_patch_generation_error(exc: Exception) -> None:
+    if isinstance(exc, PermissionError):
+        if str(exc) == "proposal_not_approved":
+            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
+        raise exc
+    if isinstance(exc, FileExistsError):
+        _raise(409, "patch_generation_already_running", str(exc))
+    if isinstance(exc, ValueError):
+        _raise(409, str(exc), str(exc))
+    if isinstance(exc, (FileNotFoundError, subprocess.CalledProcessError)):
+        detail = (
+            exc.stderr if isinstance(exc, subprocess.CalledProcessError)
+            else str(exc)
+        ) or (
+            exc.stdout if isinstance(exc, subprocess.CalledProcessError)
+            else ""
+        ) or str(exc)
+        _raise(500, "patch_generation_failed", str(detail).strip() or "生成 patch 失败")
+    raise exc
+
+
 async def generate_assistant_proposal_patch(
     manager: MultiBotManager,
     alias: str,
@@ -1055,23 +1077,64 @@ async def generate_assistant_proposal_patch(
             generated_by=generated_by,
             regenerate=regenerate,
         )
-    except PermissionError as exc:
-        if str(exc) == "proposal_not_approved":
-            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
-        raise
-    except FileExistsError as exc:
-        _raise(409, "patch_generation_already_running", str(exc))
-    except ValueError as exc:
-        _raise(409, str(exc), str(exc))
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        detail = (
-            exc.stderr if isinstance(exc, subprocess.CalledProcessError)
-            else str(exc)
-        ) or (
-            exc.stdout if isinstance(exc, subprocess.CalledProcessError)
-            else ""
-        ) or str(exc)
-        _raise(500, "patch_generation_failed", str(detail).strip() or "生成 patch 失败")
+    except Exception as exc:
+        _raise_patch_generation_error(exc)
+
+
+async def stream_generate_assistant_proposal_patch(
+    manager: MultiBotManager,
+    alias: str,
+    proposal_id: str,
+    *,
+    target_alias: str,
+    regenerate: bool,
+    generated_by: str,
+) -> AsyncIterator[dict[str, Any]]:
+    home = _assistant_home_or_raise(manager, alias)
+    try:
+        proposal = get_proposal(home, proposal_id)
+    except FileNotFoundError as exc:
+        _raise(404, "proposal_not_found", str(exc))
+    if proposal.get("status") != "approved":
+        _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
+    try:
+        target = resolve_upgrade_target(manager, target_alias)
+    except KeyError:
+        _raise(404, "upgrade_target_not_found", target_alias)
+    if not target.get("available"):
+        _raise(409, str(target.get("reason") or "upgrade_target_unavailable"), "目标工程不可用")
+
+    event_queue: queue.Queue[Any] = queue.Queue()
+    worker_done = threading.Event()
+
+    def on_event(event: dict[str, Any]) -> None:
+        event_queue.put(event)
+
+    def run_generation() -> None:
+        try:
+            metadata = generate_pending_patch(
+                home,
+                proposal,
+                target=target,
+                generated_by=generated_by,
+                regenerate=regenerate,
+                event_callback=on_event,
+            )
+            event_queue.put({"type": "done", "metadata": metadata})
+        except Exception as exc:  # pragma: no cover - event body is asserted at stream boundary
+            logger.warning("assistant patch stream failed: alias=%s proposal=%s err=%s", alias, proposal_id, exc)
+        finally:
+            worker_done.set()
+
+    threading.Thread(target=run_generation, daemon=True).start()
+
+    while not worker_done.is_set() or not event_queue.empty():
+        try:
+            item = event_queue.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+        yield item
 
 
 async def approve_assistant_proposal_patch(

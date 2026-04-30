@@ -16,6 +16,7 @@ import type {
   AssistantMemoryReindexResult,
   AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
+  AssistantPatchGenerationHandlers,
   AssistantPatchMetadata,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
@@ -503,6 +504,7 @@ type RawAssistantPatchMetadata = {
   id?: string;
   proposal_id?: string;
   state?: string;
+  lifecycle?: string;
   target_alias?: string;
   target_working_dir?: string;
   target_repo_root?: string;
@@ -747,7 +749,7 @@ type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
   | RawAppUpdateDownloadProgress & { type: "progress" }
-  | { type: "status"; elapsed_seconds?: number; preview_text?: string }
+  | { type: "status"; elapsed_seconds?: number; preview_text?: string; phase?: string; message?: string; lifecycle?: string }
   | { type: "trace"; event?: RawChatTraceEvent }
   | { type: "log"; text?: string }
   | {
@@ -758,6 +760,7 @@ type StreamEvent =
       success?: boolean;
       message?: RawHistoryItem;
       status?: RawAppUpdateStatus;
+      metadata?: RawAssistantPatchMetadata;
     }
   | { type: "error"; message?: string; code?: string };
 
@@ -1316,6 +1319,7 @@ function mapAssistantPatchMetadata(raw: RawAssistantPatchMetadata): AssistantPat
     id: raw.id || "",
     proposalId: raw.proposal_id || "",
     state: raw.state || "",
+    lifecycle: raw.lifecycle || raw.state || "",
     targetAlias: raw.target_alias || "",
     targetWorkingDir: raw.target_working_dir || "",
     targetRepoRoot: raw.target_repo_root || "",
@@ -3107,6 +3111,89 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapAssistantPatchMetadata(data);
+  }
+
+  async generateAssistantProposalPatchStream(
+    botAlias: string,
+    proposalId: string,
+    input: { targetAlias: string; regenerate?: boolean },
+    handlers?: AssistantPatchGenerationHandlers,
+  ): Promise<AssistantPatchMetadata> {
+    const response = await fetch(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/patch/stream`,
+      {
+        method: "POST",
+        headers: this.headers({
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          target_alias: input.targetAlias,
+          regenerate: Boolean(input.regenerate),
+        }),
+      },
+    );
+
+    if (!response.ok || !response.body) {
+      let message = "生成 patch 失败";
+      try {
+        const payload = (await response.json()) as JsonEnvelope<unknown>;
+        message = payload.error?.message || message;
+      } catch {
+        // ignore parse failures
+      }
+      throw new Error(message);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalMetadata: AssistantPatchMetadata | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        const block = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+
+        const event = parseSseBlock(block);
+        if (!event) {
+          separatorIndex = buffer.indexOf("\n\n");
+          continue;
+        }
+
+        if (event.type === "status") {
+          handlers?.onStatus?.({
+            phase: typeof event.phase === "string" ? event.phase : undefined,
+            message: typeof event.message === "string" ? event.message : undefined,
+            lifecycle: typeof event.lifecycle === "string" ? event.lifecycle : undefined,
+          });
+        } else if (event.type === "log" && typeof event.text === "string" && event.text) {
+          handlers?.onLog?.(event.text);
+        } else if (event.type === "trace") {
+          const traceEvent = mapTraceEvent(event.event);
+          if (traceEvent) {
+            handlers?.onTrace?.(traceEvent);
+          }
+        } else if (event.type === "done" && event.metadata) {
+          finalMetadata = mapAssistantPatchMetadata(event.metadata);
+        } else if (event.type === "error") {
+          throw new Error(event.message || "生成 patch 失败");
+        }
+
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+    }
+
+    if (!finalMetadata) {
+      throw new Error("patch 生成已中断");
+    }
+    return finalMetadata;
   }
 
   async approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata> {

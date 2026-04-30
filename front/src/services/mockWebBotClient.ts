@@ -18,6 +18,7 @@ import type {
   AssistantMemorySearchItem,
   AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
+  AssistantPatchGenerationHandlers,
   AssistantPatchMetadata,
   AssistantPerfDiagnostics,
   AssistantPerfRecord,
@@ -1419,9 +1420,10 @@ export class MockWebBotClient implements WebBotClient {
     const metadata = this.getAssistantPatchMetadata(botAlias, proposal.id);
     const key = this.assistantProposalKey(botAlias, proposal.id);
     const hasPatch = this.assistantProposalPatchDiffs.has(key);
+    const lifecycle = metadata?.lifecycle || metadata?.state || "";
     const state = proposal.status === "applied"
       ? "applied"
-      : (metadata?.state || "none");
+      : (lifecycle === "failed" ? "failed" : (metadata?.state || "none"));
     return {
       state,
       targetAlias: metadata?.targetAlias || "",
@@ -1431,7 +1433,7 @@ export class MockWebBotClient implements WebBotClient {
       generationStatus: metadata?.generator.status || "",
       sensitiveHits: metadata?.sensitiveHits || [],
       canGenerate: proposal.status === "approved",
-      canApprovePatch: metadata?.state === "pending" && (metadata.sensitiveHits?.length || 0) === 0,
+      canApprovePatch: metadata?.state === "pending" && lifecycle !== "failed" && (metadata.sensitiveHits?.length || 0) === 0,
       canDryRun: metadata?.state === "approved",
       canApply: metadata?.state === "approved" && proposal.status !== "applied",
     };
@@ -3616,6 +3618,7 @@ export class MockWebBotClient implements WebBotClient {
       id: proposalId,
       proposalId,
       state: "pending",
+      lifecycle: "pending",
       targetAlias: target.alias,
       targetWorkingDir: target.workingDir,
       targetRepoRoot: target.repoRoot,
@@ -3654,6 +3657,29 @@ export class MockWebBotClient implements WebBotClient {
     return metadata;
   }
 
+  async generateAssistantProposalPatchStream(
+    botAlias: string,
+    proposalId: string,
+    input: { targetAlias: string; regenerate?: boolean },
+    handlers?: AssistantPatchGenerationHandlers,
+  ): Promise<AssistantPatchMetadata> {
+    handlers?.onStatus?.({ phase: "setup", message: "准备生成", lifecycle: "running" });
+    handlers?.onLog?.("开始生成 patch");
+    handlers?.onTrace?.({
+      kind: "tool_call",
+      summary: "git worktree add",
+      toolName: "git",
+      callId: "call_git_worktree_add",
+    });
+    handlers?.onTrace?.({
+      kind: "tool_result",
+      summary: "Exit code: 0\nWall time: 1s",
+      toolName: "git",
+      callId: "call_git_worktree_add",
+    });
+    return this.generateAssistantProposalPatch(botAlias, proposalId, input);
+  }
+
   async approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata> {
     const key = this.assistantProposalKey(botAlias, proposalId);
     const current = this.getAssistantPatchMetadata(botAlias, proposalId);
@@ -3666,6 +3692,7 @@ export class MockWebBotClient implements WebBotClient {
     const next: AssistantPatchMetadata = {
       ...current,
       state: "approved",
+      lifecycle: "approved",
       patchPath: `upgrades/approved/${proposalId}.patch`,
       approvedBy: String(this.session.userId || "1001"),
       approvedAt: new Date().toISOString(),

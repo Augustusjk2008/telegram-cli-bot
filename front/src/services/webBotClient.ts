@@ -18,6 +18,7 @@ import type {
   AssistantMemoryReindexResult,
   AssistantMemorySearchOptions,
   AssistantMemorySearchResult,
+  AssistantPatchGenerationHandlers,
   AssistantPatchMetadata,
   AssistantUpgradeApplyLog,
   AssistantUpgradeApplyResult,
@@ -204,6 +205,12 @@ export interface WebBotClient {
     botAlias: string,
     proposalId: string,
     input: { targetAlias: string; regenerate?: boolean },
+  ): Promise<AssistantPatchMetadata>;
+  generateAssistantProposalPatchStream(
+    botAlias: string,
+    proposalId: string,
+    input: { targetAlias: string; regenerate?: boolean },
+    handlers?: AssistantPatchGenerationHandlers,
   ): Promise<AssistantPatchMetadata>;
   approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata>;
   rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;

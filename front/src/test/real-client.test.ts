@@ -2885,6 +2885,95 @@ describe("RealWebBotClient", () => {
     expect(detail.upgrade.canDryRun).toBe(true);
   });
 
+  test("assistant patch stream forwards status trace log and returns metadata", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            "event: status\ndata: {\"phase\":\"setup\",\"message\":\"准备生成\",\"lifecycle\":\"running\"}\n\n",
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            "event: log\ndata: {\"text\":\"开始生成 patch\"}\n\n",
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            "event: trace\ndata: {\"event\":{\"kind\":\"tool_call\",\"summary\":\"git worktree add\",\"tool_name\":\"git\",\"call_id\":\"call_git_add\"}}\n\n",
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            "event: trace\ndata: {\"event\":{\"kind\":\"tool_result\",\"summary\":\"Exit code: 0\\nWall time: 1s\",\"tool_name\":\"git\",\"call_id\":\"call_git_add\"}}\n\n",
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            "event: done\ndata: {\"metadata\":{\"id\":\"pr_1\",\"proposal_id\":\"pr_1\",\"state\":\"pending\",\"lifecycle\":\"pending\",\"target_alias\":\"target1\",\"target_working_dir\":\"C:\\\\workspace\\\\target1\",\"target_repo_root\":\"C:\\\\workspace\\\\target1\",\"base_commit\":\"deadbeef\",\"worktree_path\":\"C:\\\\workspace\\\\.assistant\\\\upgrades\\\\worktrees\\\\pr_1\",\"patch_path\":\"upgrades/pending/pr_1.patch\",\"generated_at\":\"2026-04-30T01:00:00Z\",\"generated_by\":\"1001\",\"generator\":{\"cli_type\":\"codex\",\"cli_path\":\"codex\",\"status\":\"succeeded\",\"elapsed_seconds\":3},\"dry_run\":{\"ok\":false,\"checked_at\":\"\",\"stderr\":\"\"},\"sensitive_hits\":[],\"changed_files\":[\"bot/x.py\"],\"additions\":3,\"deletions\":1}}\n\n",
+          ),
+        );
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const statuses: Array<{ phase?: string; message?: string; lifecycle?: string }> = [];
+    const logs: string[] = [];
+    const traces: Array<{ kind: string; summary: string }> = [];
+
+    const result = await client.generateAssistantProposalPatchStream(
+      "assistant1",
+      "pr_1",
+      { targetAlias: "target1", regenerate: true },
+      {
+        onStatus: (event) => statuses.push(event),
+        onLog: (text) => logs.push(text),
+        onTrace: (event) => traces.push({ kind: event.kind, summary: event.summary }),
+      },
+    );
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/assistant1/assistant/proposals/pr_1/patch/stream",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          target_alias: "target1",
+          regenerate: true,
+        }),
+      }),
+    );
+    expect(statuses).toEqual([{ phase: "setup", message: "准备生成", lifecycle: "running" }]);
+    expect(logs).toEqual(["开始生成 patch"]);
+    expect(traces).toEqual([
+      { kind: "tool_call", summary: "git worktree add" },
+      { kind: "tool_result", summary: "Exit code: 0\nWall time: 1s" },
+    ]);
+    expect(result.targetAlias).toBe("target1");
+    expect(result.lifecycle).toBe("pending");
+  });
+
   test("assistant diagnostics endpoint maps stage durations", async () => {
     fetchMock
       .mockResolvedValueOnce({

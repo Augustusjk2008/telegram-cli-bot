@@ -1133,6 +1133,7 @@ export type AssistantPatchMetadata = {
   id: string;
   proposalId: string;
   state: string;
+  lifecycle?: string;
   targetAlias: string;
   targetWorkingDir: string;
   targetRepoRoot: string;
@@ -1158,6 +1159,18 @@ export type AssistantPatchMetadata = {
   changedFiles: string[];
   additions: number;
   deletions: number;
+};
+
+export type AssistantPatchGenerationStatus = {
+  phase?: string;
+  message?: string;
+  lifecycle?: string;
+};
+
+export type AssistantPatchGenerationHandlers = {
+  onStatus?: (event: AssistantPatchGenerationStatus) => void;
+  onLog?: (text: string) => void;
+  onTrace?: (event: ChatTraceEvent) => void;
 };
 
 export type AssistantProposalDiffFile = {
