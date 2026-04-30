@@ -6,11 +6,26 @@ cd "$SCRIPT_DIR"
 
 CHECK_ONLY=0
 NON_INTERACTIVE=0
+EXAMPLE_PLUGINS_MODE="prompt"
 INSTALL_USER_PHASE="${INSTALL_USER_PHASE:-0}"
 for arg in "$@"; do
   case "$arg" in
     --check-only) CHECK_ONLY=1 ;;
     --non-interactive) NON_INTERACTIVE=1 ;;
+    --install-example-plugins)
+      if [[ "$EXAMPLE_PLUGINS_MODE" == "skip" ]]; then
+        echo "[错误] --install-example-plugins 和 --skip-example-plugins 不能同时使用" >&2
+        exit 2
+      fi
+      EXAMPLE_PLUGINS_MODE="install"
+      ;;
+    --skip-example-plugins)
+      if [[ "$EXAMPLE_PLUGINS_MODE" == "install" ]]; then
+        echo "[错误] --install-example-plugins 和 --skip-example-plugins 不能同时使用" >&2
+        exit 2
+      fi
+      EXAMPLE_PLUGINS_MODE="skip"
+      ;;
     *)
       echo "[错误] 不支持的参数: $arg" >&2
       exit 2
@@ -209,6 +224,32 @@ initialize_register_code() {
   info "邀请码: $(printf '%s' "$invite_json" | "$python_bin" -c 'import json,sys; print(json.loads(sys.stdin.read())["code"])')"
 }
 
+install_example_plugins() {
+  local python_bin="$1"
+  local mode="$EXAMPLE_PLUGINS_MODE"
+
+  if [[ "$mode" == "prompt" ]]; then
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+      mode="skip"
+    else
+      local choice=""
+      read -r -p "是否安装 examples 中的示例插件？[y/N] " choice
+      if [[ "$choice" =~ ^[Yy]$ ]]; then
+        mode="install"
+      else
+        mode="skip"
+      fi
+    fi
+  fi
+
+  if [[ "$mode" != "install" ]]; then
+    info "跳过示例插件安装"
+    return 0
+  fi
+
+  "$python_bin" -m bot.plugins.installer --repo-root "$SCRIPT_DIR" --all
+}
+
 step "检查 Python 3.10+"
 python_bin=""
 if python_bin="$(detect_python)"; then
@@ -288,6 +329,9 @@ ensure_tailwind_oxide_binding
 
 step "构建前端"
 (cd front && npm run build)
+
+step "安装示例插件"
+install_example_plugins "$PYTHON_BIN"
 
 step "生成 .env"
 ensure_env_file

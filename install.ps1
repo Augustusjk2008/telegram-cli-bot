@@ -1,6 +1,8 @@
 ﻿param(
     [switch]$CheckOnly,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$InstallExamplePlugins,
+    [switch]$SkipExamplePlugins
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,12 +12,16 @@ $script:RootDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $script:RootDir
 
 $script:StepIndex = 0
-$script:TotalSteps = if ($CheckOnly) { 6 } else { 11 }
+$script:TotalSteps = if ($CheckOnly) { 6 } else { 12 }
 $script:Warnings = New-Object System.Collections.Generic.List[string]
 $script:Summary = [ordered]@{}
 $script:WingetAvailable = $false
 $script:CloudflaredDownloadUrl = "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-windows-amd64.exe"
 $script:CodexDownloadUrl = "https://github.com/openai/codex/releases/download/rust-v0.121.0/codex-x86_64-pc-windows-msvc.exe"
+
+if ($InstallExamplePlugins -and $SkipExamplePlugins) {
+    throw "-InstallExamplePlugins 和 -SkipExamplePlugins 不能同时使用。"
+}
 
 function Write-Step {
     param([string]$Message)
@@ -672,6 +678,49 @@ print(json.dumps(payload, ensure_ascii=False))
     Save-Summary -Key "邀请码" -Value ("已初始化（可用 {0} 次）" -f $maxUses)
 }
 
+function Resolve-ExamplePluginInstallMode {
+    if ($InstallExamplePlugins) {
+        return "install"
+    }
+
+    if ($SkipExamplePlugins) {
+        return "skip"
+    }
+
+    if ($NonInteractive) {
+        return "skip"
+    }
+
+    $choice = Read-Choice -Prompt "是否安装 examples 中的示例插件：1) 跳过  2) 安装全部" -Choices @("1", "2") -DefaultChoice "1"
+    if ($choice -eq "2") {
+        return "install"
+    }
+
+    return "skip"
+}
+
+function Install-ExamplePlugins {
+    param([object]$PythonInfo)
+
+    $mode = Resolve-ExamplePluginInstallMode
+    if ($mode -ne "install") {
+        Write-Info "跳过示例插件安装。"
+        Save-Summary -Key "示例插件" -Value "已跳过"
+        return
+    }
+
+    Invoke-CheckedCommand -FilePath $PythonInfo.Command -Arguments @(
+        $PythonInfo.PrefixArgs + @(
+            "-m",
+            "bot.plugins.installer",
+            "--repo-root",
+            $script:RootDir,
+            "--all"
+        )
+    ) -FailureMessage "安装示例插件失败" -WorkingDirectory $script:RootDir
+    Save-Summary -Key "示例插件" -Value "已安装 examples 插件"
+}
+
 function Show-CliWarning {
     Write-Warn "未检测到 codex / claude。"
     Write-Host "请先安装 Codex CLI 或 Claude Code CLI，并完成登录。"
@@ -848,6 +897,9 @@ try {
     Write-Step "构建前端"
     Invoke-CheckedCommand -FilePath $npmCommand -Arguments @("run", "build") -FailureMessage "前端构建失败" -WorkingDirectory (Join-Path $script:RootDir "front")
     Save-Summary -Key "前端构建" -Value "已完成"
+
+    Write-Step "安装示例插件"
+    Install-ExamplePlugins -PythonInfo $pythonInfo
 
     $tunnelConfig = Resolve-TunnelConfiguration
 

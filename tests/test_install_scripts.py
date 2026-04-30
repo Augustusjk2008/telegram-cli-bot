@@ -44,6 +44,8 @@ def test_install_sh_mentions_apt_node_check_only_and_cli_warning():
     assert "apt-get" in content
     assert "--check-only" in content
     assert "--non-interactive" in content
+    assert "--install-example-plugins" in content
+    assert "--skip-example-plugins" in content
     assert "codex" in content
     assert "claude" in content
     assert ".env.example" in content
@@ -317,3 +319,45 @@ Get-Content (Join-Path $script:RootDir '.env')
     assert "CLI_PATH=C:\\repo\\tools\\codex\\codex.exe" in output
     assert "WEB_TUNNEL_MODE=cloudflare_quick" in output
     assert "WEB_TUNNEL_CLOUDFLARED_PATH=C:\\repo\\tools\\cloudflared\\cloudflared.exe" in output
+
+@pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
+def test_install_ps1_installs_example_plugins_when_requested(tmp_path: Path):
+    result = _run_install_ps1_command(
+        f"""
+$script:RootDir = '{tmp_path}'
+$captured = [ordered]@{{}}
+$InstallExamplePlugins = $true
+$SkipExamplePlugins = $false
+$NonInteractive = $false
+function Invoke-CheckedCommand {{
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$FailureMessage,
+        [string]$WorkingDirectory
+    )
+    $captured['FilePath'] = $FilePath
+    $captured['Arguments'] = $Arguments
+    $captured['FailureMessage'] = $FailureMessage
+    $captured['WorkingDirectory'] = $WorkingDirectory
+}}
+$pythonInfo = [pscustomobject]@{{ Command = 'C:\\Python312\\python.exe'; PrefixArgs = @('-3') }}
+Install-ExamplePlugins -PythonInfo $pythonInfo
+$captured | ConvertTo-Json -Compress
+"""
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["FilePath"] == "C:\\Python312\\python.exe"
+    assert payload["FailureMessage"] == "安装示例插件失败"
+    assert payload["WorkingDirectory"] == str(tmp_path)
+    assert payload["Arguments"] == [
+        "-3",
+        "-m",
+        "bot.plugins.installer",
+        "--repo-root",
+        str(tmp_path),
+        "--all",
+    ]
