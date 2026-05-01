@@ -118,6 +118,7 @@ type RawBotSummary = {
   cli_path?: string;
   status: string;
   is_processing?: boolean;
+  assistant_runtime?: RawAssistantRuntimeSnapshot | null;
   working_dir: string;
   avatar_name?: string;
   bot_mode?: string;
@@ -804,7 +805,8 @@ function mapStatusText(status: BotStatus): string {
 }
 
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
-  const status = mapStatus(raw.status, isProcessing);
+  const hasPendingAssistantRun = Number(raw.assistant_runtime?.pending_count || 0) > 0;
+  const status = mapStatus(raw.status, isProcessing || hasPendingAssistantRun);
   const summary: BotSummary = {
     alias: raw.alias,
     cliType: raw.cli_type,

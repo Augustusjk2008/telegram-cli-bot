@@ -512,6 +512,62 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("listBots marks assistant with queued runtime work as busy", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: [
+            {
+              alias: "assistant1",
+              cli_type: "codex",
+              status: "running",
+              is_processing: false,
+              working_dir: "C:\\workspace\\assistant",
+              bot_mode: "assistant",
+              assistant_runtime: {
+                pending_count: 1,
+                queued_count: 1,
+                active: null,
+                queue: [
+                  {
+                    run_id: "run_queued",
+                    source: "web",
+                    status: "queued",
+                    task_mode: "standard",
+                    interactive: true,
+                    visible_text: "排队任务",
+                    enqueued_at: "2026-04-09T10:40:01",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const bots = await client.listBots();
+
+    expect(bots[0]).toMatchObject({
+      alias: "assistant1",
+      status: "busy",
+      lastActiveText: "处理中",
+      botMode: "assistant",
+    });
+  });
+
   test("listFiles maps snake_case directory entries to camelCase", async () => {
     fetchMock
       .mockResolvedValueOnce({
