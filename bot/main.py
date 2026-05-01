@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import webbrowser
@@ -46,9 +47,7 @@ from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
 
 logger = logging.getLogger(__name__)
 
-_POSIX_BROWSER_COMMANDS = (
-    "x-www-browser",
-    "sensible-browser",
+_POSIX_GRAPHICAL_BROWSER_COMMANDS = (
     "firefox",
     "firefox-esr",
     "google-chrome",
@@ -61,6 +60,17 @@ _POSIX_BROWSER_COMMANDS = (
     "microsoft-edge-stable",
     "opera",
 )
+
+_POSIX_BROWSER_WRAPPER_COMMANDS = {
+    "gio",
+    "gvfs-open",
+    "kde-open",
+    "sensible-browser",
+    "xdg-open",
+    "x-www-browser",
+}
+
+_POSIX_BROWSER_LAUNCH_TIMEOUT_SECONDS = 0.75
 
 
 def safe_print(text: str = ""):
@@ -163,10 +173,33 @@ def _is_posix_root() -> bool:
         return False
 
 
+def _split_browser_env_commands(raw_value: str) -> list[str]:
+    return [command.strip() for command in raw_value.split(os.pathsep) if command.strip()]
+
+
+def _is_posix_browser_wrapper(command: str) -> bool:
+    executable = os.path.basename(command.split()[0])
+    return executable in _POSIX_BROWSER_WRAPPER_COMMANDS
+
+
 def _has_posix_browser_command() -> bool:
-    if os.environ.get("BROWSER"):
+    browser_env = os.environ.get("BROWSER")
+    if browser_env:
+        return any(
+            not _is_posix_browser_wrapper(command)
+            for command in _split_browser_env_commands(browser_env)
+        )
+    return any(shutil.which(command) for command in _POSIX_GRAPHICAL_BROWSER_COMMANDS)
+
+
+def _has_posix_desktop_session() -> bool:
+    if os.environ.get("WAYLAND_DISPLAY") and os.environ.get("XDG_RUNTIME_DIR"):
         return True
-    return any(shutil.which(command) for command in _POSIX_BROWSER_COMMANDS)
+    if os.environ.get("DISPLAY") and os.environ.get("XAUTHORITY"):
+        return True
+    if os.environ.get("MIR_SOCKET"):
+        return True
+    return False
 
 
 def _should_open_local_browser() -> bool:
@@ -177,11 +210,7 @@ def _should_open_local_browser() -> bool:
     if sys.platform.startswith(("linux", "freebsd", "openbsd", "netbsd")):
         if _is_posix_root():
             return False
-        has_display = any(
-            os.environ.get(name)
-            for name in ("DISPLAY", "WAYLAND_DISPLAY", "MIR_SOCKET")
-        )
-        if not has_display and not os.environ.get("BROWSER"):
+        if not _has_posix_desktop_session() and not os.environ.get("BROWSER"):
             return False
         return _has_posix_browser_command()
     return True
@@ -191,13 +220,43 @@ def _open_default_browser(url: str) -> bool:
     return bool(webbrowser.open(url, new=2))
 
 
+def _try_open_posix_graphical_browser(url: str) -> bool:
+    for command in _POSIX_GRAPHICAL_BROWSER_COMMANDS:
+        executable = shutil.which(command)
+        if not executable:
+            continue
+        try:
+            process = subprocess.Popen(
+                [executable, url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                return_code = process.wait(timeout=_POSIX_BROWSER_LAUNCH_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                return True
+            if return_code == 0:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _open_local_browser_sync(url: str) -> bool:
+    if sys.platform.startswith(("linux", "freebsd", "openbsd", "netbsd")) and not os.environ.get("BROWSER"):
+        return _try_open_posix_graphical_browser(url)
+    return _open_default_browser(url)
+
+
 async def _open_local_browser(bind: RuntimeWebBind):
     url = _get_local_browser_url(bind)
     if not _should_open_local_browser():
         logger.info("当前环境未检测到图形浏览器，跳过自动打开: %s", url)
         return
     try:
-        opened = await asyncio.to_thread(_open_default_browser, url)
+        opened = await asyncio.to_thread(_open_local_browser_sync, url)
         if opened:
             logger.info("已用默认浏览器打开: %s", url)
         else:
