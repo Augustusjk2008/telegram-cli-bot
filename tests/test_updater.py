@@ -246,6 +246,69 @@ def test_download_latest_update_forwards_progress_callback(monkeypatch, tmp_path
     assert "更新包已保存到:" in str(progress_events[-1]["message"])
 
 
+def test_download_latest_update_replaces_unusable_repo_cache_path(monkeypatch, tmp_path: Path):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    blocked_cache_path = tmp_path / ".updates"
+    blocked_cache_path.write_text("blocked", encoding="utf-8")
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda repo_root=None: "installer")
+    monkeypatch.setattr(
+        updater,
+        "_fetch_latest_release",
+        lambda: {
+            "tag_name": "v1.0.1",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.0.1",
+            "body": "Bugfixes",
+            "assets": _windows_release_assets(),
+        },
+    )
+    downloaded: dict[str, object] = {}
+
+    def fake_download(url, target):
+        downloaded["url"] = url
+        downloaded["target"] = target
+        target.write_bytes(b"zip-bytes")
+
+    monkeypatch.setattr(updater, "_download_file", fake_download)
+
+    status = updater.download_latest_update(repo_root=tmp_path)
+
+    cache_dir = tmp_path / ".updates"
+    blocked_backups = list(tmp_path.glob(".updates.blocked-*"))
+    assert cache_dir.is_dir()
+    assert len(blocked_backups) == 1
+    assert blocked_backups[0].read_text(encoding="utf-8") == "blocked"
+    assert downloaded["url"] == "https://example.invalid/installer.zip"
+    assert downloaded["target"] == cache_dir / "orbit-safe-claw-windows-x64-installer-1.2.0.zip"
+    assert Path(status["pending_update_path"]).parent == cache_dir
+
+
+def test_prepare_update_cache_dir_falls_back_when_repo_cache_cannot_be_repaired(monkeypatch, tmp_path: Path):
+    repo_cache = tmp_path / ".updates"
+    fallback_cache = tmp_path / "fallback-cache"
+    progress_events: list[dict[str, object]] = []
+
+    def fake_ensure(path: Path) -> None:
+        if path == repo_cache:
+            raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
+        path.mkdir(parents=True, exist_ok=True)
+
+    def fake_reset(cache_root: Path, error: OSError, *, progress_callback=None) -> Path | None:
+        return None
+
+    monkeypatch.setattr(updater, "_ensure_writable_directory", fake_ensure)
+    monkeypatch.setattr(updater, "_reset_blocked_cache_dir", fake_reset)
+    monkeypatch.setattr(updater, "_fallback_update_cache_dir", lambda repo_root: fallback_cache)
+
+    result = updater._prepare_update_cache_dir(tmp_path, progress_callback=progress_events.append)
+
+    assert result == fallback_cache
+    assert fallback_cache.exists()
+    assert any("改用备用目录" in str(event.get("message") or "") for event in progress_events)
+
+
 def test_fetch_latest_release_uses_git_proxy_port(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)

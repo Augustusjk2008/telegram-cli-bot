@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -163,8 +165,7 @@ def download_latest_update(
         settings["last_available_notes"] = str(release.get("body") or "")
 
         asset = _select_release_asset(release.get("assets", []), package_kind)
-        cache_root = (repo_root or Path.cwd()) / UPDATE_CACHE_DIR_NAME
-        cache_root.mkdir(parents=True, exist_ok=True)
+        cache_root = _prepare_update_cache_dir(repo_root, progress_callback=progress_callback)
         target_path = cache_root / asset["name"]
         _emit_download_log(progress_callback, f"找到更新包: {asset['name']}")
         if progress_callback is None:
@@ -350,6 +351,86 @@ def _format_update_package_kind(package_kind: str) -> str:
     if package_kind == LINUX_PACKAGE_KIND:
         return "Linux"
     return "未知"
+
+
+def _prepare_update_cache_dir(
+    repo_root: Path | None = None,
+    *,
+    progress_callback: Any | None = None,
+) -> Path:
+    root = Path(repo_root or Path.cwd()).resolve()
+    cache_root = root / UPDATE_CACHE_DIR_NAME
+    try:
+        _ensure_writable_directory(cache_root)
+        return cache_root
+    except OSError as exc:
+        backup_path = _reset_blocked_cache_dir(cache_root, exc, progress_callback=progress_callback)
+        if backup_path is not None:
+            try:
+                _ensure_writable_directory(cache_root)
+                return cache_root
+            except OSError as retry_exc:
+                _emit_download_log(progress_callback, f"仓库内更新缓存目录重建失败: {retry_exc}")
+        fallback_root = _fallback_update_cache_dir(root)
+        _emit_download_log(progress_callback, f"仓库内更新缓存目录不可用，改用备用目录: {fallback_root}")
+        _ensure_writable_directory(fallback_root)
+        return fallback_root
+
+
+def _ensure_writable_directory(path: Path) -> None:
+    if path.exists() and not path.is_dir():
+        raise NotADirectoryError(f"更新缓存路径不是目录: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path, prefix=".write-test-", delete=True) as handle:
+        handle.write(b"")
+        handle.flush()
+
+
+def _reset_blocked_cache_dir(
+    cache_root: Path,
+    error: OSError,
+    *,
+    progress_callback: Any | None = None,
+) -> Path | None:
+    if not cache_root.exists():
+        return None
+    backup_path = _unique_update_cache_backup_path(cache_root)
+    try:
+        cache_root.rename(backup_path)
+    except OSError as rename_exc:
+        _emit_download_log(
+            progress_callback,
+            f"更新缓存目录不可用且无法迁移: {cache_root} ({error}); {rename_exc}",
+        )
+        return None
+    _emit_download_log(progress_callback, f"更新缓存目录不可用，已迁移旧目录到: {backup_path}")
+    return backup_path
+
+
+def _unique_update_cache_backup_path(cache_root: Path) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    for index in range(1000):
+        suffix = f".blocked-{timestamp}" if index == 0 else f".blocked-{timestamp}-{index}"
+        candidate = cache_root.with_name(f"{cache_root.name}{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"无法为更新缓存目录生成备份路径: {cache_root}")
+
+
+def _fallback_update_cache_dir(repo_root: Path) -> Path:
+    repo_hash = hashlib.sha1(str(repo_root).encode("utf-8")).hexdigest()[:12]
+    return _default_user_cache_root() / "cli-bridge" / "updates" / f"{repo_root.name}-{repo_hash}"
+
+
+def _default_user_cache_root() -> Path:
+    if _is_windows_runtime():
+        local_appdata = str(os.environ.get("LOCALAPPDATA") or "").strip()
+        if local_appdata:
+            return Path(local_appdata).expanduser()
+    xdg_cache_home = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
+    if xdg_cache_home:
+        return Path(xdg_cache_home).expanduser()
+    return Path.home() / ".cache"
 
 
 def _download_file(
