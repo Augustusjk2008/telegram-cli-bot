@@ -32,6 +32,7 @@ from bot.assistant_cron_store import (
     read_job_run_audit,
 )
 from bot.assistant_dream import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
+from bot.assistant_dream_managed_context import collect_managed_bot_dream_context
 from bot.assistant_cron_types import AssistantCronJob
 from bot.assistant_diagnostics import get_perf_diagnostics
 from bot.assistant_compaction import (
@@ -79,6 +80,7 @@ from bot.cli_params import get_default_params, get_params_schema, normalize_cli_
 from bot.config import CLI_MODEL_OPTIONS
 from bot.cli import (
     build_cli_command,
+    extract_codex_error_output,
     normalize_cli_type,
     parse_claude_stream_json_line,
     parse_claude_stream_json_output,
@@ -88,6 +90,7 @@ from bot.cli import (
     should_mark_claude_session_initialized,
     should_reset_claude_session,
     should_reset_codex_session,
+    should_suggest_reset_codex_session,
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
@@ -2477,6 +2480,16 @@ def _prepare_dream_assistant_prompt(
     context_user_id = request.context_user_id if request.context_user_id is not None else request.user_id
     context_session = get_session_for_alias(manager, profile.alias, context_user_id)
     config = AssistantDreamConfig.from_task_payload(request.task_payload)
+    managed_context = collect_managed_bot_dream_context(
+        manager,
+        current_alias=profile.alias,
+        context_user_id=context_user_id,
+        lookback_hours=config.lookback_hours,
+        history_limit=config.history_limit,
+        capture_limit=config.capture_limit,
+        session_resolver=lambda alias, user_id: get_session_for_alias(manager, alias, user_id),
+        history_service_factory=_get_chat_history_service,
+    )
     prepared_prompt = prepare_dream_prompt(
         assistant_home,
         profile=profile,
@@ -2484,6 +2497,8 @@ def _prepare_dream_assistant_prompt(
         history_service=_get_chat_history_service(context_session),
         config=config,
         visible_text=user_text,
+        managed_context_text=managed_context.text,
+        managed_context_stats=managed_context.stats,
     )
     compiled_prompt = compile_assistant_prompt(
         prepared_prompt.prompt_text,
@@ -3033,6 +3048,26 @@ def _resolve_completion_state(
     return "completed"
 
 
+def _decorate_codex_resume_error(
+    response: str,
+    *,
+    session_id: Optional[str],
+    returncode: int,
+) -> tuple[str, bool]:
+    normalized = str(response or "").strip()
+    if not should_suggest_reset_codex_session(session_id, normalized, returncode):
+        return normalized, False
+
+    hint = str(msg("chat", "codex_resume_reset_hint") or "").strip()
+    if not hint:
+        return normalized, True
+    if "重置会话" in normalized:
+        return normalized, True
+    if not normalized:
+        return hint, True
+    return f"{normalized}\n\n{hint}", True
+
+
 def _calculate_elapsed_seconds(loop: asyncio.AbstractEventLoop, started_at: float) -> int:
     return max(0, int(loop.time() - started_at))
 
@@ -3220,7 +3255,8 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
 
     raw_output = "".join(chunks)
     final_text, parsed_thread_id = parse_codex_json_output(raw_output)
-    final_text = candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
+    error_text = extract_codex_error_output(raw_output) if returncode != 0 else None
+    final_text = error_text or candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
     if not final_text:
         final_text = msg("chat", "no_output")
     return final_text, thread_id or parsed_thread_id, returncode
@@ -3603,6 +3639,8 @@ async def _stream_cli_chat(
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id
                 response = codex_done_candidate or _extract_final_codex_completed_message(raw_output) or response
+                if returncode != 0:
+                    response = extract_codex_error_output(raw_output) or response
             elif cli_type == "claude":
                 if claude_collector is not None:
                     response = claude_collector.final_text or ""
@@ -3612,6 +3650,7 @@ async def _stream_cli_chat(
                 response = raw_output.strip()
 
             response = response or msg("chat", "no_output")
+            should_force_error_output = False
 
             if (
                 cli_type == "claude"
@@ -3644,6 +3683,13 @@ async def _stream_cli_chat(
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
+
+            if cli_type == "codex":
+                response, should_force_error_output = _decorate_codex_resume_error(
+                    response,
+                    session_id=attempt.codex_session_id,
+                    returncode=returncode,
+                )
 
             if session_id_changed:
                 session.persist()
@@ -3679,7 +3725,11 @@ async def _stream_cli_chat(
                 native_session_id=native_session_id,
             )
             assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
-            fallback_output = response if completion_state == "completed" else (latest_preview_text or response)
+            fallback_output = (
+                response
+                if completion_state == "completed" or should_force_error_output
+                else (latest_preview_text or response)
+            )
             done_message = service.complete_turn(
                 turn_handle,
                 completion_state=completion_state,
@@ -3902,6 +3952,7 @@ async def run_cli_chat(
                 with session._lock:
                     session.process = None
             assistant_stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
+            should_force_error_output = False
 
             if (
                 cli_type == "claude"
@@ -3934,6 +3985,13 @@ async def run_cli_chat(
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
+
+            if cli_type == "codex":
+                response, should_force_error_output = _decorate_codex_resume_error(
+                    response,
+                    session_id=attempt.codex_session_id,
+                    returncode=returncode,
+                )
 
             if session_id_changed:
                 session.persist()
@@ -3968,7 +4026,11 @@ async def run_cli_chat(
             assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
             done_message = service.complete_turn(
                 turn_handle,
-                content=response if completion_state == "completed" else (response or msg("chat", "no_output")),
+                content=(
+                    response
+                    if completion_state == "completed" or should_force_error_output
+                    else (response or msg("chat", "no_output"))
+                ),
                 completion_state=completion_state,
                 native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,

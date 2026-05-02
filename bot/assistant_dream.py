@@ -168,6 +168,8 @@ def prepare_dream_prompt(
     history_service: ChatHistoryService,
     config: AssistantDreamConfig,
     visible_text: str,
+    managed_context_text: str = "",
+    managed_context_stats: dict[str, Any] | None = None,
 ) -> AssistantDreamPreparedPrompt:
     cutoff = datetime.now(UTC) - timedelta(hours=config.lookback_hours)
     raw_history = history_service.list_history(profile, session, limit=config.history_limit)
@@ -191,6 +193,8 @@ def prepare_dream_prompt(
 
     history_block = _format_history_items(recent_history) or "- 无"
     capture_block = _format_capture_items(recent_captures) or "- 无"
+    managed_context_block = str(managed_context_text or "").strip() or "- 无"
+    managed_stats = dict(managed_context_stats or {})
 
     prompt_text = "\n\n".join(
         [
@@ -242,6 +246,8 @@ def prepare_dream_prompt(
             history_block,
             "## 最近 captures",
             capture_block,
+            "## 其它 managed bots 快照",
+            managed_context_block,
         ]
     )
 
@@ -253,6 +259,7 @@ def prepare_dream_prompt(
             "capture_count": len(recent_captures),
             "history_limit": config.history_limit,
             "capture_limit": config.capture_limit,
+            **managed_stats,
         },
     )
 

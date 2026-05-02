@@ -271,6 +271,21 @@ def parse_codex_json_output(raw_output: str) -> Tuple[str, Optional[str]]:
     return final_text, thread_id
 
 
+def extract_codex_error_output(raw_output: str) -> Optional[str]:
+    """提取 Codex JSON 输出里的 error 事件文本。"""
+    error_parts: List[str] = []
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_codex_json_line(stripped)
+        if parsed["error_text"]:
+            error_parts.append(parsed["error_text"])
+    if not error_parts:
+        return None
+    return "\n".join(part for part in error_parts if part).strip() or None
+
+
 def _extract_claude_session_id(event: Dict[str, Any]) -> Optional[str]:
     candidate_paths = (
         ("session_id",),
@@ -669,6 +684,23 @@ def should_reset_codex_session(session_id: Optional[str], response: str, returnc
         "not a valid thread",
     )
     return any(marker in lower for marker in invalid_markers)
+
+
+def should_suggest_reset_codex_session(session_id: Optional[str], response: str, returncode: int) -> bool:
+    """Codex 恢复旧会话时遇到上游 500，提示用户手动重置会话。"""
+    if not session_id or returncode == 0:
+        return False
+
+    lower = (response or "").lower().strip()
+    if not lower:
+        return False
+
+    has_500 = (
+        "status_code=500" in lower
+        or "status code=500" in lower
+        or "status code 500" in lower
+    )
+    return has_500 and "upstream error" in lower and "do request failed" in lower
 
 
 def should_reset_claude_session(response: str, returncode: int) -> bool:

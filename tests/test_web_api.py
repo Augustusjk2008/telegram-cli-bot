@@ -28,6 +28,7 @@ from bot.assistant_cron import AssistantCronService
 from bot.assistant_cron_store import load_job_runtime_state, read_job_run_audit, save_job_runtime_state
 from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
 from bot.assistant_dream import AssistantDreamPreparedPrompt, AssistantDreamApplyResult
+from bot.assistant_dream_managed_context import ManagedBotDreamContext
 from bot.assistant_docs import ManagedPromptSyncResult
 from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_runtime import AssistantRunRequest
@@ -4523,6 +4524,27 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
     assert data["message"]["content"] == "完成回复"
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_suggests_reset_for_codex_resume_upstream_error(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.codex_session_id = "thread-stuck"
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("status_code=500, upstream error: do request failed", None, 1),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert "重置会话" in data["output"]
+    assert "status_code=500" in data["output"]
+    assert data["message"]["content"] == data["output"]
+    assert session.codex_session_id == "thread-stuck"
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
     fake_process = MagicMock()
 
@@ -4567,6 +4589,44 @@ async def test_communicate_process_waits_without_forced_timeout():
     assert fake_process.timeout_arg is None
     fake_process.terminate.assert_not_called()
     fake_process.kill.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_communicate_codex_process_prefers_error_event_text_over_preview():
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-stuck"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"我先检查一下。"}}\n',
+                '{"type":"error","message":"status_code=500, upstream error: do request failed"}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.returncode = 1
+            self.terminate = MagicMock()
+            self.kill = MagicMock(side_effect=self._kill)
+
+        def _kill(self):
+            self.returncode = -9
+
+        def poll(self):
+            return self.returncode if not self.stdout._lines else None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    output, thread_id, returncode = await api_service._communicate_codex_process(FakeProcess())
+
+    assert output == "status_code=500, upstream error: do request failed"
+    assert thread_id == "thread-stuck"
+    assert returncode == 1
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
@@ -4718,6 +4778,18 @@ async def test_execute_assistant_run_request_applies_dream_result_and_skips_capt
              return_value=ManagedPromptSyncResult(False, False, "hash-current"),
          ), \
          patch(
+             "bot.web.api_service.collect_managed_bot_dream_context",
+             return_value=ManagedBotDreamContext(
+                 text="### team2\n- history_count: 1\n#### 最近聊天\n- team2 最近修了 UI",
+                 stats={
+                     "managed_bot_count": 1,
+                     "managed_history_count": 1,
+                     "managed_capture_count": 0,
+                     "managed_error_count": 0,
+                 },
+             ),
+         ) as managed_context_mock, \
+         patch(
              "bot.web.api_service.prepare_dream_prompt",
              return_value=AssistantDreamPreparedPrompt(
                  prompt_text="dream prompt payload",
@@ -4755,7 +4827,10 @@ async def test_execute_assistant_run_request_applies_dream_result_and_skips_capt
         result = await execute_assistant_run_request(web_manager, request)
 
     prepare_mock.assert_called_once()
+    managed_context_mock.assert_called_once()
     capture_mock.assert_not_called()
+    assert prepare_mock.call_args.kwargs["managed_context_text"].startswith("### team2")
+    assert prepare_mock.call_args.kwargs["managed_context_stats"]["managed_bot_count"] == 1
     assert build_mock.call_args.kwargs["user_text"] == "dream prompt payload"
     apply_mock.assert_called_once()
     assert result["output"] == "dream 完成"
@@ -5773,6 +5848,57 @@ async def test_stream_cli_chat_codex_final_event_terminates_hanging_process(web_
     assert done_event["output"] == "完成回复"
     assert done_event["returncode"] == 0
     fake_process.terminate.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_suggests_reset_for_codex_resume_upstream_error(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.codex_session_id = "thread-stuck"
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-stuck"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"我先检查一下。"}}\n',
+                '{"type":"error","message":"status_code=500, upstream error: do request failed"}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = 1
+
+        def poll(self):
+            return self.returncode if not self.stdout._lines else None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 1
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert "重置会话" in done_event["output"]
+    assert "status_code=500" in done_event["output"]
+    assert done_event["message"]["content"] == done_event["output"]
+    assert session.codex_session_id == "thread-stuck"
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_codex_final_event_terminates_hanging_process(web_manager: MultiBotManager):

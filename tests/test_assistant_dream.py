@@ -71,6 +71,36 @@ def test_prepare_dream_prompt_uses_recent_history_and_captures(temp_dir: Path):
     assert prepared.context_stats["capture_count"] == 1
 
 
+def test_prepare_dream_prompt_includes_managed_bot_context(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+
+    prepared = prepare_dream_prompt(
+        home,
+        profile=SimpleNamespace(alias="assistant1"),
+        session=SimpleNamespace(),
+        history_service=_FakeHistoryService([]),
+        config=AssistantDreamConfig(prompt="根据所有 bot 做自我整理", lookback_hours=24, history_limit=10, capture_limit=5),
+        visible_text="daily dream",
+        managed_context_text="### team2\n- history_count: 1\n#### 最近聊天\n- team2 最近修了 UI",
+        managed_context_stats={
+            "managed_bot_count": 1,
+            "managed_history_count": 1,
+            "managed_capture_count": 0,
+            "managed_error_count": 0,
+        },
+    )
+
+    assert "## 其它 managed bots 快照" in prepared.prompt_text
+    assert "### team2" in prepared.prompt_text
+    assert "team2 最近修了 UI" in prepared.prompt_text
+    assert prepared.context_stats["managed_bot_count"] == 1
+    assert prepared.context_stats["managed_history_count"] == 1
+    assert prepared.context_stats["managed_capture_count"] == 0
+    assert prepared.context_stats["managed_error_count"] == 0
+
+
 def test_apply_dream_result_writes_working_memory_knowledge_proposal_and_audit(temp_dir: Path):
     workdir = temp_dir / "assistant-repo"
     workdir.mkdir()
