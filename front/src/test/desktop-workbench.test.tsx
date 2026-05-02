@@ -1006,6 +1006,53 @@ test("desktop file tree shows diff for modified files and uses the tighter menu 
   expect(await screen.findByRole("tab", { name: "README.md.diff" })).toBeInTheDocument();
 });
 
+test("desktop file tree diff uses repo-relative path when workbench root is nested", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace/packages/app");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace/packages/app");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace/packages/app",
+    entries: [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }],
+  });
+  vi.spyOn(client, "getGitTreeStatus").mockResolvedValue({
+    repoFound: true,
+    workingDir: "/workspace/packages/app",
+    repoPath: "/workspace",
+    items: {
+      "README.md": "modified",
+    },
+  });
+  const getGitDiff = vi.spyOn(client, "getGitDiff").mockResolvedValue({
+    path: "packages/app/README.md",
+    staged: false,
+    diff: "@@ -1 +1 @@\n-before\n+after",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "Diff" }));
+
+  expect(getGitDiff).toHaveBeenCalledWith("main", "packages/app/README.md", false);
+  expect(await screen.findByRole("tab", { name: "README.md.diff" })).toBeInTheDocument();
+});
+
 test("desktop file tree loads file content on the first click", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

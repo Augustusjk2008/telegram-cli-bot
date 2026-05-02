@@ -50,6 +50,27 @@ import {
 
 const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
 
+function normalizeWorkbenchPath(value: string) {
+  return String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPath: string) {
+  const normalizedRepoPath = normalizeWorkbenchPath(repoPath);
+  const normalizedAbsolutePath = normalizeWorkbenchPath(absolutePath);
+  if (!normalizedRepoPath || !normalizedAbsolutePath) {
+    return path;
+  }
+
+  const repoKey = normalizedRepoPath.toLowerCase();
+  const absoluteKey = normalizedAbsolutePath.toLowerCase();
+  if (!absoluteKey.startsWith(`${repoKey}/`)) {
+    return path;
+  }
+
+  const relativePath = normalizedAbsolutePath.slice(normalizedRepoPath.length + 1);
+  return relativePath || path;
+}
+
 type Props = {
   authToken?: string;
   botAlias: string;
@@ -155,6 +176,7 @@ export function DesktopWorkbench({
   });
   const [gitBranchName, setGitBranchName] = useState("");
   const [gitDecorations, setGitDecorations] = useState<GitTreeStatus["items"]>({});
+  const [gitRepoPath, setGitRepoPath] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
   const [definitionCandidates, setDefinitionCandidates] = useState<WorkspaceDefinitionItem[]>([]);
@@ -255,11 +277,13 @@ export function DesktopWorkbench({
         return;
       }
       setGitDecorations(next.repoFound ? next.items : {});
+      setGitRepoPath(next.repoFound ? next.repoPath || "" : "");
     } catch {
       if (gitDecorationRequestRef.current !== requestId) {
         return;
       }
       setGitDecorations({});
+      setGitRepoPath("");
     }
   }, [botAlias, client]);
 
@@ -350,6 +374,7 @@ export function DesktopWorkbench({
     if (!fileTree.rootPath) {
       setGitBranchName("");
       setGitDecorations({});
+      setGitRepoPath("");
       return;
     }
 
@@ -513,10 +538,10 @@ export function DesktopWorkbench({
     setEditorReveal(null);
   }
 
-  async function openGitDiffInEditor(path: string, staged: boolean) {
-    const diff = await client.getGitDiff(botAlias, path, staged);
+  async function openGitDiffInEditor(path: string, staged: boolean, gitPath = path) {
+    const diff = await client.getGitDiff(botAlias, gitPath, staged);
     const basename = path.split(/[\\/]/).filter(Boolean).pop() || path;
-    const tabPath = `git-diff:${staged ? "staged" : "worktree"}:${path}`;
+    const tabPath = `git-diff:${staged ? "staged" : "worktree"}:${gitPath}`;
     tabs.openReadOnlyTab({
       path: tabPath,
       basename: `${basename}.diff`,
@@ -631,8 +656,9 @@ export function DesktopWorkbench({
           onRequestPreview={(path) => {
             void loadPreview(path, "preview");
           }}
-          onRequestDiff={(path) => {
-            void openGitDiffInEditor(path, false);
+          onRequestDiff={(path, absolutePath) => {
+            const gitPath = resolveRepoRelativeDiffPath(path, absolutePath, gitRepoPath);
+            void openGitDiffInEditor(path, false, gitPath);
           }}
           onRequestUpload={handleUpload}
           gitDecorations={gitDecorations}

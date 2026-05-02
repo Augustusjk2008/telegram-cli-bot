@@ -13,7 +13,7 @@ type Props = {
   onRenamedFile: (oldPath: string, nextPath: string) => void;
   onDeletedFile: (path: string) => void;
   onRequestPreview: (path: string) => void;
-  onRequestDiff?: (path: string) => void | Promise<void>;
+  onRequestDiff?: (path: string, absolutePath: string) => void | Promise<void>;
   onRequestUpload: (files: File[]) => Promise<void>;
   gitDecorations: Record<string, GitTreeDecorationKind>;
   onRefreshGitDecorations: () => Promise<void>;
@@ -1411,7 +1411,7 @@ export function FileTreePane({
                   <button
                     type="button"
                     onClick={() => {
-                      void onRequestDiff(contextMenu.entry.path);
+                      void onRequestDiff(contextMenu.entry.path, contextMenu.absolutePath);
                       closeContextMenu();
                     }}
                     className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
