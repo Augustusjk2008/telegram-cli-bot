@@ -101,6 +101,25 @@ def test_prepare_dream_prompt_includes_managed_bot_context(temp_dir: Path):
     assert prepared.context_stats["managed_error_count"] == 0
 
 
+def test_prepare_dream_prompt_includes_incident_cooldown_rule(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+
+    prepared = prepare_dream_prompt(
+        home,
+        profile=SimpleNamespace(alias="assistant1"),
+        session=SimpleNamespace(),
+        history_service=_FakeHistoryService([]),
+        config=AssistantDreamConfig(prompt="根据近期工作做自我完善", lookback_hours=24, history_limit=10, capture_limit=5),
+        visible_text="daily dream",
+    )
+
+    assert "故障降温" in prepared.prompt_text
+    assert "把对应排查项从 open_loops 删除" in prepared.prompt_text
+    assert "recent_summary 留简短事实：时间、状态、直接错误、用户归因" in prepared.prompt_text
+
+
 def test_apply_dream_result_writes_working_memory_knowledge_proposal_and_audit(temp_dir: Path):
     workdir = temp_dir / "assistant-repo"
     workdir.mkdir()
