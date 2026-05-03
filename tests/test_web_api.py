@@ -47,6 +47,7 @@ from bot.web.api_service import (
     WebApiError,
     build_session_snapshot,
     change_working_directory,
+    create_conversation,
     get_directory_listing,
     get_history,
     get_history_trace,
@@ -55,6 +56,7 @@ from bot.web.api_service import (
     resolve_session_bot_id,
     get_working_directory,
     kill_user_process,
+    list_conversations,
     list_bots,
     copy_path,
     create_text_file,
@@ -67,6 +69,7 @@ from bot.web.api_service import (
     run_cli_chat,
     save_chat_attachment,
     save_uploaded_file,
+    select_conversation,
     update_bot_workdir,
     write_file_content,
 )
@@ -4524,7 +4527,7 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
     assert data["message"]["content"] == "完成回复"
 
 @pytest.mark.asyncio
-async def test_run_cli_chat_suggests_reset_for_codex_resume_upstream_error(web_manager: MultiBotManager):
+async def test_run_cli_chat_suggests_new_conversation_for_codex_resume_upstream_error(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-stuck"
     fake_process = MagicMock()
@@ -4539,13 +4542,13 @@ async def test_run_cli_chat_suggests_reset_for_codex_resume_upstream_error(web_m
          ):
         data = await run_cli_chat(web_manager, "main", 1001, "hello")
 
-    assert "重置会话" in data["output"]
+    assert "新会话" in data["output"]
     assert "status_code=500" in data["output"]
     assert data["message"]["content"] == data["output"]
     assert session.codex_session_id == "thread-stuck"
 
 @pytest.mark.asyncio
-async def test_run_cli_chat_suggests_reset_for_codex_resume_payload_too_large(web_manager: MultiBotManager):
+async def test_run_cli_chat_suggests_new_conversation_for_codex_resume_payload_too_large(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-stuck"
     fake_process = MagicMock()
@@ -4560,7 +4563,7 @@ async def test_run_cli_chat_suggests_reset_for_codex_resume_payload_too_large(we
          ):
         data = await run_cli_chat(web_manager, "main", 1001, "hello")
 
-    assert "重置会话" in data["output"]
+    assert "新会话" in data["output"]
     assert "payload too large" in data["output"]
     assert data["message"]["content"] == data["output"]
     assert session.codex_session_id == "thread-stuck"
@@ -5424,6 +5427,61 @@ def test_get_history_reads_from_local_store_not_overlay_or_legacy_history(
     assert all(item["content"] != "legacy" for item in data["items"])
     assert all(item["content"] != "overlay" for item in data["items"])
 
+
+def test_conversation_api_create_list_and_select(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+
+    created = create_conversation(web_manager, "main", 1001, "新任务")
+    conversation_id = created["conversation"]["id"]
+    listed = list_conversations(web_manager, "main", 1001)
+    selected = select_conversation(web_manager, "main", 1001, conversation_id)
+
+    assert listed["items"][0]["id"] == conversation_id
+    assert listed["items"][0]["active"] is True
+    assert selected["conversation"]["active"] is True
+    assert selected["messages"] == []
+    assert session.active_conversation_id == conversation_id
+
+
+def test_select_conversation_restores_codex_session_id(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    store = ChatStore(tmp_path)
+    conversation_id = store.create_conversation(
+        bot_id=session.bot_id,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=1,
+        native_provider="codex",
+        title="旧线程",
+    )
+    handle = store.begin_turn(
+        bot_id=session.bot_id,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=1,
+        user_text="hi",
+        native_provider="codex",
+        conversation_id=conversation_id,
+    )
+    store.complete_turn(handle, content="ok", completion_state="completed", native_session_id="thread-1")
+
+    selected = select_conversation(web_manager, "main", 1001, conversation_id)
+
+    assert session.codex_session_id == "thread-1"
+    assert selected["messages"][-1]["content"] == "ok"
+
+
 def test_get_history_trace_returns_full_trace_for_assistant_message(
     web_manager: MultiBotManager,
     tmp_path: Path,
@@ -5871,7 +5929,7 @@ async def test_stream_cli_chat_codex_final_event_terminates_hanging_process(web_
     fake_process.terminate.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_stream_cli_chat_suggests_reset_for_codex_resume_upstream_error(web_manager: MultiBotManager):
+async def test_stream_cli_chat_suggests_new_conversation_for_codex_resume_upstream_error(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-stuck"
@@ -5916,13 +5974,13 @@ async def test_stream_cli_chat_suggests_reset_for_codex_resume_upstream_error(we
         events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
 
     done_event = next(event for event in events if event["type"] == "done")
-    assert "重置会话" in done_event["output"]
+    assert "新会话" in done_event["output"]
     assert "status_code=500" in done_event["output"]
     assert done_event["message"]["content"] == done_event["output"]
     assert session.codex_session_id == "thread-stuck"
 
 @pytest.mark.asyncio
-async def test_stream_cli_chat_suggests_reset_for_codex_resume_payload_too_large(web_manager: MultiBotManager):
+async def test_stream_cli_chat_suggests_new_conversation_for_codex_resume_payload_too_large(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-stuck"
@@ -5967,7 +6025,7 @@ async def test_stream_cli_chat_suggests_reset_for_codex_resume_payload_too_large
         events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
 
     done_event = next(event for event in events if event["type"] == "done")
-    assert "重置会话" in done_event["output"]
+    assert "新会话" in done_event["output"]
     assert "payload too large" in done_event["output"]
     assert done_event["message"]["content"] == done_event["output"]
     assert session.codex_session_id == "thread-stuck"

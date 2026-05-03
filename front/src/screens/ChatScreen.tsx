@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Square, Trash2 } from "lucide-react";
+import { History, LoaderCircle, Maximize2, Minimize2, Paperclip, Plus, Square, Trash2 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
@@ -7,6 +7,7 @@ import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ChatTracePanel } from "../components/ChatTracePanel";
+import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
@@ -19,6 +20,7 @@ import type {
   ChatStatusUpdate,
   CliParamsPayload,
   ChatTraceEvent,
+  ConversationSummary,
   FileReadResult,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -643,7 +645,7 @@ export function ChatScreen({
   const [error, setError] = useState("");
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
+  const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
@@ -659,6 +661,10 @@ export function ChatScreen({
   const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
   const [expandedTracePanels, setExpandedTracePanels] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
+  const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
+  const [conversationQuery, setConversationQuery] = useState("");
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
@@ -685,6 +691,12 @@ export function ChatScreen({
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
+
+  useEffect(() => {
+    setHistoryPanelOpen(false);
+    setConversationQuery("");
+    setConversations([]);
+  }, [botAlias]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -1289,6 +1301,70 @@ export function ChatScreen({
     }
   }, [botAlias, client]);
 
+  const loadConversations = useCallback(async (query = "") => {
+    setConversationLoading(true);
+    setError("");
+    try {
+      const data = await client.listConversations(botAlias, query);
+      setConversations(data.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载历史会话失败");
+    } finally {
+      setConversationLoading(false);
+    }
+  }, [botAlias, client]);
+
+  async function handleOpenHistoryPanel() {
+    setHistoryPanelOpen(true);
+    await loadConversations(conversationQuery);
+  }
+
+  async function handleSelectConversation(conversationId: string) {
+    if (isStreaming) {
+      setError("当前任务运行中，先终止或等待完成");
+      return;
+    }
+    setConversationLoading(true);
+    setError("");
+    try {
+      const data = await client.selectConversation(botAlias, conversationId);
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      setExpandedTracePanels({});
+      setTraceLoadState({});
+      setItems(data.messages);
+      setConversations((prev) => prev.map((item) => ({ ...item, active: item.id === conversationId })));
+      setHistoryPanelOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "切换会话失败");
+    } finally {
+      setConversationLoading(false);
+    }
+  }
+
+  async function handleNewConversation() {
+    if (isStreaming) {
+      setError("当前任务运行中，先终止或等待完成");
+      return;
+    }
+    setConversationLoading(true);
+    setError("");
+    try {
+      const data = await client.createConversation(botAlias);
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      setExpandedTracePanels({});
+      setTraceLoadState({});
+      setItems(data.messages);
+      setConversations((prev) => [data.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
+      setHistoryPanelOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建会话失败");
+    } finally {
+      setConversationLoading(false);
+    }
+  }
+
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
       return;
@@ -1571,22 +1647,6 @@ export function ChatScreen({
     };
   }, [botAlias, sendMessageInternal]);
 
-  async function handleResetSession() {
-    setActionLoading("reset");
-    setError("");
-    try {
-      await client.resetSession(botAlias);
-      setExpandedTracePanels({});
-      setTraceLoadState({});
-      setItems([]);
-      appendSystemMessage("当前会话已重置");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重置会话失败");
-    } finally {
-      setActionLoading("");
-    }
-  }
-
   async function handleKillTask() {
     setActionLoading("kill");
     setError("");
@@ -1675,12 +1735,20 @@ export function ChatScreen({
             ) : null}
             <button
               type="button"
-              onClick={() => void handleResetSession()}
-              disabled={actionLoading === "reset"}
+              onClick={() => void handleOpenHistoryPanel()}
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)]"
+            >
+              <History className="h-4 w-4" />
+              历史
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleNewConversation()}
+              disabled={conversationLoading || isStreaming}
               className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
             >
-              <RotateCcw className="h-4 w-4" />
-              {actionLoading === "reset" ? "重置中..." : "重置会话"}
+              <Plus className="h-4 w-4" />
+              {conversationLoading ? "新建中..." : "新会话"}
             </button>
             <button
               type="button"
@@ -1760,6 +1828,20 @@ export function ChatScreen({
           <div ref={bottomAnchorRef} aria-hidden="true" />
         </div>
       </section>
+      <ConversationHistoryPanel
+        open={historyPanelOpen}
+        loading={conversationLoading}
+        conversations={conversations}
+        query={conversationQuery}
+        disabled={isStreaming}
+        onQueryChange={(nextQuery) => {
+          setConversationQuery(nextQuery);
+          void loadConversations(nextQuery);
+        }}
+        onClose={() => setHistoryPanelOpen(false)}
+        onNewConversation={() => void handleNewConversation()}
+        onSelectConversation={(conversationId) => void handleSelectConversation(conversationId)}
+      />
       {showImmersiveButton ? (
         <button
           type="button"

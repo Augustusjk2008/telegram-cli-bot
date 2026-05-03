@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { ChatMessage, ChatTraceDetails, CliParamsPayload, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
+import type { ChatMessage, ChatTraceDetails, CliParamsPayload, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
@@ -43,6 +43,46 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       isProcessing: false,
     }),
     listMessages: async () => [],
+    listConversations: async (): Promise<ConversationListResult> => ({
+      activeConversationId: "",
+      items: [],
+    }),
+    createConversation: async (): Promise<ConversationSelectResult> => ({
+      conversation: {
+        id: "conv-new",
+        title: "新会话",
+        lastMessagePreview: "",
+        messageCount: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      messages: [],
+    }),
+    selectConversation: async (): Promise<ConversationSelectResult> => ({
+      conversation: {
+        id: "conv-selected",
+        title: "旧会话",
+        lastMessagePreview: "",
+        messageCount: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      messages: [],
+    }),
     getMessageTrace: async (): Promise<ChatTraceDetails> => ({
       traceCount: 0,
       toolCallCount: 0,
@@ -943,6 +983,136 @@ test("switching bots resets chat history instead of mixing conversations", async
   expect(screen.queryByText("main-history")).not.toBeInTheDocument();
 });
 
+test("chat screen opens history and switches conversation", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const client = createClient({
+    listConversations: async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-1",
+      items: [{
+        id: "conv-2",
+        title: "旧会话",
+        lastMessagePreview: "旧回答",
+        messageCount: 2,
+        pinned: false,
+        active: false,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }),
+    selectConversation: async (): Promise<ConversationSelectResult> => ({
+      conversation: {
+        id: "conv-2",
+        title: "旧会话",
+        lastMessagePreview: "旧回答",
+        messageCount: 2,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      },
+      messages: [{
+        id: "assistant-old",
+        role: "assistant",
+        text: "旧回答",
+        createdAt: now,
+        state: "done",
+      }],
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.click(await screen.findByRole("button", { name: "历史" }));
+  await user.click(await screen.findByRole("button", { name: /旧会话/ }));
+
+  expect(await screen.findByText("旧回答")).toBeInTheDocument();
+});
+
+test("chat screen creates a new conversation from the action bar", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const createConversation = vi.fn(async (): Promise<ConversationSelectResult> => ({
+    conversation: {
+      id: "conv-new",
+      title: "新会话",
+      lastMessagePreview: "",
+      messageCount: 0,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      botMode: "cli",
+      cliType: "codex",
+      workingDir: "C:\\workspace",
+      createdAt: now,
+      updatedAt: now,
+    },
+    messages: [],
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-existing",
+      role: "assistant",
+      text: "已有会话",
+      createdAt: now,
+      state: "done",
+    }],
+    createConversation,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("已有会话")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "新会话" }));
+
+  expect(createConversation).toHaveBeenCalledWith("main");
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  expect(screen.queryByText("已有会话")).not.toBeInTheDocument();
+});
+
+test("chat screen blocks conversation switch while streaming", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const client = createClient({
+    listConversations: async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-1",
+      items: [{
+        id: "conv-2",
+        title: "旧会话",
+        lastMessagePreview: "旧回答",
+        messageCount: 2,
+        pinned: false,
+        active: false,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }),
+    sendMessage: async () => new Promise<ChatMessage>(() => {}),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "运行");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.click(await screen.findByRole("button", { name: "历史" }));
+
+  expect(await screen.findByRole("button", { name: /旧会话/ })).toBeDisabled();
+});
+
 test("shows waiting time while a reply is still pending", async () => {
   const user = userEvent.setup();
   const client = createClient({
@@ -1275,12 +1445,13 @@ test("assistant sse recovery resolves stale runningReply when overview is idle",
   expect(screen.getByText("已修。")).toBeInTheDocument();
 });
 
-test("shows reset and kill actions for non-main bots", async () => {
+test("shows new conversation and kill actions for non-main bots", async () => {
   const client = createClient();
 
   render(<ChatScreen botAlias="team2" client={client} />);
 
-  expect(await screen.findByRole("button", { name: "重置会话" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "新会话" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重置会话" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
 });
 

@@ -203,9 +203,8 @@ export function SettingsScreen({
   const [workdirDraft, setWorkdirDraft] = useState("");
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"" | "reset" | "kill">("");
+  const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [savingCliParams, setSavingCliParams] = useState(false);
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
@@ -327,21 +326,6 @@ export function SettingsScreen({
   const syncCliParams = (payload: CliParamsPayload) => {
     setCliParams(payload);
     setDraftValues(buildDraftValues(payload));
-  };
-
-  const confirmReset = async () => {
-    setActionLoading("reset");
-    setError("");
-    setNotice("");
-    try {
-      await client.resetSession(botAlias);
-      setNotice("当前会话已重置");
-      setShowResetConfirm(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重置会话失败");
-    } finally {
-      setActionLoading("");
-    }
   };
 
   const confirmKill = async () => {
@@ -1218,15 +1202,6 @@ export function SettingsScreen({
               终止当前任务
             </span>
           </button>
-          <button
-            onClick={() => setShowResetConfirm(true)}
-            className="w-full flex items-center justify-between p-4 hover:bg-[var(--surface-strong)] active:bg-[var(--border)] text-[var(--danger)]"
-          >
-            <span className="flex items-center gap-3">
-              <RefreshCw className="w-5 h-5" />
-              重置当前会话
-            </span>
-          </button>
           {embedded ? null : (
             <button
               onClick={onLogout}
@@ -1278,33 +1253,6 @@ export function SettingsScreen({
                 className="rounded-full bg-[var(--danger)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
               >
                 {savingWorkdir ? "切换中..." : "确认并切换"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showResetConfirm ? (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-sm w-full shadow-[var(--shadow-card)]">
-            <div className="flex items-center gap-3 text-[var(--danger)] mb-4">
-              <AlertTriangle className="w-6 h-6" />
-              <h2 className="text-lg font-bold">危险操作</h2>
-            </div>
-            <p className="text-[var(--text)] mb-6">确定要重置当前会话吗？此操作不可恢复。</p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className="px-4 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-strong)]"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => void confirmReset()}
-                disabled={actionLoading === "reset"}
-                className="px-4 py-2 rounded-lg bg-[var(--danger)] text-white hover:opacity-90"
-              >
-                {actionLoading === "reset" ? "重置中..." : "确定重置"}
               </button>
             </div>
           </div>

@@ -56,6 +56,8 @@ import type {
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   ChatSendOptions,
+  ConversationListResult,
+  ConversationSelectResult,
   HistoryDeltaResult,
   PublicHostInfo,
   PluginViewWindowRequest,
@@ -99,6 +101,9 @@ export interface WebBotClient {
   installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   getBotOverview(botAlias: string): Promise<BotOverview>;
+  listConversations(botAlias: string, query?: string): Promise<ConversationListResult>;
+  createConversation(botAlias: string, title?: string): Promise<ConversationSelectResult>;
+  selectConversation(botAlias: string, conversationId: string): Promise<ConversationSelectResult>;
   listMessages(botAlias: string): Promise<ChatMessage[]>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number): Promise<HistoryDeltaResult>;
   getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails>;

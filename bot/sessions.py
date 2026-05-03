@@ -54,6 +54,7 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
         )
         preferred.message_count = max(preferred.message_count, fallback.message_count)
         preferred.session_epoch = max(preferred.session_epoch, fallback.session_epoch)
+        preferred.active_conversation_id = preferred.active_conversation_id or fallback.active_conversation_id
         preferred.managed_prompt_hash_seen = (
             preferred.managed_prompt_hash_seen or fallback.managed_prompt_hash_seen
         )
@@ -105,6 +106,7 @@ def get_or_create_session(
             running_updated_at = None
             local_history_backend = LOCAL_HISTORY_BACKEND
             session_epoch = 0
+            active_conversation_id = None
             managed_prompt_hash_seen = None
             
             if stored_data:
@@ -130,6 +132,7 @@ def get_or_create_session(
                     session_epoch = max(0, int(stored_data.get("session_epoch", 0) or 0))
                 except (TypeError, ValueError):
                     session_epoch = 0
+                active_conversation_id = stored_data.get("active_conversation_id") or None
                 managed_prompt_hash_seen = stored_data.get("managed_prompt_hash_seen") or None
                 # 恢复时标记为已初始化（因为我们有 session_id）
                 claude_session_initialized = bool(claude_session_id)
@@ -162,6 +165,7 @@ def get_or_create_session(
                 message_count=message_count,
                 local_history_backend=local_history_backend,
                 session_epoch=session_epoch,
+                active_conversation_id=active_conversation_id,
                 managed_prompt_hash_seen=managed_prompt_hash_seen,
             )
             session = sessions[key]
@@ -191,6 +195,7 @@ def _save_session_to_store(session: UserSession):
             last_activity=session.last_activity.isoformat(),
             local_history_backend=session.local_history_backend,
             session_epoch=session.session_epoch,
+            active_conversation_id=session.active_conversation_id,
             managed_prompt_hash_seen=session.managed_prompt_hash_seen,
         )
 

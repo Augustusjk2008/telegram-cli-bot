@@ -118,6 +118,22 @@ class TestSaveAndLoadSession:
             assert "running_preview_text" not in data
             assert "web_turn_overlays" not in data
 
+    def test_save_session_persists_active_conversation_id(self, temp_dir: Path):
+        store_file = temp_dir / ".session_store.json"
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(
+                bot_id=1,
+                user_id=1001,
+                codex_session_id="thread-1",
+                active_conversation_id="conv_abc",
+            )
+
+            data = load_session(1, 1001)
+
+            assert data is not None
+            assert data["active_conversation_id"] == "conv_abc"
+
 
 class TestRemoveSession:
     """测试删除会话"""

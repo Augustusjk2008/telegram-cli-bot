@@ -1083,6 +1083,46 @@ describe("RealWebBotClient", () => {
     ]);
   });
 
+  test("listConversations maps native session metadata", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          active_conversation_id: "conv-1",
+          items: [{
+            id: "conv-1",
+            title: "修复 diff",
+            last_message_preview: "完成",
+            message_count: 2,
+            pinned: false,
+            active: true,
+            status: "active",
+            bot_alias: "main",
+            bot_mode: "cli",
+            cli_type: "codex",
+            working_dir: "C:\\repo",
+            native_provider: "codex",
+            native_session_id: "thread-1",
+            created_at: "2026-05-03T00:00:00Z",
+            updated_at: "2026-05-03T00:01:00Z",
+          }],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const data = await client.listConversations("main");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/conversations?limit=80",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(data.activeConversationId).toBe("conv-1");
+    expect(data.items[0].title).toBe("修复 diff");
+    expect(data.items[0].nativeSource?.sessionId).toBe("thread-1");
+  });
+
   test("listMessages maps rich native history meta and lazy trace counters", async () => {
     fetchMock
       .mockResolvedValueOnce({

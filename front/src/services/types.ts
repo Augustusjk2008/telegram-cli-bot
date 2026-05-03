@@ -174,6 +174,33 @@ export type HistoryDeltaResult = {
   reset: boolean;
 };
 
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  lastMessagePreview: string;
+  messageCount: number;
+  pinned: boolean;
+  active: boolean;
+  status: string;
+  botAlias: string;
+  botMode: string;
+  cliType: string;
+  workingDir: string;
+  nativeSource?: ChatMessageNativeSource;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationListResult = {
+  items: ConversationSummary[];
+  activeConversationId: string;
+};
+
+export type ConversationSelectResult = {
+  conversation: ConversationSummary;
+  messages: ChatMessage[];
+};
+
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;

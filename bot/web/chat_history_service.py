@@ -15,6 +15,10 @@ def _session_epoch(session: UserSession) -> int:
         return 0
 
 
+def _active_conversation_id(session: UserSession) -> str:
+    return str(getattr(session, "active_conversation_id", "") or "").strip()
+
+
 class StreamingPersistenceBuffer:
     def __init__(
         self,
@@ -75,6 +79,7 @@ class ChatHistoryService:
             user_id=session.user_id,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
         )
 
     def _should_attempt_trace_recovery(self, context: dict[str, Any]) -> bool:
@@ -141,7 +146,8 @@ class ChatHistoryService:
         managed_prompt_hash: str | None = None,
         prompt_surface_version: str | None = None,
     ) -> ChatTurnHandle:
-        return self.store.begin_turn(
+        had_active_conversation = bool(_active_conversation_id(session))
+        handle = self.store.begin_turn(
             bot_id=session.bot_id,
             bot_alias=session.bot_alias,
             user_id=session.user_id,
@@ -151,10 +157,16 @@ class ChatHistoryService:
             session_epoch=_session_epoch(session),
             user_text=user_text,
             native_provider=native_provider,
+            conversation_id=_active_conversation_id(session) or None,
             assistant_home=assistant_home,
             managed_prompt_hash=managed_prompt_hash,
             prompt_surface_version=prompt_surface_version,
         )
+        if not had_active_conversation:
+            with session._lock:
+                session.active_conversation_id = handle.conversation_id
+            session.persist()
+        return handle
 
     def replace_assistant_preview(self, handle: ChatTurnHandle, preview_text: str) -> None:
         self.store.replace_assistant_content(handle, preview_text[-800:], state="streaming")
@@ -203,8 +215,19 @@ class ChatHistoryService:
             user_id=session.user_id,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
             limit=limit,
         )
+        if items and not _active_conversation_id(session):
+            try:
+                context = self.store.get_trace_recovery_context(str(items[-1].get("id") or ""))
+            except KeyError:
+                context = {}
+            conversation_id = str(context.get("conversation_id") or "")
+            if conversation_id:
+                with session._lock:
+                    session.active_conversation_id = conversation_id
+                session.persist()
         recovered = False
         for item in items:
             if str(item.get("role") or "") != "assistant":
@@ -220,10 +243,11 @@ class ChatHistoryService:
         return self.store.list_active_history(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            working_dir=session.working_dir,
-            session_epoch=_session_epoch(session),
-            limit=limit,
-        )
+                working_dir=session.working_dir,
+                session_epoch=_session_epoch(session),
+                conversation_id=_active_conversation_id(session) or None,
+                limit=limit,
+            )
 
     def get_message_trace(
         self,
@@ -289,6 +313,7 @@ class ChatHistoryService:
                 user_id=session.user_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
+                conversation_id=_active_conversation_id(session) or None,
             ),
             "is_processing": is_processing,
             "running_reply": self.store.get_running_reply(
@@ -296,12 +321,14 @@ class ChatHistoryService:
                 user_id=session.user_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
+                conversation_id=_active_conversation_id(session) or None,
             ) if is_processing else None,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },
+            "active_conversation_id": _active_conversation_id(session),
         }
 
     def summarize_active_conversation(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
@@ -312,6 +339,7 @@ class ChatHistoryService:
                 user_id=session.user_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
+                conversation_id=_active_conversation_id(session) or None,
             ),
             "message_count": session.message_count,
             "bot_mode": profile.bot_mode,
@@ -321,6 +349,13 @@ class ChatHistoryService:
         return self.summarize_active_conversation(profile, session)["history_count"] > 0
 
     def reset_active_conversation(self, profile: BotProfile, session: UserSession) -> None:
+        conversation_id = _active_conversation_id(session)
+        if conversation_id:
+            self.store.delete_conversation_by_id(conversation_id)
+            with session._lock:
+                session.active_conversation_id = None
+            session.persist()
+            return
         self.store.delete_conversation(
             bot_id=session.bot_id,
             user_id=session.user_id,

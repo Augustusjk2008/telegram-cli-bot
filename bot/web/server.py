@@ -86,6 +86,7 @@ from .api_service import (
     bulk_invalidate_assistant_memories,
     build_bot_summary,
     change_working_directory,
+    create_conversation,
     create_directory,
     create_text_file,
     copy_path,
@@ -115,6 +116,7 @@ from .api_service import (
     get_working_directory,
     kill_user_process,
     list_bots,
+    list_conversations,
     list_assistant_cron_jobs,
     list_assistant_cron_runs,
     list_installable_plugins,
@@ -145,6 +147,7 @@ from .api_service import (
     stop_managed_bot,
     stream_update_download,
     stream_chat,
+    select_conversation,
     create_assistant_cron_job,
     delete_chat_attachment,
     delete_assistant_cron_job,
@@ -1446,6 +1449,25 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         after_id = request.query.get("after_id", "")
         return _json({"ok": True, "data": get_history_delta(self.manager, alias, auth.user_id, after_id, limit=limit)})
+
+    async def get_conversations_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        limit = int(request.query.get("limit", "50"))
+        query = request.query.get("q", "")
+        return _json({"ok": True, "data": list_conversations(self.manager, alias, auth.user_id, limit=limit, query=query)})
+
+    async def post_conversation_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        return _json({"ok": True, "data": create_conversation(self.manager, alias, auth.user_id, str(body.get("title") or ""))})
+
+    async def post_conversation_select_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        conversation_id = request.match_info.get("conversation_id", "")
+        return _json({"ok": True, "data": select_conversation(self.manager, alias, auth.user_id, conversation_id)})
 
     async def get_debug_profile(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_DEBUG_EXEC)
@@ -2860,6 +2882,9 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
         app.router.add_get("/api/bots/{alias}/history/delta", self.get_history_delta_view)
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)
+        app.router.add_get("/api/bots/{alias}/conversations", self.get_conversations_view)
+        app.router.add_post("/api/bots/{alias}/conversations", self.post_conversation_view)
+        app.router.add_post("/api/bots/{alias}/conversations/{conversation_id}/select", self.post_conversation_select_view)
         app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
         app.router.add_get("/api/bots/{alias}/git/tree-status", self.get_git_tree_status_view)
         app.router.add_get("/api/bots/{alias}/git/branches", self.get_git_branches_view)

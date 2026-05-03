@@ -125,6 +125,8 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         merged.pop("codex_session_id", None)
     if not merged.get("claude_session_id"):
         merged.pop("claude_session_id", None)
+    if not merged.get("active_conversation_id"):
+        merged.pop("active_conversation_id", None)
     if not merged.get("managed_prompt_hash_seen"):
         merged.pop("managed_prompt_hash_seen", None)
     return merged
@@ -203,6 +205,7 @@ def save_session(
     last_activity: Optional[str] = None,
     local_history_backend: Optional[str] = None,
     session_epoch: Optional[int] = None,
+    active_conversation_id: Optional[str] = None,
     managed_prompt_hash_seen: Optional[str] = None,
     running_user_text: Optional[str] = None,
     running_preview_text: Optional[str] = None,
@@ -229,6 +232,8 @@ def save_session(
         session_data["local_history_backend"] = local_history_backend
     if isinstance(session_epoch, int):
         session_data["session_epoch"] = max(0, session_epoch)
+    if active_conversation_id:
+        session_data["active_conversation_id"] = str(active_conversation_id)
     if managed_prompt_hash_seen:
         session_data["managed_prompt_hash_seen"] = managed_prompt_hash_seen
     # legacy history is intentionally no longer persisted

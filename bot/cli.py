@@ -687,7 +687,7 @@ def should_reset_codex_session(session_id: Optional[str], response: str, returnc
 
 
 def should_suggest_reset_codex_session(session_id: Optional[str], response: str, returncode: int) -> bool:
-    """Codex 恢复旧会话时遇到上游 500，提示用户手动重置会话。"""
+    """Codex 恢复旧会话时遇到上游 500，提示用户手动新建会话。"""
     if not session_id or returncode == 0:
         return False
 

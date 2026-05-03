@@ -2261,6 +2261,121 @@ def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int =
     return {"items": service.list_history(profile, session, limit=max(1, limit))}
 
 
+def list_conversations(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    limit: int = 50,
+    query: str = "",
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    store = ChatStore(Path(session.working_dir))
+    active_id = str(getattr(session, "active_conversation_id", "") or "")
+    items = store.list_conversations(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        working_dir=session.working_dir,
+        limit=max(1, limit),
+        query=query,
+    )
+    return {
+        "items": [
+            {
+                **item,
+                "active": str(item.get("id") or "") == active_id,
+                "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
+            }
+            for item in items
+        ],
+        "active_conversation_id": active_id,
+    }
+
+
+def create_conversation(manager: MultiBotManager, alias: str, user_id: int, title: str = "") -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    with session._lock:
+        is_processing = bool(session.is_processing)
+    if is_processing:
+        _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+
+    store = ChatStore(Path(session.working_dir))
+    conversation_id = store.create_conversation(
+        bot_id=session.bot_id,
+        bot_alias=session.bot_alias,
+        user_id=session.user_id,
+        bot_mode=profile.bot_mode,
+        cli_type=profile.cli_type,
+        working_dir=session.working_dir,
+        session_epoch=max(0, int(getattr(session, "session_epoch", 0) or 0)),
+        native_provider=normalize_cli_type(profile.cli_type),
+        title=title,
+    )
+    with session._lock:
+        session.active_conversation_id = conversation_id
+        session.codex_session_id = None
+        session.claude_session_id = None
+        session.claude_session_initialized = False
+    session.persist()
+    return {
+        "conversation": {
+            **store.get_conversation(conversation_id),
+            "active": True,
+            "bot_mode": profile.bot_mode,
+        },
+        "messages": [],
+    }
+
+
+def select_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    with session._lock:
+        is_processing = bool(session.is_processing)
+    if is_processing:
+        _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+
+    store = ChatStore(Path(session.working_dir))
+    try:
+        conversation = store.get_conversation(conversation_id)
+    except KeyError:
+        _raise(404, "conversation_not_found", "未找到会话")
+
+    if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("working_dir") or "") != session.working_dir:
+        _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
+    if str(conversation.get("archived_at") or "").strip():
+        _raise(404, "conversation_not_found", "未找到会话")
+
+    native_provider = normalize_cli_type(str(conversation.get("native_provider") or profile.cli_type))
+    native_session_id = str(conversation.get("native_session_id") or "").strip()
+    with session._lock:
+        session.active_conversation_id = str(conversation["id"])
+        if native_provider == "codex":
+            session.codex_session_id = native_session_id or None
+        if native_provider == "claude":
+            session.claude_session_id = native_session_id or None
+            session.claude_session_initialized = bool(native_session_id)
+    session.persist()
+
+    messages = ChatHistoryService(store).list_history(profile, session, limit=50)
+    return {
+        "conversation": {
+            **conversation,
+            "active": True,
+            "bot_mode": str(conversation.get("bot_mode") or profile.bot_mode),
+        },
+        "messages": messages,
+    }
+
+
 def get_history_delta(
     manager: MultiBotManager,
     alias: str,
@@ -3061,7 +3176,7 @@ def _decorate_codex_resume_error(
     hint = str(msg("chat", "codex_resume_reset_hint") or "").strip()
     if not hint:
         return normalized, True
-    if "重置会话" in normalized:
+    if "新会话" in normalized or "重置会话" in normalized:
         return normalized, True
     if not normalized:
         return hint, True
@@ -4822,6 +4937,7 @@ def _reset_session_for_workdir_change(session: UserSession, working_dir: str) ->
         session.codex_session_id = None
         session.claude_session_id = None
         session.claude_session_initialized = False
+        session.active_conversation_id = None
         session.history = []
         session.web_turn_overlays = []
         session.running_user_text = None

@@ -105,6 +105,7 @@ class UserSession:
     managed_prompt_hash_seen: Optional[str] = None
     local_history_backend: str = "local_v1"
     session_epoch: int = 0
+    active_conversation_id: Optional[str] = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
@@ -258,5 +259,6 @@ class UserSession:
             self.codex_session_id = None
             self.claude_session_id = None
             self.claude_session_initialized = False
+            self.active_conversation_id = None
         self.persist()
         logger.info(f"已清除会话ID: bot={self.bot_id}, user={self.user_id}")

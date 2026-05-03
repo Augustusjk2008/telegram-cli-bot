@@ -177,12 +177,14 @@ class ChatStore:
                 assistant_home TEXT,
                 managed_prompt_hash TEXT,
                 prompt_surface_version TEXT,
+                title TEXT,
+                last_message_preview TEXT,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                archived_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_identity
-            ON conversations(bot_id, user_id, working_dir, session_epoch);
 
             CREATE TABLE IF NOT EXISTS turns (
                 id TEXT PRIMARY KEY,
@@ -244,8 +246,20 @@ class ChatStore:
             ON trace_events(turn_id, ordinal);
             """
         )
+        conn.execute("DROP INDEX IF EXISTS idx_conversations_identity")
+        self._ensure_column(conn, "conversations", "title", "TEXT")
+        self._ensure_column(conn, "conversations", "last_message_preview", "TEXT")
+        self._ensure_column(conn, "conversations", "message_count", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "conversations", "archived_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_conversations_scope_updated
+            ON conversations(bot_id, user_id, working_dir, archived_at, pinned, updated_at)
+            """
+        )
 
     def _next_turn_seq(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(
@@ -267,9 +281,43 @@ class ChatStore:
             """
             SELECT id
             FROM conversations
-            WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ?
+            WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            LIMIT 1
             """,
             (bot_id, user_id, working_dir, session_epoch),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["id"])
+
+    def _get_scoped_conversation_id(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        conversation_id: str | None,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        session_epoch: int,
+    ) -> str | None:
+        normalized_id = str(conversation_id or "").strip()
+        if not normalized_id:
+            return self._get_active_conversation_id(
+                conn,
+                bot_id=bot_id,
+                user_id=user_id,
+                working_dir=working_dir,
+                session_epoch=session_epoch,
+            )
+
+        row = conn.execute(
+            """
+            SELECT id
+            FROM conversations
+            WHERE id = ? AND bot_id = ? AND user_id = ? AND working_dir = ? AND archived_at IS NULL
+            """,
+            (normalized_id, bot_id, user_id, working_dir),
         ).fetchone()
         if row is None:
             return None
@@ -296,7 +344,9 @@ class ChatStore:
             """
             SELECT id
             FROM conversations
-            WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ?
+            WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            LIMIT 1
             """,
             (bot_id, user_id, working_dir, session_epoch),
         ).fetchone()
@@ -350,9 +400,14 @@ class ChatStore:
                 assistant_home,
                 managed_prompt_hash,
                 prompt_surface_version,
+                title,
+                last_message_preview,
+                message_count,
+                pinned,
+                archived_at,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -369,11 +424,163 @@ class ChatStore:
                 assistant_home,
                 managed_prompt_hash,
                 prompt_surface_version,
+                "",
+                "",
+                0,
+                0,
+                None,
                 now,
                 now,
             ),
         )
         return conversation_id, 1
+
+    def _conversation_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "bot_id": int(row["bot_id"]),
+            "bot_alias": str(row["bot_alias"] or ""),
+            "user_id": int(row["user_id"]),
+            "bot_mode": str(row["bot_mode"] or ""),
+            "cli_type": str(row["cli_type"] or ""),
+            "working_dir": str(row["working_dir"] or ""),
+            "session_epoch": int(row["session_epoch"] or 0),
+            "status": str(row["status"] or "active"),
+            "native_provider": str(row["native_provider"] or ""),
+            "native_session_id": str(row["native_session_id"] or ""),
+            "title": str(row["title"] or ""),
+            "last_message_preview": str(row["last_message_preview"] or ""),
+            "message_count": int(row["message_count"] or 0),
+            "pinned": bool(row["pinned"]),
+            "archived_at": str(row["archived_at"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+
+    def create_conversation(
+        self,
+        *,
+        bot_id: int,
+        bot_alias: str,
+        user_id: int,
+        bot_mode: str,
+        cli_type: str,
+        working_dir: str,
+        session_epoch: int,
+        native_provider: str,
+        title: str = "",
+        assistant_home: str | None = None,
+        managed_prompt_hash: str | None = None,
+        prompt_surface_version: str | None = None,
+    ) -> str:
+        now = _utc_now()
+        conversation_id = f"conv_{uuid.uuid4().hex}"
+        normalized_title = str(title or "").strip()
+        with self._connect_for_write() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversations (
+                    id,
+                    bot_id,
+                    bot_alias,
+                    user_id,
+                    bot_mode,
+                    cli_type,
+                    working_dir,
+                    session_epoch,
+                    status,
+                    native_provider,
+                    native_session_id,
+                    assistant_home,
+                    managed_prompt_hash,
+                    prompt_surface_version,
+                    title,
+                    last_message_preview,
+                    message_count,
+                    pinned,
+                    archived_at,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conversation_id,
+                    bot_id,
+                    bot_alias,
+                    user_id,
+                    bot_mode,
+                    cli_type,
+                    working_dir,
+                    session_epoch,
+                    "active",
+                    native_provider,
+                    None,
+                    assistant_home,
+                    managed_prompt_hash,
+                    prompt_surface_version,
+                    normalized_title,
+                    "",
+                    0,
+                    0,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+        return conversation_id
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(conversation_id)
+        with conn:
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(conversation_id)
+            return self._conversation_from_row(row)
+
+    def list_conversations(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        limit: int = 50,
+        query: str = "",
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+
+        safe_limit = max(1, min(int(limit), 100))
+        normalized_query = str(query or "").strip()
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        query_clause = ""
+        params: list[Any] = [bot_id, user_id, working_dir]
+        if normalized_query:
+            query_clause = "AND (title LIKE ? OR last_message_preview LIKE ?)"
+            query_value = f"%{normalized_query}%"
+            params.extend([query_value, query_value])
+        params.append(safe_limit)
+
+        with conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM conversations
+                WHERE bot_id = ? AND user_id = ? AND working_dir = ?
+                {archived_clause}
+                {query_clause}
+                ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._conversation_from_row(row) for row in rows]
 
     def begin_turn(
         self,
@@ -387,6 +594,7 @@ class ChatStore:
         session_epoch: int,
         user_text: str,
         native_provider: str,
+        conversation_id: str | None = None,
         assistant_home: str | None = None,
         managed_prompt_hash: str | None = None,
         prompt_surface_version: str | None = None,
@@ -396,20 +604,35 @@ class ChatStore:
         user_message_id = f"msg_{uuid.uuid4().hex}"
         assistant_message_id = f"msg_{uuid.uuid4().hex}"
         with self._connect_for_write() as conn:
-            conversation_id, next_seq = self._get_or_create_conversation(
-                conn,
-                bot_id=bot_id,
-                bot_alias=bot_alias,
-                user_id=user_id,
-                bot_mode=bot_mode,
-                cli_type=cli_type,
-                working_dir=working_dir,
-                session_epoch=session_epoch,
-                native_provider=native_provider,
-                assistant_home=assistant_home,
-                managed_prompt_hash=managed_prompt_hash,
-                prompt_surface_version=prompt_surface_version,
-            )
+            normalized_conversation_id = str(conversation_id or "").strip()
+            if normalized_conversation_id:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM conversations
+                    WHERE id = ? AND bot_id = ? AND user_id = ? AND working_dir = ? AND archived_at IS NULL
+                    """,
+                    (normalized_conversation_id, bot_id, user_id, working_dir),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(normalized_conversation_id)
+                resolved_conversation_id = str(row["id"])
+                next_seq = self._next_turn_seq(conn, resolved_conversation_id)
+            else:
+                resolved_conversation_id, next_seq = self._get_or_create_conversation(
+                    conn,
+                    bot_id=bot_id,
+                    bot_alias=bot_alias,
+                    user_id=user_id,
+                    bot_mode=bot_mode,
+                    cli_type=cli_type,
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
+                    native_provider=native_provider,
+                    assistant_home=assistant_home,
+                    managed_prompt_hash=managed_prompt_hash,
+                    prompt_surface_version=prompt_surface_version,
+                )
             conn.execute(
                 """
                 INSERT INTO turns (
@@ -429,7 +652,7 @@ class ChatStore:
                 """,
                 (
                     turn_id,
-                    conversation_id,
+                    resolved_conversation_id,
                     next_seq,
                     user_message_id,
                     assistant_message_id,
@@ -458,7 +681,7 @@ class ChatStore:
                 """,
                 (
                     user_message_id,
-                    conversation_id,
+                    resolved_conversation_id,
                     turn_id,
                     "user",
                     user_text,
@@ -484,7 +707,7 @@ class ChatStore:
                 """,
                 (
                     assistant_message_id,
-                    conversation_id,
+                    resolved_conversation_id,
                     turn_id,
                     "assistant",
                     "",
@@ -495,7 +718,7 @@ class ChatStore:
                 ),
             )
         return ChatTurnHandle(
-            conversation_id=conversation_id,
+            conversation_id=resolved_conversation_id,
             turn_id=turn_id,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
@@ -650,6 +873,28 @@ class ChatStore:
                 )
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
 
+    def _derive_title(self, conn: sqlite3.Connection, conversation_id: str) -> str:
+        row = conn.execute(
+            """
+            SELECT content
+            FROM messages
+            WHERE conversation_id = ? AND role = 'user'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (conversation_id,),
+        ).fetchone()
+        text = " ".join(str(row["content"] or "").strip().split()) if row is not None else ""
+        if not text:
+            return "新会话"
+        return text if len(text) <= 32 else f"{text[:29].rstrip()}..."
+
+    def _summarize_preview(self, content: str) -> str:
+        preview = " ".join(str(content or "").strip().split())
+        if len(preview) > 160:
+            return f"{preview[:157].rstrip()}..."
+        return preview
+
     def complete_turn(
         self,
         handle: ChatTurnHandle,
@@ -690,11 +935,26 @@ class ChatStore:
                     handle.turn_id,
                 ),
             )
-            if native_session_id:
-                conn.execute(
-                    "UPDATE conversations SET native_session_id = ?, updated_at = ? WHERE id = ?",
-                    (native_session_id, now, handle.conversation_id),
-                )
+            title = self._derive_title(conn, handle.conversation_id)
+            conn.execute(
+                """
+                UPDATE conversations
+                SET native_session_id = COALESCE(NULLIF(?, ''), native_session_id),
+                    title = CASE WHEN COALESCE(title, '') = '' THEN ? ELSE title END,
+                    last_message_preview = ?,
+                    message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = ?),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    native_session_id or "",
+                    title,
+                    self._summarize_preview(content),
+                    handle.conversation_id,
+                    now,
+                    handle.conversation_id,
+                ),
+            )
         return self.get_message(handle.assistant_message_id)
 
     def _load_trace_stats(
@@ -890,22 +1150,24 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        conversation_id: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         conn = self._connect(create=False)
         if conn is None:
             return []
         with conn:
-            conversation_id = self._get_active_conversation_id(
+            resolved_conversation_id = self._get_scoped_conversation_id(
                 conn,
+                conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
-        if conversation_id is None:
+        if resolved_conversation_id is None:
             return []
-        return self.list_messages(conversation_id, limit=max(1, limit))
+        return self.list_messages(resolved_conversation_id, limit=max(1, limit))
 
     def count_history(
         self,
@@ -914,23 +1176,25 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        conversation_id: str | None = None,
     ) -> int:
         conn = self._connect(create=False)
         if conn is None:
             return 0
         with conn:
-            conversation_id = self._get_active_conversation_id(
+            resolved_conversation_id = self._get_scoped_conversation_id(
                 conn,
+                conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
-            if conversation_id is None:
+            if resolved_conversation_id is None:
                 return 0
             row = conn.execute(
                 "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
-                (conversation_id,),
+                (resolved_conversation_id,),
             ).fetchone()
             return int(row["count"])
 
@@ -941,6 +1205,7 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        conversation_id: str | None = None,
         error_code: str = "stale_stream_recovered",
         fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
     ) -> int:
@@ -949,14 +1214,15 @@ class ChatStore:
             return 0
         now = _utc_now()
         with conn:
-            conversation_id = self._get_active_conversation_id(
+            resolved_conversation_id = self._get_scoped_conversation_id(
                 conn,
+                conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
-            if conversation_id is None:
+            if resolved_conversation_id is None:
                 return 0
             rows = conn.execute(
                 """
@@ -968,7 +1234,7 @@ class ChatStore:
                 JOIN messages AS m ON m.id = t.assistant_message_id
                 WHERE t.conversation_id = ? AND m.role = ? AND m.state = ?
                 """,
-                (conversation_id, "assistant", "streaming"),
+                (resolved_conversation_id, "assistant", "streaming"),
             ).fetchall()
             for row in rows:
                 content = str(row["assistant_content"] or "").strip() or fallback_content
@@ -998,19 +1264,21 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        conversation_id: str | None = None,
     ) -> dict[str, Any] | None:
         conn = self._connect(create=False)
         if conn is None:
             return None
         with conn:
-            conversation_id = self._get_active_conversation_id(
+            resolved_conversation_id = self._get_scoped_conversation_id(
                 conn,
+                conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
-            if conversation_id is None:
+            if resolved_conversation_id is None:
                 return None
             row = conn.execute(
                 """
@@ -1026,7 +1294,7 @@ class ChatStore:
                 ORDER BY t.seq DESC
                 LIMIT 1
                 """,
-                (conversation_id, "streaming"),
+                (resolved_conversation_id, "streaming"),
             ).fetchone()
             if row is None:
                 return None
@@ -1187,6 +1455,13 @@ class ChatStore:
                 """,
                 (bot_id, user_id, working_dir, session_epoch),
             )
+
+    def delete_conversation_by_id(self, conversation_id: str) -> None:
+        conn = self._connect(create=False)
+        if conn is None:
+            return
+        with conn:
+            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
 
     def get_message_trace(self, message_id: str) -> dict[str, Any]:
         conn = self._connect(create=False)

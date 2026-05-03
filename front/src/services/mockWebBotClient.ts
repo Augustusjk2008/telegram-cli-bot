@@ -32,6 +32,9 @@ import type {
   AssistantUpgradeDryRunResult,
   AssistantUpgradeTarget,
   ChatSendOptions,
+  ConversationListResult,
+  ConversationSelectResult,
+  ConversationSummary,
   CreateAssistantCronJobInput,
   BotOverview,
   BotSummary,
@@ -856,6 +859,8 @@ export class MockWebBotClient implements WebBotClient {
   private pluginArtifacts = new Map<string, { filename: string; content: string }>();
   private pluginArtifactCounter = 0;
   private workdirOverrides = new Map<string, string>();
+  private conversationsByBot = new Map<string, ConversationSummary[]>();
+  private activeConversationByBot = new Map<string, string>();
   private terminalActionsConfig: TerminalActionsConfig = {
     schemaVersion: 1,
     configPath: `${DEMO_MAIN_WORKDIR}\\scripts\\terminal-actions.json`,
@@ -2042,6 +2047,79 @@ export class MockWebBotClient implements WebBotClient {
       isProcessing: false,
       assistantRuntime: this.buildAssistantRuntime(botAlias),
     };
+  }
+
+  private ensureConversations(botAlias: string): ConversationSummary[] {
+    const existing = this.conversationsByBot.get(botAlias);
+    if (existing) {
+      return existing;
+    }
+    const messages = mockChatMessages[botAlias] || [];
+    const now = new Date().toISOString();
+    const conversation: ConversationSummary = {
+      id: `mock-conv-${botAlias}`,
+      title: messages.find((item) => item.role === "user")?.text.slice(0, 32) || "当前会话",
+      lastMessagePreview: [...messages].reverse().find((item) => item.text.trim())?.text || "",
+      messageCount: messages.length,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias,
+      botMode: this.getBotSummary(botAlias).botMode || "cli",
+      cliType: this.getBotSummary(botAlias).cliType,
+      workingDir: this.getBotSummary(botAlias).workingDir,
+      createdAt: messages[0]?.createdAt || now,
+      updatedAt: messages[messages.length - 1]?.createdAt || now,
+    };
+    const items = [conversation];
+    this.conversationsByBot.set(botAlias, items);
+    this.activeConversationByBot.set(botAlias, conversation.id);
+    return items;
+  }
+
+  async listConversations(botAlias: string): Promise<ConversationListResult> {
+    const items = this.ensureConversations(botAlias);
+    const activeConversationId = this.activeConversationByBot.get(botAlias) || items.find((item) => item.active)?.id || "";
+    return { items, activeConversationId };
+  }
+
+  async createConversation(botAlias: string, title = ""): Promise<ConversationSelectResult> {
+    const now = new Date().toISOString();
+    const bot = this.getBotSummary(botAlias);
+    const conversation: ConversationSummary = {
+      id: `mock-conv-${Date.now()}`,
+      title: title.trim() || "新会话",
+      lastMessagePreview: "",
+      messageCount: 0,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias,
+      botMode: bot.botMode || "cli",
+      cliType: bot.cliType,
+      workingDir: bot.workingDir,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const previous = this.ensureConversations(botAlias).map((item) => ({ ...item, active: false }));
+    this.conversationsByBot.set(botAlias, [conversation, ...previous]);
+    this.activeConversationByBot.set(botAlias, conversation.id);
+    mockChatMessages[botAlias] = [];
+    return { conversation, messages: [] };
+  }
+
+  async selectConversation(botAlias: string, conversationId: string): Promise<ConversationSelectResult> {
+    const items = this.ensureConversations(botAlias).map((item) => ({
+      ...item,
+      active: item.id === conversationId,
+    }));
+    const conversation = items.find((item) => item.id === conversationId);
+    if (!conversation) {
+      throw new WebApiClientError("未找到会话", { status: 404, code: "conversation_not_found" });
+    }
+    this.conversationsByBot.set(botAlias, items);
+    this.activeConversationByBot.set(botAlias, conversationId);
+    return { conversation, messages: mockChatMessages[botAlias] || [] };
   }
 
   async listMessages(botAlias: string): Promise<ChatMessage[]> {

@@ -102,6 +102,84 @@ def test_begin_turn_reuses_active_conversation_within_same_session_epoch(monkeyp
     assert [item["content"] for item in items] == ["第一问", "", "第二问", ""]
 
 
+def test_chat_store_lists_multiple_conversations_for_same_scope(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    first = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        title="修复 diff",
+    )
+    second = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        title="图片 payload",
+    )
+
+    assert first != second
+    rows = store.list_conversations(bot_id=1, user_id=1001, working_dir=str(workspace), limit=10)
+
+    assert [row["title"] for row in rows] == ["图片 payload", "修复 diff"]
+    assert [row["id"] for row in rows] == [second, first]
+
+
+def test_chat_store_selectable_conversation_preserves_native_session(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    conversation_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        title="继续旧 Codex",
+    )
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="hello",
+        native_provider="codex",
+        conversation_id=conversation_id,
+    )
+    store.complete_turn(handle, content="world", completion_state="completed", native_session_id="thread-1")
+
+    summary = store.get_conversation(conversation_id)
+
+    assert summary["native_session_id"] == "thread-1"
+    assert summary["message_count"] == 2
+    assert summary["last_message_preview"] == "world"
+
+
 def test_rename_bot_identity_merges_old_history_into_new_bot_id(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

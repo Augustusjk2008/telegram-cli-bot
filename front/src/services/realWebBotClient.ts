@@ -53,6 +53,9 @@ import type {
   ChatTraceEvent,
   CliParamsPayload,
   CliType,
+  ConversationListResult,
+  ConversationSelectResult,
+  ConversationSummary,
   CreateBotInput,
   DebugBreakpoint,
   DebugFrame,
@@ -156,6 +159,24 @@ type RawHistoryItem = {
   state?: ChatMessage["state"];
   elapsed_seconds?: number;
   meta?: RawChatMessageMeta;
+};
+
+type RawConversationSummary = {
+  id?: string;
+  bot_alias?: string;
+  bot_mode?: string;
+  cli_type?: string;
+  working_dir?: string;
+  status?: string;
+  native_provider?: string;
+  native_session_id?: string;
+  title?: string;
+  last_message_preview?: string;
+  message_count?: number;
+  pinned?: boolean;
+  active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type RawChatTraceEvent = {
@@ -1065,6 +1086,32 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
     state: raw.state || fallbackState,
     ...(typeof raw.elapsed_seconds === "number" ? { elapsedSeconds: raw.elapsed_seconds } : {}),
     ...(mapMessageMeta(raw.meta) ? { meta: mapMessageMeta(raw.meta) } : {}),
+  };
+}
+
+function mapConversationSummary(raw: RawConversationSummary): ConversationSummary {
+  const nativeProvider = String(raw.native_provider || "");
+  const nativeSessionId = String(raw.native_session_id || "");
+  return {
+    id: String(raw.id || ""),
+    title: String(raw.title || "新会话"),
+    lastMessagePreview: String(raw.last_message_preview || ""),
+    messageCount: Number(raw.message_count || 0),
+    pinned: Boolean(raw.pinned),
+    active: Boolean(raw.active),
+    status: String(raw.status || "active"),
+    botAlias: String(raw.bot_alias || ""),
+    botMode: String(raw.bot_mode || ""),
+    cliType: String(raw.cli_type || ""),
+    workingDir: String(raw.working_dir || ""),
+    ...(nativeProvider || nativeSessionId ? {
+      nativeSource: {
+        provider: nativeProvider,
+        sessionId: nativeSessionId,
+      },
+    } : {}),
+    createdAt: String(raw.created_at || ""),
+    updatedAt: String(raw.updated_at || ""),
   };
 }
 
@@ -2037,6 +2084,49 @@ export class RealWebBotClient implements WebBotClient {
   async listMessages(botAlias: string): Promise<ChatMessage[]> {
     const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history`);
     return data.items.map((item, index) => mapChatMessage(item, index));
+  }
+
+  async listConversations(botAlias: string, query = ""): Promise<ConversationListResult> {
+    const params = new URLSearchParams({ limit: "80" });
+    if (query.trim()) {
+      params.set("q", query.trim());
+    }
+    const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
+    );
+    return {
+      items: data.items.map(mapConversationSummary),
+      activeConversationId: String(data.active_conversation_id || ""),
+    };
+  }
+
+  async createConversation(botAlias: string, title = ""): Promise<ConversationSelectResult> {
+    const data = await this.requestJson<{ conversation: RawConversationSummary; messages: RawHistoryItem[] }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/conversations`,
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ title }),
+      },
+    );
+    return {
+      conversation: mapConversationSummary(data.conversation),
+      messages: data.messages.map((item, index) => mapChatMessage(item, index)),
+    };
+  }
+
+  async selectConversation(botAlias: string, conversationId: string): Promise<ConversationSelectResult> {
+    const data = await this.requestJson<{ conversation: RawConversationSummary; messages: RawHistoryItem[] }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}/select`,
+      {
+        method: "POST",
+        headers: this.headers(),
+      },
+    );
+    return {
+      conversation: mapConversationSummary(data.conversation),
+      messages: data.messages.map((item, index) => mapChatMessage(item, index)),
+    };
   }
 
   async listMessageDelta(botAlias: string, afterId: string, limit = 50): Promise<HistoryDeltaResult> {

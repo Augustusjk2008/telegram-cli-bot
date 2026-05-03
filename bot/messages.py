@@ -133,7 +133,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "processing_with_time": "⏳ 处理中，已等待 {elapsed} 秒...",
         "no_cli": "❌ 未找到 CLI 可执行文件: {cli_path}\n请在设置页修改 CLI 路径，或用 /bot_set_cli <alias> <cli_type> <cli_path> 配置。",
         "cli_failed": "❌ CLI 进程启动失败",
-        "codex_resume_reset_hint": "当前 Codex 会话可能异常，请点“重置会话”后重试。",
+        "codex_resume_reset_hint": "当前 Codex 会话可能异常，请点“新会话”后重试。",
         "error": "❌ 错误: {error}",
         "no_output": "(无输出)"
     },
