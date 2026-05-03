@@ -1064,6 +1064,7 @@ export function DesktopWorkbench({
           title={previewName}
           content={previewContent}
           mode={previewMode}
+          botAlias={botAlias}
           previewKind={previewResult?.previewKind}
           contentType={previewResult?.contentType}
           contentBase64={previewResult?.contentBase64}

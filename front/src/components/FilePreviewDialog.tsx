@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
 
 type DesktopAnchorRect = {
   left: number;
@@ -12,6 +13,7 @@ type Props = {
   title: string;
   content: string;
   mode: "preview" | "full";
+  botAlias?: string;
   previewKind?: "text" | "image";
   contentType?: string;
   contentBase64?: string;
@@ -41,6 +43,7 @@ export function FilePreviewDialog({
   title,
   content,
   mode,
+  botAlias = "",
   previewKind,
   contentType,
   contentBase64,
@@ -167,6 +170,20 @@ export function FilePreviewDialog({
     };
   }, [desktopAnchorRect, desktopOffset.x, desktopOffset.y, variant]);
 
+  const resolveMarkdownImageSrc = useMemo(() => {
+    const normalizedBotAlias = botAlias.trim();
+    return (src: string) => {
+      if (isSafeMarkdownHref(src) && isExternalHref(src)) {
+        return src;
+      }
+      if (!normalizedBotAlias) {
+        return "";
+      }
+      const imagePath = resolveMarkdownImagePath(src, title);
+      return imagePath ? buildFileDownloadUrl(normalizedBotAlias, imagePath) : "";
+    };
+  }, [botAlias, title]);
+
   function handleDesktopDragStart(event: ReactPointerEvent<HTMLDivElement>) {
     if (variant !== "desktop" || event.button !== 0) {
       return;
@@ -224,7 +241,12 @@ export function FilePreviewDialog({
 
           <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
             {isMarkdownPreview ? (
-              <MarkdownPreview content={content} variant="desktop-preview" onFileLinkClick={onFileLinkClick} />
+              <MarkdownPreview
+                content={content}
+                variant="desktop-preview"
+                onFileLinkClick={onFileLinkClick}
+                resolveImageSrc={resolveMarkdownImageSrc}
+              />
             ) : imagePreviewUrl ? (
               <div className="flex h-full items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4">
                 <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
@@ -295,7 +317,11 @@ export function FilePreviewDialog({
           </button>
         </div>
         {isMarkdownPreview ? (
-          <MarkdownPreview content={content} onFileLinkClick={onFileLinkClick} />
+          <MarkdownPreview
+            content={content}
+            onFileLinkClick={onFileLinkClick}
+            resolveImageSrc={resolveMarkdownImageSrc}
+          />
         ) : imagePreviewUrl ? (
           <div className="flex max-h-[50vh] items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4">
             <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />

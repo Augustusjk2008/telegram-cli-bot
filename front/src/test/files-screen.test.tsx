@@ -253,6 +253,7 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
             "| Cell | 42 |",
             "",
             "![Architecture](assets/diagram.png)",
+            "![Remote Chart](https://example.com/chart.png)",
             "",
             "```ts",
             "const answer = 42;",
@@ -423,14 +424,17 @@ test("renders markdown files as formatted content", async () => {
   expect(screen.getByText("const answer = 42;")).toBeInTheDocument();
 });
 
-test("shows markdown image paths instead of rendering images", async () => {
+test("renders markdown image references in place", async () => {
   const user = userEvent.setup();
   render(<FilesScreen botAlias="main" client={createClient()} />);
 
   await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
 
-  expect(await screen.findByText(/assets\/diagram\.png/)).toBeInTheDocument();
-  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  const localImage = await screen.findByRole("img", { name: "Architecture" });
+  const localImageSrc = localImage.getAttribute("src") || "";
+  expect(localImageSrc).toContain("/api/bots/main/files/download?");
+  expect(localImageSrc).toContain("filename=assets%2Fdiagram.png");
+  expect(screen.getByRole("img", { name: "Remote Chart" })).toHaveAttribute("src", "https://example.com/chart.png");
 });
 
 test("keeps non-markdown files in plain-text preview mode", async () => {

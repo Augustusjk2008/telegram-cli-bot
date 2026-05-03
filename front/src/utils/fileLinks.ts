@@ -86,3 +86,37 @@ export function resolvePreviewFilePath(href: string, workingDir: string) {
 
   return normalizedCandidate.replace(/^\.\//, "");
 }
+
+export function resolveMarkdownImagePath(src: string, markdownPath: string) {
+  const cleaned = cleanHref(src);
+  if (!cleaned || cleaned.startsWith("#") || !isSafeMarkdownHref(cleaned) || isExternalHref(cleaned)) {
+    return null;
+  }
+
+  const normalizedSrc = stripTrailingLocation(normalizePath(cleaned));
+  if (!normalizedSrc || normalizedSrc === ".") {
+    return null;
+  }
+
+  if (/^[A-Za-z]:\//.test(normalizedSrc)) {
+    return normalizedSrc;
+  }
+
+  if (normalizedSrc.startsWith("/")) {
+    return normalizedSrc.replace(/^\/+/, "");
+  }
+
+  const normalizedMarkdownPath = normalizePath(markdownPath || "");
+  const pathParts = normalizedMarkdownPath.split("/").filter(Boolean);
+  if (pathParts.length > 0) {
+    pathParts.pop();
+  }
+  const baseDir = pathParts.join("/");
+  const joinedPath = baseDir ? `${baseDir}/${normalizedSrc}` : normalizedSrc;
+  return normalizePath(joinedPath).replace(/^\.\//, "");
+}
+
+export function buildFileDownloadUrl(botAlias: string, filename: string) {
+  const params = new URLSearchParams({ filename });
+  return `/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`;
+}

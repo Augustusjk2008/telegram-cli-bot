@@ -4,18 +4,20 @@ import rehypeKatex from "rehype-katex";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
+import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 
 type Props = {
   content: string;
   variant?: "preview" | "desktop-preview";
   onFileLinkClick?: (href: string) => void;
+  resolveImageSrc?: (src: string) => string;
 };
 
 type MarkdownContentProps = {
   content: string;
   variant?: "preview" | "desktop-preview" | "chat";
   onFileLinkClick?: (href: string) => void;
+  resolveImageSrc?: (src: string) => string;
 };
 
 function safeUrlTransform(url: string) {
@@ -169,7 +171,7 @@ function MarkdownPre({
   return <pre className={isChat ? "min-w-0 overflow-x-auto" : "my-4 min-w-0 overflow-x-auto"}>{children}</pre>;
 }
 
-export function MarkdownContent({ content, variant = "preview", onFileLinkClick }: MarkdownContentProps) {
+export function MarkdownContent({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
   const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
@@ -263,15 +265,39 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
           th: ({ children }) => <th className="break-words px-3 py-2 text-left text-sm font-semibold [overflow-wrap:anywhere]">{children}</th>,
           td: ({ children }) => <td className="break-words px-3 py-2 align-top text-sm [overflow-wrap:anywhere]">{children}</td>,
           hr: () => <hr className={isChat ? "border-0 border-t border-[var(--border)]" : "my-6 border-0 border-t border-[var(--border)]"} />,
-          img: ({ src, alt }) => (
-            <div className={isChat
-              ? "rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"
-              : "my-4 rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"}
-            >
-              <span className="mr-2 font-medium text-[var(--text)]">图片路径</span>
-              <span className="break-all">{src || alt || "(未提供路径)"}</span>
-            </div>
-          ),
+          img: ({ src, alt }) => {
+            const rawSrc = src || "";
+            const resolvedSrc = rawSrc
+              ? resolveImageSrc?.(rawSrc) || (isSafeMarkdownHref(rawSrc) && isExternalHref(rawSrc) ? rawSrc : "")
+              : "";
+
+            if (resolvedSrc) {
+              return (
+                <span className={isChat ? "my-2 block" : "my-4 block"}>
+                  <img
+                    src={resolvedSrc}
+                    alt={alt || rawSrc || "Markdown 图片"}
+                    loading="lazy"
+                    decoding="async"
+                    className="block h-auto max-w-full rounded-lg border border-[var(--border)] bg-[var(--surface)]"
+                  />
+                  {alt ? (
+                    <span className="mt-2 block text-xs leading-5 text-[var(--muted)]">{alt}</span>
+                  ) : null}
+                </span>
+              );
+            }
+
+            return (
+              <span className={isChat
+                ? "block rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"
+                : "my-4 block rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"}
+              >
+                <span className="mr-2 font-medium text-[var(--text)]">图片路径</span>
+                <span className="break-all">{rawSrc || alt || "(未提供路径)"}</span>
+              </span>
+            );
+          },
         }}
       >
         {content}
@@ -280,6 +306,13 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick 
   );
 }
 
-export function MarkdownPreview({ content, variant = "preview", onFileLinkClick }: Props) {
-  return <MarkdownContent content={content} variant={variant} onFileLinkClick={onFileLinkClick} />;
+export function MarkdownPreview({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: Props) {
+  return (
+    <MarkdownContent
+      content={content}
+      variant={variant}
+      onFileLinkClick={onFileLinkClick}
+      resolveImageSrc={resolveImageSrc}
+    />
+  );
 }
