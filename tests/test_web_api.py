@@ -4545,6 +4545,27 @@ async def test_run_cli_chat_suggests_reset_for_codex_resume_upstream_error(web_m
     assert session.codex_session_id == "thread-stuck"
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_suggests_reset_for_codex_resume_payload_too_large(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.codex_session_id = "thread-stuck"
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("payload too large", None, 1),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert "重置会话" in data["output"]
+    assert "payload too large" in data["output"]
+    assert data["message"]["content"] == data["output"]
+    assert session.codex_session_id == "thread-stuck"
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
     fake_process = MagicMock()
 
@@ -5897,6 +5918,57 @@ async def test_stream_cli_chat_suggests_reset_for_codex_resume_upstream_error(we
     done_event = next(event for event in events if event["type"] == "done")
     assert "重置会话" in done_event["output"]
     assert "status_code=500" in done_event["output"]
+    assert done_event["message"]["content"] == done_event["output"]
+    assert session.codex_session_id == "thread-stuck"
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_suggests_reset_for_codex_resume_payload_too_large(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.codex_session_id = "thread-stuck"
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-stuck"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"我先检查一下。"}}\n',
+                '{"type":"error","message":"payload too large"}\n',
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = 1
+
+        def poll(self):
+            return self.returncode if not self.stdout._lines else None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 1
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert "重置会话" in done_event["output"]
+    assert "payload too large" in done_event["output"]
     assert done_event["message"]["content"] == done_event["output"]
     assert session.codex_session_id == "thread-stuck"
 

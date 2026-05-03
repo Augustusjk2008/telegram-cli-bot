@@ -700,7 +700,14 @@ def should_suggest_reset_codex_session(session_id: Optional[str], response: str,
         or "status code=500" in lower
         or "status code 500" in lower
     )
-    return has_500 and "upstream error" in lower and "do request failed" in lower
+    if has_500 and "upstream error" in lower and "do request failed" in lower:
+        return True
+
+    oversized_markers = (
+        "payload too large",
+        "request too large",
+    )
+    return any(marker in lower for marker in oversized_markers)
 
 
 def should_reset_claude_session(response: str, returncode: int) -> bool:
