@@ -1,4 +1,4 @@
-"""按 (bot_id, user_id) 隔离的会话存储与生命周期管理"""
+"""按 (bot_id, user_id, agent_id) 隔离的会话存储与生命周期管理"""
 
 import logging
 import threading
@@ -18,8 +18,12 @@ from bot.session_store import (
 logger = logging.getLogger(__name__)
 
 # 全局会话存储
-sessions: Dict[Tuple[int, int], UserSession] = {}
+sessions: Dict[Tuple[int, int, str], UserSession] = {}
 sessions_lock = threading.Lock()
+
+
+def _normalize_agent_id(agent_id: str | None) -> str:
+    return str(agent_id or "main").strip().lower() or "main"
 
 
 def _parse_stored_datetime(value) -> datetime:
@@ -45,6 +49,7 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
     with preferred._lock, fallback._lock:
         preferred.bot_id = bot_id
         preferred.bot_alias = bot_alias
+        preferred.agent_id = preferred.agent_id or fallback.agent_id or "main"
         preferred.working_dir = preferred.working_dir or fallback.working_dir
         preferred.browse_dir = preferred.browse_dir or fallback.browse_dir or preferred.working_dir
         preferred.codex_session_id = preferred.codex_session_id or fallback.codex_session_id
@@ -57,6 +62,9 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
         preferred.active_conversation_id = preferred.active_conversation_id or fallback.active_conversation_id
         preferred.managed_prompt_hash_seen = (
             preferred.managed_prompt_hash_seen or fallback.managed_prompt_hash_seen
+        )
+        preferred.agent_prompt_hash_seen = (
+            preferred.agent_prompt_hash_seen or fallback.agent_prompt_hash_seen
         )
         preferred.local_history_backend = preferred.local_history_backend or fallback.local_history_backend
         if fallback.last_activity > preferred.last_activity:
@@ -82,14 +90,16 @@ def get_or_create_session(
     user_id: int,
     default_working_dir: str = None,
     load_persisted_state: bool = True,
+    agent_id: str = "main",
 ) -> UserSession:
-    key = (bot_id, user_id)
+    normalized_agent_id = _normalize_agent_id(agent_id)
+    key = (bot_id, user_id, normalized_agent_id)
     should_persist_migration = False
 
     with sessions_lock:
         if key not in sessions:
             # 尝试从持久化存储恢复会话
-            stored_data = load_session(bot_id, user_id) if load_persisted_state else None
+            stored_data = load_session(bot_id, user_id, agent_id=normalized_agent_id) if load_persisted_state else None
             
             codex_session_id = None
             claude_session_id = None
@@ -108,6 +118,7 @@ def get_or_create_session(
             session_epoch = 0
             active_conversation_id = None
             managed_prompt_hash_seen = None
+            agent_prompt_hash_seen = None
             
             if stored_data:
                 original_stored_data = dict(stored_data)
@@ -134,6 +145,7 @@ def get_or_create_session(
                     session_epoch = 0
                 active_conversation_id = stored_data.get("active_conversation_id") or None
                 managed_prompt_hash_seen = stored_data.get("managed_prompt_hash_seen") or None
+                agent_prompt_hash_seen = stored_data.get("agent_prompt_hash_seen") or None
                 # 恢复时标记为已初始化（因为我们有 session_id）
                 claude_session_initialized = bool(claude_session_id)
                 if (
@@ -151,6 +163,7 @@ def get_or_create_session(
                 bot_alias=bot_alias,
                 user_id=user_id,
                 working_dir=working_dir,
+                agent_id=normalized_agent_id,
                 browse_dir=browse_dir,
                 history=[],
                 codex_session_id=codex_session_id,
@@ -167,6 +180,7 @@ def get_or_create_session(
                 session_epoch=session_epoch,
                 active_conversation_id=active_conversation_id,
                 managed_prompt_hash_seen=managed_prompt_hash_seen,
+                agent_prompt_hash_seen=agent_prompt_hash_seen,
             )
             session = sessions[key]
         else:
@@ -187,6 +201,7 @@ def _save_session_to_store(session: UserSession):
         save_session(
             bot_id=session.bot_id,
             user_id=session.user_id,
+            agent_id=session.agent_id,
             codex_session_id=session.codex_session_id,
             claude_session_id=session.claude_session_id,
             working_dir=session.working_dir,
@@ -197,11 +212,13 @@ def _save_session_to_store(session: UserSession):
             session_epoch=session.session_epoch,
             active_conversation_id=session.active_conversation_id,
             managed_prompt_hash_seen=session.managed_prompt_hash_seen,
+            agent_prompt_hash_seen=session.agent_prompt_hash_seen,
         )
 
 
-def reset_session(bot_id: int, user_id: int) -> bool:
-    key = (bot_id, user_id)
+def reset_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
+    normalized_agent_id = _normalize_agent_id(agent_id)
+    key = (bot_id, user_id, normalized_agent_id)
     removed_in_memory = False
     with sessions_lock:
         session = sessions.pop(key, None)
@@ -214,7 +231,7 @@ def reset_session(bot_id: int, user_id: int) -> bool:
         except Exception as exc:
             logger.warning("终止会话进程失败 bot=%s user=%s error=%s", bot_id, user_id, exc)
 
-    removed_from_store = remove_session(bot_id, user_id)
+    removed_from_store = remove_session(bot_id, user_id, agent_id=normalized_agent_id)
     return removed_in_memory or removed_from_store
 
 
@@ -276,6 +293,12 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
             if session.bot_alias == bot_alias:
                 session.working_dir = working_dir
                 session.browse_dir = working_dir
+                session.codex_session_id = None
+                session.claude_session_id = None
+                session.claude_session_initialized = False
+                session.active_conversation_id = None
+                session.agent_prompt_hash_seen = None
+                session.session_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0)) + 1
                 session.persist()
                 updated_count += 1
     return updated_count
@@ -324,7 +347,7 @@ def rekey_bot_sessions(old_bot_id: int, new_bot_id: int, *, old_alias: str, new_
     with sessions_lock:
         for key in [item for item in list(sessions.keys()) if item[0] == old_bot_id]:
             source = sessions.pop(key)
-            target_key = (new_bot_id, source.user_id)
+            target_key = (new_bot_id, source.user_id, _normalize_agent_id(source.agent_id))
             target = sessions.pop(target_key, None)
 
             if target is None:

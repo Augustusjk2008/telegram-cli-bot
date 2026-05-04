@@ -31,6 +31,11 @@ import type {
   AssistantUpgradeApplyResult,
   AssistantUpgradeDryRunResult,
   AssistantUpgradeTarget,
+  AgentInput,
+  AgentListResult,
+  AgentMutationResult,
+  AgentScopedOptions,
+  AgentSummary,
   ChatSendOptions,
   ConversationListResult,
   ConversationSelectResult,
@@ -861,6 +866,7 @@ export class MockWebBotClient implements WebBotClient {
   private workdirOverrides = new Map<string, string>();
   private conversationsByBot = new Map<string, ConversationSummary[]>();
   private activeConversationByBot = new Map<string, string>();
+  private agentsByBot = new Map<string, AgentSummary[]>();
   private terminalActionsConfig: TerminalActionsConfig = {
     schemaVersion: 1,
     configPath: `${DEMO_MAIN_WORKDIR}\\scripts\\terminal-actions.json`,
@@ -1214,6 +1220,16 @@ export class MockWebBotClient implements WebBotClient {
     map.set(newKey, value);
   }
 
+  private moveAgentScopedKeys<T>(map: Map<string, T>, oldAlias: string, newAlias: string) {
+    for (const [key, value] of Array.from(map.entries())) {
+      if (key !== oldAlias && !key.startsWith(`${oldAlias}:`)) {
+        continue;
+      }
+      map.delete(key);
+      map.set(`${newAlias}${key.slice(oldAlias.length)}`, value);
+    }
+  }
+
   private getBotSummary(botAlias: string): BotSummary {
     const fallback = this.bots.get("main") || Array.from(this.bots.values())[0];
     const base = this.bots.get(botAlias) || fallback;
@@ -1425,10 +1441,58 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private appendChatMessage(botAlias: string, message: ChatMessage) {
-    if (!mockChatMessages[botAlias]) {
-      mockChatMessages[botAlias] = [];
+    this.appendAgentChatMessage(botAlias, "main", message);
+  }
+
+  private agentKey(botAlias: string, agentId = "main") {
+    return `${botAlias}:${agentId || "main"}`;
+  }
+
+  private getAgentMessages(botAlias: string, agentId = "main") {
+    if (agentId === "main") {
+      return mockChatMessages[botAlias] || [];
     }
-    mockChatMessages[botAlias].push(message);
+    const key = this.agentKey(botAlias, agentId);
+    if (!mockChatMessages[key]) {
+      mockChatMessages[key] = [];
+    }
+    return mockChatMessages[key];
+  }
+
+  private appendAgentChatMessage(botAlias: string, agentId: string, message: ChatMessage) {
+    const key = agentId === "main" ? botAlias : this.agentKey(botAlias, agentId);
+    if (!mockChatMessages[key]) {
+      mockChatMessages[key] = [];
+    }
+    mockChatMessages[key].push(message);
+  }
+
+  private getConversationKey(botAlias: string, agentId = "main") {
+    return agentId === "main" ? botAlias : this.agentKey(botAlias, agentId);
+  }
+
+  private mainAgent(): AgentSummary {
+    return {
+      id: "main",
+      name: "主 agent",
+      systemPrompt: "",
+      enabled: true,
+      isMain: true,
+    };
+  }
+
+  private ensureAgents(botAlias: string) {
+    const existing = this.agentsByBot.get(botAlias);
+    if (existing) {
+      return existing;
+    }
+    const items = [this.mainAgent()];
+    this.agentsByBot.set(botAlias, items);
+    return items;
+  }
+
+  private cloneAgent(agent: AgentSummary): AgentSummary {
+    return { ...agent };
   }
 
   private buildAssistantUpgradeState(botAlias: string, proposal: AssistantProposal) {
@@ -2034,30 +2098,108 @@ export class MockWebBotClient implements WebBotClient {
     return this.clonePluginSummary(updated);
   }
 
-  async getBotOverview(botAlias: string): Promise<BotOverview> {
+  async listAgents(botAlias: string): Promise<AgentListResult> {
+    this.getBotSummary(botAlias);
+    return { items: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)) };
+  }
+
+  async createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult> {
     const bot = this.getBotSummary(botAlias);
+    if ((bot.botMode || "cli") !== "cli") {
+      throw new WebApiClientError("仅 CLI Bot 支持子 agent", { status: 400, code: "agent_not_supported" });
+    }
+    const id = (input.id || "").trim().toLowerCase();
+    const name = (input.name || "").trim();
+    if (!id || id === "main" || !/^[a-z][a-z0-9_-]{1,31}$/.test(id)) {
+      throw new WebApiClientError("agent id 无效", { status: 400, code: "invalid_agent" });
+    }
+    if (!name) {
+      throw new WebApiClientError("agent 名称不能为空", { status: 400, code: "invalid_agent" });
+    }
+    const agents = this.ensureAgents(botAlias);
+    if (agents.some((agent) => agent.id === id)) {
+      throw new WebApiClientError("agent id 已存在", { status: 400, code: "invalid_agent" });
+    }
+    const now = new Date().toISOString();
+    const agent: AgentSummary = {
+      id,
+      name,
+      systemPrompt: input.systemPrompt || "",
+      enabled: input.enabled !== false,
+      isMain: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.agentsByBot.set(botAlias, [...agents, agent]);
+    return { agent: this.cloneAgent(agent) };
+  }
+
+  async updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult> {
+    const agents = this.ensureAgents(botAlias);
+    const id = agentId.trim().toLowerCase();
+    if (id === "main") {
+      throw new WebApiClientError("主 agent 不支持编辑", { status: 400, code: "invalid_agent" });
+    }
+    const index = agents.findIndex((agent) => agent.id === id);
+    if (index < 0) {
+      throw new WebApiClientError("未找到 agent", { status: 404, code: "agent_not_found" });
+    }
+    const current = agents[index];
+    const updated: AgentSummary = {
+      ...current,
+      name: typeof input.name === "string" ? input.name.trim() : current.name,
+      systemPrompt: typeof input.systemPrompt === "string" ? input.systemPrompt : current.systemPrompt,
+      enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [...agents];
+    next[index] = updated;
+    this.agentsByBot.set(botAlias, next);
+    return { agent: this.cloneAgent(updated) };
+  }
+
+  async deleteAgent(botAlias: string, agentId: string): Promise<void> {
+    const id = agentId.trim().toLowerCase();
+    if (id === "main") {
+      throw new WebApiClientError("主 agent 不能删除", { status: 400, code: "invalid_agent" });
+    }
+    const agents = this.ensureAgents(botAlias);
+    if (!agents.some((agent) => agent.id === id)) {
+      throw new WebApiClientError("未找到 agent", { status: 404, code: "agent_not_found" });
+    }
+    this.agentsByBot.set(botAlias, agents.filter((agent) => agent.id !== id));
+  }
+
+  async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
+    const bot = this.getBotSummary(botAlias);
+    const agentId = options.agentId || "main";
+    const messages = this.getAgentMessages(bot.alias, agentId);
     return {
       ...bot,
       botMode: bot.botMode || "cli",
       cliPath: bot.cliPath,
       enabled: bot.enabled,
       isMain: bot.isMain,
-      messageCount: mockChatMessages[bot.alias]?.length || 0,
-      historyCount: mockChatMessages[bot.alias]?.length || 0,
+      messageCount: messages.length,
+      historyCount: messages.length,
       isProcessing: false,
       assistantRuntime: this.buildAssistantRuntime(botAlias),
+      agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
+      activeAgentId: agentId,
+      busyAgentIds: [],
     };
   }
 
-  private ensureConversations(botAlias: string): ConversationSummary[] {
-    const existing = this.conversationsByBot.get(botAlias);
+  private ensureConversations(botAlias: string, agentId = "main"): ConversationSummary[] {
+    const key = this.getConversationKey(botAlias, agentId);
+    const existing = this.conversationsByBot.get(key);
     if (existing) {
       return existing;
     }
-    const messages = mockChatMessages[botAlias] || [];
+    const messages = this.getAgentMessages(botAlias, agentId);
     const now = new Date().toISOString();
     const conversation: ConversationSummary = {
-      id: `mock-conv-${botAlias}`,
+      id: `mock-conv-${key}`,
       title: messages.find((item) => item.role === "user")?.text.slice(0, 32) || "当前会话",
       lastMessagePreview: [...messages].reverse().find((item) => item.text.trim())?.text || "",
       messageCount: messages.length,
@@ -2065,6 +2207,7 @@ export class MockWebBotClient implements WebBotClient {
       active: true,
       status: "active",
       botAlias,
+      agentId,
       botMode: this.getBotSummary(botAlias).botMode || "cli",
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
@@ -2072,18 +2215,22 @@ export class MockWebBotClient implements WebBotClient {
       updatedAt: messages[messages.length - 1]?.createdAt || now,
     };
     const items = [conversation];
-    this.conversationsByBot.set(botAlias, items);
-    this.activeConversationByBot.set(botAlias, conversation.id);
+    this.conversationsByBot.set(key, items);
+    this.activeConversationByBot.set(key, conversation.id);
     return items;
   }
 
-  async listConversations(botAlias: string): Promise<ConversationListResult> {
-    const items = this.ensureConversations(botAlias);
-    const activeConversationId = this.activeConversationByBot.get(botAlias) || items.find((item) => item.active)?.id || "";
+  async listConversations(botAlias: string, _query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {
+    const agentId = options.agentId || "main";
+    const key = this.getConversationKey(botAlias, agentId);
+    const items = this.ensureConversations(botAlias, agentId);
+    const activeConversationId = this.activeConversationByBot.get(key) || items.find((item) => item.active)?.id || "";
     return { items, activeConversationId };
   }
 
-  async createConversation(botAlias: string, title = ""): Promise<ConversationSelectResult> {
+  async createConversation(botAlias: string, title = "", options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
+    const agentId = options.agentId || "main";
+    const key = this.getConversationKey(botAlias, agentId);
     const now = new Date().toISOString();
     const bot = this.getBotSummary(botAlias);
     const conversation: ConversationSummary = {
@@ -2095,21 +2242,28 @@ export class MockWebBotClient implements WebBotClient {
       active: true,
       status: "active",
       botAlias,
+      agentId,
       botMode: bot.botMode || "cli",
       cliType: bot.cliType,
       workingDir: bot.workingDir,
       createdAt: now,
       updatedAt: now,
     };
-    const previous = this.ensureConversations(botAlias).map((item) => ({ ...item, active: false }));
-    this.conversationsByBot.set(botAlias, [conversation, ...previous]);
-    this.activeConversationByBot.set(botAlias, conversation.id);
-    mockChatMessages[botAlias] = [];
+    const previous = this.ensureConversations(botAlias, agentId).map((item) => ({ ...item, active: false }));
+    this.conversationsByBot.set(key, [conversation, ...previous]);
+    this.activeConversationByBot.set(key, conversation.id);
+    if (agentId === "main") {
+      mockChatMessages[botAlias] = [];
+    } else {
+      mockChatMessages[this.agentKey(botAlias, agentId)] = [];
+    }
     return { conversation, messages: [] };
   }
 
-  async selectConversation(botAlias: string, conversationId: string): Promise<ConversationSelectResult> {
-    const items = this.ensureConversations(botAlias).map((item) => ({
+  async selectConversation(botAlias: string, conversationId: string, options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
+    const agentId = options.agentId || "main";
+    const key = this.getConversationKey(botAlias, agentId);
+    const items = this.ensureConversations(botAlias, agentId).map((item) => ({
       ...item,
       active: item.id === conversationId,
     }));
@@ -2117,17 +2271,17 @@ export class MockWebBotClient implements WebBotClient {
     if (!conversation) {
       throw new WebApiClientError("未找到会话", { status: 404, code: "conversation_not_found" });
     }
-    this.conversationsByBot.set(botAlias, items);
-    this.activeConversationByBot.set(botAlias, conversationId);
-    return { conversation, messages: mockChatMessages[botAlias] || [] };
+    this.conversationsByBot.set(key, items);
+    this.activeConversationByBot.set(key, conversationId);
+    return { conversation, messages: this.getAgentMessages(botAlias, agentId) };
   }
 
-  async listMessages(botAlias: string): Promise<ChatMessage[]> {
-    return mockChatMessages[botAlias] || [];
+  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {
+    return this.getAgentMessages(botAlias, options.agentId || "main");
   }
 
-  async listMessageDelta(botAlias: string, afterId: string, limit = 50): Promise<HistoryDeltaResult> {
-    const messages = mockChatMessages[botAlias] || [];
+  async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: AgentScopedOptions = {}): Promise<HistoryDeltaResult> {
+    const messages = this.getAgentMessages(botAlias, options.agentId || "main");
     if (!afterId) {
       return { items: messages.slice(-limit), reset: false };
     }
@@ -2273,9 +2427,10 @@ export class MockWebBotClient implements WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
   ): Promise<ChatMessage> {
+    const agentId = options?.agentId || "main";
     const createdAt = new Date().toISOString();
     const userText = options?.visibleText || text;
-    this.appendChatMessage(botAlias, {
+    this.appendAgentChatMessage(botAlias, agentId, {
       id: `user-${Date.now()}`,
       role: "user",
       text: userText,
@@ -2325,7 +2480,7 @@ export class MockWebBotClient implements WebBotClient {
           }],
         },
       };
-      this.appendChatMessage(botAlias, assistantMessage);
+      this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
       return assistantMessage;
     }
 
@@ -2345,7 +2500,7 @@ export class MockWebBotClient implements WebBotClient {
       elapsedSeconds: 1,
       state: "done"
     } satisfies ChatMessage;
-    this.appendChatMessage(botAlias, assistantMessage);
+    this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
     return assistantMessage;
   }
 
@@ -3634,7 +3789,8 @@ export class MockWebBotClient implements WebBotClient {
       throw new Error("assistant 型 Bot 不允许修改默认工作目录");
     }
     const nextDir = workingDir.trim();
-    const historyCount = mockChatMessages[botAlias]?.length || 0;
+    const historyCount = this.ensureAgents(botAlias)
+      .reduce((count, agent) => count + this.getAgentMessages(botAlias, agent.id).length, 0);
     if (!options.forceReset && historyCount > 0) {
       throw new WebApiClientError("切换工作目录会丢失当前会话，确认后重试", {
         status: 409,
@@ -4382,6 +4538,9 @@ export class MockWebBotClient implements WebBotClient {
     });
     this.moveKey(this.currentPaths, botAlias, alias);
     this.moveKey(this.workdirOverrides, botAlias, alias);
+    this.moveKey(this.agentsByBot, botAlias, alias);
+    this.moveAgentScopedKeys(this.conversationsByBot, botAlias, alias);
+    this.moveAgentScopedKeys(this.activeConversationByBot, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
     this.moveKey(this.assistantCronJobs, botAlias, alias);
     this.moveKey(this.assistantProposals, botAlias, alias);

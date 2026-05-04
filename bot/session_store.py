@@ -56,15 +56,26 @@ def save_session_ids(data: Dict[str, dict]):
         logger.error(f"保存会话存储文件失败: {e}")
 
 
-def _make_key(bot_id: int, user_id: int) -> str:
+def _normalize_agent_id(agent_id: str | None = "main") -> str:
+    return str(agent_id or "main").strip().lower() or "main"
+
+
+def _make_key(bot_id: int, user_id: int, agent_id: str | None = "main") -> str:
     """生成存储键"""
-    return f"{bot_id}:{user_id}"
+    normalized_agent_id = _normalize_agent_id(agent_id)
+    if normalized_agent_id == "main":
+        return f"{bot_id}:{user_id}"
+    return f"{bot_id}:{user_id}:{normalized_agent_id}"
 
 
-def _parse_key(key: str) -> Tuple[int, int] | None:
+def _parse_key(key: str) -> Tuple[int, int, str] | None:
     try:
-        bot_text, user_text = str(key or "").split(":", 1)
-        return int(bot_text), int(user_text)
+        parts = str(key or "").split(":")
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1]), "main"
+        if len(parts) == 3:
+            return int(parts[0]), int(parts[1]), _normalize_agent_id(parts[2])
+        return None
     except (TypeError, ValueError):
         return None
 
@@ -129,10 +140,12 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         merged.pop("active_conversation_id", None)
     if not merged.get("managed_prompt_hash_seen"):
         merged.pop("managed_prompt_hash_seen", None)
+    if not merged.get("agent_prompt_hash_seen"):
+        merged.pop("agent_prompt_hash_seen", None)
     return merged
 
 
-def _flush_live_session_if_available(bot_id: int, user_id: int):
+def _flush_live_session_if_available(bot_id: int, user_id: int, agent_id: str = "main"):
     """在直接读取持久化快照前，尽量刷新同一会话的待写状态。
 
     `get_session()` 在持有 `sessions_lock` 时也会调用 `load_session()`，这里必须避免阻塞式重入。
@@ -147,7 +160,7 @@ def _flush_live_session_if_available(bot_id: int, user_id: int):
         return
 
     try:
-        session = sessions.get((bot_id, user_id))
+        session = sessions.get((bot_id, user_id, _normalize_agent_id(agent_id)))
     finally:
         sessions_lock.release()
 
@@ -155,16 +168,16 @@ def _flush_live_session_if_available(bot_id: int, user_id: int):
         session.flush_persistence()
 
 
-def load_session(bot_id: int, user_id: int) -> Optional[dict]:
+def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[dict]:
     """加载指定会话的 session 信息
     
     Returns:
         dict: 包含 codex_session_id, claude_session_id
         None: 如果没有找到
     """
-    _flush_live_session_if_available(bot_id, user_id)
+    _flush_live_session_if_available(bot_id, user_id, agent_id)
     data = load_session_ids()
-    key = _make_key(bot_id, user_id)
+    key = _make_key(bot_id, user_id, agent_id)
     return data.get(key)
 
 
@@ -207,13 +220,15 @@ def save_session(
     session_epoch: Optional[int] = None,
     active_conversation_id: Optional[str] = None,
     managed_prompt_hash_seen: Optional[str] = None,
+    agent_prompt_hash_seen: Optional[str] = None,
     running_user_text: Optional[str] = None,
     running_preview_text: Optional[str] = None,
     running_started_at: Optional[str] = None,
     running_updated_at: Optional[str] = None,
+    agent_id: str = "main",
 ):
     """保存会话信息到持久化存储（原子读-改-写）"""
-    key = _make_key(bot_id, user_id)
+    key = _make_key(bot_id, user_id, agent_id)
 
     session_data: dict = {}
     if codex_session_id:
@@ -236,6 +251,8 @@ def save_session(
         session_data["active_conversation_id"] = str(active_conversation_id)
     if managed_prompt_hash_seen:
         session_data["managed_prompt_hash_seen"] = managed_prompt_hash_seen
+    if agent_prompt_hash_seen:
+        session_data["agent_prompt_hash_seen"] = agent_prompt_hash_seen
     # legacy history is intentionally no longer persisted
     # legacy running_* and web_turn_overlays are intentionally dropped on local_v1
 
@@ -266,9 +283,9 @@ def save_session(
     logger.debug(f"已保存会话: bot={bot_id}, user={user_id}")
 
 
-def remove_session(bot_id: int, user_id: int) -> bool:
+def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
     """删除指定会话的持久化存储（原子读-改-写）"""
-    key = _make_key(bot_id, user_id)
+    key = _make_key(bot_id, user_id, agent_id)
 
     with _store_lock:
         if not STORE_FILE.exists():
@@ -345,10 +362,10 @@ def rename_bot_sessions(old_bot_id: int, new_bot_id: int) -> int:
             parsed = _parse_key(key)
             if parsed is None:
                 continue
-            bot_id, user_id = parsed
+            bot_id, user_id, agent_id = parsed
             if bot_id != old_bot_id:
                 continue
-            new_key = _make_key(new_bot_id, user_id)
+            new_key = _make_key(new_bot_id, user_id, agent_id)
             next_data[new_key] = _merge_session_snapshots(value if isinstance(value, dict) else {}, next_data.get(new_key))
             next_data.pop(key, None)
             moved += 1

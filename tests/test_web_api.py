@@ -47,7 +47,9 @@ from bot.web.api_service import (
     WebApiError,
     build_session_snapshot,
     change_working_directory,
+    create_agent,
     create_conversation,
+    delete_agent,
     get_directory_listing,
     get_history,
     get_history_trace,
@@ -57,6 +59,7 @@ from bot.web.api_service import (
     get_working_directory,
     kill_user_process,
     list_conversations,
+    list_agents,
     list_bots,
     copy_path,
     create_text_file,
@@ -70,6 +73,7 @@ from bot.web.api_service import (
     save_chat_attachment,
     save_uploaded_file,
     select_conversation,
+    update_agent,
     update_bot_workdir,
     write_file_content,
 )
@@ -5443,6 +5447,41 @@ def test_conversation_api_create_list_and_select(web_manager: MultiBotManager, t
     assert selected["conversation"]["active"] is True
     assert selected["messages"] == []
     assert session.active_conversation_id == conversation_id
+
+
+@pytest.mark.asyncio
+async def test_agent_api_create_update_delete(web_manager: MultiBotManager):
+    listed = list_agents(web_manager, "main")
+    assert listed["items"][0]["id"] == "main"
+    assert listed["items"][0]["is_main"] is True
+
+    created = await create_agent(
+        web_manager,
+        "main",
+        {"id": "reviewer", "name": "代码审查", "system_prompt": "先列风险"},
+    )
+    assert created["agent"]["id"] == "reviewer"
+
+    updated = await update_agent(web_manager, "main", "reviewer", {"enabled": False})
+    assert updated["agent"]["enabled"] is False
+
+    deleted = await delete_agent(web_manager, "main", "reviewer")
+    assert deleted["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_conversation_api_is_agent_scoped(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    await create_agent(web_manager, "main", {"id": "reviewer", "name": "代码审查"})
+
+    main_created = create_conversation(web_manager, "main", 1001, "主会话", agent_id="main")
+    reviewer_created = create_conversation(web_manager, "main", 1001, "审查会话", agent_id="reviewer")
+
+    main_list = list_conversations(web_manager, "main", 1001, agent_id="main")
+    reviewer_list = list_conversations(web_manager, "main", 1001, agent_id="reviewer")
+
+    assert [item["id"] for item in main_list["items"]] == [main_created["conversation"]["id"]]
+    assert [item["id"] for item in reviewer_list["items"]] == [reviewer_created["conversation"]["id"]]
 
 
 def test_select_conversation_restores_codex_session_id(web_manager: MultiBotManager, tmp_path: Path):

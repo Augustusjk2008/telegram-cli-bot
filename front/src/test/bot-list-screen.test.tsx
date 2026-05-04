@@ -92,4 +92,6 @@ test("bot manager can browse and pick a workdir for a new bot", async () => {
     cliPath: "codex",
     workingDir: "/workspace/repos/team-a",
   });
+  expect(client.addBotCalls[0]).not.toHaveProperty("agents");
+  expect(screen.queryByText("子 agent")).not.toBeInTheDocument();
 }, 10_000);

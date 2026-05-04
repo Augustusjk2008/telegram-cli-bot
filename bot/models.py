@@ -22,6 +22,41 @@ SESSION_PERSIST_DEBOUNCE_SECONDS = 0.25
 
 
 @dataclass
+class AgentProfile:
+    """Bot 内部的 CLI 子 agent 配置。"""
+
+    id: str
+    name: str
+    system_prompt: str = ""
+    enabled: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "system_prompt": self.system_prompt,
+            "enabled": self.enabled,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AgentProfile":
+        from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt
+
+        return cls(
+            id=normalize_agent_id(data.get("id"), allow_main=True),
+            name=normalize_agent_name(data.get("name")),
+            system_prompt=normalize_agent_prompt(data.get("system_prompt")),
+            enabled=bool(data.get("enabled", True)),
+            created_at=str(data.get("created_at") or ""),
+            updated_at=str(data.get("updated_at") or ""),
+        )
+
+
+@dataclass
 class BotProfile:
     """Bot 配置档案"""
     alias: str
@@ -33,6 +68,7 @@ class BotProfile:
     bot_mode: str = "cli"  # "cli" | "assistant"
     avatar_name: str = ""
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
+    agents: List[AgentProfile] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         result = {
@@ -57,7 +93,22 @@ class BotProfile:
                 break
         if has_custom:
             result["cli_params"] = params_dict
+        child_agents = [agent.to_dict() for agent in self.agents if agent.id != "main"]
+        if child_agents:
+            result["agents"] = child_agents
         return result
+
+    def normalized_agents(self) -> list[AgentProfile]:
+        main = AgentProfile(id="main", name="主 agent", enabled=True)
+        children = [agent for agent in self.agents if agent.id != "main"]
+        return [main, *children]
+
+    def get_agent(self, agent_id: str) -> AgentProfile:
+        normalized_id = str(agent_id or "main").strip().lower() or "main"
+        for agent in self.normalized_agents():
+            if agent.id == normalized_id:
+                return agent
+        raise KeyError(normalized_id)
     
     @classmethod
     def from_dict(cls, data: dict) -> "BotProfile":
@@ -65,6 +116,11 @@ class BotProfile:
         # 提取 cli_params
         cli_params_data = data.get("cli_params")
         cli_params = CliParamsConfig.from_dict(cli_params_data) if cli_params_data else CliParamsConfig()
+        agents = [
+            AgentProfile.from_dict(item)
+            for item in data.get("agents", [])
+            if isinstance(item, dict)
+        ]
         
         return cls(
             alias=data["alias"],
@@ -76,6 +132,7 @@ class BotProfile:
             bot_mode=data.get("bot_mode", "cli"),
             avatar_name=str(data.get("avatar_name", "") or ""),
             cli_params=cli_params,
+            agents=agents,
         )
 
 
@@ -87,6 +144,7 @@ class UserSession:
     bot_alias: str
     user_id: int
     working_dir: str
+    agent_id: str = "main"
     browse_dir: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
@@ -103,6 +161,7 @@ class UserSession:
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     managed_prompt_hash_seen: Optional[str] = None
+    agent_prompt_hash_seen: Optional[str] = None
     local_history_backend: str = "local_v1"
     session_epoch: int = 0
     active_conversation_id: Optional[str] = None

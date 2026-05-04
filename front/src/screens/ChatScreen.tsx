@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { History, LoaderCircle, Maximize2, Minimize2, Paperclip, Plus, Square, Trash2 } from "lucide-react";
+import { AgentSwitcher } from "../components/AgentSwitcher";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatComposer } from "../components/ChatComposer";
@@ -12,6 +13,7 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AssistantRuntimePendingRun,
+  AgentSummary,
   BotOverview,
   ChatAttachmentUploadResult,
   ChatMessage,
@@ -74,6 +76,68 @@ const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
+
+function fallbackAgents(): AgentSummary[] {
+  return [{ id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true }];
+}
+
+function activeAgentStorageKey(botAlias: string) {
+  return `tcb.activeAgent.${botAlias}`;
+}
+
+function readStoredAgentId(botAlias: string) {
+  if (typeof window === "undefined") {
+    return "main";
+  }
+  return window.localStorage.getItem(activeAgentStorageKey(botAlias)) || "main";
+}
+
+function agentOptions(agentId?: string) {
+  return agentId && agentId !== "main" ? { agentId } : undefined;
+}
+
+function getScopedOverview(client: WebBotClient, botAlias: string, agentId: string) {
+  const options = agentOptions(agentId);
+  return options ? client.getBotOverview(botAlias, options) : client.getBotOverview(botAlias);
+}
+
+function listScopedMessages(client: WebBotClient, botAlias: string, agentId: string) {
+  const options = agentOptions(agentId);
+  return options ? client.listMessages(botAlias, options) : client.listMessages(botAlias);
+}
+
+function listScopedMessageDelta(client: WebBotClient, botAlias: string, afterId: string, limit: number, agentId: string) {
+  const options = agentOptions(agentId);
+  return options
+    ? client.listMessageDelta(botAlias, afterId, limit, options)
+    : client.listMessageDelta(botAlias, afterId, limit);
+}
+
+function getScopedMessageTrace(client: WebBotClient, botAlias: string, messageId: string, agentId: string) {
+  const options = agentOptions(agentId);
+  return options
+    ? client.getMessageTrace(botAlias, messageId, options)
+    : client.getMessageTrace(botAlias, messageId);
+}
+
+function listScopedConversations(client: WebBotClient, botAlias: string, query: string, agentId: string) {
+  const options = agentOptions(agentId);
+  return options
+    ? client.listConversations(botAlias, query, options)
+    : client.listConversations(botAlias, query);
+}
+
+function selectScopedConversation(client: WebBotClient, botAlias: string, conversationId: string, agentId: string) {
+  const options = agentOptions(agentId);
+  return options
+    ? client.selectConversation(botAlias, conversationId, options)
+    : client.selectConversation(botAlias, conversationId);
+}
+
+function createScopedConversation(client: WebBotClient, botAlias: string, agentId: string) {
+  const options = agentOptions(agentId);
+  return options ? client.createConversation(botAlias, "", options) : client.createConversation(botAlias);
+}
 
 function pendingCronUserId(runId: string) {
   return `assistant-cron-user-${runId}`;
@@ -665,6 +729,8 @@ export function ChatScreen({
   const [conversationQuery, setConversationQuery] = useState("");
   const [conversationLoading, setConversationLoading] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
+  const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias));
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
@@ -679,6 +745,7 @@ export function ChatScreen({
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
   const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
+  const activeAgentIdRef = useRef(activeAgentId);
   const assistantPollTimerRef = useRef<number | null>(null);
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
@@ -696,6 +763,9 @@ export function ChatScreen({
     setHistoryPanelOpen(false);
     setConversationQuery("");
     setConversations([]);
+    const storedAgentId = readStoredAgentId(botAlias);
+    setActiveAgentId(storedAgentId);
+    activeAgentIdRef.current = storedAgentId;
   }, [botAlias]);
 
   useEffect(() => {
@@ -729,6 +799,10 @@ export function ChatScreen({
   useEffect(() => {
     pendingCronRunsRef.current = pendingCronRuns;
   }, [pendingCronRuns]);
+
+  useEffect(() => {
+    activeAgentIdRef.current = activeAgentId;
+  }, [activeAgentId]);
 
   useEffect(() => {
     let active = true;
@@ -818,7 +892,8 @@ export function ChatScreen({
         }
 
         try {
-          const overview = await client.getBotOverview(botAlias);
+          const agentId = activeAgentIdRef.current;
+          const overview = await getScopedOverview(client, botAlias, agentId);
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
@@ -833,7 +908,7 @@ export function ChatScreen({
             return;
           }
 
-          const messages = await client.listMessages(botAlias);
+          const messages = await listScopedMessages(client, botAlias, agentId);
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
@@ -869,7 +944,8 @@ export function ChatScreen({
     }
 
     try {
-      const overview = await client.getBotOverview(botAlias);
+      const agentId = activeAgentIdRef.current;
+      const overview = await getScopedOverview(client, botAlias, agentId);
       if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
         return;
       }
@@ -901,12 +977,12 @@ export function ChatScreen({
       if (shouldRefreshMessages) {
         const afterId = previousItems[previousItems.length - 1]?.id || "";
         if (hasStreamingAssistant) {
-          messages = await client.listMessages(botAlias);
+          messages = await listScopedMessages(client, botAlias, agentId);
         } else if (afterId) {
-          const delta = await client.listMessageDelta(botAlias, afterId, 50);
+          const delta = await listScopedMessageDelta(client, botAlias, afterId, 50, agentId);
           messages = delta.reset ? delta.items : [...previousItems, ...delta.items];
         } else {
-          messages = await client.listMessages(botAlias);
+          messages = await listScopedMessages(client, botAlias, agentId);
         }
       }
       if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
@@ -994,9 +1070,26 @@ export function ChatScreen({
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
 
-    Promise.all([client.listMessages(botAlias), client.getBotOverview(botAlias)])
-      .then(([messages, overview]) => {
+    const requestedAgentId = activeAgentIdRef.current || "main";
+    const loadAgents = typeof client.listAgents === "function"
+      ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
+      : Promise.resolve({ items: fallbackAgents() });
+
+    Promise.all([
+      loadAgents,
+      listScopedMessages(client, botAlias, requestedAgentId),
+      getScopedOverview(client, botAlias, requestedAgentId),
+    ])
+      .then(([agentData, messages, overview]) => {
         if (cancelled) return;
+        const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
+        const nextAgentId = nextAgents.some((agent) => agent.id === requestedAgentId) ? requestedAgentId : "main";
+        if (nextAgentId !== requestedAgentId) {
+          setActiveAgentId(nextAgentId);
+          activeAgentIdRef.current = nextAgentId;
+          window.localStorage.setItem(activeAgentStorageKey(botAlias), nextAgentId);
+        }
+        setAgents(nextAgents);
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         applyHistoryView(messages, overview, []);
@@ -1273,7 +1366,7 @@ export function ChatScreen({
     }));
 
     try {
-      const traceDetails = await client.getMessageTrace(botAlias, messageId);
+      const traceDetails = await getScopedMessageTrace(client, botAlias, messageId, activeAgentIdRef.current);
       setItems((prev) => updateMessageByIdOrClientStateKey(prev, messageId, messageClientStateKey, (item) => ({
         ...item,
         meta: mergeMessageMeta(item.meta, {
@@ -1305,7 +1398,7 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await client.listConversations(botAlias, query);
+      const data = await listScopedConversations(client, botAlias, query, activeAgentIdRef.current);
       setConversations(data.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载历史会话失败");
@@ -1327,7 +1420,7 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await client.selectConversation(botAlias, conversationId);
+      const data = await selectScopedConversation(client, botAlias, conversationId, activeAgentIdRef.current);
       stopAssistantPoll();
       stopSseRecoveryWatch();
       setExpandedTracePanels({});
@@ -1350,7 +1443,7 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await client.createConversation(botAlias);
+      const data = await createScopedConversation(client, botAlias, activeAgentIdRef.current);
       stopAssistantPoll();
       stopSseRecoveryWatch();
       setExpandedTracePanels({});
@@ -1364,6 +1457,51 @@ export function ChatScreen({
       setConversationLoading(false);
     }
   }
+
+  const handleSelectAgent = useCallback((agentId: string) => {
+    const normalized = agentId || "main";
+    activeAgentIdRef.current = normalized;
+    setActiveAgentId(normalized);
+    window.localStorage.setItem(activeAgentStorageKey(botAlias), normalized);
+    assistantSendVersionRef.current += 1;
+    stopAssistantPoll();
+    stopSseRecoveryWatch();
+    setLoading(true);
+    setError("");
+    setItems([]);
+    setConversations([]);
+    setExpandedTracePanels({});
+    setTraceLoadState({});
+    setPendingAttachments([]);
+    setHistoryPanelOpen(false);
+    setIsStreaming(false);
+    setStreamMode("");
+    setStreamStartedAtMs(null);
+
+    Promise.all([
+      listScopedMessages(client, botAlias, normalized),
+      getScopedOverview(client, botAlias, normalized),
+    ])
+      .then(([messages, overview]) => {
+        if (activeAgentIdRef.current !== normalized) {
+          return;
+        }
+        setBotOverview(overview);
+        setWorkingDir(overview.workingDir || "");
+        if (overview.agents && overview.agents.length > 0) {
+          setAgents(overview.agents);
+        }
+        applyHistoryView(messages, overview, []);
+        setLoading(false);
+      })
+      .catch((err: Error) => {
+        if (activeAgentIdRef.current !== normalized) {
+          return;
+        }
+        setError(err.message || "切换 agent 失败");
+        setLoading(false);
+      });
+  }, [applyHistoryView, botAlias, client, stopAssistantPoll, stopSseRecoveryWatch]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -1531,8 +1669,23 @@ export function ChatScreen({
         ));
       };
       const finalMessage = options.sendOptions
-        ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, options.sendOptions)
-        : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace);
+        ? await client.sendMessage(
+          botAlias,
+          composedText,
+          onChunk,
+          onStatus,
+          onTrace,
+          activeAgentIdRef.current === "main"
+            ? options.sendOptions
+            : { ...options.sendOptions, agentId: activeAgentIdRef.current },
+        )
+        : (
+          activeAgentIdRef.current === "main"
+            ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace)
+            : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, {
+              agentId: activeAgentIdRef.current,
+            })
+        );
 
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
@@ -1680,6 +1833,8 @@ export function ChatScreen({
   const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
+  const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
+  const showAgentSwitcher = agents.length > 1;
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
@@ -1722,6 +1877,14 @@ export function ChatScreen({
                   <option key={model} value={model}>{model}</option>
                 ))}
               </select>
+            ) : null}
+            {showAgentSwitcher ? (
+              <AgentSwitcher
+                agents={agents}
+                activeAgentId={activeAgentId}
+                disabled={loading}
+                onSelect={handleSelectAgent}
+              />
             ) : null}
             {embedded && onToggleFocus ? (
               <button
@@ -1861,6 +2024,7 @@ export function ChatScreen({
           disabled={isStreaming || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
+          placeholder={showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"}
         />
       ) : null}
 

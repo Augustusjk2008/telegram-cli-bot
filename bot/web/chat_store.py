@@ -167,6 +167,7 @@ class ChatStore:
                 bot_id INTEGER NOT NULL,
                 bot_alias TEXT NOT NULL,
                 user_id INTEGER NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'main',
                 bot_mode TEXT NOT NULL,
                 cli_type TEXT NOT NULL,
                 working_dir TEXT NOT NULL,
@@ -177,6 +178,7 @@ class ChatStore:
                 assistant_home TEXT,
                 managed_prompt_hash TEXT,
                 prompt_surface_version TEXT,
+                agent_prompt_hash TEXT,
                 title TEXT,
                 last_message_preview TEXT,
                 message_count INTEGER NOT NULL DEFAULT 0,
@@ -248,16 +250,19 @@ class ChatStore:
         )
         conn.execute("DROP INDEX IF EXISTS idx_conversations_identity")
         self._ensure_column(conn, "conversations", "title", "TEXT")
+        self._ensure_column(conn, "conversations", "agent_id", "TEXT NOT NULL DEFAULT 'main'")
+        self._ensure_column(conn, "conversations", "agent_prompt_hash", "TEXT")
         self._ensure_column(conn, "conversations", "last_message_preview", "TEXT")
         self._ensure_column(conn, "conversations", "message_count", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "conversations", "archived_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
+        conn.execute("DROP INDEX IF EXISTS idx_conversations_scope_updated")
         conn.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_conversations_scope_updated
-            ON conversations(bot_id, user_id, working_dir, archived_at, pinned, updated_at)
+            CREATE INDEX IF NOT EXISTS idx_conversations_agent_scope_updated
+            ON conversations(bot_id, user_id, agent_id, working_dir, archived_at, pinned, updated_at)
             """
         )
 
@@ -274,6 +279,7 @@ class ChatStore:
         *,
         bot_id: int,
         user_id: int,
+        agent_id: str = "main",
         working_dir: str,
         session_epoch: int,
     ) -> str | None:
@@ -281,11 +287,11 @@ class ChatStore:
             """
             SELECT id
             FROM conversations
-            WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
+            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
             ORDER BY updated_at DESC, created_at DESC, id DESC
             LIMIT 1
             """,
-            (bot_id, user_id, working_dir, session_epoch),
+            (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
         ).fetchone()
         if row is None:
             return None
@@ -298,6 +304,7 @@ class ChatStore:
         conversation_id: str | None,
         bot_id: int,
         user_id: int,
+        agent_id: str = "main",
         working_dir: str,
         session_epoch: int,
     ) -> str | None:
@@ -307,6 +314,7 @@ class ChatStore:
                 conn,
                 bot_id=bot_id,
                 user_id=user_id,
+                agent_id=agent_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
@@ -315,9 +323,9 @@ class ChatStore:
             """
             SELECT id
             FROM conversations
-            WHERE id = ? AND bot_id = ? AND user_id = ? AND working_dir = ? AND archived_at IS NULL
+            WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND archived_at IS NULL
             """,
-            (normalized_id, bot_id, user_id, working_dir),
+            (normalized_id, bot_id, user_id, str(agent_id or "main"), working_dir),
         ).fetchone()
         if row is None:
             return None
@@ -330,6 +338,7 @@ class ChatStore:
         bot_id: int,
         bot_alias: str,
         user_id: int,
+        agent_id: str = "main",
         bot_mode: str,
         cli_type: str,
         working_dir: str,
@@ -338,17 +347,18 @@ class ChatStore:
         assistant_home: str | None,
         managed_prompt_hash: str | None,
         prompt_surface_version: str | None,
+        agent_prompt_hash: str | None = None,
     ) -> tuple[str, int]:
         now = _utc_now()
         row = conn.execute(
             """
             SELECT id
             FROM conversations
-            WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
+            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
             ORDER BY updated_at DESC, created_at DESC, id DESC
             LIMIT 1
             """,
-            (bot_id, user_id, working_dir, session_epoch),
+            (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
         ).fetchone()
 
         if row is not None:
@@ -364,6 +374,7 @@ class ChatStore:
                     assistant_home = ?,
                     managed_prompt_hash = ?,
                     prompt_surface_version = ?,
+                    agent_prompt_hash = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -376,6 +387,7 @@ class ChatStore:
                     assistant_home,
                     managed_prompt_hash,
                     prompt_surface_version,
+                    agent_prompt_hash,
                     now,
                     conversation_id,
                 ),
@@ -390,6 +402,7 @@ class ChatStore:
                 bot_id,
                 bot_alias,
                 user_id,
+                agent_id,
                 bot_mode,
                 cli_type,
                 working_dir,
@@ -400,6 +413,7 @@ class ChatStore:
                 assistant_home,
                 managed_prompt_hash,
                 prompt_surface_version,
+                agent_prompt_hash,
                 title,
                 last_message_preview,
                 message_count,
@@ -407,13 +421,14 @@ class ChatStore:
                 archived_at,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
                 bot_id,
                 bot_alias,
                 user_id,
+                str(agent_id or "main"),
                 bot_mode,
                 cli_type,
                 working_dir,
@@ -424,6 +439,7 @@ class ChatStore:
                 assistant_home,
                 managed_prompt_hash,
                 prompt_surface_version,
+                agent_prompt_hash,
                 "",
                 "",
                 0,
@@ -441,6 +457,7 @@ class ChatStore:
             "bot_id": int(row["bot_id"]),
             "bot_alias": str(row["bot_alias"] or ""),
             "user_id": int(row["user_id"]),
+            "agent_id": str(row["agent_id"] or "main"),
             "bot_mode": str(row["bot_mode"] or ""),
             "cli_type": str(row["cli_type"] or ""),
             "working_dir": str(row["working_dir"] or ""),
@@ -448,6 +465,7 @@ class ChatStore:
             "status": str(row["status"] or "active"),
             "native_provider": str(row["native_provider"] or ""),
             "native_session_id": str(row["native_session_id"] or ""),
+            "agent_prompt_hash": str(row["agent_prompt_hash"] or ""),
             "title": str(row["title"] or ""),
             "last_message_preview": str(row["last_message_preview"] or ""),
             "message_count": int(row["message_count"] or 0),
@@ -463,6 +481,7 @@ class ChatStore:
         bot_id: int,
         bot_alias: str,
         user_id: int,
+        agent_id: str = "main",
         bot_mode: str,
         cli_type: str,
         working_dir: str,
@@ -472,6 +491,7 @@ class ChatStore:
         assistant_home: str | None = None,
         managed_prompt_hash: str | None = None,
         prompt_surface_version: str | None = None,
+        agent_prompt_hash: str | None = None,
     ) -> str:
         now = _utc_now()
         conversation_id = f"conv_{uuid.uuid4().hex}"
@@ -484,6 +504,7 @@ class ChatStore:
                     bot_id,
                     bot_alias,
                     user_id,
+                    agent_id,
                     bot_mode,
                     cli_type,
                     working_dir,
@@ -494,6 +515,7 @@ class ChatStore:
                     assistant_home,
                     managed_prompt_hash,
                     prompt_surface_version,
+                    agent_prompt_hash,
                     title,
                     last_message_preview,
                     message_count,
@@ -501,13 +523,14 @@ class ChatStore:
                     archived_at,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
                     bot_id,
                     bot_alias,
                     user_id,
+                    str(agent_id or "main"),
                     bot_mode,
                     cli_type,
                     working_dir,
@@ -518,6 +541,7 @@ class ChatStore:
                     assistant_home,
                     managed_prompt_hash,
                     prompt_surface_version,
+                    agent_prompt_hash,
                     normalized_title,
                     "",
                     0,
@@ -547,6 +571,7 @@ class ChatStore:
         *,
         bot_id: int,
         user_id: int,
+        agent_id: str = "main",
         working_dir: str,
         limit: int = 50,
         query: str = "",
@@ -560,7 +585,7 @@ class ChatStore:
         normalized_query = str(query or "").strip()
         archived_clause = "" if include_archived else "AND archived_at IS NULL"
         query_clause = ""
-        params: list[Any] = [bot_id, user_id, working_dir]
+        params: list[Any] = [bot_id, user_id, str(agent_id or "main"), working_dir]
         if normalized_query:
             query_clause = "AND (title LIKE ? OR last_message_preview LIKE ?)"
             query_value = f"%{normalized_query}%"
@@ -572,7 +597,7 @@ class ChatStore:
                 f"""
                 SELECT *
                 FROM conversations
-                WHERE bot_id = ? AND user_id = ? AND working_dir = ?
+                WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ?
                 {archived_clause}
                 {query_clause}
                 ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
@@ -588,6 +613,7 @@ class ChatStore:
         bot_id: int,
         bot_alias: str,
         user_id: int,
+        agent_id: str = "main",
         bot_mode: str,
         cli_type: str,
         working_dir: str,
@@ -598,6 +624,7 @@ class ChatStore:
         assistant_home: str | None = None,
         managed_prompt_hash: str | None = None,
         prompt_surface_version: str | None = None,
+        agent_prompt_hash: str | None = None,
     ) -> ChatTurnHandle:
         now = _utc_now()
         turn_id = f"turn_{uuid.uuid4().hex}"
@@ -610,9 +637,9 @@ class ChatStore:
                     """
                     SELECT id
                     FROM conversations
-                    WHERE id = ? AND bot_id = ? AND user_id = ? AND working_dir = ? AND archived_at IS NULL
+                    WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND archived_at IS NULL
                     """,
-                    (normalized_conversation_id, bot_id, user_id, working_dir),
+                    (normalized_conversation_id, bot_id, user_id, str(agent_id or "main"), working_dir),
                 ).fetchone()
                 if row is None:
                     raise KeyError(normalized_conversation_id)
@@ -624,6 +651,7 @@ class ChatStore:
                     bot_id=bot_id,
                     bot_alias=bot_alias,
                     user_id=user_id,
+                    agent_id=agent_id,
                     bot_mode=bot_mode,
                     cli_type=cli_type,
                     working_dir=working_dir,
@@ -632,6 +660,7 @@ class ChatStore:
                     assistant_home=assistant_home,
                     managed_prompt_hash=managed_prompt_hash,
                     prompt_surface_version=prompt_surface_version,
+                    agent_prompt_hash=agent_prompt_hash,
                 )
             conn.execute(
                 """
@@ -1150,6 +1179,7 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        agent_id: str = "main",
         conversation_id: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -1162,6 +1192,7 @@ class ChatStore:
                 conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
+                agent_id=agent_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
@@ -1176,6 +1207,7 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        agent_id: str = "main",
         conversation_id: str | None = None,
     ) -> int:
         conn = self._connect(create=False)
@@ -1187,6 +1219,7 @@ class ChatStore:
                 conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
+                agent_id=agent_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
@@ -1205,6 +1238,7 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        agent_id: str = "main",
         conversation_id: str | None = None,
         error_code: str = "stale_stream_recovered",
         fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
@@ -1219,6 +1253,7 @@ class ChatStore:
                 conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
+                agent_id=agent_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
@@ -1264,6 +1299,7 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        agent_id: str = "main",
         conversation_id: str | None = None,
     ) -> dict[str, Any] | None:
         conn = self._connect(create=False)
@@ -1275,6 +1311,7 @@ class ChatStore:
                 conversation_id=conversation_id,
                 bot_id=bot_id,
                 user_id=user_id,
+                agent_id=agent_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
             )
@@ -1417,11 +1454,12 @@ class ChatStore:
                     """
                     SELECT *
                     FROM conversations
-                    WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ?
+                    WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
                     """,
                     (
                         new_bot_id,
                         source["user_id"],
+                        source["agent_id"],
                         source["working_dir"],
                         source["session_epoch"],
                     ),
@@ -1443,6 +1481,7 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         session_epoch: int,
+        agent_id: str = "main",
     ) -> None:
         conn = self._connect(create=False)
         if conn is None:
@@ -1451,9 +1490,9 @@ class ChatStore:
             conn.execute(
                 """
                 DELETE FROM conversations
-                WHERE bot_id = ? AND user_id = ? AND working_dir = ? AND session_epoch = ?
+                WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
                 """,
-                (bot_id, user_id, working_dir, session_epoch),
+                (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
             )
 
     def delete_conversation_by_id(self, conversation_id: str) -> None:

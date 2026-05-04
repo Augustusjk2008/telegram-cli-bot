@@ -1,6 +1,10 @@
 import type {
   BotOverview,
   BotSummary,
+  AgentInput,
+  AgentListResult,
+  AgentMutationResult,
+  AgentScopedOptions,
   ChatMessage,
   ChatStatusUpdate,
   ChatTraceDetails,
@@ -100,13 +104,17 @@ export interface WebBotClient {
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
   installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
-  getBotOverview(botAlias: string): Promise<BotOverview>;
-  listConversations(botAlias: string, query?: string): Promise<ConversationListResult>;
-  createConversation(botAlias: string, title?: string): Promise<ConversationSelectResult>;
-  selectConversation(botAlias: string, conversationId: string): Promise<ConversationSelectResult>;
-  listMessages(botAlias: string): Promise<ChatMessage[]>;
-  listMessageDelta(botAlias: string, afterId: string, limit?: number): Promise<HistoryDeltaResult>;
-  getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails>;
+  listAgents(botAlias: string): Promise<AgentListResult>;
+  createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult>;
+  updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult>;
+  deleteAgent(botAlias: string, agentId: string): Promise<void>;
+  getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
+  listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
+  createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
+  selectConversation(botAlias: string, conversationId: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
+  listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
+  listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: AgentScopedOptions): Promise<HistoryDeltaResult>;
+  getMessageTrace(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTraceDetails>;
   sendMessage(
     botAlias: string,
     text: string,

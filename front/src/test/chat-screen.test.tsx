@@ -983,6 +983,63 @@ test("switching bots resets chat history instead of mixing conversations", async
   expect(screen.queryByText("main-history")).not.toBeInTheDocument();
 });
 
+test("chat screen hides agent switcher when there are no child agents", async () => {
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+    ],
+  }));
+  const client = createClient({ listAgents });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await waitFor(() => {
+    expect(listAgents).toHaveBeenCalledWith("main");
+  });
+  expect(screen.queryByRole("button", { name: /当前 agent/ })).not.toBeInTheDocument();
+});
+
+test("chat screen switches agent and scopes history requests", async () => {
+  const user = userEvent.setup();
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+    ],
+  }));
+  const listMessages = vi.fn(async (_botAlias: string, options?: { agentId?: string }): Promise<ChatMessage[]> => {
+    if (options?.agentId === "reviewer") {
+      return [{
+        id: "reviewer-1",
+        role: "assistant",
+        text: "reviewer-history",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      }];
+    }
+    return [];
+  });
+  const listConversations = vi.fn(async (): Promise<ConversationListResult> => ({
+    activeConversationId: "",
+    items: [],
+  }));
+  const client = createClient({ listAgents, listMessages, listConversations });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: /代码审查/ }));
+
+  await waitFor(() => {
+    expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
+  });
+  expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "历史" }));
+  await waitFor(() => {
+    expect(listConversations).toHaveBeenLastCalledWith("main", "", { agentId: "reviewer" });
+  });
+});
+
 test("chat screen opens history and switches conversation", async () => {
   const user = userEvent.setup();
   const now = new Date().toISOString();

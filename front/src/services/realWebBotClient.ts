@@ -30,6 +30,11 @@ import type {
   AssistantUpgradeState,
   AssistantUpgradeTarget,
   Capability,
+  AgentInput,
+  AgentListResult,
+  AgentMutationResult,
+  AgentScopedOptions,
+  AgentSummary,
   CreateAssistantCronJobInput,
   GitActionResult,
   GitBlamePayload,
@@ -129,6 +134,26 @@ type RawBotSummary = {
   is_main?: boolean;
 };
 
+type RawAgentSummary = {
+  id?: string;
+  name?: string;
+  system_prompt?: string;
+  systemPrompt?: string;
+  enabled?: boolean;
+  is_main?: boolean;
+  isMain?: boolean;
+  is_processing?: boolean;
+  isProcessing?: boolean;
+  message_count?: number;
+  messageCount?: number;
+  active_conversation_id?: string;
+  activeConversationId?: string;
+  created_at?: string;
+  createdAt?: string;
+  updated_at?: string;
+  updatedAt?: string;
+};
+
 type RawAvatarAsset = {
   name: string;
   url: string;
@@ -164,6 +189,7 @@ type RawHistoryItem = {
 type RawConversationSummary = {
   id?: string;
   bot_alias?: string;
+  agent_id?: string;
   bot_mode?: string;
   cli_type?: string;
   working_dir?: string;
@@ -851,6 +877,37 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   return summary;
 }
 
+function mapAgentSummary(raw: RawAgentSummary): AgentSummary {
+  return {
+    id: String(raw.id || "main"),
+    name: String(raw.name || (raw.id === "main" ? "主 agent" : raw.id || "agent")),
+    systemPrompt: String(raw.system_prompt ?? raw.systemPrompt ?? ""),
+    enabled: raw.enabled !== false,
+    isMain: Boolean(raw.is_main ?? raw.isMain ?? raw.id === "main"),
+    isProcessing: Boolean(raw.is_processing ?? raw.isProcessing ?? false),
+    messageCount: Number(raw.message_count ?? raw.messageCount ?? 0),
+    activeConversationId: String(raw.active_conversation_id ?? raw.activeConversationId ?? ""),
+    createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
+    updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
+  };
+}
+
+function mapAgentInput(input: AgentInput): Record<string, unknown> {
+  return {
+    ...(typeof input.id !== "undefined" ? { id: input.id } : {}),
+    ...(typeof input.name !== "undefined" ? { name: input.name } : {}),
+    ...(typeof input.systemPrompt !== "undefined" ? { system_prompt: input.systemPrompt } : {}),
+    ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
+  };
+}
+
+function appendAgentParam(params: URLSearchParams, agentId?: string) {
+  const normalized = String(agentId || "").trim();
+  if (normalized && normalized !== "main") {
+    params.set("agent_id", normalized);
+  }
+}
+
 function mapWorkdirChangeConflict(raw: unknown): WorkdirChangeConflict | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -1103,6 +1160,7 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
     botAlias: String(raw.bot_alias || ""),
     botMode: String(raw.bot_mode || ""),
     cliType: String(raw.cli_type || ""),
+    agentId: String(raw.agent_id || "main"),
     workingDir: String(raw.working_dir || ""),
     ...(nativeProvider || nativeSessionId ? {
       nativeSource: {
@@ -2053,7 +2111,51 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async getBotOverview(botAlias: string): Promise<BotOverview> {
+  async listAgents(botAlias: string): Promise<AgentListResult> {
+    const data = await this.requestJson<{ items: RawAgentSummary[] }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/agents`,
+    );
+    return { items: (data.items || []).map(mapAgentSummary) };
+  }
+
+  async createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult> {
+    const data = await this.requestJson<{ agent: RawAgentSummary }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents`,
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify(mapAgentInput(input)),
+      },
+    );
+    return { agent: mapAgentSummary(data.agent) };
+  }
+
+  async updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult> {
+    const data = await this.requestJson<{ agent: RawAgentSummary }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents/${encodeURIComponent(agentId)}`,
+      {
+        method: "PATCH",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify(mapAgentInput(input)),
+      },
+    );
+    return { agent: mapAgentSummary(data.agent) };
+  }
+
+  async deleteAgent(botAlias: string, agentId: string): Promise<void> {
+    await this.requestJson(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents/${encodeURIComponent(agentId)}`,
+      {
+        method: "DELETE",
+        headers: this.headers(),
+      },
+    );
+  }
+
+  async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{
       bot: RawBotSummary & { assistant_runtime?: RawAssistantRuntimeSnapshot | null };
       session: {
@@ -2063,7 +2165,10 @@ export class RealWebBotClient implements WebBotClient {
         is_processing: boolean;
         running_reply?: RawRunningReply | null;
       };
-    }>(`/api/bots/${encodeURIComponent(botAlias)}`);
+      agents?: RawAgentSummary[];
+      active_agent_id?: string;
+      busy_agent_ids?: string[];
+    }>(`/api/bots/${encodeURIComponent(botAlias)}${suffix}`);
 
     const summary = mapBotSummary(data.bot, data.session.is_processing);
     const overview: BotOverview = {
@@ -2074,6 +2179,9 @@ export class RealWebBotClient implements WebBotClient {
       isProcessing: data.session.is_processing,
       runningReply: mapRunningReply(data.session.running_reply),
       assistantRuntime: mapAssistantRuntimeSnapshot(data.bot.assistant_runtime),
+      agents: (data.agents || []).map(mapAgentSummary),
+      activeAgentId: String(data.active_agent_id || options.agentId || "main"),
+      busyAgentIds: (data.busy_agent_ids || []).map((item) => String(item)),
     };
     if (data.bot.bot_mode) {
       overview.botMode = data.bot.bot_mode;
@@ -2081,16 +2189,20 @@ export class RealWebBotClient implements WebBotClient {
     return overview;
   }
 
-  async listMessages(botAlias: string): Promise<ChatMessage[]> {
-    const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history`);
+  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
     return data.items.map((item, index) => mapChatMessage(item, index));
   }
 
-  async listConversations(botAlias: string, query = ""): Promise<ConversationListResult> {
+  async listConversations(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {
     const params = new URLSearchParams({ limit: "80" });
     if (query.trim()) {
       params.set("q", query.trim());
     }
+    appendAgentParam(params, options.agentId);
     const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
     );
@@ -2100,13 +2212,16 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async createConversation(botAlias: string, title = ""): Promise<ConversationSelectResult> {
+  async createConversation(botAlias: string, title = "", options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
     const data = await this.requestJson<{ conversation: RawConversationSummary; messages: RawHistoryItem[] }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations`,
       {
         method: "POST",
         headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({
+          title,
+          ...(options.agentId ? { agent_id: options.agentId } : {}),
+        }),
       },
     );
     return {
@@ -2115,12 +2230,13 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async selectConversation(botAlias: string, conversationId: string): Promise<ConversationSelectResult> {
+  async selectConversation(botAlias: string, conversationId: string, options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
     const data = await this.requestJson<{ conversation: RawConversationSummary; messages: RawHistoryItem[] }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}/select`,
       {
         method: "POST",
-        headers: this.headers(),
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify(options.agentId ? { agent_id: options.agentId } : {}),
       },
     );
     return {
@@ -2129,11 +2245,12 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async listMessageDelta(botAlias: string, afterId: string, limit = 50): Promise<HistoryDeltaResult> {
+  async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: AgentScopedOptions = {}): Promise<HistoryDeltaResult> {
     const params = new URLSearchParams({
       after_id: afterId,
       limit: String(limit),
     });
+    appendAgentParam(params, options.agentId);
     const data = await this.requestJson<{ items: RawHistoryItem[]; reset: boolean }>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/delta?${params.toString()}`,
     );
@@ -2143,9 +2260,12 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails> {
+  async getMessageTrace(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTraceDetails> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawChatTraceDetails>(
-      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace`,
+      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
     );
     return mapChatTraceDetails(data);
   }
@@ -2168,6 +2288,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
         ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
+        ...(options?.agentId ? { agent_id: options.agentId } : {}),
       }),
     });
 

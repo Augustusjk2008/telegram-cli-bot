@@ -2,6 +2,7 @@ import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
+import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotIdentity } from "../components/BotIdentity";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -1021,6 +1022,10 @@ export function SettingsScreen({
               </p>
             </div>
           </>
+        ) : null}
+
+        {overview ? (
+          <AgentSettingsPanel botAlias={botAlias} botMode={overview.botMode || "cli"} client={client} />
         ) : null}
 
         {cliParams ? (

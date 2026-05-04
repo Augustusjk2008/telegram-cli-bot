@@ -144,6 +144,56 @@ test("assistant settings do not render assistant ops console", async () => {
   expect(screen.queryByRole("heading", { name: "Automation 定时任务" })).not.toBeInTheDocument();
 });
 
+test("settings screen shows child agent empty state on cli bot page", async () => {
+  const client = new MockWebBotClient();
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("暂无子 agent")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "新增 agent" })).toBeInTheDocument();
+});
+
+test("settings screen creates child agent", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const createAgent = vi.spyOn(client, "createAgent");
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.click(await screen.findByRole("button", { name: "新增 agent" }));
+  await user.type(screen.getByLabelText("Agent ID"), "reviewer");
+  await user.type(screen.getByLabelText("名称"), "代码审查");
+  await user.type(screen.getByLabelText("系统提示词"), "先列风险");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => {
+    expect(createAgent).toHaveBeenCalledWith("main", {
+      id: "reviewer",
+      name: "代码审查",
+      systemPrompt: "先列风险",
+      enabled: true,
+    });
+  });
+  expect(await screen.findByText("agent 已新增")).toBeInTheDocument();
+});
+
+test("settings screen hides agent management for assistant bot", async () => {
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "assistant1",
+    botMode: "assistant",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\assistant1",
+    avatarName: "avatar_01.png",
+  });
+
+  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
+  expect(screen.queryByText("子 agent")).not.toBeInTheDocument();
+});
+
 test("settings can browse and pick a workdir before saving", async () => {
   const user = userEvent.setup();
   const client = new SettingsDirectoryPickerClient();

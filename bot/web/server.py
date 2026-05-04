@@ -86,11 +86,13 @@ from .api_service import (
     bulk_invalidate_assistant_memories,
     build_bot_summary,
     change_working_directory,
+    create_agent,
     create_conversation,
     create_directory,
     create_text_file,
     copy_path,
     delete_path,
+    delete_agent,
     dispose_plugin_view,
     execute_shell_command,
     get_plugin_artifact,
@@ -116,6 +118,7 @@ from .api_service import (
     get_working_directory,
     kill_user_process,
     list_bots,
+    list_agents,
     list_conversations,
     list_assistant_cron_jobs,
     list_assistant_cron_runs,
@@ -153,6 +156,7 @@ from .api_service import (
     delete_assistant_cron_job,
     update_cli_params,
     update_assistant_cron_job,
+    update_agent,
     update_bot_avatar,
     update_bot_cli,
     update_plugin,
@@ -1020,7 +1024,40 @@ class WebApiServer:
     async def get_bot_overview(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_overview(self.manager, alias, auth.user_id)})
+        agent_id = self._request_agent_id(request)
+        return _json({"ok": True, "data": get_overview(self.manager, alias, auth.user_id, agent_id=agent_id)})
+
+    def _request_agent_id(self, request: web.Request, body: dict[str, Any] | None = None) -> str:
+        value = request.query.get("agent_id") or request.query.get("agentId")
+        if not value and isinstance(body, dict):
+            value = body.get("agent_id") or body.get("agentId")
+        if not isinstance(value, str):
+            return "main"
+        return str(value or "main").strip().lower() or "main"
+
+    async def get_agents_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_VIEW_BOT_STATUS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": list_agents(self.manager, alias)})
+
+    async def post_agent_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await create_agent(self.manager, alias, dict(body or {}))})
+
+    async def patch_agent_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        agent_id = request.match_info.get("agent_id", "")
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await update_agent(self.manager, alias, agent_id, dict(body or {}))})
+
+    async def delete_agent_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        agent_id = request.match_info.get("agent_id", "")
+        return _json({"ok": True, "data": await delete_agent(self.manager, alias, agent_id)})
 
     async def post_chat(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
@@ -1029,6 +1066,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
+        agent_id = self._request_agent_id(request, body)
         if task_mode or isinstance(task_payload, dict) or visible_text is not None:
             data = await run_chat(
                 self.manager,
@@ -1038,9 +1076,10 @@ class WebApiServer:
                 task_mode=task_mode or "standard",
                 task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
                 visible_text=str(visible_text) if visible_text is not None else None,
+                agent_id=agent_id,
             )
         else:
-            data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""))
+            data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""), agent_id=agent_id)
         return _json({"ok": True, "data": data})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
@@ -1050,6 +1089,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
+        agent_id = self._request_agent_id(request, body)
 
         response = web.StreamResponse(
             status=200,
@@ -1063,17 +1103,31 @@ class WebApiServer:
 
         client_disconnected = False
         if task_mode or isinstance(task_payload, dict) or visible_text is not None:
+            stream_kwargs: dict[str, Any] = {
+                "task_mode": task_mode or "standard",
+                "task_payload": dict(task_payload) if isinstance(task_payload, dict) else None,
+                "visible_text": str(visible_text) if visible_text is not None else None,
+            }
+            if agent_id != "main":
+                stream_kwargs["agent_id"] = agent_id
             event_stream = stream_chat(
                 self.manager,
                 alias,
                 auth.user_id,
                 body.get("message", ""),
-                task_mode=task_mode or "standard",
-                task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
-                visible_text=str(visible_text) if visible_text is not None else None,
+                **stream_kwargs,
             )
         else:
-            event_stream = stream_chat(self.manager, alias, auth.user_id, body.get("message", ""))
+            if agent_id == "main":
+                event_stream = stream_chat(self.manager, alias, auth.user_id, body.get("message", ""))
+            else:
+                event_stream = stream_chat(
+                    self.manager,
+                    alias,
+                    auth.user_id,
+                    body.get("message", ""),
+                    agent_id=agent_id,
+                )
         async for event in event_stream:
             if client_disconnected:
                 continue
@@ -1441,33 +1495,39 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
-        return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit)})
+        agent_id = self._request_agent_id(request)
+        return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit, agent_id=agent_id)})
 
     async def get_history_delta_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         after_id = request.query.get("after_id", "")
-        return _json({"ok": True, "data": get_history_delta(self.manager, alias, auth.user_id, after_id, limit=limit)})
+        agent_id = self._request_agent_id(request)
+        return _json({"ok": True, "data": get_history_delta(self.manager, alias, auth.user_id, after_id, limit=limit, agent_id=agent_id)})
 
     async def get_conversations_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         query = request.query.get("q", "")
-        return _json({"ok": True, "data": list_conversations(self.manager, alias, auth.user_id, limit=limit, query=query)})
+        agent_id = self._request_agent_id(request)
+        return _json({"ok": True, "data": list_conversations(self.manager, alias, auth.user_id, limit=limit, query=query, agent_id=agent_id)})
 
     async def post_conversation_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        return _json({"ok": True, "data": create_conversation(self.manager, alias, auth.user_id, str(body.get("title") or ""))})
+        agent_id = self._request_agent_id(request, body)
+        return _json({"ok": True, "data": create_conversation(self.manager, alias, auth.user_id, str(body.get("title") or ""), agent_id=agent_id)})
 
     async def post_conversation_select_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         conversation_id = request.match_info.get("conversation_id", "")
-        return _json({"ok": True, "data": select_conversation(self.manager, alias, auth.user_id, conversation_id)})
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
+        return _json({"ok": True, "data": select_conversation(self.manager, alias, auth.user_id, conversation_id, agent_id=agent_id)})
 
     async def get_debug_profile(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_DEBUG_EXEC)
@@ -1587,7 +1647,8 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_TRACE)
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
-        return _json({"ok": True, "data": get_history_trace(self.manager, alias, auth.user_id, message_id)})
+        agent_id = self._request_agent_id(request)
+        return _json({"ok": True, "data": get_history_trace(self.manager, alias, auth.user_id, message_id, agent_id=agent_id)})
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
@@ -2879,6 +2940,10 @@ class WebApiServer:
         app.router.add_get("/api/bots/{alias}/cli-params", self.get_cli_params)
         app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
         app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
+        app.router.add_get("/api/bots/{alias}/agents", self.get_agents_view)
+        app.router.add_post("/api/admin/bots/{alias}/agents", self.post_agent_view)
+        app.router.add_patch("/api/admin/bots/{alias}/agents/{agent_id}", self.patch_agent_view)
+        app.router.add_delete("/api/admin/bots/{alias}/agents/{agent_id}", self.delete_agent_view)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
         app.router.add_get("/api/bots/{alias}/history/delta", self.get_history_delta_view)
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)

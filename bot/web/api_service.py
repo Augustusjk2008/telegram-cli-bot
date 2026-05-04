@@ -76,6 +76,7 @@ from bot.assistant_state import (
     record_assistant_capture,
     restore_assistant_runtime_state,
 )
+from bot.agents import build_agent_prompt_input
 from bot.cli_params import get_default_params, get_params_schema, normalize_cli_model_options
 from bot.config import CLI_MODEL_OPTIONS
 from bot.cli import (
@@ -94,7 +95,7 @@ from bot.cli import (
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
-from bot.models import BotProfile, UserSession
+from bot.models import AgentProfile, BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.runtime_paths import get_chat_attachments_dir
@@ -460,6 +461,33 @@ def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) ->
     return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
 
+def get_chat_session_for_alias(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    agent_id: str = "main",
+) -> tuple[BotProfile, AgentProfile, UserSession]:
+    profile = get_profile_or_raise(manager, alias)
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+    try:
+        agent = profile.get_agent(normalized_agent_id)
+    except KeyError:
+        _raise(404, "agent_not_found", "未找到 agent")
+    if normalized_agent_id == "main":
+        return profile, agent, get_session_for_alias(manager, alias, user_id)
+    if normalized_agent_id != "main" and profile.bot_mode != "cli":
+        _raise(400, "agent_not_supported", "仅 CLI Bot 支持子 agent")
+    session = get_or_create_session(
+        bot_id=resolve_session_bot_id(manager, alias),
+        bot_alias=alias,
+        user_id=user_id,
+        default_working_dir=profile.working_dir,
+        load_persisted_state=profile.bot_mode != "assistant",
+        agent_id=agent.id,
+    )
+    return profile, agent, align_session_paths(session, profile.working_dir, profile.bot_mode)
+
+
 def _supports_cli_runtime(profile: BotProfile) -> bool:
     return profile.bot_mode in ("cli", "assistant")
 
@@ -646,13 +674,47 @@ def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[d
     return [build_bot_summary(manager, alias, user_id) for alias in aliases]
 
 
-def get_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     return {
         "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
+        "agents": manager.list_bot_agents(alias),
+        "active_agent_id": session.agent_id,
     }
+
+
+def list_agents(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    get_profile_or_raise(manager, alias)
+    return {"items": manager.list_bot_agents(alias)}
+
+
+async def create_agent(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        agent = await manager.create_bot_agent(alias, data)
+    except ValueError as exc:
+        _raise(400, "invalid_agent", str(exc))
+    return {"agent": agent}
+
+
+async def update_agent(manager: MultiBotManager, alias: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        agent = await manager.update_bot_agent(alias, agent_id, data)
+    except KeyError:
+        _raise(404, "agent_not_found", "未找到 agent")
+    except ValueError as exc:
+        _raise(400, "invalid_agent", str(exc))
+    return {"agent": agent}
+
+
+async def delete_agent(manager: MultiBotManager, alias: str, agent_id: str) -> dict[str, Any]:
+    try:
+        await manager.delete_bot_agent(alias, agent_id)
+    except KeyError:
+        _raise(404, "agent_not_found", "未找到 agent")
+    except ValueError as exc:
+        _raise(400, "invalid_agent", str(exc))
+    return {"deleted": True}
 
 
 async def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: bool = False) -> list[dict[str, Any]]:
@@ -2254,9 +2316,14 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
     }
 
 
-def get_history(manager: MultiBotManager, alias: str, user_id: int, limit: int = 50) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+def get_history(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    limit: int = 50,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     service = _get_chat_history_service(session)
     return {"items": service.list_history(profile, session, limit=max(1, limit))}
 
@@ -2267,14 +2334,15 @@ def list_conversations(
     user_id: int,
     limit: int = 50,
     query: str = "",
+    agent_id: str = "main",
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     store = ChatStore(Path(session.working_dir))
     active_id = str(getattr(session, "active_conversation_id", "") or "")
     items = store.list_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
+        agent_id=session.agent_id,
         working_dir=session.working_dir,
         limit=max(1, limit),
         query=query,
@@ -2292,9 +2360,14 @@ def list_conversations(
     }
 
 
-def create_conversation(manager: MultiBotManager, alias: str, user_id: int, title: str = "") -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+def create_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    title: str = "",
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     with session._lock:
         is_processing = bool(session.is_processing)
     if is_processing:
@@ -2305,6 +2378,7 @@ def create_conversation(manager: MultiBotManager, alias: str, user_id: int, titl
         bot_id=session.bot_id,
         bot_alias=session.bot_alias,
         user_id=session.user_id,
+        agent_id=session.agent_id,
         bot_mode=profile.bot_mode,
         cli_type=profile.cli_type,
         working_dir=session.working_dir,
@@ -2323,6 +2397,7 @@ def create_conversation(manager: MultiBotManager, alias: str, user_id: int, titl
             **store.get_conversation(conversation_id),
             "active": True,
             "bot_mode": profile.bot_mode,
+            "agent_id": session.agent_id,
         },
         "messages": [],
     }
@@ -2333,9 +2408,9 @@ def select_conversation(
     alias: str,
     user_id: int,
     conversation_id: str,
+    agent_id: str = "main",
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     with session._lock:
         is_processing = bool(session.is_processing)
     if is_processing:
@@ -2348,6 +2423,8 @@ def select_conversation(
         _raise(404, "conversation_not_found", "未找到会话")
 
     if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("agent_id") or "main") != session.agent_id:
         _raise(404, "conversation_not_found", "未找到会话")
     if str(conversation.get("working_dir") or "") != session.working_dir:
         _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
@@ -2371,6 +2448,7 @@ def select_conversation(
             **conversation,
             "active": True,
             "bot_mode": str(conversation.get("bot_mode") or profile.bot_mode),
+            "agent_id": session.agent_id,
         },
         "messages": messages,
     }
@@ -2382,9 +2460,9 @@ def get_history_delta(
     user_id: int,
     after_id: str,
     limit: int = 50,
+    agent_id: str = "main",
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     items = _get_chat_history_service(session).list_history(profile, session, limit=max(1, limit))
     marker = str(after_id or "")
     if not marker:
@@ -2396,9 +2474,14 @@ def get_history_delta(
     return {"items": items[ids.index(marker) + 1:], "reset": False}
 
 
-def get_history_trace(manager: MultiBotManager, alias: str, user_id: int, message_id: str) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
+def get_history_trace(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    message_id: str,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     service = _get_chat_history_service(session)
     data = service.get_message_trace(profile, session, message_id)
     if data is None:
@@ -2457,6 +2540,24 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     if cli_type == "codex":
         env["CI"] = "true"
     return env
+
+
+def _current_native_session_id(session: UserSession, cli_type: str) -> str:
+    normalized = normalize_cli_type(cli_type)
+    if normalized == "codex":
+        return str(session.codex_session_id or "").strip()
+    if normalized == "claude":
+        return str(session.claude_session_id or "").strip()
+    return ""
+
+
+def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session: UserSession, cli_type: str) -> str:
+    if agent.id == "main" or _current_native_session_id(session, cli_type):
+        return prompt_text
+    wrapped, prompt_hash = build_agent_prompt_input(prompt_text, agent.system_prompt)
+    with session._lock:
+        session.agent_prompt_hash_seen = prompt_hash or None
+    return wrapped
 
 
 def _prepare_assistant_prompt(
@@ -3471,12 +3572,12 @@ async def _stream_cli_chat(
     user_text: str,
     *,
     request: AssistantRunRequest | None = None,
+    agent_id: str = "main",
 ) -> AsyncIterator[dict[str, Any]]:
-    profile = get_profile_or_raise(manager, alias)
+    profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
-    session = get_session_for_alias(manager, alias, user_id)
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
     text = (visible_input or "").strip()
     if not text:
@@ -3507,6 +3608,8 @@ async def _stream_cli_chat(
                 )
             )
         )
+    elif agent.id != "main":
+        prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
 
     done_session = None
     if cli_type == "claude":
@@ -3923,12 +4026,12 @@ async def run_cli_chat(
     user_text: str,
     *,
     request: AssistantRunRequest | None = None,
+    agent_id: str = "main",
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
+    profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
-    session = get_session_for_alias(manager, alias, user_id)
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
     text = (visible_input or "").strip()
     if not text:
@@ -3976,6 +4079,8 @@ async def run_cli_chat(
                     )
                 )
             )
+    elif agent.id != "main":
+        prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
 
     done_session = None
     if cli_type == "claude":
@@ -4220,6 +4325,7 @@ async def run_chat(
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
+    agent_id: str = "main",
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     if profile.bot_mode == "assistant":
@@ -4237,7 +4343,7 @@ async def run_chat(
         )
         return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
-        return await run_cli_chat(manager, alias, user_id, user_text)
+        return await run_cli_chat(manager, alias, user_id, user_text, agent_id=agent_id)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
 
@@ -4250,6 +4356,7 @@ async def stream_chat(
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
+    agent_id: str = "main",
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -4270,7 +4377,7 @@ async def stream_chat(
                 yield event
             return
         if _supports_cli_runtime(profile):
-            async for event in _stream_cli_chat(manager, alias, user_id, user_text):
+            async for event in _stream_cli_chat(manager, alias, user_id, user_text, agent_id=agent_id):
                 yield event
             return
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")

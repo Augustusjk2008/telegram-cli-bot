@@ -14,6 +14,7 @@ type Props = {
   disabled?: boolean;
   compact?: boolean;
   uploadingAttachments?: boolean;
+  placeholder?: string;
 };
 
 export function ChatComposer({
@@ -24,6 +25,7 @@ export function ChatComposer({
   disabled,
   compact = false,
   uploadingAttachments = false,
+  placeholder = "输入消息",
 }: Props) {
   const shellClassName = compact
     ? "border-t border-[var(--border)] bg-[var(--surface-strong)] px-2 py-2"
@@ -95,7 +97,7 @@ export function ChatComposer({
         </label>
         <textarea
           name="message"
-          placeholder="输入消息"
+          placeholder={placeholder}
           rows={1}
           disabled={inputDisabled}
           onKeyDown={(event) => {

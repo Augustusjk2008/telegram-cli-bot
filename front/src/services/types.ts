@@ -55,6 +55,38 @@ export type BotSummary = {
   isMain?: boolean;
 };
 
+export type AgentSummary = {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  enabled: boolean;
+  isMain: boolean;
+  isProcessing?: boolean;
+  messageCount?: number;
+  activeConversationId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AgentListResult = {
+  items: AgentSummary[];
+};
+
+export type AgentInput = {
+  id?: string;
+  name?: string;
+  systemPrompt?: string;
+  enabled?: boolean;
+};
+
+export type AgentMutationResult = {
+  agent: AgentSummary;
+};
+
+export type AgentScopedOptions = {
+  agentId?: string;
+};
+
 export type WorkdirChangeConflict = {
   currentWorkingDir: string;
   requestedWorkingDir: string;
@@ -123,6 +155,9 @@ export type BotOverview = {
   isProcessing?: boolean;
   runningReply?: RunningReply | null;
   assistantRuntime?: AssistantRuntimeSnapshot | null;
+  agents?: AgentSummary[];
+  activeAgentId?: string;
+  busyAgentIds?: string[];
 };
 
 export type ChatTraceEvent = {
@@ -185,6 +220,7 @@ export type ConversationSummary = {
   botAlias: string;
   botMode: string;
   cliType: string;
+  agentId?: string;
   workingDir: string;
   nativeSource?: ChatMessageNativeSource;
   createdAt: string;
@@ -212,6 +248,7 @@ export type ChatSendOptions = {
   taskMode?: ChatTaskMode;
   taskPayload?: Record<string, unknown>;
   visibleText?: string;
+  agentId?: string;
 };
 
 export type TerminalRuntimePlatform = "windows" | "linux";

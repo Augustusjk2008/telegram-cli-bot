@@ -18,7 +18,8 @@ from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinat
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
-from bot.models import BotProfile
+from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
+from bot.models import AgentProfile, BotProfile
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
@@ -115,6 +116,8 @@ class MultiBotManager:
             }
             if "cli_params" in item:
                 profile_data["cli_params"] = item["cli_params"]
+            if "agents" in item:
+                profile_data["agents"] = item["agents"]
             self.managed_profiles[alias] = BotProfile.from_dict(profile_data)
 
         assistant_aliases = [
@@ -175,6 +178,14 @@ class MultiBotManager:
         if isinstance(cli_params, dict):
             self.main_profile.cli_params = CliParamsConfig.from_dict(cli_params)
 
+        agents = profile_data.get("agents")
+        if isinstance(agents, list):
+            self.main_profile.agents = [
+                AgentProfile.from_dict(item)
+                for item in agents
+                if isinstance(item, dict)
+            ]
+
     def _persist_main_profile(self) -> None:
         app_settings.update_main_bot_profile(self.main_profile.to_dict(), self.app_settings_file)
 
@@ -210,6 +221,78 @@ class MultiBotManager:
             if profile.bot_mode == "assistant":
                 return alias
         return None
+
+    def _agent_to_summary(self, profile: BotProfile, agent: AgentProfile) -> dict[str, Any]:
+        return {
+            **agent.to_dict(),
+            "is_main": agent.id == "main",
+        }
+
+    def list_bot_agents(self, alias: str) -> list[dict[str, Any]]:
+        profile = self.get_profile(alias)
+        return [self._agent_to_summary(profile, agent) for agent in profile.normalized_agents()]
+
+    def _ensure_cli_agent_profile(self, alias: str) -> BotProfile:
+        profile = self._get_profile_for_update(alias)
+        if profile.bot_mode != "cli":
+            raise ValueError("仅 CLI Bot 支持 agent")
+        return profile
+
+    def _persist_profile_agents(self, profile: BotProfile) -> None:
+        if profile.alias == self.main_profile.alias:
+            self._persist_main_profile()
+        else:
+            self._save_profiles()
+
+    async def create_bot_agent(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
+        async with self._lock:
+            profile = self._ensure_cli_agent_profile(alias)
+            agent_id = normalize_agent_id(data.get("id"), allow_main=False)
+            if any(agent.id == agent_id for agent in profile.normalized_agents()):
+                raise ValueError("agent id 已存在")
+            now = now_iso()
+            agent = AgentProfile(
+                id=agent_id,
+                name=normalize_agent_name(data.get("name")),
+                system_prompt=normalize_agent_prompt(data.get("system_prompt")),
+                enabled=bool(data.get("enabled", True)),
+                created_at=now,
+                updated_at=now,
+            )
+            profile.agents.append(agent)
+            self._persist_profile_agents(profile)
+            return self._agent_to_summary(profile, agent)
+
+    async def update_bot_agent(self, alias: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        async with self._lock:
+            profile = self._ensure_cli_agent_profile(alias)
+            normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
+            if normalized_agent_id == "main":
+                raise ValueError("主 agent 不支持编辑")
+            agent = next((item for item in profile.agents if item.id == normalized_agent_id), None)
+            if agent is None:
+                raise KeyError(normalized_agent_id)
+            if "name" in data:
+                agent.name = normalize_agent_name(data.get("name"))
+            if "system_prompt" in data or "systemPrompt" in data:
+                agent.system_prompt = normalize_agent_prompt(data.get("system_prompt", data.get("systemPrompt")))
+            if "enabled" in data:
+                agent.enabled = bool(data.get("enabled"))
+            agent.updated_at = now_iso()
+            self._persist_profile_agents(profile)
+            return self._agent_to_summary(profile, agent)
+
+    async def delete_bot_agent(self, alias: str, agent_id: str) -> None:
+        async with self._lock:
+            profile = self._ensure_cli_agent_profile(alias)
+            normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
+            if normalized_agent_id == "main":
+                raise ValueError("主 agent 不能删除")
+            before = len(profile.agents)
+            profile.agents = [item for item in profile.agents if item.id != normalized_agent_id]
+            if len(profile.agents) == before:
+                raise KeyError(normalized_agent_id)
+            self._persist_profile_agents(profile)
 
     async def _ensure_assistant_runtime(self) -> None:
         if self._assistant_result_executor is None:

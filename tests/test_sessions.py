@@ -14,10 +14,12 @@ import pytest
 from bot.sessions import (
     clear_bot_sessions,
     get_session,
+    get_or_create_session,
     is_bot_processing,
     reset_session,
     sessions,
     sessions_lock,
+    update_bot_working_dir,
 )
 
 
@@ -46,6 +48,18 @@ class TestGetSession:
         s2 = get_session(2, "sub", 100, str(temp_dir))
         assert s1 is not s2
 
+    def test_different_agents_different_sessions(self, temp_dir: Path):
+        main = get_or_create_session(1, "main", 100, str(temp_dir), agent_id="main")
+        reviewer = get_or_create_session(1, "main", 100, str(temp_dir), agent_id="reviewer")
+        main.codex_session_id = "codex-main"
+        reviewer.codex_session_id = "codex-reviewer"
+
+        assert main is not reviewer
+        assert main.agent_id == "main"
+        assert reviewer.agent_id == "reviewer"
+        assert main.codex_session_id == "codex-main"
+        assert reviewer.codex_session_id == "codex-reviewer"
+
     def test_inactive_session_is_reused_instead_of_recreated(self, temp_dir: Path):
         s1 = get_session(1, "main", 100, str(temp_dir))
         s1.last_activity = datetime(2000, 1, 1)  # 强制过期
@@ -61,9 +75,23 @@ class TestResetSession:
         result = reset_session(1, 100)
         assert result is True
         # 再获取应该是新的
-        key = (1, 100)
+        key = (1, 100, "main")
         with sessions_lock:
             assert key not in sessions
+
+    def test_reset_child_agent_keeps_main_agent(self, temp_dir: Path):
+        main = get_or_create_session(1, "main", 100, str(temp_dir), agent_id="main")
+        reviewer = get_or_create_session(1, "main", 100, str(temp_dir), agent_id="reviewer")
+        main.codex_session_id = "codex-main"
+        reviewer.codex_session_id = "codex-reviewer"
+
+        result = reset_session(1, 100, agent_id="reviewer")
+
+        assert result is True
+        with sessions_lock:
+            assert (1, 100, "main") in sessions
+            assert (1, 100, "reviewer") not in sessions
+        assert main.codex_session_id == "codex-main"
 
     def test_reset_nonexistent(self):
         result = reset_session(999, 999)
@@ -77,7 +105,7 @@ class TestResetSession:
         with patch("bot.session_store.STORE_FILE", store_file):
             save_session(bot_id=7, user_id=8, codex_session_id="thread-only-store")
             with sessions_lock:
-                sessions.pop((7, 8), None)
+                sessions.pop((7, 8, "main"), None)
 
             result = reset_session(7, 8)
 
@@ -96,9 +124,26 @@ class TestClearBotSessions:
         clear_bot_sessions(1)
 
         with sessions_lock:
-            assert (1, 100) not in sessions
-            assert (1, 200) not in sessions
-            assert (2, 100) in sessions
+            assert (1, 100, "main") not in sessions
+            assert (1, 200, "main") not in sessions
+            assert (2, 100, "main") in sessions
+
+    def test_update_workdir_resets_all_agent_native_sessions(self, temp_dir: Path):
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        main = get_or_create_session(1, "main", 100, str(old_dir), agent_id="main")
+        reviewer = get_or_create_session(1, "main", 100, str(old_dir), agent_id="reviewer")
+        main.codex_session_id = "codex-main"
+        reviewer.codex_session_id = "codex-reviewer"
+
+        update_bot_working_dir("main", str(new_dir))
+
+        assert main.working_dir == str(new_dir)
+        assert reviewer.working_dir == str(new_dir)
+        assert main.codex_session_id is None
+        assert reviewer.codex_session_id is None
 
 
 class TestIsBotProcessing:

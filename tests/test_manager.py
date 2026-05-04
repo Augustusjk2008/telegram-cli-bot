@@ -41,6 +41,27 @@ class TestManagerLoadSave:
 
         assert restored.avatar_name == "claude-blue.png"
 
+    def test_bot_profile_round_trips_agents(self):
+        payload = {
+            "alias": "repo",
+            "agents": [
+                {
+                    "id": "reviewer",
+                    "name": "代码审查",
+                    "system_prompt": "先审查",
+                    "enabled": True,
+                    "created_at": "2026-05-04T10:00:00",
+                    "updated_at": "2026-05-04T10:00:00",
+                }
+            ],
+        }
+
+        profile = BotProfile.from_dict(payload)
+
+        assert profile.get_agent("main").name == "主 agent"
+        assert profile.get_agent("reviewer").system_prompt == "先审查"
+        assert profile.to_dict()["agents"][0]["id"] == "reviewer"
+
     def test_load_empty(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         profile = BotProfile(alias="main", token="main_tok")
@@ -185,6 +206,27 @@ class TestManagerLoadSave:
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert data["bots"][0]["alias"] == "sub1"
         assert data["bots"][0]["working_dir"] == str(new_dir)
+
+    @pytest.mark.asyncio
+    async def test_agent_crud_is_scoped_to_existing_cli_bot(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
+
+        created = await manager.create_bot_agent(
+            "main",
+            {"id": "reviewer", "name": "代码审查", "system_prompt": "先审查"},
+        )
+        updated = await manager.update_bot_agent("main", "reviewer", {"enabled": False})
+
+        assert created["id"] == "reviewer"
+        assert updated["enabled"] is False
+        assert manager.get_profile("main").get_agent("reviewer").system_prompt == "先审查"
+
+        await manager.delete_bot_agent("main", "reviewer")
+
+        with pytest.raises(KeyError):
+            manager.get_profile("main").get_agent("reviewer")
 
     @pytest.mark.asyncio
     async def test_set_bot_workdir_does_not_update_live_sessions_by_default(self, temp_dir: Path):

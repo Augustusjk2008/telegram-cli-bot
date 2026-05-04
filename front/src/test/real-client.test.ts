@@ -1039,6 +1039,172 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("agent endpoints and scoped chat requests use agent_id", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [{
+              id: "reviewer",
+              name: "代码审查",
+              system_prompt: "先列风险",
+              enabled: true,
+              is_main: false,
+            }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            agent: {
+              id: "writer",
+              name: "文档",
+              system_prompt: "写文档",
+              enabled: true,
+              is_main: false,
+            },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            bot: {
+              alias: "main",
+              cli_type: "codex",
+              status: "running",
+              working_dir: "C:\\workspace",
+            },
+            session: {
+              working_dir: "C:\\workspace",
+              message_count: 0,
+              history_count: 0,
+              is_processing: false,
+            },
+            agents: [],
+            active_agent_id: "reviewer",
+            busy_agent_ids: [],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: { items: [] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            active_conversation_id: "",
+            items: [],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            conversation: {
+              id: "conv-1",
+              title: "审查",
+              last_message_preview: "",
+              message_count: 0,
+              pinned: false,
+              active: true,
+              status: "active",
+              bot_alias: "main",
+              bot_mode: "cli",
+              cli_type: "codex",
+              working_dir: "C:\\workspace",
+              agent_id: "reviewer",
+              created_at: "2026-05-04T00:00:00Z",
+              updated_at: "2026-05-04T00:00:00Z",
+            },
+            messages: [],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    const agents = await client.listAgents("main");
+    const created = await client.createAgent("main", {
+      id: "writer",
+      name: "文档",
+      systemPrompt: "写文档",
+      enabled: true,
+    });
+    await client.getBotOverview("main", { agentId: "reviewer" });
+    await client.listMessages("main", { agentId: "reviewer" });
+    await client.listConversations("main", "", { agentId: "reviewer" });
+    await client.createConversation("main", "审查", { agentId: "reviewer" });
+
+    expect(agents.items[0]).toEqual(expect.objectContaining({
+      id: "reviewer",
+      name: "代码审查",
+      systemPrompt: "先列风险",
+    }));
+    expect(created.agent).toEqual(expect.objectContaining({
+      id: "writer",
+      systemPrompt: "写文档",
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/bots/main/agents",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/bots/main/agents",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          id: "writer",
+          name: "文档",
+          system_prompt: "写文档",
+          enabled: true,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main?agent_id=reviewer",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/bots/main/history?agent_id=reviewer",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/bots/main/conversations?limit=80&agent_id=reviewer",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/bots/main/conversations",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          title: "审查",
+          agent_id: "reviewer",
+        }),
+      }),
+    );
+  });
+
   test("listMessages maps persisted elapsed seconds from history", async () => {
     fetchMock
       .mockResolvedValueOnce({

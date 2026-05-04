@@ -155,6 +155,29 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
     if isinstance(cli_params, dict):
         normalized["cli_params"] = copy.deepcopy(cli_params)
 
+    agents = value.get("agents")
+    if isinstance(agents, list):
+        normalized_agents: list[dict[str, Any]] = []
+        for item in agents:
+            if not isinstance(item, dict):
+                continue
+            agent_id = str(item.get("id") or "").strip().lower()
+            name = str(item.get("name") or "").strip()
+            if not agent_id or not name:
+                continue
+            normalized_agents.append(
+                {
+                    "id": agent_id,
+                    "name": name,
+                    "system_prompt": str(item.get("system_prompt") or ""),
+                    "enabled": bool(item.get("enabled", True)),
+                    "created_at": str(item.get("created_at") or ""),
+                    "updated_at": str(item.get("updated_at") or ""),
+                }
+            )
+        if normalized_agents:
+            normalized["agents"] = normalized_agents
+
     return normalized
 
 

@@ -77,6 +77,7 @@ class ChatHistoryService:
         return self.store.mark_stale_streaming_turns(
             bot_id=session.bot_id,
             user_id=session.user_id,
+            agent_id=session.agent_id,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -151,6 +152,7 @@ class ChatHistoryService:
             bot_id=session.bot_id,
             bot_alias=session.bot_alias,
             user_id=session.user_id,
+            agent_id=session.agent_id,
             bot_mode=profile.bot_mode,
             cli_type=profile.cli_type,
             working_dir=session.working_dir,
@@ -161,6 +163,7 @@ class ChatHistoryService:
             assistant_home=assistant_home,
             managed_prompt_hash=managed_prompt_hash,
             prompt_surface_version=prompt_surface_version,
+            agent_prompt_hash=getattr(session, "agent_prompt_hash_seen", None),
         )
         if not had_active_conversation:
             with session._lock:
@@ -213,6 +216,7 @@ class ChatHistoryService:
         items = self.store.list_active_history(
             bot_id=session.bot_id,
             user_id=session.user_id,
+            agent_id=session.agent_id,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -243,11 +247,12 @@ class ChatHistoryService:
         return self.store.list_active_history(
             bot_id=session.bot_id,
             user_id=session.user_id,
-                working_dir=session.working_dir,
-                session_epoch=_session_epoch(session),
-                conversation_id=_active_conversation_id(session) or None,
-                limit=limit,
-            )
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
+            limit=limit,
+        )
 
     def get_message_trace(
         self,
@@ -311,6 +316,7 @@ class ChatHistoryService:
             "history_count": self.store.count_history(
                 bot_id=session.bot_id,
                 user_id=session.user_id,
+                agent_id=session.agent_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
@@ -319,6 +325,7 @@ class ChatHistoryService:
             "running_reply": self.store.get_running_reply(
                 bot_id=session.bot_id,
                 user_id=session.user_id,
+                agent_id=session.agent_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
@@ -337,6 +344,7 @@ class ChatHistoryService:
             "history_count": self.store.count_history(
                 bot_id=session.bot_id,
                 user_id=session.user_id,
+                agent_id=session.agent_id,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
@@ -359,6 +367,7 @@ class ChatHistoryService:
         self.store.delete_conversation(
             bot_id=session.bot_id,
             user_id=session.user_id,
+            agent_id=session.agent_id,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
         )
