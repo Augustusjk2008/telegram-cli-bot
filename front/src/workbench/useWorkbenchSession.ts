@@ -17,10 +17,12 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
   const [restoredSession, setRestoredSession] = useState<PersistedWorkbenchSession | null>(null);
   const [restoreState, setRestoreState] = useState<WorkbenchRestoreState>("clean");
   const [restoreApplied, setRestoreApplied] = useState(false);
+  const [restoreLoaded, setRestoreLoaded] = useState(false);
   const writeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setRestoreApplied(false);
+    setRestoreLoaded(false);
     if (!workspaceRoot) {
       setRestoredSession(null);
       setRestoreState("clean");
@@ -36,6 +38,7 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
           ? "restored"
           : "clean",
     );
+    setRestoreLoaded(true);
   }, [botAlias, workspaceRoot]);
 
   const persistedSnapshot = useMemo(() => {
@@ -77,6 +80,7 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
     restoredSession,
     restoreState,
     restoreApplied,
+    restoreLoaded,
     markRestoreApplied: () => setRestoreApplied(true),
   };
 }

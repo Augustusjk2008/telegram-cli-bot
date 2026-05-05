@@ -58,7 +58,12 @@
   animation: workbenchOverlayFadeIn 120ms ease-out;
 }
 
-.desktop-workbench-root [data-highlighted="true"] {
+.desktop-workbench-root [data-selected="true"] > button {
+  background: var(--workbench-active-bg);
+  border-color: var(--workbench-focus-ring);
+}
+
+.desktop-workbench-root [data-highlighted="true"] > button {
   animation: workbenchRowHighlight 1.2s ease-out;
 }
 

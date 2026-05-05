@@ -919,6 +919,7 @@ export function FileTreePane({
       return;
     }
     event.preventDefault();
+    tree.selectPath(entry.path);
     openContextMenu(entry, absolutePath, event.clientX, event.clientY);
   }
 
@@ -930,6 +931,7 @@ export function FileTreePane({
       return;
     }
     event.preventDefault();
+    tree.selectPath(entry.path);
     const rect = event.currentTarget.getBoundingClientRect();
     openContextMenu(entry, absolutePath, rect.left + 12, rect.bottom + 4);
   }
@@ -1147,7 +1149,13 @@ export function FileTreePane({
     const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations);
     const isIgnored = gitDecoration === "ignored";
     const itemToneClass = treeItemToneClass(gitDecoration);
-    const itemButtonClassName = "flex h-full min-w-0 flex-1 items-center rounded border border-transparent px-2 text-left transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]";
+    const selected = tree.selectedPath === entry.path;
+    const itemButtonClassName = clsx(
+      "flex h-full min-w-0 flex-1 items-center rounded border px-2 text-left transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
+      selected
+        ? "border-[var(--workbench-focus-ring)] bg-[var(--workbench-active-bg)]"
+        : "border-transparent",
+    );
 
     return (
       <div
@@ -1156,6 +1164,7 @@ export function FileTreePane({
         data-git-state={gitDecoration || "clean"}
         data-git-ignored={isIgnored ? "true" : "false"}
         data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
+        data-selected={selected ? "true" : "false"}
         data-drop-target={dropTargetPath === entry.path ? "true" : "false"}
         style={{ paddingLeft: `${depth * 12}px` }}
       >
@@ -1164,6 +1173,7 @@ export function FileTreePane({
             type="button"
             draggable={!structureOnly}
             aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
+            aria-current={selected ? "true" : undefined}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
             onDragStart={(event) => handleEntryDragStart(event, entry)}
@@ -1171,7 +1181,10 @@ export function FileTreePane({
             onDragLeave={(event) => handleDirectoryDragLeave(event, entry)}
             onDrop={(event) => handleDirectoryDrop(event, entry)}
             onDragEnd={resetInternalDrag}
-            onClick={() => void tree.toggleDirectory(entry.path)}
+            onClick={() => {
+              tree.selectPath(entry.path);
+              void tree.toggleDirectory(entry.path);
+            }}
             className={clsx(
               itemButtonClassName,
               dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
@@ -1188,11 +1201,13 @@ export function FileTreePane({
             type="button"
             draggable={!structureOnly}
             aria-label={`打开 ${entry.path}`}
+            aria-current={selected ? "true" : undefined}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
             onDragStart={(event) => handleEntryDragStart(event, entry)}
             onDragEnd={resetInternalDrag}
             onClick={() => {
+              tree.selectPath(entry.path);
               if (!structureOnly) {
                 onOpenFile(entry.path);
               }

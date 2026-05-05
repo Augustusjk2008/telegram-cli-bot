@@ -126,6 +126,9 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
     expandedPaths: Array.isArray(candidate.expandedPaths)
       ? candidate.expandedPaths.filter((item): item is string => typeof item === "string" && item.length > 0)
       : [],
+    selectedTreePath: typeof candidate.selectedTreePath === "string"
+      ? candidate.selectedTreePath.trim()
+      : undefined,
     activeTabPath: typeof candidate.activeTabPath === "string" ? candidate.activeTabPath : "",
     terminalOverrideCwd: typeof candidate.terminalOverrideCwd === "string" ? candidate.terminalOverrideCwd : undefined,
     focusedPane:

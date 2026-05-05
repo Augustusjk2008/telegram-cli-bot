@@ -52,6 +52,7 @@ export type PersistedWorkbenchSession = {
   workspaceRoot: string;
   sidebarView: DesktopSidebarView;
   expandedPaths: string[];
+  selectedTreePath?: string;
   activeTabPath: string;
   terminalOverrideCwd?: string;
   focusedPane?: FocusedWorkbenchPane;

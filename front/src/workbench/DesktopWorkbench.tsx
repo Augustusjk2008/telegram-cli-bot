@@ -211,6 +211,7 @@ export function DesktopWorkbench({
       ? {
           sidebarView: layoutState.sidebarView,
           expandedPaths: fileTree.expandedPaths,
+          selectedTreePath: fileTree.selectedPath,
           activeTabPath: tabs.activeTabPath,
           terminalOverrideCwd: terminalOverride?.cwd,
           focusedPane,
@@ -338,7 +339,7 @@ export function DesktopWorkbench({
   }, [focusedPane, layoutState.chatWidthPx, layoutState.editorHeightPx, layoutState.sidebarCollapsed, layoutState.sidebarWidthPx]);
 
   useEffect(() => {
-    if (!fileTree.rootPath || session.restoreApplied || restoringRef.current) {
+    if (!fileTree.rootPath || !session.restoreLoaded || session.restoreApplied || restoringRef.current) {
       return;
     }
 
@@ -355,6 +356,9 @@ export function DesktopWorkbench({
             ? { cwd: restoredSession.terminalOverrideCwd, source: "manual" }
             : null);
           await fileTree.restoreExpandedPaths(restoredSession.expandedPaths);
+          if (restoredSession.selectedTreePath) {
+            fileTree.selectPath(restoredSession.selectedTreePath);
+          }
           await tabs.restoreFromSnapshot(restoredSession.tabs, restoredSession.activeTabPath);
         }
       } finally {
@@ -368,7 +372,7 @@ export function DesktopWorkbench({
     return () => {
       cancelled = true;
     };
-  }, [fileTree.rootPath, session.restoreApplied, session.restoredSession]);
+  }, [fileTree.rootPath, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
 
   useEffect(() => {
     if (!fileTree.rootPath) {

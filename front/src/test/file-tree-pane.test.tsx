@@ -46,6 +46,12 @@ function expectFileIconNode(fileName: string, iconKind: string) {
   return icon as HTMLElement;
 }
 
+function expectTreeRowSelected(path: string, selected = true) {
+  const row = document.querySelector(`[data-tree-path="${path}"]`);
+  expect(row).not.toBeNull();
+  expect(row).toHaveAttribute("data-selected", selected ? "true" : "false");
+}
+
 function createDragData(path: string) {
   const store = new Map<string, string>([["application/x-tcb-file-path", path]]);
   return {
@@ -141,6 +147,74 @@ test("desktop file tree items keep a thin hover border", async () => {
   expect(fileButton).toHaveClass("h-full", "border", "border-transparent", "hover:border-[var(--workbench-hover-border)]", "hover:bg-[var(--workbench-hover-bg)]");
 });
 
+test("clicking desktop file tree rows marks exactly one selected row", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [
+          { name: "docs", isDir: true },
+          { name: "README.md", isDir: false, size: 12 },
+        ],
+      };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  expectTreeRowSelected("README.md");
+  expectTreeRowSelected("docs", false);
+
+  await user.click(screen.getByRole("button", { name: "展开 docs" }));
+  expectTreeRowSelected("docs");
+  expectTreeRowSelected("README.md", false);
+});
+
+test("right-clicking a desktop file tree row selects the menu target", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "docs", isDir: true },
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const fileButton = await screen.findByRole("button", { name: "打开 README.md" });
+  fireEvent.contextMenu(fileButton);
+
+  expectTreeRowSelected("README.md");
+  expect(await screen.findByRole("menu", { name: "文件树菜单" })).toBeInTheDocument();
+});
+
 test("file context menu copies a sibling file", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -185,6 +259,7 @@ test("file context menu copies a sibling file", async () => {
 
   expect(copyPath).toHaveBeenCalledWith("main", "README.md");
   expect(await screen.findByRole("button", { name: "打开 README 副本.md" })).toBeInTheDocument();
+  expectTreeRowSelected("README 副本.md");
 });
 
 test("file context menu copies the absolute file path", async () => {
@@ -251,6 +326,47 @@ test("directory context menu copies the absolute directory path", async () => {
   expect(writeText).toHaveBeenCalledWith("/workspace/docs");
 });
 
+test("deleting a selected file moves selection to a sibling", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rootEntries = [
+    { name: "docs", isDir: true },
+    { name: "README.md", isDir: false, size: 12 },
+    { name: "package.json", isDir: false, size: 24 },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => ({
+    workingDir: path || "/workspace",
+    entries: !path || path === "/workspace" ? rootEntries : [],
+  }));
+  vi.spyOn(client, "deletePath").mockImplementation(async (_botAlias, path) => {
+    rootEntries = rootEntries.filter((entry) => entry.name !== path);
+  });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "删除" }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: "打开 README.md" })).not.toBeInTheDocument();
+  });
+  expectTreeRowSelected("package.json");
+});
+
 test("dragging a file onto a folder moves it into that folder", async () => {
   const client = new MockWebBotClient();
   let rootEntries = [
@@ -302,6 +418,7 @@ test("dragging a file onto a folder moves it into that folder", async () => {
     expect(movePath).toHaveBeenCalledWith("main", "README.md", "docs");
   });
   expect(await screen.findByRole("button", { name: "打开 docs/README.md" })).toBeInTheDocument();
+  expectTreeRowSelected("docs/README.md");
   expect(screen.queryByRole("button", { name: "打开 README.md" })).not.toBeInTheDocument();
 });
 
@@ -362,6 +479,7 @@ test("dragging a folder onto another folder moves it into that folder", async ()
     expect(movePath).toHaveBeenCalledWith("main", "src", "docs");
   });
   expect(await screen.findByRole("button", { name: "展开 docs/src" })).toBeInTheDocument();
+  expectTreeRowSelected("docs/src");
   expect(screen.queryByRole("button", { name: "展开 src" })).not.toBeInTheDocument();
 });
 
@@ -442,6 +560,46 @@ test("workspace open reveals file tree through one backend request", async () =>
     expect(revealFileTreePath).toHaveBeenCalledTimes(1);
   });
   expect(revealFileTreePath).toHaveBeenCalledWith("main", "src/nested/api.py");
+  await waitFor(() => {
+    expectTreeRowSelected("src/nested/api.py");
+  });
+});
+
+test("refresh clears selection when the selected file disappears", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rootEntries = [
+    { name: "README.md", isDir: false, size: 12 },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => ({
+    workingDir: path || "/workspace",
+    entries: !path || path === "/workspace" ? rootEntries : [],
+  }));
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  expectTreeRowSelected("README.md");
+
+  rootEntries = [];
+  await user.click(screen.getByRole("button", { name: "刷新文件树" }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: "打开 README.md" })).not.toBeInTheDocument();
+  });
+  expect(document.querySelector('[data-selected="true"]')).toBeNull();
 });
 
 test("large file tree renders only visible rows", async () => {

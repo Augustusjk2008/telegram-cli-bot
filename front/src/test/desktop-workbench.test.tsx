@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
+import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
 
 function render(ui: ReactElement) {
   const client = ((ui.props as { client?: MockWebBotClient }).client) || new MockWebBotClient();
@@ -23,6 +24,12 @@ afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
 });
+
+function expectDesktopTreeRowSelected(path: string, selected = true) {
+  const row = document.querySelector(`[data-tree-path="${path}"]`);
+  expect(row).not.toBeNull();
+  expect(row).toHaveAttribute("data-selected", selected ? "true" : "false");
+}
 
 test("desktop workbench shows four panes and persists collapse state", async () => {
   const user = userEvent.setup();
@@ -53,6 +60,67 @@ test("desktop workbench shows four panes and persists collapse state", async () 
 
   await user.click(screen.getByRole("button", { name: "手机版" }));
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
+});
+
+test("desktop workbench persists and restores the selected tree path", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "docs", isDir: true },
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+  vi.spyOn(client, "revealFileTreePath").mockResolvedValue({
+    rootPath: "/workspace",
+    highlightPath: "README.md",
+    expandedPaths: [],
+    branches: {
+      "": [
+        { name: "docs", isDir: true },
+        { name: "README.md", isDir: false, size: 12 },
+      ],
+    },
+  });
+  const storageKey = buildWorkbenchSessionStorageKey("main", "/workspace");
+
+  const view = render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+
+  await waitFor(() => {
+    const raw = localStorage.getItem(storageKey);
+    expect(raw ? JSON.parse(raw).selectedTreePath : "").toBe("README.md");
+  });
+
+  view.unmount();
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+  await waitFor(() => {
+    expectDesktopTreeRowSelected("README.md");
+  });
 });
 
 test("desktop titlebar layout controls toggle visible panes", async () => {
