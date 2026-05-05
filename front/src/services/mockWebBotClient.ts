@@ -850,6 +850,11 @@ export class MockWebBotClient implements WebBotClient {
         botMode: "cli",
         enabled: true,
         isMain: item.alias === "main",
+        serviceStatus: item.status === "offline" ? "offline" : "online",
+        activityStatus: item.status === "busy" ? "busy" : "idle",
+        busyAgentIds: [],
+        busyAgentNames: [],
+        busyAgentCount: item.status === "busy" ? 1 : 0,
       },
     ]),
   );
@@ -1248,8 +1253,18 @@ export class MockWebBotClient implements WebBotClient {
       };
     }
     const workingDir = this.workdirOverrides.get(base.alias) || base.workingDir;
+    const serviceStatus = base.serviceStatus || (base.status === "offline" ? "offline" : "online");
+    const activityStatus = base.activityStatus || (base.status === "busy" ? "busy" : "idle");
+    const busyAgentIds = base.busyAgentIds || [];
+    const busyAgentNames = base.busyAgentNames || [];
+    const busyAgentCount = base.busyAgentCount ?? busyAgentIds.length;
     return {
       ...base,
+      serviceStatus,
+      activityStatus,
+      busyAgentIds,
+      busyAgentNames,
+      busyAgentCount,
       workingDir,
     };
   }
@@ -4517,6 +4532,11 @@ export class MockWebBotClient implements WebBotClient {
       avatarName: input.avatarName,
       enabled: true,
       isMain: false,
+      serviceStatus: "online",
+      activityStatus: "idle",
+      busyAgentIds: [],
+      busyAgentNames: [],
+      busyAgentCount: 0,
     };
     this.bots.set(alias, bot);
     this.currentPaths.set(alias, bot.workingDir);
@@ -4634,6 +4654,7 @@ export class MockWebBotClient implements WebBotClient {
       status: "running",
       lastActiveText: "运行中",
       enabled: true,
+      serviceStatus: "online",
     });
     return this.getBotSummary(botAlias);
   }
@@ -4645,6 +4666,11 @@ export class MockWebBotClient implements WebBotClient {
       status: "offline",
       lastActiveText: "离线",
       enabled: false,
+      serviceStatus: "offline",
+      activityStatus: "idle",
+      busyAgentIds: [],
+      busyAgentNames: [],
+      busyAgentCount: 0,
     });
     return this.getBotSummary(botAlias);
   }

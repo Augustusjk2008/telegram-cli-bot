@@ -1036,9 +1036,9 @@ class WebApiServer:
         return str(value or "main").strip().lower() or "main"
 
     async def get_agents_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_VIEW_BOT_STATUS)
+        auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": list_agents(self.manager, alias)})
+        return _json({"ok": True, "data": list_agents(self.manager, alias, auth.user_id)})
 
     async def post_agent_view(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

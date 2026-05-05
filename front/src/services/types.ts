@@ -1,5 +1,7 @@
 export type CliType = "claude" | "codex";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
+export type BotServiceStatus = "online" | "offline";
+export type BotActivityStatus = "idle" | "busy";
 export type AccountRole = "member" | "guest";
 export type Capability =
   | "view_bots"
@@ -48,6 +50,12 @@ export type BotSummary = {
   status: BotStatus;
   workingDir: string;
   lastActiveText: string;
+  serviceStatus?: BotServiceStatus;
+  activityStatus?: BotActivityStatus;
+  busyAgentIds?: string[];
+  busyAgentNames?: string[];
+  busyAgentCount?: number;
+  agents?: AgentSummary[];
   avatarName?: string;
   cliPath?: string;
   botMode?: string;
@@ -158,6 +166,8 @@ export type BotOverview = {
   agents?: AgentSummary[];
   activeAgentId?: string;
   busyAgentIds?: string[];
+  busyAgentNames?: string[];
+  busyAgentCount?: number;
 };
 
 export type ChatTraceEvent = {

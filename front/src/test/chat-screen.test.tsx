@@ -1040,6 +1040,55 @@ test("chat screen switches agent and scopes history requests", async () => {
   });
 });
 
+test("chat screen reports active child agent activity when sending", async () => {
+  const user = userEvent.setup();
+  let resolveSend: ((message: ChatMessage) => void) | null = null;
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+    ],
+  }));
+  const sendMessage = vi.fn(
+    async () => new Promise<ChatMessage>((resolve) => {
+      resolveSend = resolve;
+    }),
+  );
+  const onBotActivityChange = vi.fn();
+  const client = createClient({ listAgents, sendMessage });
+
+  render(
+    <ChatScreen
+      botAlias="main"
+      client={client}
+      onBotActivityChange={onBotActivityChange}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: /代码审查/ }));
+  await user.type(screen.getByPlaceholderText("发给 代码审查..."), "检查实现");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => {
+    expect(onBotActivityChange).toHaveBeenCalledWith("main", expect.objectContaining({
+      activityStatus: "busy",
+      busyAgentIds: ["reviewer"],
+      busyAgentNames: ["代码审查"],
+      busyAgentCount: 1,
+    }));
+  });
+
+  await act(async () => {
+    resolveSend?.({
+      id: "assistant-done",
+      role: "assistant",
+      text: "完成",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
+});
+
 test("chat screen opens history and switches conversation", async () => {
   const user = userEvent.setup();
   const now = new Date().toISOString();

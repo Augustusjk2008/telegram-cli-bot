@@ -166,6 +166,25 @@ function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
   });
 }
 
+function applyBotActivityOverrides(
+  bots: BotSummary[],
+  overrides: Record<string, Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">>,
+) {
+  return bots.map((bot) => {
+    const override = overrides[bot.alias];
+    if (!override) {
+      return bot;
+    }
+    const busy = override.activityStatus === "busy" || (override.busyAgentCount || 0) > 0 || (override.busyAgentIds?.length || 0) > 0;
+    return {
+      ...bot,
+      ...override,
+      status: busy ? "busy" as const : bot.serviceStatus === "offline" || bot.status === "offline" ? "offline" as const : "running" as const,
+      lastActiveText: busy ? "处理中" : bot.serviceStatus === "offline" || bot.status === "offline" ? "离线" : "运行中",
+    };
+  });
+}
+
 const BOT_SWITCHER_STATUS_PRIORITY: Record<BotStatus, number> = {
   unread: 0,
   running: 1,
@@ -197,8 +216,12 @@ function sortBotsForSwitcher(bots: BotSummary[]) {
   });
 }
 
-function buildDisplayBots(bots: BotSummary[], unreadBots: string[]) {
-  return sortBotsForSwitcher(applyUnreadStatus(bots, unreadBots));
+function buildDisplayBots(
+  bots: BotSummary[],
+  unreadBots: string[],
+  botActivityOverrides: Record<string, Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">>,
+) {
+  return sortBotsForSwitcher(applyUnreadStatus(applyBotActivityOverrides(bots, botActivityOverrides), unreadBots));
 }
 
 function updateMountedChatBots(prev: string[], currentBot: string | null) {
@@ -232,6 +255,7 @@ export function App() {
   const [desktopHasDirtyTabs, setDesktopHasDirtyTabs] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
+  const [botActivityOverrides, setBotActivityOverrides] = useState<Record<string, Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">>>({});
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [publicHostInfo, setPublicHostInfo] = useState<PublicHostInfo | null>(null);
@@ -252,7 +276,7 @@ export function App() {
   const canUseSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "admin_ops");
   const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
-  const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots), [bots, unreadBots]);
+  const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots, botActivityOverrides), [botActivityOverrides, bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
   const hasUnreadOtherBots = useMemo(() => {
     if (unreadBots.length === 0) {
@@ -572,6 +596,7 @@ export function App() {
     setShowInviteCodeManager(false);
     setCurrentTab("chat");
     setBots([]);
+    setBotActivityOverrides({});
     setUnreadBots([]);
     setMountedChatBots([]);
     setDesktopChatStatusByBot({});
@@ -624,6 +649,26 @@ export function App() {
     setUnreadBots((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
   }
 
+  function handleBotActivityChange(
+    alias: string,
+    activity: Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">,
+  ) {
+    setBotActivityOverrides((prev) => {
+      if (activity.activityStatus !== "busy" && (activity.busyAgentCount || 0) <= 0 && (activity.busyAgentIds?.length || 0) <= 0) {
+        if (!prev[alias]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[alias];
+        return next;
+      }
+      return {
+        ...prev,
+        [alias]: activity,
+      };
+    });
+  }
+
   if (!isLoggedIn) {
     return (
       <LoginScreen
@@ -672,6 +717,7 @@ export function App() {
                 ? () => setIsChatImmersive((prev) => !prev)
                 : undefined}
               onUnreadResult={markBotUnread}
+              onBotActivityChange={handleBotActivityChange}
             />
           </div>
         ))}
@@ -827,6 +873,7 @@ export function App() {
                       embedded
                       onRequestDesktopPreview={requestPreview}
                       onUnreadResult={markBotUnread}
+                      onBotActivityChange={handleBotActivityChange}
                       onWorkbenchStatusChange={(status) => {
                         setDesktopChatStatusByBot((prev) => {
                           const currentStatus = prev[alias];

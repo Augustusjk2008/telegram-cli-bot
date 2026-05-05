@@ -53,6 +53,24 @@ class DirectoryPickerClient extends MockWebBotClient {
   }
 }
 
+class BusyAgentClient extends MockWebBotClient {
+  async listBots() {
+    const bots = await super.listBots();
+    return bots.map((bot) => bot.alias === "main"
+      ? {
+          ...bot,
+          status: "busy" as const,
+          serviceStatus: "online" as const,
+          activityStatus: "busy" as const,
+          busyAgentIds: ["reviewer"],
+          busyAgentNames: ["代码审查"],
+          busyAgentCount: 1,
+          lastActiveText: "处理中",
+        }
+      : bot);
+  }
+}
+
 test("bot manager can browse and pick a workdir for a new bot", async () => {
   const user = userEvent.setup();
   const client = new DirectoryPickerClient();
@@ -95,3 +113,11 @@ test("bot manager can browse and pick a workdir for a new bot", async () => {
   expect(client.addBotCalls[0]).not.toHaveProperty("agents");
   expect(screen.queryByText("子 agent")).not.toBeInTheDocument();
 }, 10_000);
+
+test("bot manager separates service status from agent activity", async () => {
+  render(<BotListScreen client={new BusyAgentClient()} onSelect={vi.fn()} />);
+
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
+  expect(screen.getAllByText("在线").length).toBeGreaterThan(0);
+  expect(screen.getByText("代码审查 处理中")).toBeInTheDocument();
+});

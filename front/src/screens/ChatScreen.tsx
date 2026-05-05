@@ -15,6 +15,7 @@ import type {
   AssistantRuntimePendingRun,
   AgentSummary,
   BotOverview,
+  BotSummary,
   ChatAttachmentUploadResult,
   ChatMessage,
   ChatMessageMetaInfo,
@@ -58,6 +59,7 @@ type Props = {
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onUnreadResult?: (botAlias: string) => void;
+  onBotActivityChange?: (botAlias: string, activity: Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
 };
@@ -698,6 +700,7 @@ export function ChatScreen({
   onToggleFocus,
   onToggleImmersive,
   onUnreadResult,
+  onBotActivityChange,
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
 }: Props) {
@@ -745,6 +748,7 @@ export function ChatScreen({
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
   const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
+  const agentsRef = useRef<AgentSummary[]>(fallbackAgents());
   const activeAgentIdRef = useRef(activeAgentId);
   const assistantPollTimerRef = useRef<number | null>(null);
   const sseRecoveryTimerRef = useRef<number | null>(null);
@@ -799,6 +803,10 @@ export function ChatScreen({
   useEffect(() => {
     pendingCronRunsRef.current = pendingCronRuns;
   }, [pendingCronRuns]);
+
+  useEffect(() => {
+    agentsRef.current = agents;
+  }, [agents]);
 
   useEffect(() => {
     activeAgentIdRef.current = activeAgentId;
@@ -1622,6 +1630,7 @@ export function ChatScreen({
     setStreamMode("sse");
     setStreamStartedAtMs(localStartedAtMs);
     sseLastActivityAtRef.current = localStartedAtMs;
+    emitBotActivityForActiveAgent("busy");
 
     try {
       let usingPreviewReplace = false;
@@ -1728,6 +1737,7 @@ export function ChatScreen({
       setIsStreaming(false);
       setStreamMode("");
       setStreamStartedAtMs(null);
+      emitBotActivityForActiveAgent("idle");
     }
   }, [botAlias, client, markSseActivity, onUnreadResult, stopAssistantPoll, stopSseRecoveryWatch]);
 
@@ -1843,6 +1853,17 @@ export function ChatScreen({
   const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
     ? [selectedModel, ...modelOptions]
     : modelOptions;
+
+  function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
+    const agentId = activeAgentIdRef.current || "main";
+    const agent = agentsRef.current.find((item) => item.id === agentId) || activeAgent;
+    onBotActivityChange?.(botAlias, {
+      activityStatus,
+      busyAgentIds: activityStatus === "busy" ? [agentId] : [],
+      busyAgentNames: activityStatus === "busy" ? [agent.name || agentId] : [],
+      busyAgentCount: activityStatus === "busy" ? 1 : 0,
+    });
+  }
 
   return (
     <main className="relative flex flex-col h-full">

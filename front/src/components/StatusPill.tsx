@@ -2,12 +2,13 @@ import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 type Props = {
-  status: "running" | "busy" | "unread" | "offline";
+  status: "running" | "busy" | "unread" | "offline" | "online";
   className?: string;
 };
 
 export function StatusPill({ status, className }: Props) {
   const statusMap = {
+    online: { label: "在线", color: "bg-green-100 text-green-800 border-green-200" },
     running: { label: "运行中", color: "bg-green-100 text-green-800 border-green-200" },
     busy: { label: "处理中", color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
     unread: { label: "未读", color: "bg-sky-100 text-sky-800 border-sky-200" },

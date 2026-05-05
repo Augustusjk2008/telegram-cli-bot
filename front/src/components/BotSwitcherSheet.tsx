@@ -1,5 +1,6 @@
 import { BotSummary } from "../services/types";
 import { X } from "lucide-react";
+import { BotActivitySummary } from "./BotActivitySummary";
 import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
 
@@ -52,7 +53,7 @@ export function BotSwitcherSheet({
         </div>
         <div className="overflow-y-auto p-4 space-y-2">
           {bots.map((bot) => {
-            const isOffline = bot.status === "offline";
+            const isOffline = bot.serviceStatus === "offline" || bot.status === "offline";
             return (
               <button
                 key={bot.alias}
@@ -84,9 +85,13 @@ export function BotSwitcherSheet({
                     {isOffline ? (
                       <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
                     ) : null}
+                    {!isOffline ? <BotActivitySummary bot={bot} className="mt-1" /> : null}
                   </div>
                 </div>
-                <StatusPill status={bot.status} />
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  {bot.status === "unread" ? <StatusPill status="unread" /> : null}
+                  <StatusPill status={isOffline ? "offline" : "online"} />
+                </div>
               </button>
             );
           })}

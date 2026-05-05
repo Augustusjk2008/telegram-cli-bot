@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AvatarPicker } from "../components/AvatarPicker";
+import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -103,7 +104,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
     setError("");
     setNotice("");
     try {
-      if (bot.status === "offline") {
+      if (bot.serviceStatus === "offline" || bot.status === "offline") {
         await client.startBot(bot.alias);
         setNotice(`已启动 ${bot.alias}`);
       } else {
@@ -305,7 +306,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           {bots.map((bot) => {
             const isMain = bot.alias === "main" || bot.isMain;
             const isRenaming = renamingAlias === bot.alias;
-            const isOffline = bot.status === "offline";
+            const isOffline = bot.serviceStatus === "offline" || bot.status === "offline";
+            const servicePillStatus = isOffline ? "offline" : "online";
             return (
               <section
                 key={bot.alias}
@@ -332,8 +334,10 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                       {isMain ? (
                         <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主智能体</span>
                       ) : null}
-                      <StatusPill status={bot.status} />
+                      {bot.status === "unread" ? <StatusPill status="unread" /> : null}
+                      <StatusPill status={servicePillStatus} />
                     </div>
+                    <BotActivitySummary bot={bot} />
                   </div>
                 </div>
 
@@ -363,12 +367,12 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                     <>
                       <button
                         type="button"
-                        aria-label={bot.status === "offline" ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
+                        aria-label={isOffline ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
                         onClick={() => void toggleBot(bot)}
                         disabled={savingAction !== ""}
                         className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
-                        {savingAction === `${bot.alias}:toggle` ? "处理中..." : bot.status === "offline" ? "启动" : "停止"}
+                        {savingAction === `${bot.alias}:toggle` ? "处理中..." : isOffline ? "启动" : "停止"}
                       </button>
                       <button
                         type="button"

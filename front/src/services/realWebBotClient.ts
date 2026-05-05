@@ -126,6 +126,17 @@ type RawBotSummary = {
   cli_path?: string;
   status: string;
   is_processing?: boolean;
+  service_status?: string;
+  serviceStatus?: string;
+  activity_status?: string;
+  activityStatus?: string;
+  busy_agent_ids?: string[];
+  busyAgentIds?: string[];
+  busy_agent_names?: string[];
+  busyAgentNames?: string[];
+  busy_agent_count?: number;
+  busyAgentCount?: number;
+  agents?: RawAgentSummary[];
   assistant_runtime?: RawAssistantRuntimeSnapshot | null;
   working_dir: string;
   avatar_name?: string;
@@ -853,11 +864,32 @@ function mapStatusText(status: BotStatus): string {
 
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const hasPendingAssistantRun = Number(raw.assistant_runtime?.pending_count || 0) > 0;
-  const status = mapStatus(raw.status, isProcessing || hasPendingAssistantRun);
+  const busyAgentIds = (raw.busy_agent_ids ?? raw.busyAgentIds ?? []).map((item) => String(item));
+  const busyAgentNames = (raw.busy_agent_names ?? raw.busyAgentNames ?? []).map((item) => String(item));
+  const hasExplicitBusyAgentCount = typeof raw.busy_agent_count !== "undefined" || typeof raw.busyAgentCount !== "undefined";
+  const legacyProcessing = busyAgentIds.length === 0 && isProcessing;
+  const resolvedBusyAgentIds = legacyProcessing ? ["main"] : busyAgentIds;
+  const resolvedBusyAgentNames = legacyProcessing ? ["主 agent"] : busyAgentNames;
+  const busyAgentCount = legacyProcessing
+    ? 1
+    : Number(raw.busy_agent_count ?? raw.busyAgentCount ?? resolvedBusyAgentIds.length);
+  const serviceStatus = (raw.service_status ?? raw.serviceStatus) === "offline" || raw.status === "stopped" || raw.status === "offline"
+    ? "offline"
+    : "online";
+  const activityStatus = (raw.activity_status ?? raw.activityStatus) === "busy" || busyAgentCount > 0 || isProcessing || hasPendingAssistantRun
+    ? "busy"
+    : "idle";
+  const status = mapStatus(raw.status, activityStatus === "busy");
   const summary: BotSummary = {
     alias: raw.alias,
     cliType: raw.cli_type,
     status,
+    serviceStatus,
+    activityStatus,
+    busyAgentIds: resolvedBusyAgentIds,
+    busyAgentNames: resolvedBusyAgentNames,
+    busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,
+    agents: Array.isArray(raw.agents) ? raw.agents.map(mapAgentSummary) : undefined,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
     avatarName: raw.avatar_name || "",
@@ -2181,7 +2213,9 @@ export class RealWebBotClient implements WebBotClient {
       assistantRuntime: mapAssistantRuntimeSnapshot(data.bot.assistant_runtime),
       agents: (data.agents || []).map(mapAgentSummary),
       activeAgentId: String(data.active_agent_id || options.agentId || "main"),
-      busyAgentIds: (data.busy_agent_ids || []).map((item) => String(item)),
+      busyAgentIds: summary.busyAgentIds || [],
+      busyAgentNames: summary.busyAgentNames || [],
+      busyAgentCount: summary.busyAgentCount || 0,
     };
     if (data.bot.bot_mode) {
       overview.botMode = data.bot.bot_mode;

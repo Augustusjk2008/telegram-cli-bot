@@ -626,6 +626,61 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
     return "configured" if profile.enabled else "stopped"
 
 
+def _build_agent_runtime_map(bot_id: int, user_id: int | None) -> dict[str, dict[str, Any]]:
+    if user_id is None:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    with sessions_lock:
+        for (session_bot_id, session_user_id, session_agent_id), session in sessions.items():
+            if session_bot_id != bot_id or session_user_id != user_id:
+                continue
+            with session._lock:
+                result[session_agent_id] = {
+                    "is_processing": bool(session.is_processing),
+                    "message_count": max(0, int(session.message_count or 0)),
+                    "active_conversation_id": session.active_conversation_id or "",
+                }
+    return result
+
+
+def _agent_summary_with_runtime(
+    profile: BotProfile,
+    agent: AgentProfile,
+    runtime_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    runtime = runtime_map.get(agent.id, {})
+    return {
+        **agent.to_dict(),
+        "is_main": agent.id == "main",
+        "is_processing": bool(runtime.get("is_processing", False)),
+        "message_count": max(0, int(runtime.get("message_count", 0) or 0)),
+        "active_conversation_id": str(runtime.get("active_conversation_id") or ""),
+    }
+
+
+def _build_agent_status_items(
+    profile: BotProfile,
+    runtime_map: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        _agent_summary_with_runtime(profile, agent, runtime_map)
+        for agent in profile.normalized_agents()
+    ]
+
+
+def _build_activity_summary(agent_items: list[dict[str, Any]]) -> dict[str, Any]:
+    busy_agents = [item for item in agent_items if item.get("is_processing")]
+    busy_agent_ids = [str(item.get("id") or "main") for item in busy_agents]
+    busy_agent_names = [str(item.get("name") or item.get("id") or "agent") for item in busy_agents]
+    return {
+        "activity_status": "busy" if busy_agents else "idle",
+        "busy_agent_ids": busy_agent_ids,
+        "busy_agent_names": busy_agent_names,
+        "busy_agent_count": len(busy_agents),
+        "is_processing": bool(busy_agents),
+    }
+
+
 def build_bot_summary(
     manager: MultiBotManager,
     alias: str,
@@ -636,21 +691,22 @@ def build_bot_summary(
 ) -> dict[str, Any]:
     profile = profile or get_profile_or_raise(manager, alias)
     app = manager.applications.get(alias)
+    run_status = _build_run_status(manager, alias, profile)
+    service_status = "offline" if run_status in {"stopped", "offline"} else "online"
+    bot_id = resolve_session_bot_id(manager, alias)
 
     # 优先使用当前用户 session 的工作目录（如果用户已登录）
     working_dir = profile.working_dir
-    is_processing = False
     if user_id is not None:
         try:
             current_session = session or get_session_for_alias(manager, alias, user_id)
             if current_session and current_session.working_dir:
                 working_dir = current_session.working_dir
-            if current_session:
-                with current_session._lock:
-                    is_processing = current_session.is_processing
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
+    agent_items = _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))
+    activity = _build_activity_summary(agent_items)
 
     return {
         "alias": profile.alias,
@@ -661,8 +717,9 @@ def build_bot_summary(
         "working_dir": working_dir,
         "avatar_name": profile.avatar_name or "",
         "is_main": alias == manager.main_profile.alias,
-        "status": _build_run_status(manager, alias, profile),
-        "is_processing": is_processing,
+        "status": run_status,
+        "service_status": service_status,
+        **activity,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(profile, alias == manager.main_profile.alias),
         "assistant_runtime": _build_assistant_runtime_item(manager, profile),
@@ -676,17 +733,19 @@ def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[d
 
 def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    bot_id = resolve_session_bot_id(manager, alias)
     return {
         "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
-        "agents": manager.list_bot_agents(alias),
+        "agents": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id)),
         "active_agent_id": session.agent_id,
     }
 
 
-def list_agents(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    get_profile_or_raise(manager, alias)
-    return {"items": manager.list_bot_agents(alias)}
+def list_agents(manager: MultiBotManager, alias: str, user_id: int | None = None) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    bot_id = resolve_session_bot_id(manager, alias)
+    return {"items": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))}
 
 
 async def create_agent(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:

@@ -481,6 +481,11 @@ describe("RealWebBotClient", () => {
               cli_type: "codex",
               status: "running",
               is_processing: true,
+              service_status: "online",
+              activity_status: "busy",
+              busy_agent_ids: ["reviewer"],
+              busy_agent_names: ["代码审查"],
+              busy_agent_count: 1,
               working_dir: "C:\\workspace\\demo",
             },
           ],
@@ -496,6 +501,11 @@ describe("RealWebBotClient", () => {
         alias: "main",
         cliType: "codex",
         status: "busy",
+        serviceStatus: "online",
+        activityStatus: "busy",
+        busyAgentIds: ["reviewer"],
+        busyAgentNames: ["代码审查"],
+        busyAgentCount: 1,
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
         avatarName: "",
@@ -565,6 +575,46 @@ describe("RealWebBotClient", () => {
       status: "busy",
       lastActiveText: "处理中",
       botMode: "assistant",
+    });
+  });
+
+  test("listBots treats legacy processing without busy agents as main agent busy", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: [
+            {
+              alias: "main",
+              cli_type: "codex",
+              status: "running",
+              is_processing: true,
+              working_dir: "C:\\workspace\\demo",
+            },
+          ],
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const bots = await client.listBots();
+
+    expect(bots[0]).toMatchObject({
+      status: "busy",
+      activityStatus: "busy",
+      busyAgentIds: ["main"],
+      busyAgentNames: ["主 agent"],
+      busyAgentCount: 1,
     });
   });
 
@@ -1535,6 +1585,11 @@ describe("RealWebBotClient", () => {
       alias: "main",
       cliType: "codex",
       status: "running",
+      serviceStatus: "online",
+      activityStatus: "idle",
+      busyAgentIds: [],
+      busyAgentNames: [],
+      busyAgentCount: 0,
       workingDir: "C:\\workspace\\next",
       lastActiveText: "运行中",
       avatarName: "",
@@ -1635,6 +1690,11 @@ describe("RealWebBotClient", () => {
       alias: "main",
       cliType: "claude",
       status: "running",
+      serviceStatus: "online",
+      activityStatus: "idle",
+      busyAgentIds: [],
+      busyAgentNames: [],
+      busyAgentCount: 0,
       workingDir: "C:\\workspace\\demo",
       lastActiveText: "运行中",
       cliPath: "claude.cmd",

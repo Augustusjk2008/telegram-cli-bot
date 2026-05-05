@@ -51,6 +51,7 @@ from bot.web.api_service import (
     create_conversation,
     delete_agent,
     get_directory_listing,
+    get_chat_session_for_alias,
     get_history,
     get_history_trace,
     get_session_for_alias,
@@ -335,6 +336,23 @@ def test_list_bots_includes_processing_state_for_current_user(web_manager: Multi
     items = list_bots(web_manager, 1001)
 
     assert items[0]["alias"] == "main"
+    assert items[0]["is_processing"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_bots_reports_busy_child_agents(web_manager: MultiBotManager):
+    await create_agent(web_manager, "main", {"id": "reviewer", "name": "代码审查"})
+    _profile, _agent, reviewer = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")
+    with reviewer._lock:
+        reviewer.is_processing = True
+
+    items = list_bots(web_manager, 1001)
+
+    assert items[0]["service_status"] == "online"
+    assert items[0]["activity_status"] == "busy"
+    assert items[0]["busy_agent_ids"] == ["reviewer"]
+    assert items[0]["busy_agent_names"] == ["代码审查"]
+    assert items[0]["busy_agent_count"] == 1
     assert items[0]["is_processing"] is True
 
 def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyPatch):
@@ -5467,6 +5485,24 @@ async def test_agent_api_create_update_delete(web_manager: MultiBotManager):
 
     deleted = await delete_agent(web_manager, "main", "reviewer")
     assert deleted["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_agents_includes_processing_state(web_manager: MultiBotManager):
+    await create_agent(web_manager, "main", {"id": "reviewer", "name": "代码审查"})
+    _profile, _agent, reviewer = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")
+    with reviewer._lock:
+        reviewer.is_processing = True
+        reviewer.message_count = 3
+        reviewer.active_conversation_id = "conv-reviewer"
+
+    listed = list_agents(web_manager, "main", user_id=1001)
+
+    by_id = {item["id"]: item for item in listed["items"]}
+    assert by_id["main"]["is_processing"] is False
+    assert by_id["reviewer"]["is_processing"] is True
+    assert by_id["reviewer"]["message_count"] == 3
+    assert by_id["reviewer"]["active_conversation_id"] == "conv-reviewer"
 
 
 @pytest.mark.asyncio

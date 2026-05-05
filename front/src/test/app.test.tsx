@@ -306,7 +306,7 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
   await user.click(screen.getByRole("button", { name: "main" }));
 
   expect(listBotsSpy).toHaveBeenCalledTimes(2);
-  expect(await screen.findByText("处理中")).toBeInTheDocument();
+  expect(await screen.findByText(/处理中/)).toBeInTheDocument();
   expect(screen.getByText("codex: C:\\workspace\\demo")).toBeInTheDocument();
 });
 
