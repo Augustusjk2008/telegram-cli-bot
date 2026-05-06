@@ -193,6 +193,28 @@ async def test_cluster_status_reports_mcp_missing(web_manager: MultiBotManager):
 
 
 @pytest.mark.asyncio
+async def test_cluster_status_detects_installed_codex_mcp(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def fake_run(command, **_kwargs):
+        if command[:3] == ["codex", "mcp", "get"]:
+            return subprocess.CompletedProcess(command, 0, "tcb-cluster\n  enabled: true\n", "")
+        return subprocess.CompletedProcess(command, 1, "", "not found")
+
+    monkeypatch.setattr(api_service.subprocess, "run", fake_run)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/cluster/status")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["mcp"]["codex"]["state"] == "installed"
+    assert payload["data"]["mcp"]["codex"]["message"] == "已安装"
+
+
+@pytest.mark.asyncio
 async def test_cluster_setup_prepare_returns_launcher_paths(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -287,6 +309,14 @@ async def test_run_chat_cluster_finishes_runtime_run(web_manager: MultiBotManage
 
     assert result["output"] == "ok"
     assert api_service._CLUSTER_RUNTIME.get_run(captured["run_id"]) is None
+
+
+def test_cluster_prompt_includes_run_id():
+    prompt = api_service._build_cluster_prompt([{"agent_id": "tester"}], "clr_test")
+
+    assert "当前集群 run_id: clr_test" in prompt
+    assert "调用 ask_agent 时带 run_id" in prompt
+    assert "用户显式提及的子 agent: tester" in prompt
 
 
 @pytest.mark.asyncio

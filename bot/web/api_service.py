@@ -779,6 +779,43 @@ def verify_cluster_mcp_request(request_headers: dict[str, str]) -> None:
         _raise(401, "cluster_mcp_unauthorized", "cluster MCP 未授权")
 
 
+def _cluster_cli_path(profile: BotProfile, cli_type: str) -> str:
+    try:
+        active_cli_type = normalize_cli_type(profile.cli_type)
+    except ValueError:
+        active_cli_type = ""
+    return profile.cli_path if active_cli_type == cli_type and profile.cli_path else cli_type
+
+
+def _cluster_mcp_target_status(profile: BotProfile, cli_type: str) -> dict[str, str]:
+    cli_path = _cluster_cli_path(profile, cli_type)
+    command = build_cli_verify_command(cli_type, cli_path)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            **build_hidden_process_kwargs(),
+        )
+    except FileNotFoundError:
+        return {"state": "cli_missing", "message": f"未找到 {cli_type}"}
+    except subprocess.TimeoutExpired:
+        return {"state": "broken", "message": "检测超时"}
+    except OSError as exc:
+        return {"state": "broken", "message": str(exc)}
+
+    output = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()
+    if completed.returncode == 0 and CLUSTER_MCP_SERVER_NAME in output:
+        if "enabled: false" in output.lower():
+            return {"state": "broken", "message": "已安装但未启用"}
+        return {"state": "installed", "message": "已安装"}
+    if "not found" in output.lower() or "no mcp" in output.lower() or completed.returncode != 0:
+        return {"state": "mcp_missing", "message": "未安装"}
+    return {"state": "mcp_missing", "message": "未安装"}
+
+
 def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     return {
@@ -786,8 +823,8 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
         "model_tiers": dict(profile.cluster.model_tiers),
         "mcp": {
             "server_name": CLUSTER_MCP_SERVER_NAME,
-            "codex": {"state": "not_checked", "message": "未检测"},
-            "claude": {"state": "not_checked", "message": "未检测"},
+            "codex": _cluster_mcp_target_status(profile, "codex"),
+            "claude": _cluster_mcp_target_status(profile, "claude"),
         },
         "agents": [
             {
@@ -2743,7 +2780,7 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     return CliParamsConfig.from_dict(params)
 
 
-def _build_cluster_prompt(mentions: list[dict[str, Any]] | None) -> str:
+def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "") -> str:
     mentioned = ", ".join(
         str(item.get("agent_id") or item.get("agentId") or "").strip()
         for item in (mentions or [])
@@ -2753,6 +2790,7 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None) -> str:
         "<tcb_cluster_mode>\n"
         "你处于 TCB 集群模式。可用 MCP server: tcb-cluster。\n"
         "需要委派时，调用 MCP 工具 ask_agent。不要要求用户切换子 agent 页面。\n"
+        f"当前集群 run_id: {run_id or '无'}。调用 ask_agent 时带 run_id。\n"
         f"用户显式提及的子 agent: {mentioned or '无'}\n"
         "</tcb_cluster_mode>\n\n"
     )
@@ -3805,7 +3843,7 @@ async def _stream_cli_chat(
         text = "/" + text[2:]
     prompt_text = text
     if cluster_run_id:
-        prompt_text = _build_cluster_prompt(cluster_mentions) + prompt_text
+        prompt_text = _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False
@@ -4269,7 +4307,7 @@ async def run_cli_chat(
         text = "/" + text[2:]
     prompt_text = text
     if cluster_run_id:
-        prompt_text = _build_cluster_prompt(cluster_mentions) + prompt_text
+        prompt_text = _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False

@@ -10,6 +10,12 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from bot.cluster_config import (
+    AgentClusterConfig,
+    BotClusterConfig,
+    normalize_agent_cluster_config,
+    normalize_bot_cluster_config,
+)
 from bot.config import MANAGED_BOTS_FILE
 
 APP_SETTINGS_FILE = Path(MANAGED_BOTS_FILE).resolve().parent / ".web_admin_settings.json"
@@ -165,18 +171,26 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
             name = str(item.get("name") or "").strip()
             if not agent_id or not name:
                 continue
-            normalized_agents.append(
-                {
-                    "id": agent_id,
-                    "name": name,
-                    "system_prompt": str(item.get("system_prompt") or ""),
-                    "enabled": bool(item.get("enabled", True)),
-                    "created_at": str(item.get("created_at") or ""),
-                    "updated_at": str(item.get("updated_at") or ""),
-                }
-            )
+            normalized_agent = {
+                "id": agent_id,
+                "name": name,
+                "system_prompt": str(item.get("system_prompt") or ""),
+                "enabled": bool(item.get("enabled", True)),
+                "created_at": str(item.get("created_at") or ""),
+                "updated_at": str(item.get("updated_at") or ""),
+            }
+            if isinstance(item.get("cluster"), dict):
+                agent_cluster = normalize_agent_cluster_config(item.get("cluster"))
+                if agent_cluster != AgentClusterConfig():
+                    normalized_agent["cluster"] = agent_cluster.to_dict()
+            normalized_agents.append(normalized_agent)
         if normalized_agents:
             normalized["agents"] = normalized_agents
+
+    if isinstance(value.get("cluster"), dict):
+        cluster = normalize_bot_cluster_config(value.get("cluster"))
+        if cluster != BotClusterConfig():
+            normalized["cluster"] = cluster.to_dict()
 
     return normalized
 

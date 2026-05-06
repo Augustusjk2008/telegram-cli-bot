@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { ChatMessage, ChatTraceDetails, CliParamsPayload, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
+import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
@@ -997,6 +997,89 @@ test("chat screen hides agent switcher when there are no child agents", async ()
     expect(listAgents).toHaveBeenCalledWith("main");
   });
   expect(screen.queryByRole("button", { name: /当前 agent/ })).not.toBeInTheDocument();
+});
+
+test("cluster mode shows child agent mention chips", async () => {
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+    ],
+  }));
+  const client = createClient({
+    listAgents,
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "", medium: "", high: "" },
+      },
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("button", { name: "@reviewer 代码审查" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /当前 agent/ })).not.toBeInTheDocument();
+});
+
+test("cluster mode loads main conversation when a child agent was previously active", async () => {
+  window.localStorage.setItem("tcb.activeAgent.main", "reviewer");
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+    ],
+  }));
+  const listMessages = vi.fn(async (_botAlias: string, options?: { agentId?: string }): Promise<ChatMessage[]> => {
+    if (options?.agentId === "reviewer") {
+      return [{
+        id: "reviewer-1",
+        role: "assistant",
+        text: "reviewer-history",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      }];
+    }
+    return [{
+      id: "main-1",
+      role: "assistant",
+      text: "main-history",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }];
+  });
+  const getBotOverview = vi.fn(async (): Promise<BotOverview> => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: false,
+    cluster: {
+      enabled: true,
+      writePolicy: "selected_agents",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 2,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+    },
+  }));
+  const client = createClient({ listAgents, listMessages, getBotOverview });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("main-history")).toBeInTheDocument();
+  expect(screen.queryByText("reviewer-history")).not.toBeInTheDocument();
+  expect(listMessages).toHaveBeenLastCalledWith("main");
+  expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("main");
 });
 
 test("chat screen switches agent and scopes history requests", async () => {

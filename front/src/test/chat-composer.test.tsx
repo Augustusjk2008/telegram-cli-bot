@@ -56,3 +56,58 @@ test("cluster mode collects agent mentions", async () => {
     [expect.objectContaining({ agentId: "reviewer" })],
   );
 });
+
+test("cluster mode shows child agent chips and inserts a mention", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <ChatComposer
+      onSend={() => {}}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      clusterMode
+      agents={[{
+        id: "reviewer",
+        name: "代码审查",
+        systemPrompt: "",
+        enabled: true,
+        isMain: false,
+      }]}
+    />,
+  );
+
+  const input = screen.getByPlaceholderText("输入消息");
+  const clusterLabel = screen.getByText("智能体集群");
+  await user.click(screen.getByRole("button", { name: "@reviewer 代码审查" }));
+
+  expect(clusterLabel).toHaveClass("text-emerald-700");
+  expect(input).toHaveValue("@reviewer ");
+});
+
+test("typing at in cluster mode opens agent picker", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <ChatComposer
+      onSend={() => {}}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      clusterMode
+      agents={[{
+        id: "reviewer",
+        name: "代码审查",
+        systemPrompt: "",
+        enabled: true,
+        isMain: false,
+      }]}
+    />,
+  );
+
+  const input = screen.getByPlaceholderText("输入消息");
+  await user.type(input, "@");
+  await user.click(await screen.findByRole("option", { name: "@reviewer 代码审查" }));
+
+  expect(input).toHaveValue("@reviewer ");
+});

@@ -1090,14 +1090,25 @@ export function ChatScreen({
       listScopedMessages(client, botAlias, requestedAgentId),
       getScopedOverview(client, botAlias, requestedAgentId),
     ])
-      .then(([agentData, messages, overview]) => {
+      .then(async ([agentData, initialMessages, initialOverview]) => {
         if (cancelled) return;
         const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
-        const nextAgentId = nextAgents.some((agent) => agent.id === requestedAgentId) ? requestedAgentId : "main";
+        const nextAgentId = initialOverview.cluster?.enabled
+          ? "main"
+          : (nextAgents.some((agent) => agent.id === requestedAgentId) ? requestedAgentId : "main");
+        let messages = initialMessages;
+        let overview = initialOverview;
         if (nextAgentId !== requestedAgentId) {
           setActiveAgentId(nextAgentId);
           activeAgentIdRef.current = nextAgentId;
           window.localStorage.setItem(activeAgentStorageKey(botAlias), nextAgentId);
+          [messages, overview] = await Promise.all([
+            listScopedMessages(client, botAlias, nextAgentId),
+            getScopedOverview(client, botAlias, nextAgentId),
+          ]);
+          if (cancelled || activeAgentIdRef.current !== nextAgentId) {
+            return;
+          }
         }
         setAgents(nextAgents);
         setBotOverview(overview);
@@ -1512,6 +1523,13 @@ export function ChatScreen({
         setLoading(false);
       });
   }, [applyHistoryView, botAlias, client, stopAssistantPoll, stopSseRecoveryWatch]);
+
+  useEffect(() => {
+    if (!botOverview?.cluster?.enabled || activeAgentIdRef.current === "main") {
+      return;
+    }
+    handleSelectAgent("main");
+  }, [botOverview?.cluster?.enabled, handleSelectAgent]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -2057,7 +2075,7 @@ export function ChatScreen({
           disabled={isStreaming || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
-          placeholder={clusterMode ? "@ 可指定子 agent" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
+          placeholder={clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
         />
       ) : null}
 

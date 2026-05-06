@@ -546,6 +546,60 @@ class TestManagerValidation:
         assert restored.main_profile.cli_params.get_param("codex", "model") is None
 
     @pytest.mark.asyncio
+    async def test_main_bot_cluster_config_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex"), str(storage))
+        await manager.update_bot_cluster(
+            "main",
+            {
+                "enabled": True,
+                "model_tiers": {
+                    "low": "gpt-5.3-codex",
+                    "medium": "gpt-5.4",
+                    "high": "gpt-5.5",
+                },
+            },
+        )
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex"), str(storage))
+
+        assert restored.main_profile.cluster.enabled is True
+        assert restored.main_profile.cluster.model_tiers["low"] == "gpt-5.3-codex"
+
+    @pytest.mark.asyncio
+    async def test_main_bot_agent_cluster_config_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex"), str(storage))
+        await manager.create_bot_agent(
+            "main",
+            {
+                "id": "tester",
+                "name": "测试专家",
+                "cluster": {
+                    "allow_cluster": True,
+                    "allow_write": True,
+                    "session_policy": "ephemeral",
+                    "timeout_seconds": 900,
+                },
+            },
+        )
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex"), str(storage))
+        agent = restored.main_profile.get_agent("tester")
+
+        assert agent.cluster.allow_write is True
+        assert agent.cluster.session_policy == "ephemeral"
+        assert agent.cluster.timeout_seconds == 900
+
+    @pytest.mark.asyncio
     async def test_managed_bot_avatar_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({

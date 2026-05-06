@@ -256,6 +256,7 @@ export type BotOverview = {
   runningReply?: RunningReply | null;
   assistantRuntime?: AssistantRuntimeSnapshot | null;
   agents?: AgentSummary[];
+  cluster?: BotClusterConfig;
   activeAgentId?: string;
   busyAgentIds?: string[];
   busyAgentNames?: string[];

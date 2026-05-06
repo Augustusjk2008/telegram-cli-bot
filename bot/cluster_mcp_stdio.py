@@ -15,27 +15,28 @@ from bot.cluster_mcp_client import load_mcp_bridge_config, post_mcp_tool
 
 
 def _write(message: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+    sys.stdout.write(json.dumps(message, ensure_ascii=True) + "\n")
     sys.stdout.flush()
 
 
 def _tools_for_environment() -> list[dict[str, Any]]:
-    if os.environ.get("TCB_CLUSTER_ACTIVE") != "1":
-        return []
     return [
         {
             "name": "cluster_status",
-            "description": "查看当前 TCB 集群运行状态和可用子 agent。",
-            "inputSchema": {"type": "object", "properties": {}},
+            "description": "查看当前 TCB 集群运行状态和可用子 agent。必须传 run_id。",
+            "inputSchema": {"type": "object", "properties": {"run_id": {"type": "string"}}},
         },
         {
             "name": "list_agents",
-            "description": "列出当前 TCB 集群可调用子 agent。",
-            "inputSchema": {"type": "object", "properties": {"include_disabled": {"type": "boolean"}}},
+            "description": "列出当前 TCB 集群可调用子 agent。必须传 run_id。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"include_disabled": {"type": "boolean"}, "run_id": {"type": "string"}},
+            },
         },
         {
             "name": "ask_agent",
-            "description": "向一个 TCB 子 agent 发送任务并返回结果。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
+            "description": "向一个 TCB 子 agent 发送任务并返回结果。必须传 run_id。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
             "inputSchema": {
                 "type": "object",
                 "required": ["agent_id", "message"],
@@ -45,6 +46,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
                     "model_tier": {"type": "string", "enum": ["low", "medium", "high"]},
                     "timeout_seconds": {"type": "integer"},
                     "allow_write": {"type": "boolean"},
+                    "run_id": {"type": "string"},
                 },
             },
         },
@@ -53,6 +55,10 @@ def _tools_for_environment() -> list[dict[str, Any]]:
 
 def _content_text(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
+
+
+def _tool_error(message: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": message}], "isError": True}
 
 
 def handle_request(config_path: Path, request: dict[str, Any]) -> dict[str, Any] | None:
@@ -73,10 +79,17 @@ def handle_request(config_path: Path, request: dict[str, Any]) -> dict[str, Any]
     if method == "tools/call":
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
         name = str(params.get("name") or "")
-        arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-        run_id = os.environ.get("TCB_CLUSTER_RUN_ID", "")
-        config = load_mcp_bridge_config(config_path)
-        result = post_mcp_tool(config, name, arguments, run_id=run_id)
+        arguments = dict(params.get("arguments")) if isinstance(params.get("arguments"), dict) else {}
+        run_id = str(arguments.pop("run_id", "") or os.environ.get("TCB_CLUSTER_RUN_ID", ""))
+        try:
+            config = load_mcp_bridge_config(config_path)
+            result = post_mcp_tool(config, name, arguments, run_id=run_id)
+        except Exception as exc:
+            message = json.dumps(
+                {"ok": False, "error": str(exc), "error_type": type(exc).__name__},
+                ensure_ascii=False,
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(message)}
         return {"jsonrpc": "2.0", "id": request_id, "result": _content_text(json.dumps(result, ensure_ascii=False))}
     if method == "notifications/initialized":
         return None

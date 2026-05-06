@@ -37,12 +37,16 @@ def _write_launcher(path: Path, *, python_executable: Path, repo_root: Path, con
     if _is_windows_launcher(path):
         content = "\n".join([
             "@echo off",
+            "set PYTHONUTF8=1",
+            "set PYTHONIOENCODING=utf-8",
             f'"{python_executable}" "{script_path}" --config "{config_path}" %*',
             "",
         ])
     else:
         content = "\n".join([
             "#!/usr/bin/env sh",
+            "export PYTHONUTF8=1",
+            "export PYTHONIOENCODING=utf-8",
             f'exec "{python_executable}" "{script_path}" --config "{config_path}" "$@"',
             "",
         ])
