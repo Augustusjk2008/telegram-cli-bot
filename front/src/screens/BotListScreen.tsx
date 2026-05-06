@@ -1,13 +1,18 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AvatarAsset, BotSummary, CliType, CreateBotInput } from "../services/types";
+import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { DEFAULT_AVATAR_ASSETS, pickAvailableAvatarName } from "../utils/avatar";
-import { normalizePathInput } from "../utils/pathInput";
+import {
+  EMPTY_CREATE_DRAFT,
+  isBotOffline,
+  isMainBot,
+  useBotManager,
+  type CreateDraft,
+} from "./useBotManager";
 
 type Props = {
   client?: WebBotClient;
@@ -16,181 +21,44 @@ type Props = {
   canManage?: boolean;
 };
 
-type CreateDraft = CreateBotInput;
-
-const EMPTY_CREATE_DRAFT: CreateDraft = {
-  alias: "",
-  botMode: "cli",
-  cliType: "codex",
-  cliPath: "",
-  workingDir: "",
-  avatarName: "",
-};
-
 export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange, canManage = true }: Props) {
-  const [bots, setBots] = useState<BotSummary[]>([]);
-  const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [createDraft, setCreateDraft] = useState<CreateDraft>(EMPTY_CREATE_DRAFT);
-  const [savingAction, setSavingAction] = useState("");
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
-
-  async function loadBots() {
-    setLoading(true);
-    setError("");
-    try {
-      const [data, assets] = await Promise.all([
-        client.listBots(),
-        client.listAvatarAssets().catch(() => DEFAULT_AVATAR_ASSETS),
-      ]);
-      const resolvedAssets = assets.length > 0 ? assets : DEFAULT_AVATAR_ASSETS;
-      setBots(data);
-      onBotsChange?.(data);
-      setAvatarAssets(resolvedAssets);
-      setCreateDraft((prev) => ({
-        ...prev,
-        avatarName: pickAvailableAvatarName(prev.avatarName, resolvedAssets, "bot"),
-      }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载智能体失败");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadBots();
-  }, [client]);
+  const {
+    bots,
+    avatarAssets,
+    loading,
+    error,
+    notice,
+    savingAction,
+    setError,
+    createBot,
+    toggleBot,
+    renameBot,
+    deleteBot,
+    updateBotAvatar,
+  } = useBotManager({ client, onBotsChange });
 
   const directoryBrowserAlias = bots.find((bot) => bot.isMain || bot.alias === "main")?.alias || bots[0]?.alias || "main";
 
-  async function createBot() {
-    if (!createDraft.alias.trim()) {
-      setError("别名不能为空");
-      return;
-    }
-
-    setSavingAction("create");
-    setError("");
-    setNotice("");
-    try {
-      await client.addBot({
-        ...createDraft,
-        alias: createDraft.alias.trim(),
-        cliPath: normalizePathInput(createDraft.cliPath),
-        workingDir: normalizePathInput(createDraft.workingDir),
-        avatarName: pickAvailableAvatarName(createDraft.avatarName, avatarAssets, "bot"),
-      });
+  async function handleCreateBot() {
+    const created = await createBot(createDraft);
+    if (created) {
       setCreateDraft(EMPTY_CREATE_DRAFT);
-      setNotice("智能体已创建");
-      await loadBots();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "创建智能体失败");
-    } finally {
-      setSavingAction("");
-    }
-  }
-
-  async function toggleBot(bot: BotSummary) {
-    if (bot.alias === "main") {
-      return;
-    }
-
-    setSavingAction(`${bot.alias}:toggle`);
-    setError("");
-    setNotice("");
-    try {
-      if (bot.serviceStatus === "offline" || bot.status === "offline") {
-        await client.startBot(bot.alias);
-        setNotice(`已启动 ${bot.alias}`);
-      } else {
-        await client.stopBot(bot.alias);
-        setNotice(`已停止 ${bot.alias}`);
-      }
-      await loadBots();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "更新智能体状态失败");
-    } finally {
-      setSavingAction("");
     }
   }
 
   async function saveRename(bot: BotSummary) {
-    const nextAlias = (renameDrafts[bot.alias] || "").trim();
-    if (!nextAlias) {
-      setError("新别名不能为空");
-      return;
-    }
-
-    setSavingAction(`${bot.alias}:rename`);
-    setError("");
-    setNotice("");
-    try {
-      await client.renameBot(bot.alias, nextAlias);
-      setNotice(`已将 ${bot.alias} 改名为 ${nextAlias}`);
+    const renamed = await renameBot(bot, renameDrafts[bot.alias] || "");
+    if (renamed) {
       setRenamingAlias("");
       setRenameDrafts((prev) => {
         const next = { ...prev };
         delete next[bot.alias];
         return next;
       });
-      await loadBots();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "智能体改名失败");
-    } finally {
-      setSavingAction("");
-    }
-  }
-
-  async function deleteBot(bot: BotSummary) {
-    if (bot.alias === "main") {
-      return;
-    }
-    if (!window.confirm(`确定删除智能体 ${bot.alias} 吗？`)) {
-      return;
-    }
-
-    setSavingAction(`${bot.alias}:delete`);
-    setError("");
-    setNotice("");
-    try {
-      await client.removeBot(bot.alias);
-      setNotice(`已删除 ${bot.alias}`);
-      await loadBots();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "删除智能体失败");
-    } finally {
-      setSavingAction("");
-    }
-  }
-
-  async function updateExistingBotAvatar(bot: BotSummary, avatarName: string) {
-    const nextAvatarName = pickAvailableAvatarName(avatarName, avatarAssets, "bot");
-    if (nextAvatarName === pickAvailableAvatarName(bot.avatarName, avatarAssets, "bot")) {
-      return;
-    }
-
-    setSavingAction(`${bot.alias}:avatar`);
-    setError("");
-    setNotice("");
-    setBots((prev) => prev.map((item) => (
-      item.alias === bot.alias
-        ? { ...item, avatarName: nextAvatarName }
-        : item
-    )));
-    try {
-      await client.updateBotAvatar(bot.alias, nextAvatarName);
-      setNotice(`已更新 ${bot.alias} 的头像`);
-      await loadBots();
-    } catch (err) {
-      await loadBots();
-      setError(err instanceof Error ? err.message : "更新头像失败");
-    } finally {
-      setSavingAction("");
     }
   }
 
@@ -288,7 +156,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
         </div>
         <button
           type="button"
-          onClick={() => void createBot()}
+          onClick={() => void handleCreateBot()}
           disabled={savingAction !== ""}
           className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
         >
@@ -304,9 +172,9 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
       ) : (
         <div className="space-y-4">
           {bots.map((bot) => {
-            const isMain = bot.alias === "main" || bot.isMain;
+            const isMain = isMainBot(bot);
             const isRenaming = renamingAlias === bot.alias;
-            const isOffline = bot.serviceStatus === "offline" || bot.status === "offline";
+            const isOffline = isBotOffline(bot);
             const servicePillStatus = isOffline ? "offline" : "online";
             return (
               <section
@@ -325,7 +193,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                     selectLabel={`${bot.alias} 头像`}
                     disabled={savingAction !== ""}
                     onSelect={(avatarName) => {
-                      void updateExistingBotAvatar(bot, avatarName);
+                      void updateBotAvatar(bot, avatarName);
                     }}
                   />
                   <div className="min-w-0 flex-1 space-y-1">

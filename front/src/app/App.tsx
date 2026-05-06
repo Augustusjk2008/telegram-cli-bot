@@ -27,6 +27,7 @@ import type { BotStatus, BotSummary, PublicHostInfo, SessionState } from "../ser
 import type { WebBotClient } from "../services/webBotClient";
 import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
+import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
 import { FilesScreen } from "../screens/FilesScreen";
 import { GitScreen } from "../screens/GitScreen";
 import { InviteCodeManagementScreen } from "../screens/InviteCodeManagementScreen";
@@ -671,6 +672,17 @@ export function App() {
   }
 
   if (showBotManager || !currentBot) {
+    if (effectiveLayoutMode === "desktop") {
+      return (
+        <DesktopBotManagerScreen
+          client={client}
+          currentAlias={currentBot}
+          onSelect={handleSelectBot}
+          onBotsChange={setBots}
+          canManage={canManageBots}
+        />
+      );
+    }
     return <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} canManage={canManageBots} />;
   }
 

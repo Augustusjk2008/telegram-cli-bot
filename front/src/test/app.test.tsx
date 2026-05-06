@@ -524,6 +524,22 @@ test("bot manager can add rename and delete managed bots", async () => {
   expect(screen.queryByText("planner")).not.toBeInTheDocument();
 });
 
+test("desktop bot manager uses dense desktop screen while mobile keeps old manager", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
+
+  expect(await screen.findByTestId("desktop-bot-manager-screen")).toBeInTheDocument();
+});
+
 test("settings can change my avatar and chat uses the selected image", async () => {
   const user = userEvent.setup();
 
