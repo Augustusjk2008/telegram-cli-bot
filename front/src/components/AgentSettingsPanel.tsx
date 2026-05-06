@@ -7,6 +7,8 @@ type AgentSettingsPanelProps = {
   botAlias: string;
   botMode?: string;
   client: WebBotClient;
+  canManage?: boolean;
+  className?: string;
 };
 
 type FormState = {
@@ -46,7 +48,13 @@ function validateForm(form: FormState, editingId: string) {
   return "";
 }
 
-export function AgentSettingsPanel({ botAlias, botMode, client }: AgentSettingsPanelProps) {
+export function AgentSettingsPanel({
+  botAlias,
+  botMode,
+  client,
+  canManage = true,
+  className = "",
+}: AgentSettingsPanelProps) {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -189,20 +197,22 @@ export function AgentSettingsPanel({ botAlias, botMode, client }: AgentSettingsP
   }
 
   return (
-    <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+    <section className={`rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 ${className}`}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-[var(--text)]">子 agent</h2>
           <p className="text-sm text-[var(--muted)]">提示词改动对新会话生效</p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90"
-        >
-          <Plus className="h-4 w-4" />
-          新增 agent
-        </button>
+        {canManage ? (
+          <button
+            type="button"
+            onClick={openCreate}
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90"
+          >
+            <Plus className="h-4 w-4" />
+            新增 agent
+          </button>
+        ) : null}
       </div>
 
       {error ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
@@ -223,7 +233,7 @@ export function AgentSettingsPanel({ botAlias, botMode, client }: AgentSettingsP
               </div>
               <div className="mt-0.5 truncate text-xs text-[var(--muted)]">{agent.id}</div>
             </div>
-            {!agent.isMain ? (
+            {!agent.isMain && canManage ? (
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -312,7 +322,7 @@ export function AgentSettingsPanel({ botAlias, botMode, client }: AgentSettingsP
             <button
               type="button"
               onClick={() => void saveAgent()}
-              disabled={saving || Boolean(formError)}
+              disabled={!canManage || saving || Boolean(formError)}
               className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />

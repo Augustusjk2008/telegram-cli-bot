@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { clsx } from "clsx";
 import {
+  CheckSquare,
   FolderOpen,
   LogIn,
   Pencil,
@@ -13,14 +14,15 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
+import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { AvatarPicker } from "../components/AvatarPicker";
+import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
-  BotStatus,
   BotSummary,
   CliType,
   UpdateBotWorkdirOptions,
@@ -28,19 +30,24 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
-  EMPTY_CREATE_DRAFT,
-  asWebApiClientError,
-  botMatchesManagerQuery,
+  buildBulkActionPlan,
   countBotManagerStats,
+  detectBotIssues,
   draftFromBot,
   getBotManagerStatus,
-  getErrorMessage,
+  getBusyAgentNames,
+  getVisibleManagedBots,
   isBotOffline,
   isMainBot,
-  sortManagedBots,
+  type BulkAction,
+  type BulkActionResult,
+  type EditDraft,
+  type ManagerViewFilter,
+} from "./botManagerModel";
+import {
+  EMPTY_CREATE_DRAFT,
   useBotManager,
   type CreateDraft,
-  type EditDraft,
 } from "./useBotManager";
 
 type Props = {
@@ -51,15 +58,16 @@ type Props = {
   canManage?: boolean;
 };
 
-type StatusFilter = "all" | BotStatus;
-type Mode = "view" | "edit" | "create";
+type Mode = "inspect" | "create";
+type InspectorTab = "overview" | "config" | "agents";
 
-const STATUS_FILTERS: Array<{ id: StatusFilter; label: string }> = [
+const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
   { id: "all", label: "全部" },
   { id: "unread", label: "未读" },
   { id: "running", label: "运行中" },
   { id: "busy", label: "处理中" },
   { id: "offline", label: "离线" },
+  { id: "attention", label: "需处理" },
 ];
 
 function managerPillStatus(bot: BotSummary) {
@@ -97,6 +105,34 @@ function createDraftEquals(left: CreateDraft, right: CreateDraft) {
   return JSON.stringify(normalizeCreateDraft(left)) === JSON.stringify(normalizeCreateDraft(right));
 }
 
+function issueClassName(severity: "info" | "warning") {
+  return severity === "warning"
+    ? "border-amber-200 bg-amber-50 text-amber-700"
+    : "border-[var(--border)] bg-[var(--surface-strong)] text-[var(--muted)]";
+}
+
+function bulkActionVerb(action: BulkAction) {
+  if (action === "start") {
+    return "启动";
+  }
+  if (action === "stop") {
+    return "停止";
+  }
+  return "删除";
+}
+
+function bulkResultSummary(result: BulkActionResult) {
+  const verb = bulkActionVerb(result.action);
+  const parts = [`已${verb} ${result.succeeded.length} 个`];
+  if (result.failed.length > 0) {
+    parts.push(`失败 ${result.failed.length} 个`);
+  }
+  if (result.skipped.length > 0) {
+    parts.push(`跳过 ${result.skipped.length} 个`);
+  }
+  return parts.join("，");
+}
+
 function WorkdirConflictNotice({
   conflict,
   onConfirm,
@@ -107,11 +143,11 @@ function WorkdirConflictNotice({
   onCancel: () => void;
 }) {
   return (
-      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-        <div>切换工作目录会清空 {conflict.historyCount} 条聊天消息。</div>
-        <div className="mt-1 break-all text-xs text-amber-700">
-          {conflict.currentWorkingDir} {"->"} {conflict.requestedWorkingDir}
-        </div>
+    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+      <div>切换工作目录会清空 {conflict.historyCount} 条聊天消息。</div>
+      <div className="mt-1 break-all text-xs text-amber-700">
+        {conflict.currentWorkingDir} {"->"} {conflict.requestedWorkingDir}
+      </div>
       <div className="mt-3 flex gap-2">
         <button
           type="button"
@@ -432,6 +468,52 @@ function EditPanel({
           onClose={() => setShowWorkdirPicker(false)}
         />
       ) : null}
+
+      <BotCliParamsPanel
+        botAlias={bot.alias}
+        client={manager.client}
+        canManage={canManage}
+        reloadKey={`${bot.alias}:${bot.cliType}:${bot.cliPath || ""}`}
+      />
+    </div>
+  );
+}
+
+function BulkSummaryPanel({
+  selectedBots,
+}: {
+  selectedBots: BotSummary[];
+}) {
+  const startPlan = buildBulkActionPlan("start", selectedBots);
+  const stopPlan = buildBulkActionPlan("stop", selectedBots);
+  const deletePlan = buildBulkActionPlan("delete", selectedBots);
+  const skipped = [...startPlan.skipped, ...stopPlan.skipped, ...deletePlan.skipped];
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-base font-semibold">批量操作</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">已选 {selectedBots.length} 个智能体。</p>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-xs text-[var(--muted)]">可启动</div>
+          <div className="mt-1 text-lg font-semibold">{startPlan.targets.length}</div>
+        </div>
+        <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-xs text-[var(--muted)]">可停止</div>
+          <div className="mt-1 text-lg font-semibold">{stopPlan.targets.length}</div>
+        </div>
+        <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-xs text-[var(--muted)]">可删除</div>
+          <div className="mt-1 text-lg font-semibold">{deletePlan.targets.length}</div>
+        </div>
+      </div>
+      <div className="space-y-1 text-xs text-[var(--muted)]">
+        {skipped.slice(0, 6).map((item, index) => (
+          <div key={`${item.alias}:${item.reason}:${index}`}>{item.alias}: {item.reason}</div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -445,32 +527,41 @@ export function DesktopBotManagerScreen({
 }: Props) {
   const manager = useBotManager({ client, onBotsChange });
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [mode, setMode] = useState<Mode>("view");
-  const [selectedAlias, setSelectedAlias] = useState(currentAlias || "");
+  const [statusFilter, setStatusFilter] = useState<ManagerViewFilter>("all");
+  const [mode, setMode] = useState<Mode>("inspect");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("overview");
+  const [focusedAlias, setFocusedAlias] = useState(currentAlias || "");
+  const [selectedAliases, setSelectedAliases] = useState<Set<string>>(() => new Set());
   const [dirty, setDirty] = useState(false);
-  const listRef = useRef<HTMLDivElement | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkActionResult | null>(null);
 
-  const visibleBots = useMemo(() => sortManagedBots(manager.bots).filter((bot) => {
-    const status = getBotManagerStatus(bot);
-    return (statusFilter === "all" || status === statusFilter) && botMatchesManagerQuery(bot, query);
+  const visibleBots = useMemo(() => getVisibleManagedBots({
+    bots: manager.bots,
+    query,
+    filter: statusFilter,
   }), [manager.bots, query, statusFilter]);
 
-  const selectedBot = manager.bots.find((bot) => bot.alias === selectedAlias)
+  const focusedBot = manager.bots.find((bot) => bot.alias === focusedAlias)
     || manager.bots.find((bot) => bot.alias === currentAlias)
     || visibleBots[0]
     || null;
+
+  const selectedBots = useMemo(
+    () => manager.bots.filter((bot) => selectedAliases.has(bot.alias)),
+    [manager.bots, selectedAliases],
+  );
+
   const stats = countBotManagerStats(manager.bots);
 
   useEffect(() => {
-    if (!selectedBot && visibleBots[0]) {
-      setSelectedAlias(visibleBots[0].alias);
+    if (!focusedBot && visibleBots[0]) {
+      setFocusedAlias(visibleBots[0].alias);
       return;
     }
-    if (selectedBot && !manager.bots.some((bot) => bot.alias === selectedBot.alias)) {
-      setSelectedAlias(visibleBots[0]?.alias || currentAlias || "");
+    if (focusedBot && !manager.bots.some((bot) => bot.alias === focusedBot.alias)) {
+      setFocusedAlias(visibleBots[0]?.alias || currentAlias || "");
     }
-  }, [currentAlias, manager.bots, selectedBot, visibleBots]);
+  }, [currentAlias, focusedBot, manager.bots, visibleBots]);
 
   function confirmDiscardDirty() {
     if (!dirty) {
@@ -479,27 +570,152 @@ export function DesktopBotManagerScreen({
     return window.confirm("当前智能体配置有未保存修改，继续会丢失这些修改。确定继续吗？");
   }
 
-  function selectBot(alias: string) {
+  function focusBot(alias: string) {
     if (!confirmDiscardDirty()) {
       return;
     }
     setDirty(false);
-    setMode("view");
-    setSelectedAlias(alias);
+    setMode("inspect");
+    setInspectorTab("overview");
+    setFocusedAlias(alias);
   }
 
-  function handleListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function toggleBotSelection(alias: string) {
+    setSelectedAliases((prev) => {
+      const next = new Set(prev);
+      if (next.has(alias)) {
+        next.delete(alias);
+      } else {
+        next.add(alias);
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedAliases(new Set());
+  }
+
+  function selectVisibleBots() {
+    setSelectedAliases(new Set(visibleBots.map((bot) => bot.alias)));
+  }
+
+  function handleTableKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (visibleBots.length === 0) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (selectedAliases.size > 0) {
+        clearSelection();
+        return;
+      }
+      if (dirty && confirmDiscardDirty()) {
+        setDirty(false);
+        setMode("inspect");
+        setInspectorTab("overview");
+      }
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      selectVisibleBots();
+      return;
+    }
+    if (event.key === " ") {
+      event.preventDefault();
+      if (focusedBot) {
+        toggleBotSelection(focusedBot.alias);
+      }
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
       return;
     }
     event.preventDefault();
-    const currentIndex = Math.max(0, visibleBots.findIndex((bot) => bot.alias === selectedBot?.alias));
+    const currentIndex = Math.max(0, visibleBots.findIndex((bot) => bot.alias === focusedBot?.alias));
     const delta = event.key === "ArrowDown" ? 1 : -1;
     const nextBot = visibleBots[(currentIndex + delta + visibleBots.length) % visibleBots.length];
-    selectBot(nextBot.alias);
+    focusBot(nextBot.alias);
+  }
+
+  async function runBulkAction(action: BulkAction) {
+    const plan = buildBulkActionPlan(action, selectedBots);
+    if (plan.targets.length === 0 && plan.skipped.length === 0) {
+      return;
+    }
+
+    if (plan.destructive) {
+      const confirmed = window.confirm(`确定删除 ${plan.targets.length} 个智能体吗？将跳过 ${plan.skipped.length} 个不可删除项。`);
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const result: BulkActionResult = {
+      action,
+      succeeded: [],
+      failed: [],
+      skipped: plan.skipped,
+    };
+
+    for (const bot of plan.targets) {
+      try {
+        if (action === "start") {
+          await manager.client.startBot(bot.alias);
+        } else if (action === "stop") {
+          await manager.client.stopBot(bot.alias);
+        } else {
+          await manager.client.removeBot(bot.alias);
+        }
+        result.succeeded.push(bot.alias);
+      } catch (error) {
+        result.failed.push({
+          alias: bot.alias,
+          message: error instanceof Error ? error.message : `${bulkActionVerb(action)}失败`,
+        });
+      }
+    }
+
+    setBulkResult(result);
+    clearSelection();
+    await manager.loadBots();
+  }
+
+  function renderInspectorTabs() {
+    const tabs: Array<{ id: InspectorTab; label: string }> = [
+      { id: "overview", label: "概览" },
+      { id: "config", label: "配置" },
+      { id: "agents", label: "Agent" },
+    ];
+
+    return (
+      <div className="mb-3 inline-flex rounded-md border border-[var(--border)] bg-[var(--surface-strong)] p-0.5">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            aria-pressed={inspectorTab === tab.id}
+            onClick={() => {
+              if (tab.id !== inspectorTab && !confirmDiscardDirty()) {
+                return;
+              }
+              setDirty(false);
+              setMode("inspect");
+              setInspectorTab(tab.id);
+            }}
+            className={clsx(
+              "h-8 rounded px-2 text-xs",
+              inspectorTab === tab.id
+                ? "bg-[var(--accent)] text-white"
+                : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -527,6 +743,35 @@ export function DesktopBotManagerScreen({
                 className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--bg)] pl-8 pr-3 text-sm outline-none focus:border-[var(--accent)]"
               />
             </div>
+            {selectedAliases.size > 0 ? (
+              <div className="flex items-center gap-1 border-r border-[var(--border)] pr-2">
+                <span className="px-1 text-xs text-[var(--muted)]">已选 {selectedAliases.size}</span>
+                <button
+                  type="button"
+                  onClick={() => void runBulkAction("start")}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs hover:bg-[var(--surface-strong)]"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  批量启动
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runBulkAction("stop")}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs hover:bg-[var(--surface-strong)]"
+                >
+                  <Square className="h-3.5 w-3.5" />
+                  批量停止
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runBulkAction("delete")}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  批量删除
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               aria-label="刷新智能体"
@@ -549,6 +794,7 @@ export function DesktopBotManagerScreen({
                     return;
                   }
                   setDirty(false);
+                  clearSelection();
                   setMode("create");
                 }}
                 className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white"
@@ -586,61 +832,143 @@ export function DesktopBotManagerScreen({
         <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">{manager.notice}</div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(420px,520px)_minmax(420px,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(680px,1fr)_400px]">
         <section
-          ref={listRef}
           data-testid="desktop-bot-manager-list"
           tabIndex={0}
-          onKeyDown={handleListKeyDown}
-          className="min-h-0 overflow-y-auto border-r border-[var(--border)] bg-[var(--surface)] p-2 focus:outline-none"
+          onKeyDown={handleTableKeyDown}
+          className="min-h-0 overflow-auto border-r border-[var(--border)] bg-[var(--surface)] focus:outline-none"
         >
           {manager.loading ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载中...</div>
           ) : visibleBots.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">没有匹配的智能体</div>
-          ) : visibleBots.map((bot) => {
-            const selected = mode !== "create" && selectedBot?.alias === bot.alias;
-            const current = bot.alias === currentAlias;
-            return (
-              <button
-                key={bot.alias}
-                type="button"
-                aria-current={selected ? "true" : undefined}
-                onClick={() => selectBot(bot.alias)}
-                onDoubleClick={() => {
-                  if (!isBotOffline(bot)) {
-                    onSelect(bot.alias);
-                  }
-                }}
-                className={clsx(
-                  "mb-1 grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-2.5 py-2 text-left",
-                  selected ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-transparent hover:bg-[var(--surface-strong)]",
-                )}
-              >
-                <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
-                <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-sm font-semibold">{bot.alias}</span>
-                    {isMainBot(bot) ? (
-                      <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">主</span>
-                    ) : null}
-                    {current ? (
-                      <span className="rounded border border-[var(--accent)] px-1 text-[10px] text-[var(--accent)]">当前</span>
-                    ) : null}
-                  </span>
-                  <span className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-[var(--muted)]">
-                    <span className="shrink-0">{bot.botMode || "cli"} · {bot.cliType}</span>
-                    <span className="truncate" title={bot.workingDir}>{bot.workingDir}</span>
-                  </span>
-                  <BotActivitySummary bot={bot} className="mt-0.5" />
-                </span>
-                <span className="flex shrink-0 flex-col items-end gap-1">
-                  {bot.status === "unread" ? <StatusPill status="unread" /> : null}
-                  <StatusPill status={managerPillStatus(bot)} />
-                </span>
-              </button>
-            );
-          })}
+          ) : (
+            <table aria-label="智能体舰队" className="w-full min-w-[900px] table-fixed border-separate border-spacing-0 text-sm">
+              <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-xs text-[var(--muted)]">
+                <tr className="border-b border-[var(--border)]">
+                  <th className="w-10 px-3 py-2">
+                    <button
+                      type="button"
+                      aria-label="选择当前可见智能体"
+                      onClick={selectVisibleBots}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--surface-strong)]"
+                    >
+                      <CheckSquare className="h-4 w-4" />
+                    </button>
+                  </th>
+                  <th className="w-[220px] px-2 py-2">智能体</th>
+                  <th className="w-[110px] px-2 py-2">状态</th>
+                  <th className="w-[120px] px-2 py-2">类型</th>
+                  <th className="w-[170px] px-2 py-2">Agent</th>
+                  <th className="px-2 py-2">工作目录</th>
+                  <th className="w-[120px] px-2 py-2">最近活动</th>
+                  <th className="w-[96px] px-2 py-2 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleBots.map((bot) => {
+                  const focused = mode !== "create" && focusedBot?.alias === bot.alias;
+                  const current = bot.alias === currentAlias;
+                  const checked = selectedAliases.has(bot.alias);
+                  const issues = detectBotIssues(bot, manager.bots);
+                  const busyNames = getBusyAgentNames(bot);
+
+                  return (
+                    <tr
+                      key={bot.alias}
+                      aria-selected={focused}
+                      className={clsx(
+                        "border-b border-[var(--border)]",
+                        focused ? "bg-[var(--accent)]/5" : "hover:bg-[var(--surface-strong)]",
+                      )}
+                    >
+                      <td className="px-3 py-2 align-middle">
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${bot.alias}`}
+                          checked={checked}
+                          onChange={() => toggleBotSelection(bot.alias)}
+                          className="h-4 w-4 rounded border-[var(--border)]"
+                        />
+                      </td>
+                      <td className="px-2 py-2 align-middle">
+                        <button
+                          type="button"
+                          aria-label={`聚焦 ${bot.alias}`}
+                          onClick={() => focusBot(bot.alias)}
+                          onDoubleClick={() => {
+                            if (!isBotOffline(bot)) {
+                              onSelect(bot.alias);
+                            }
+                          }}
+                          className="flex w-full min-w-0 items-center gap-2 text-left"
+                        >
+                          <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={28} />
+                          <span className="min-w-0">
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <span className="truncate font-semibold">{bot.alias}</span>
+                              {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">主</span> : null}
+                              {current ? <span className="rounded border border-[var(--accent)] px-1 text-[10px] text-[var(--accent)]">当前</span> : null}
+                            </span>
+                            {issues.length > 0 ? (
+                              <span className="mt-1 flex flex-wrap gap-1">
+                                {issues.slice(0, 2).map((issue) => (
+                                  <span key={issue.code} className={clsx("rounded border px-1 py-0.5 text-[10px]", issueClassName(issue.severity))}>
+                                    {issue.label}
+                                  </span>
+                                ))}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                      </td>
+                      <td className="px-2 py-2 align-middle">
+                        <div className="flex flex-col items-start gap-1">
+                          {bot.status === "unread" ? <StatusPill status="unread" /> : null}
+                          <StatusPill status={managerPillStatus(bot)} />
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 align-middle text-xs text-[var(--muted)]">{bot.botMode || "cli"} · {bot.cliType}</td>
+                      <td className="px-2 py-2 align-middle text-xs text-[var(--muted)]">
+                        {busyNames.length > 1 ? `${busyNames.length} 个 agent 处理中` : busyNames[0] || "空闲"}
+                      </td>
+                      <td className="truncate px-2 py-2 align-middle font-mono text-xs text-[var(--muted)]" title={bot.workingDir}>
+                        {bot.workingDir || "未设置"}
+                      </td>
+                      <td className="truncate px-2 py-2 align-middle text-xs text-[var(--muted)]" title={bot.lastActiveText}>
+                        {bot.lastActiveText}
+                      </td>
+                      <td className="px-2 py-2 align-middle">
+                        <div className="flex justify-end gap-1">
+                          <button
+                            type="button"
+                            aria-label="从表格进入"
+                            disabled={isBotOffline(bot)}
+                            onClick={() => onSelect(bot.alias)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <LogIn className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="打开配置"
+                            onClick={() => {
+                              focusBot(bot.alias);
+                              setInspectorTab("config");
+                            }}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] hover:bg-[var(--surface-strong)]"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </section>
 
         <aside className="min-h-0 overflow-y-auto bg-[var(--bg)] p-4">
@@ -650,123 +978,151 @@ export function DesktopBotManagerScreen({
               canManage={canManage}
               onCreated={(alias) => {
                 setDirty(false);
-                setSelectedAlias(alias);
-                setMode("view");
+                setFocusedAlias(alias);
+                setMode("inspect");
+                setInspectorTab("overview");
               }}
               onDirtyChange={setDirty}
             />
-          ) : mode === "edit" && selectedBot ? (
-            <EditPanel
-              bot={selectedBot}
-              manager={manager}
-              canManage={canManage}
-              onCancel={() => {
-                setDirty(false);
-                setMode("view");
-              }}
-              onSaved={(alias) => {
-                setDirty(false);
-                setSelectedAlias(alias);
-                setMode("view");
-              }}
-              onDirtyChange={setDirty}
-            />
-          ) : selectedBot ? (
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <ChatAvatar alt={`${selectedBot.alias} 头像`} avatarName={selectedBot.avatarName} kind="bot" size={44} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate text-base font-semibold">{selectedBot.alias}</h2>
-                    {isMainBot(selectedBot) ? (
-                      <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">主</span>
+          ) : selectedBots.length > 0 ? (
+            <BulkSummaryPanel selectedBots={selectedBots} />
+          ) : focusedBot ? (
+            <div>
+              {renderInspectorTabs()}
+              {inspectorTab === "config" ? (
+                <EditPanel
+                  bot={focusedBot}
+                  manager={manager}
+                  canManage={canManage}
+                  onCancel={() => {
+                    setDirty(false);
+                    setInspectorTab("overview");
+                  }}
+                  onSaved={(alias) => {
+                    setDirty(false);
+                    setFocusedAlias(alias);
+                    setInspectorTab("overview");
+                  }}
+                  onDirtyChange={setDirty}
+                />
+              ) : inspectorTab === "agents" ? (
+                <AgentSettingsPanel
+                  botAlias={focusedBot.alias}
+                  botMode={focusedBot.botMode || "cli"}
+                  client={client}
+                  canManage={canManage}
+                />
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <ChatAvatar alt={`${focusedBot.alias} 头像`} avatarName={focusedBot.avatarName} kind="bot" size={44} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h2 className="truncate text-base font-semibold">{focusedBot.alias}</h2>
+                        {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">主</span> : null}
+                        <StatusPill status={managerPillStatus(focusedBot)} />
+                      </div>
+                      <div className="mt-1 text-sm text-[var(--muted)]">{focusedBot.botMode || "cli"} · {focusedBot.cliType}</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+                    <div className="text-xs font-medium text-[var(--muted)]">CLI 路径</div>
+                    <div className="mt-1 break-all font-mono text-xs">{focusedBot.cliPath || focusedBot.cliType}</div>
+                  </div>
+
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+                    <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
+                    <div className="mt-1 break-all font-mono text-xs">{focusedBot.workingDir}</div>
+                  </div>
+
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+                    <div className="text-xs font-medium text-[var(--muted)]">状态</div>
+                    <BotActivitySummary bot={focusedBot} className="mt-1" />
+                    {detectBotIssues(focusedBot, manager.bots).length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {detectBotIssues(focusedBot, manager.bots).map((issue) => (
+                          <span key={issue.code} className={clsx("rounded border px-1.5 py-0.5 text-xs", issueClassName(issue.severity))}>
+                            {issue.label}
+                          </span>
+                        ))}
+                      </div>
                     ) : null}
-                    <StatusPill status={managerPillStatus(selectedBot)} />
                   </div>
-                  <div className="mt-1 text-sm text-[var(--muted)]">{selectedBot.botMode || "cli"} · {selectedBot.cliType}</div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      aria-label={isBotOffline(focusedBot) ? `${focusedBot.alias} 当前离线，不可进入` : `进入 ${focusedBot.alias}`}
+                      disabled={isBotOffline(focusedBot)}
+                      onClick={() => onSelect(focusedBot.alias)}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <LogIn className="h-4 w-4" />
+                      进入
+                    </button>
+                    {canManage ? (
+                      <button
+                        type="button"
+                        aria-label={`编辑 ${focusedBot.alias}`}
+                        onClick={() => setInspectorTab("config")}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)]"
+                      >
+                        <Pencil className="h-4 w-4" />
+                        编辑
+                      </button>
+                    ) : null}
+                    {canManage && !isMainBot(focusedBot) ? (
+                      <button
+                        type="button"
+                        aria-label={isBotOffline(focusedBot) ? `启动 ${focusedBot.alias}` : `停止 ${focusedBot.alias}`}
+                        onClick={() => void manager.toggleBot(focusedBot)}
+                        disabled={manager.savingAction !== ""}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      >
+                        {isBotOffline(focusedBot) ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                        {isBotOffline(focusedBot) ? "启动" : "停止"}
+                      </button>
+                    ) : null}
+                    {canManage && !isMainBot(focusedBot) ? (
+                      <button
+                        type="button"
+                        aria-label={`删除 ${focusedBot.alias}`}
+                        onClick={() => void manager.deleteBot(focusedBot)}
+                        disabled={manager.savingAction !== ""}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        删除
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                <div className="text-xs font-medium text-[var(--muted)]">CLI 路径</div>
-                <div className="mt-1 break-all font-mono text-xs">{selectedBot.cliPath || selectedBot.cliType}</div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
-                <div className="mt-1 break-all font-mono text-xs">{selectedBot.workingDir}</div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                <div className="text-xs font-medium text-[var(--muted)]">状态</div>
-                <BotActivitySummary bot={selectedBot} className="mt-1" />
-                {(selectedBot.busyAgentNames || []).length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {(selectedBot.busyAgentNames || []).slice(0, 6).map((name) => (
-                      <span key={name} className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
-                        {name}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  aria-label={isBotOffline(selectedBot) ? `${selectedBot.alias} 当前离线，不可进入` : `进入 ${selectedBot.alias}`}
-                  disabled={isBotOffline(selectedBot)}
-                  onClick={() => onSelect(selectedBot.alias)}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <LogIn className="h-4 w-4" />
-                  进入
-                </button>
-                {canManage ? (
-                  <button
-                    type="button"
-                    aria-label={`编辑 ${selectedBot.alias}`}
-                    onClick={() => {
-                      setDirty(false);
-                      setMode("edit");
-                    }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)]"
-                  >
-                    <Pencil className="h-4 w-4" />
-                    编辑
-                  </button>
-                ) : null}
-                {canManage && !isMainBot(selectedBot) ? (
-                  <button
-                    type="button"
-                    aria-label={isBotOffline(selectedBot) ? `启动 ${selectedBot.alias}` : `停止 ${selectedBot.alias}`}
-                    onClick={() => void manager.toggleBot(selectedBot)}
-                    disabled={manager.savingAction !== ""}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                  >
-                    {isBotOffline(selectedBot) ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                    {isBotOffline(selectedBot) ? "启动" : "停止"}
-                  </button>
-                ) : null}
-                {canManage && !isMainBot(selectedBot) ? (
-                  <button
-                    type="button"
-                    aria-label={`删除 ${selectedBot.alias}`}
-                    onClick={() => void manager.deleteBot(selectedBot)}
-                    disabled={manager.savingAction !== ""}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    删除
-                  </button>
-                ) : null}
-              </div>
+              )}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">暂无可展示智能体</div>
           )}
         </aside>
       </div>
+
+      {bulkResult ? (
+        <footer className="border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-xs text-[var(--muted)]">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-medium text-[var(--text)]">{bulkResultSummary(bulkResult)}</span>
+            {bulkResult.skipped.map((item) => (
+              <span key={`skipped:${item.alias}`} className="rounded border border-[var(--border)] px-1.5 py-0.5">
+                {item.alias}: {item.reason}
+              </span>
+            ))}
+            {bulkResult.failed.map((item) => (
+              <span key={`failed:${item.alias}`} className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-red-700">
+                {item.alias}: {item.message}
+              </span>
+            ))}
+          </div>
+        </footer>
+      ) : null}
     </main>
   );
 }

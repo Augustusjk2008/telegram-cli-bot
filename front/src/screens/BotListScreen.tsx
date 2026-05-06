@@ -8,11 +8,10 @@ import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
   EMPTY_CREATE_DRAFT,
-  isBotOffline,
-  isMainBot,
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
+import { isBotOffline, isMainBot } from "./botManagerModel";
 
 type Props = {
   client?: WebBotClient;

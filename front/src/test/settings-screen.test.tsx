@@ -3,9 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AppUpdateStatus, CliParamsPayload, DirectoryListing } from "../services/types";
-
-const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
+import type { AppUpdateStatus, DirectoryListing } from "../services/types";
 
 class StreamingUpdateClient extends MockWebBotClient {
   releaseDownload: (() => void) | null = null;
@@ -77,34 +75,6 @@ class SettingsDirectoryPickerClient extends MockWebBotClient {
       : `${this.browserPath}\\${path}`;
     return this.browserPath;
   }
-}
-
-function cliParamsWithModel(params: Partial<Record<string, unknown>> = {}): CliParamsPayload {
-  return {
-    cliType: "codex",
-    params: {
-      model: "gpt-5.5",
-      reasoning_effort: "xhigh",
-      ...params,
-    },
-    defaults: {
-      model: "gpt-5.4",
-      reasoning_effort: "xhigh",
-    },
-    schema: {
-      model: {
-        type: "string",
-        description: "模型选择",
-        nullable: true,
-        enum: MODEL_OPTIONS,
-      },
-      reasoning_effort: {
-        type: "string",
-        description: "推理努力程度",
-        enum: ["xhigh", "high", "medium", "low"],
-      },
-    },
-  };
 }
 
 test("assistant bots lock the default workdir in settings", async () => {
@@ -268,7 +238,7 @@ test("settings screen asks for confirmation before resetting the current workdir
   expect(await screen.findByText("工作目录已更新")).toBeInTheDocument();
 });
 
-test("main settings merge update controls into the main bot operations card", async () => {
+test("main settings split update controls into separate card", async () => {
   const client = new MockWebBotClient();
 
   render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
@@ -277,9 +247,10 @@ test("main settings merge update controls into the main bot operations card", as
   expect(within(opsRegion).getByRole("heading", { name: "运行配置" })).toBeInTheDocument();
   expect(within(opsRegion).getByLabelText("CLI 类型")).toBeInTheDocument();
   expect(within(opsRegion).getByLabelText("工作目录")).toBeInTheDocument();
-  expect(within(opsRegion).getByRole("heading", { name: "版本更新" })).toBeInTheDocument();
-  expect(within(opsRegion).getByText("当前版本")).toBeInTheDocument();
-  expect(within(opsRegion).getByText("自动下载更新")).toBeInTheDocument();
+  expect(within(opsRegion).queryByRole("heading", { name: "版本更新" })).not.toBeInTheDocument();
+  const updateRegion = screen.getByRole("region", { name: "版本更新" });
+  expect(within(updateRegion).getByText("当前版本")).toBeInTheDocument();
+  expect(within(updateRegion).getByText("自动下载更新")).toBeInTheDocument();
   expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
 });
 
@@ -310,70 +281,27 @@ test("main settings saves Git proxy address and port shortcut", async () => {
   expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
 });
 
-test("settings CLI params hide model and exclude it from normal saves", async () => {
+test("desktop settings show migration notice instead of bot runtime forms", async () => {
   const user = userEvent.setup();
-  const updateCliParam = vi.fn(async (_botAlias: string, key: string, value: unknown) => (
-    cliParamsWithModel({ [key]: value })
-  ));
+  const onOpenBotManager = vi.fn();
   const client = new MockWebBotClient();
-  vi.spyOn(client, "getCliParams").mockResolvedValue(cliParamsWithModel());
-  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
 
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={client}
+      onLogout={() => undefined}
+      showBotRuntimeSettings={false}
+      onOpenBotManager={onOpenBotManager}
+    />,
+  );
 
-  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
-  expect(screen.queryByLabelText("模型选择")).not.toBeInTheDocument();
-
-  await user.selectOptions(screen.getByLabelText("推理努力程度"), "high");
-  await waitFor(() => {
-    expect(screen.getByRole("button", { name: "保存参数" })).toBeEnabled();
-  });
-  await user.click(screen.getByRole("button", { name: "保存参数" }));
-
-  await waitFor(() => {
-    expect(updateCliParam).toHaveBeenCalledWith("main", "reasoning_effort", "high");
-  });
-  expect(updateCliParam).not.toHaveBeenCalledWith("main", "model", expect.anything());
-});
-
-test("settings CLI reset preserves chat selected model", async () => {
-  const user = userEvent.setup();
-  const resetCliParams = vi.fn(async () => cliParamsWithModel({ model: "gpt-5.4" }));
-  const updateCliParam = vi.fn(async (_botAlias: string, _key: string, value: unknown) => (
-    cliParamsWithModel({ model: value })
-  ));
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "getCliParams").mockResolvedValue(cliParamsWithModel());
-  vi.spyOn(client, "resetCliParams").mockImplementation(resetCliParams);
-  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
-
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-
-  await user.click(await screen.findByRole("button", { name: "恢复默认参数" }));
-
-  await waitFor(() => {
-    expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.5", "codex");
-  });
-});
-
-test("settings CLI reset preserves none model", async () => {
-  const user = userEvent.setup();
-  const resetCliParams = vi.fn(async () => cliParamsWithModel({ model: "gpt-5.4" }));
-  const updateCliParam = vi.fn(async (_botAlias: string, _key: string, value: unknown) => (
-    cliParamsWithModel({ model: value === "none" ? null : value })
-  ));
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "getCliParams").mockResolvedValue(cliParamsWithModel({ model: null }));
-  vi.spyOn(client, "resetCliParams").mockImplementation(resetCliParams);
-  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
-
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-
-  await user.click(await screen.findByRole("button", { name: "恢复默认参数" }));
-
-  await waitFor(() => {
-    expect(updateCliParam).toHaveBeenCalledWith("main", "model", "none", "codex");
-  });
+  expect(await screen.findByText("智能体配置已迁移")).toBeInTheDocument();
+  expect(screen.queryByLabelText("工作目录")).not.toBeInTheDocument();
+  expect(screen.queryByText("子 agent")).not.toBeInTheDocument();
+  expect(screen.queryByText("CLI 参数")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "打开智能体管理" }));
+  expect(onOpenBotManager).toHaveBeenCalledTimes(1);
 });
 
 test("main settings show update log modal and restart guidance after download", async () => {

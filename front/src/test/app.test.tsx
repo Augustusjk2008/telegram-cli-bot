@@ -856,3 +856,20 @@ test("mobile app never exposes assistant ops navigation", async () => {
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
 });
+
+test("desktop settings route bot runtime config into manager", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  expect(await screen.findByText("智能体配置已迁移")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "打开智能体管理" }));
+
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
+});

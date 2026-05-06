@@ -167,6 +167,7 @@ test("desktop titlebar layout controls toggle visible panes", async () => {
 
 test("desktop workbench shows the status bar and uses the left rail to switch sidebar content", async () => {
   const user = userEvent.setup();
+  const onOpenBotManager = vi.fn();
 
   render(
     <DesktopWorkbench
@@ -180,6 +181,7 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
       viewMode="desktop"
       onViewModeChange={() => {}}
       onOpenBotSwitcher={() => {}}
+      onOpenBotManager={onOpenBotManager}
     />,
   );
 
@@ -200,7 +202,9 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   expect(screen.getByRole("button", { name: "启动调试" })).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "设置" }));
-  expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
+  expect(await screen.findByText("智能体配置已迁移")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "打开智能体管理" }));
+  expect(onOpenBotManager).toHaveBeenCalledTimes(1);
 
   await user.click(screen.getByRole("button", { name: "插件" }));
   expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();

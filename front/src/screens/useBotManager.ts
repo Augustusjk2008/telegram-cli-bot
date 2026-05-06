@@ -3,7 +3,6 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
   AvatarAsset,
-  BotStatus,
   BotSummary,
   CliType,
   CreateBotInput,
@@ -13,17 +12,16 @@ import type {
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, pickAvailableAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
+import {
+  draftFromBot,
+  getErrorMessage,
+  isBotOffline,
+  isMainBot,
+  type EditDraft,
+} from "./botManagerModel";
 
 export type CreateDraft = CreateBotInput;
-
-export type EditDraft = {
-  alias: string;
-  botMode: "cli" | "assistant";
-  cliType: CliType;
-  cliPath: string;
-  workingDir: string;
-  avatarName: string;
-};
+export type { EditDraft } from "./botManagerModel";
 
 export const EMPTY_CREATE_DRAFT: CreateDraft = {
   alias: "",
@@ -34,99 +32,8 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   avatarName: "",
 };
 
-export function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
-
 export function asWebApiClientError(error: unknown): WebApiClientError | null {
   return error instanceof WebApiClientError ? error : null;
-}
-
-export function isBotOffline(bot: BotSummary) {
-  return bot.serviceStatus === "offline" || bot.status === "offline";
-}
-
-export function isMainBot(bot: BotSummary) {
-  return bot.alias === "main" || Boolean(bot.isMain);
-}
-
-export function isBotBusy(bot: BotSummary) {
-  return bot.activityStatus === "busy" || bot.status === "busy" || (bot.busyAgentCount || 0) > 0;
-}
-
-export function getBotManagerStatus(bot: BotSummary): BotStatus {
-  if (isBotOffline(bot)) {
-    return "offline";
-  }
-  if (bot.status === "unread") {
-    return "unread";
-  }
-  if (isBotBusy(bot)) {
-    return "busy";
-  }
-  return "running";
-}
-
-export function botMatchesManagerQuery(bot: BotSummary, query: string) {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  const haystack = [
-    bot.alias,
-    bot.workingDir,
-    bot.cliType,
-    bot.botMode || "",
-    ...(bot.busyAgentNames || []),
-  ].join(" ").toLowerCase();
-  return haystack.includes(normalized);
-}
-
-const MANAGER_STATUS_PRIORITY: Record<BotStatus, number> = {
-  unread: 0,
-  running: 1,
-  busy: 2,
-  offline: 3,
-};
-
-export function sortManagedBots(items: BotSummary[]) {
-  return [...items].sort((left, right) => {
-    const leftMain = isMainBot(left);
-    const rightMain = isMainBot(right);
-    if (leftMain !== rightMain) {
-      return leftMain ? -1 : 1;
-    }
-
-    const statusDelta = MANAGER_STATUS_PRIORITY[getBotManagerStatus(left)] - MANAGER_STATUS_PRIORITY[getBotManagerStatus(right)];
-    if (statusDelta !== 0) {
-      return statusDelta;
-    }
-
-    return left.alias.localeCompare(right.alias, "zh-CN", {
-      numeric: true,
-      sensitivity: "base",
-    });
-  });
-}
-
-export function countBotManagerStats(items: BotSummary[]) {
-  return {
-    total: items.length,
-    online: items.filter((bot) => !isBotOffline(bot)).length,
-    busy: items.filter(isBotBusy).length,
-    offline: items.filter(isBotOffline).length,
-  };
-}
-
-export function draftFromBot(bot: BotSummary): EditDraft {
-  return {
-    alias: bot.alias,
-    botMode: bot.botMode === "assistant" ? "assistant" : "cli",
-    cliType: bot.cliType,
-    cliPath: bot.cliPath || bot.cliType,
-    workingDir: bot.workingDir,
-    avatarName: bot.avatarName || "",
-  };
 }
 
 type SaveBotEditsResult =

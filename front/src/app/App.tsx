@@ -915,6 +915,13 @@ export function App() {
             onOpenBotSwitcher={(anchorRect) => {
               void openBotSwitcher(anchorRect);
             }}
+            onOpenBotManager={() => {
+              setShowBotManager(true);
+              setShowInviteCodeManager(false);
+              setShowSwitcher(false);
+              setIsChatImmersive(false);
+              setIsTerminalImmersive(false);
+            }}
             onDirtyTabsChange={setDesktopHasDirtyTabs}
             onChatPaneVisibilityChange={setDesktopChatPaneVisible}
           />

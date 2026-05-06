@@ -1,19 +1,17 @@
 import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Copy, Globe, LogOut, RefreshCw, RotateCw, Save, Square } from "lucide-react";
+import { AlertTriangle, Copy, Globe, LogOut, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
+import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotIdentity } from "../components/BotIdentity";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
-  AppUpdateDownloadProgress,
   AppUpdateStatus,
   AvatarAsset,
   BotOverview,
-  CliParamField,
-  CliParamsPayload,
   GitProxySettings,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -61,12 +59,10 @@ type Props = {
   userAvatarName?: string;
   onUserAvatarChange?: (avatarName: string) => void;
   sessionCapabilities?: string[];
+  showBotRuntimeSettings?: boolean;
+  onOpenBotManager?: () => void;
 };
-
-type DraftValues = Record<string, string | boolean>;
 type BuildLogStatus = "idle" | "running" | "success" | "error";
-const CHAT_CONTROLLED_CLI_PARAM_KEYS = new Set(["model"]);
-const MODEL_OPTION_NONE = "none";
 
 function isValidGitProxyAddress(value: string) {
   const address = value.trim();
@@ -83,55 +79,6 @@ function isValidGitProxyAddress(value: string) {
 
 function gitProxyStatusText(settings: GitProxySettings | null) {
   return settings?.address ? settings.address : "直连";
-}
-
-function fieldLabel(key: string, field: CliParamField) {
-  return field.description || key;
-}
-
-function buildDraftValues(payload: CliParamsPayload): DraftValues {
-  const drafts: DraftValues = {};
-  for (const [key, field] of Object.entries(payload.schema)) {
-    const value = payload.params[key];
-    if (field.type === "boolean") {
-      drafts[key] = Boolean(value);
-      continue;
-    }
-    if (field.type === "string_list") {
-      drafts[key] = Array.isArray(value) ? value.map((item) => String(item)).join("\n") : "";
-      continue;
-    }
-    drafts[key] = value == null ? "" : String(value);
-  }
-  return drafts;
-}
-
-function getSettingsCliParamEntries(payload: CliParamsPayload) {
-  return Object.entries(payload.schema).filter(([key]) => !CHAT_CONTROLLED_CLI_PARAM_KEYS.has(key));
-}
-
-function toRequestValue(field: CliParamField, value: string | boolean) {
-  if (field.type === "boolean") {
-    return Boolean(value);
-  }
-  if (field.type === "string_list") {
-    return String(value)
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return value;
-}
-
-function hasDraftValueChanged(previousValue: string | boolean, nextValue: string | boolean) {
-  return previousValue !== nextValue;
-}
-
-function toModelOptionValue(value: unknown, options: string[]) {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
 }
 
 function tunnelStatusText(status: TunnelSnapshot["status"]) {
@@ -187,14 +134,14 @@ export function SettingsScreen({
   userAvatarName = readStoredUserAvatarName(),
   onUserAvatarChange,
   sessionCapabilities = [],
+  showBotRuntimeSettings = true,
+  onOpenBotManager,
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
-  const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
-  const [draftValues, setDraftValues] = useState<DraftValues>({});
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
   const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
@@ -206,12 +153,10 @@ export function SettingsScreen({
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
-  const [savingCliParams, setSavingCliParams] = useState(false);
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
   const [updateAction, setUpdateAction] = useState<"" | "toggle" | "download">("");
-  const [resettingCliParams, setResettingCliParams] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const [showUpdateLog, setShowUpdateLog] = useState(false);
   const [updateLogLines, setUpdateLogLines] = useState<string[]>([]);
@@ -221,11 +166,8 @@ export function SettingsScreen({
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
   const isUpdateDownloading = updateAction === "download";
-  const cliParamDrafts = cliParams ? buildDraftValues(cliParams) : null;
-  const settingsCliParamEntries = cliParams ? getSettingsCliParamEntries(cliParams) : [];
-  const hasCliParamChanges = settingsCliParamEntries.length > 0
-    ? settingsCliParamEntries.some(([key]) => hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""))
-    : false;
+  const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
+  const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
 
   useEffect(() => {
     let cancelled = false;
@@ -234,7 +176,6 @@ export function SettingsScreen({
 
     Promise.allSettled([
       client.getBotOverview(botAlias),
-      client.getCliParams(botAlias),
       client.getTunnelStatus(),
       isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
       isMainBot ? client.getUpdateStatus() : Promise.resolve(null),
@@ -242,7 +183,6 @@ export function SettingsScreen({
     ])
       .then(([
         overviewResult,
-        cliParamsResult,
         tunnelResult,
         gitProxyResult,
         updateResult,
@@ -256,14 +196,7 @@ export function SettingsScreen({
           return;
         }
 
-        if (cliParamsResult.status !== "fulfilled") {
-          setError(getErrorMessage(cliParamsResult.reason, "加载设置失败"));
-          setLoading(false);
-          return;
-        }
-
         const overviewData = overviewResult.value;
-        const cliParamsData = cliParamsResult.value;
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
         const updateData = updateResult.status === "fulfilled" ? updateResult.value : null;
@@ -272,9 +205,7 @@ export function SettingsScreen({
           : DEFAULT_AVATAR_ASSETS;
 
         setOverview(overviewData);
-        setCliParams(cliParamsData);
         setAvatarAssets(avatarData);
-        setDraftValues(buildDraftValues(cliParamsData));
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
         setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
@@ -324,11 +255,6 @@ export function SettingsScreen({
     };
   }, [isUpdateDownloading]);
 
-  const syncCliParams = (payload: CliParamsPayload) => {
-    setCliParams(payload);
-    setDraftValues(buildDraftValues(payload));
-  };
-
   const confirmKill = async () => {
     setActionLoading("kill");
     setError("");
@@ -344,66 +270,6 @@ export function SettingsScreen({
     }
   };
 
-  const saveCliParams = async () => {
-    if (!cliParams) return;
-    const dirtyKeys = settingsCliParamEntries.map(([key]) => key).filter((key) =>
-      hasDraftValueChanged(cliParamDrafts?.[key] ?? "", draftValues[key] ?? ""),
-    );
-
-    if (!dirtyKeys.length) {
-      setNotice("参数未改动");
-      setError("");
-      return;
-    }
-
-    setSavingCliParams(true);
-    setError("");
-    setNotice("");
-    try {
-      let next = cliParams;
-      for (const key of dirtyKeys) {
-        const field = next.schema[key];
-        if (!field) {
-          continue;
-        }
-        next = await client.updateCliParam(
-          botAlias,
-          key,
-          toRequestValue(field, draftValues[key] ?? ""),
-        );
-      }
-      syncCliParams(next);
-      setNotice("参数已保存");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存参数失败");
-    } finally {
-      setSavingCliParams(false);
-    }
-  };
-
-  const resetCurrentCliParams = async () => {
-    setResettingCliParams(true);
-    setError("");
-    setNotice("");
-    try {
-      const currentModel = toModelOptionValue(
-        cliParams?.params.model,
-        cliParams?.schema.model?.enum ?? [],
-      );
-      let next = await client.resetCliParams(botAlias);
-      const nextModel = toModelOptionValue(next.params.model, next.schema.model?.enum ?? []);
-      if (currentModel && nextModel !== currentModel) {
-        next = await client.updateCliParam(botAlias, "model", currentModel, next.cliType);
-      }
-      syncCliParams(next);
-      setNotice("CLI 参数已恢复默认值");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重置 CLI 参数失败");
-    } finally {
-      setResettingCliParams(false);
-    }
-  };
-
   const saveCliConfig = async () => {
     const nextCliPath = cliPathDraft.trim();
     if (!nextCliPath) {
@@ -416,11 +282,9 @@ export function SettingsScreen({
     setNotice("");
     try {
       const nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
-      const nextCliParams = await client.getCliParams(botAlias);
       setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
       setCliTypeDraft(nextBot.cliType);
       setCliPathDraft(nextBot.cliPath || nextCliPath);
-      syncCliParams(nextCliParams);
       setNotice("CLI 配置已更新");
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新 CLI 配置失败");
@@ -805,177 +669,207 @@ export function SettingsScreen({
         </div>
 
         {overview ? (
+          showBotRuntimeSettings ? (
+            <section
+              aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+              className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4"
+            >
+              <div className="space-y-1">
+                <h2
+                  id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+                  className="text-base font-semibold text-[var(--text)]"
+                >
+                  {isMainBot ? "主 Bot 运维" : "Bot CLI 配置"}
+                </h2>
+                {isMainBot ? (
+                  <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置入口。</p>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
+                {overview.cliPath ? (
+                  <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
+                ) : null}
+                <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
+                <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
+              </div>
+
+              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+                <h3 className="font-medium text-[var(--text)]">运行配置</h3>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="space-y-1">
+                    <span className="text-sm text-[var(--text)]">CLI 类型</span>
+                    <select
+                      aria-label="CLI 类型"
+                      value={cliTypeDraft}
+                      disabled={!canManageBotRuntime}
+                      onChange={(event) => setCliTypeDraft(event.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+                    >
+                      <option value="codex">codex</option>
+                      <option value="claude">claude</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-sm text-[var(--text)]">CLI 路径</span>
+                    <input
+                      aria-label="CLI 路径"
+                      type="text"
+                      value={cliPathDraft}
+                      disabled={!canManageBotRuntime}
+                      onChange={(event) => setCliPathDraft(event.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void saveCliConfig()}
+                  disabled={!canManageBotRuntime || savingCliConfig}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
+                </button>
+              </div>
+
+              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+                <div>
+                  <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
+                  {workdirLocked ? <p className="mt-1 text-xs text-[var(--muted)]">assistant 型 Bot 的默认工作目录已锁定</p> : null}
+                </div>
+                <div>
+                  <input
+                    id="bot-workdir"
+                    aria-label="工作目录"
+                    type="text"
+                    value={workdirDraft}
+                    onChange={(event) => {
+                      setWorkdirDraft(event.target.value);
+                      if (pendingWorkdirConflict) {
+                        setPendingWorkdirConflict(null);
+                      }
+                    }}
+                    readOnly={workdirLocked || !canManageBotRuntime}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </div>
+                {workdirLocked ? null : (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label="浏览工作目录"
+                      onClick={() => setShowWorkdirPicker(true)}
+                      disabled={!canManageBotRuntime || savingWorkdir}
+                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                    >
+                      浏览目录
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveWorkdir()}
+                      disabled={!canManageBotRuntime || savingWorkdir}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                    >
+                      <Save className="h-4 w-4" />
+                      {savingWorkdir ? "保存中..." : "保存工作目录"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </section>
+          ) : (
+            <section
+              aria-labelledby="bot-runtime-moved-title"
+              className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-3"
+            >
+              <div className="space-y-1">
+                <h2 id="bot-runtime-moved-title" className="text-base font-semibold text-[var(--text)]">智能体配置已迁移</h2>
+                <p className="text-sm text-[var(--muted)]">桌面版的 CLI、工作目录、子 agent 和 CLI 参数统一在智能体管理页维护。</p>
+              </div>
+              {onOpenBotManager ? (
+                <button
+                  type="button"
+                  onClick={onOpenBotManager}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  打开智能体管理
+                </button>
+              ) : null}
+            </section>
+          )
+        ) : null}
+
+        {isMainBot ? (
           <section
-            aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-            className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4"
+            aria-labelledby="update-settings-title"
+            className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4"
           >
             <div className="space-y-1">
-              <h2
-                id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-                className="text-base font-semibold text-[var(--text)]"
-              >
-                {isMainBot ? "主 Bot 运维" : "Bot CLI 配置"}
-              </h2>
-              {isMainBot ? (
-                <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置和更新入口。</p>
+              <h2 id="update-settings-title" className="text-base font-semibold text-[var(--text)]">版本更新</h2>
+              <p className="text-sm text-[var(--muted)]">下载后需关闭当前程序，再重新运行 `start.bat`。</p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
+              <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <span className="text-[var(--text)]">当前版本</span>
+                <span>{updateStatus?.currentVersion || "未知"}</span>
+              </p>
+              <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <span className="text-[var(--text)]">可用版本</span>
+                <span>{updateStatus?.latestVersion || "暂无"}</span>
+              </p>
+              <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <span className="text-[var(--text)]">当前包</span>
+                <span>{formatUpdatePackageKind(updateStatus?.currentPackageKind)}</span>
+              </p>
+            </div>
+
+            <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
+              <span>自动下载更新</span>
+              <input
+                type="checkbox"
+                checked={Boolean(updateStatus?.updateEnabled)}
+                disabled={updateAction === "toggle"}
+                onChange={(event) => void saveUpdateToggle(event.target.checked)}
+                className="h-4 w-4"
+              />
+            </label>
+
+            <div className="space-y-2 text-xs text-[var(--muted)]">
+              <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
+              {updateStatus?.pendingUpdateVersion ? (
+                <p>
+                  待应用更新: {updateStatus.pendingUpdateVersion}
+                  {updateStatus.pendingUpdatePackageKind ? `（${formatUpdatePackageKind(updateStatus.pendingUpdatePackageKind)}）` : ""}，重启后生效
+                </p>
+              ) : null}
+              {updateStatus?.lastError ? (
+                <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
               ) : null}
             </div>
 
-            <div className="space-y-2">
-              <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
-              {overview.cliPath ? (
-                <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
-              ) : null}
-              <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
-              <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
-            </div>
-
-            <div className="space-y-3 border-t border-[var(--border)] pt-4">
-              <h3 className="font-medium text-[var(--text)]">运行配置</h3>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">CLI 类型</span>
-                  <select
-                    aria-label="CLI 类型"
-                    value={cliTypeDraft}
-                    onChange={(event) => setCliTypeDraft(event.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  >
-                    <option value="codex">codex</option>
-                    <option value="claude">claude</option>
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">CLI 路径</span>
-                  <input
-                    aria-label="CLI 路径"
-                    type="text"
-                    value={cliPathDraft}
-                    onChange={(event) => setCliPathDraft(event.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-              </div>
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => void saveCliConfig()}
-                disabled={savingCliConfig}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                onClick={() => void downloadUpdate()}
+                disabled={updateAction !== "" || !updateStatus?.latestVersion}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
               >
-                <Save className="h-4 w-4" />
-                {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
+                {updateAction === "download" ? "下载中..." : "下载更新"}
               </button>
+              {updateStatus?.latestReleaseUrl ? (
+                <a
+                  href={updateStatus.latestReleaseUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  查看发布说明
+                </a>
+              ) : null}
             </div>
-
-            <div className="space-y-3 border-t border-[var(--border)] pt-4">
-              <div>
-                <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
-                {workdirLocked ? <p className="mt-1 text-xs text-[var(--muted)]">assistant 型 Bot 的默认工作目录已锁定</p> : null}
-              </div>
-              <div>
-                <input
-                  id="bot-workdir"
-                  aria-label="工作目录"
-                  type="text"
-                  value={workdirDraft}
-                  onChange={(event) => {
-                    setWorkdirDraft(event.target.value);
-                    if (pendingWorkdirConflict) {
-                      setPendingWorkdirConflict(null);
-                    }
-                  }}
-                  readOnly={workdirLocked}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                />
-              </div>
-              {workdirLocked ? null : (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    aria-label="浏览工作目录"
-                    onClick={() => setShowWorkdirPicker(true)}
-                    disabled={savingWorkdir}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                  >
-                    浏览目录
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void saveWorkdir()}
-                    disabled={savingWorkdir}
-                    className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
-                  >
-                    <Save className="h-4 w-4" />
-                    {savingWorkdir ? "保存中..." : "保存工作目录"}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {isMainBot ? (
-              <div className="space-y-4 border-t border-[var(--border)] pt-4">
-                <h3 className="font-medium text-[var(--text)]">版本更新</h3>
-                <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
-                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                    <span className="text-[var(--text)]">当前版本</span>
-                    <span>{updateStatus?.currentVersion || "未知"}</span>
-                  </p>
-                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                    <span className="text-[var(--text)]">可用版本</span>
-                    <span>{updateStatus?.latestVersion || "暂无"}</span>
-                  </p>
-                  <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                    <span className="text-[var(--text)]">当前包</span>
-                    <span>{formatUpdatePackageKind(updateStatus?.currentPackageKind)}</span>
-                  </p>
-                </div>
-
-                <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
-                  <span>自动下载更新</span>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(updateStatus?.updateEnabled)}
-                    disabled={updateAction === "toggle"}
-                    onChange={(event) => void saveUpdateToggle(event.target.checked)}
-                    className="h-4 w-4"
-                  />
-                </label>
-
-                <div className="space-y-2 text-xs text-[var(--muted)]">
-                  <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
-                  {updateStatus?.pendingUpdateVersion ? (
-                    <p>
-                      待应用更新: {updateStatus.pendingUpdateVersion}
-                      {updateStatus.pendingUpdatePackageKind ? `（${formatUpdatePackageKind(updateStatus.pendingUpdatePackageKind)}）` : ""}，重启后生效
-                    </p>
-                  ) : null}
-                  {updateStatus?.lastError ? (
-                    <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void downloadUpdate()}
-                    disabled={updateAction !== "" || !updateStatus?.latestVersion}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                  >
-                    {updateAction === "download" ? "下载中..." : "下载更新"}
-                  </button>
-                  {updateStatus?.latestReleaseUrl ? (
-                    <a
-                      href={updateStatus.latestReleaseUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                    >
-                      查看发布说明
-                    </a>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
           </section>
         ) : null}
 
@@ -994,136 +888,50 @@ export function SettingsScreen({
         ) : null}
 
         {isMainBot ? (
-          <>
-            <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-              <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
-              <div className="flex items-center gap-2">
-                <input
-                  aria-label="Git 代理地址"
-                  type="text"
-                  inputMode="text"
-                  value={gitProxyAddressDraft}
-                  onChange={(event) => setGitProxyAddressDraft(event.target.value)}
-                  placeholder="例如 192.168.1.10:7897 或 7897"
-                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                />
-                <button
-                  type="button"
-                  onClick={() => void saveGitProxy()}
-                  disabled={savingGitProxy}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
-                >
-                  <Save className="h-4 w-4" />
-                  {savingGitProxy ? "保存中..." : "保存 Git 代理"}
-                </button>
-              </div>
-              <p className="text-xs text-[var(--muted)]">
-                当前状态: {gitProxyStatusText(gitProxySettings)}
-              </p>
-            </div>
-          </>
-        ) : null}
-
-        {overview ? (
-          <AgentSettingsPanel botAlias={botAlias} botMode={overview.botMode || "cli"} client={client} />
-        ) : null}
-
-        {cliParams ? (
           <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">CLI 参数</h2>
-                <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams.cliType}</p>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => void saveCliParams()}
-                  disabled={savingCliParams || !hasCliParamChanges}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
-                >
-                  <Save className="h-4 w-4" />
-                  {savingCliParams ? "保存中..." : "保存参数"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void resetCurrentCliParams()}
-                  disabled={resettingCliParams}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  {resettingCliParams ? "重置中..." : "恢复默认参数"}
-                </button>
-              </div>
+            <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
+            <div className="flex items-center gap-2">
+              <input
+                aria-label="Git 代理地址"
+                type="text"
+                inputMode="text"
+                value={gitProxyAddressDraft}
+                onChange={(event) => setGitProxyAddressDraft(event.target.value)}
+                placeholder="例如 192.168.1.10:7897 或 7897"
+                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+              />
+              <button
+                type="button"
+                onClick={() => void saveGitProxy()}
+                disabled={savingGitProxy}
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {savingGitProxy ? "保存中..." : "保存 Git 代理"}
+              </button>
             </div>
-
-            <div className="space-y-3">
-              {settingsCliParamEntries.map(([key, field]) => {
-                const label = fieldLabel(key, field);
-                const value = draftValues[key] ?? "";
-                const inputId = `cli-param-${key}`;
-
-                if (field.type === "boolean") {
-                  return (
-                    <label
-                      key={key}
-                      htmlFor={inputId}
-                      className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-medium text-[var(--text)]"
-                    >
-                      <span>{label}</span>
-                      <input
-                        id={inputId}
-                        aria-label={label}
-                        type="checkbox"
-                        checked={Boolean(value)}
-                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
-                        className="h-4 w-4 shrink-0"
-                      />
-                    </label>
-                  );
-                }
-
-                return (
-                  <div key={key} className="space-y-2">
-                    <label htmlFor={inputId} className="block text-sm font-medium text-[var(--text)]">{label}</label>
-
-                    {field.enum ? (
-                      <select
-                        id={inputId}
-                        aria-label={label}
-                        value={String(value)}
-                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                      >
-                        {field.enum.map((item) => (
-                          <option key={item} value={item}>{item}</option>
-                        ))}
-                      </select>
-                    ) : field.type === "string_list" ? (
-                      <textarea
-                        id={inputId}
-                        aria-label={label}
-                        rows={3}
-                        value={String(value)}
-                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                        placeholder="每行一个参数"
-                      />
-                    ) : (
-                      <input
-                        id={inputId}
-                        aria-label={label}
-                        type={field.type === "number" ? "number" : "text"}
-                        value={String(value)}
-                        onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <p className="text-xs text-[var(--muted)]">
+              当前状态: {gitProxyStatusText(gitProxySettings)}
+            </p>
           </div>
+        ) : null}
+
+        {overview && showBotRuntimeSettings ? (
+          <AgentSettingsPanel
+            botAlias={botAlias}
+            botMode={overview.botMode || "cli"}
+            client={client}
+            canManage={canManageBotRuntime}
+          />
+        ) : null}
+
+        {overview && showBotRuntimeSettings ? (
+          <BotCliParamsPanel
+            botAlias={botAlias}
+            client={client}
+            canManage={canManageCliParams}
+            reloadKey={`${botAlias}:${overview.cliType}:${overview.cliPath || ""}`}
+          />
         ) : null}
 
         {tunnel ? (

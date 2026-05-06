@@ -101,6 +101,7 @@ type Props = {
   onUnreadResult?: (botAlias: string) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;
+  onOpenBotManager?: () => void;
   onDirtyTabsChange?: (hasDirtyTabs: boolean) => void;
   onChatPaneVisibilityChange?: (visible: boolean) => void;
 };
@@ -135,6 +136,7 @@ export function DesktopWorkbench({
   onUnreadResult,
   onViewModeChange,
   onOpenBotSwitcher,
+  onOpenBotManager,
   onDirtyTabsChange,
   onChatPaneVisibilityChange,
 }: Props) {
@@ -794,6 +796,8 @@ export function DesktopWorkbench({
           userAvatarName={userAvatarName}
           onUserAvatarChange={onUserAvatarChange}
           sessionCapabilities={sessionCapabilities}
+          showBotRuntimeSettings={false}
+          onOpenBotManager={onOpenBotManager}
         />
       );
     }
