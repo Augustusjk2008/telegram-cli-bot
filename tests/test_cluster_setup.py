@@ -119,7 +119,7 @@ def test_cluster_mcp_stdio_advertises_tools_without_active_env(tmp_path: Path, m
     response = cluster_mcp_stdio.handle_request(config, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
     tool_names = {tool["name"] for tool in response["result"]["tools"]}
-    assert {"cluster_status", "list_agents", "ask_agent"}.issubset(tool_names)
+    assert {"cluster_status", "list_agents", "ask_agent", "poll_agent_tasks"}.issubset(tool_names)
 
 
 def test_cluster_mcp_stdio_uses_run_id_argument(tmp_path: Path, monkeypatch):
@@ -188,3 +188,45 @@ def test_cluster_mcp_stdio_returns_tool_error_instead_of_crashing(tmp_path: Path
 
     assert response["result"]["isError"] is True
     assert "bridge disconnected" in response["result"]["content"][0]["text"]
+
+
+def test_cluster_mcp_stdio_forwards_poll_agent_tasks(tmp_path: Path, monkeypatch):
+    token = tmp_path / "token"
+    token.write_text("secret-token", encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps({"bridge_url": "http://127.0.0.1:8765", "token_file": str(token)}),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_post(_config, tool_name, payload, *, run_id):
+        captured["tool_name"] = tool_name
+        captured["payload"] = payload
+        captured["run_id"] = run_id
+        return {"ok": True}
+
+    monkeypatch.setattr(cluster_mcp_stdio, "post_mcp_tool", fake_post)
+    cluster_mcp_stdio.handle_request(
+        config,
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "poll_agent_tasks",
+                "arguments": {
+                    "run_id": "clr_test",
+                    "task_ids": ["clt_one"],
+                    "include_output": True,
+                    "wait_seconds": 2,
+                },
+            },
+        },
+    )
+
+    assert captured == {
+        "tool_name": "poll_agent_tasks",
+        "payload": {"task_ids": ["clt_one"], "include_output": True, "wait_seconds": 2},
+        "run_id": "clr_test",
+    }

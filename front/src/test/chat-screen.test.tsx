@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
+import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
@@ -545,6 +545,103 @@ test("keeps history streaming rows active while overview is processing", async (
 
   expect(await screen.findByText("处理中预览")).toBeInTheDocument();
   expect(screen.getByText("正在输出")).toBeInTheDocument();
+});
+
+test("shows cluster task output after main reply finishes", async () => {
+  let pollCount = 0;
+  const taskStatuses: ClusterTaskStatus[] = [
+    {
+      tasks: [
+        {
+          taskId: "clt_1",
+          agentId: "tester",
+          status: "running",
+          modelTier: "low",
+          allowWrite: false,
+          createdAt: "2026-05-06T10:00:00+08:00",
+          startedAt: "2026-05-06T10:00:01+08:00",
+          completedAt: "",
+          error: "",
+        },
+      ],
+      queuedCount: 0,
+      runningCount: 1,
+      completedCount: 0,
+      failedCount: 0,
+      pendingCount: 1,
+    },
+    {
+      tasks: [
+        {
+          taskId: "clt_1",
+          agentId: "tester",
+          status: "completed",
+          modelTier: "low",
+          allowWrite: false,
+          createdAt: "2026-05-06T10:00:00+08:00",
+          startedAt: "2026-05-06T10:00:01+08:00",
+          completedAt: "2026-05-06T10:00:02+08:00",
+          output: "3 passed",
+          error: "",
+        },
+      ],
+      queuedCount: 0,
+      runningCount: 0,
+      completedCount: 1,
+      failedCount: 0,
+      pendingCount: 0,
+    },
+  ];
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    getClusterTaskStatus: vi.fn(async () => taskStatuses[Math.min(pollCount++, taskStatuses.length - 1)]),
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      onChunk: (chunk: string) => void,
+      onStatus?: (status: { clusterRunId?: string }) => void,
+    ) => {
+      onStatus?.({ clusterRunId: "clr_1" });
+      onChunk("主回复");
+      return {
+        id: "assistant-cluster",
+        role: "assistant",
+        text: "主回复",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      };
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const user = userEvent.setup();
+  expect(await screen.findByPlaceholderText("@ 可指定智能体集群")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("@ 可指定智能体集群"), "跑测试");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("智能体集群任务")).toBeInTheDocument();
+  expect(await screen.findByText("已完成")).toBeInTheDocument();
+  expect(await screen.findByText("3 passed")).toBeInTheDocument();
+  await waitFor(() => expect(client.getClusterTaskStatus).toHaveBeenCalledWith("main", "clr_1"));
 });
 
 test("renders empty tool call payloads with readable fallback instead of raw empty json", async () => {

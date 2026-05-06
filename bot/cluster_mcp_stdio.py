@@ -36,7 +36,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "ask_agent",
-            "description": "向一个 TCB 子 agent 发送任务并返回结果。必须传 run_id。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
+            "description": "异步启动个 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
             "inputSchema": {
                 "type": "object",
                 "required": ["agent_id", "message"],
@@ -47,6 +47,19 @@ def _tools_for_environment() -> list[dict[str, Any]]:
                     "timeout_seconds": {"type": "integer"},
                     "allow_write": {"type": "boolean"},
                     "run_id": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "poll_agent_tasks",
+            "description": "轮询当前 TCB 集群子 agent 异步任务状态和结果。必须传 run_id。task_ids 为空时返回当前 run 全部任务。wait_seconds 可选，用于本次工具调用内等待任务完成；默认 0 立即返回。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "task_ids": {"type": "array", "items": {"type": "string"}},
+                    "include_output": {"type": "boolean"},
+                    "wait_seconds": {"type": "number"},
                 },
             },
         },

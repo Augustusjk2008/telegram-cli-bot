@@ -308,7 +308,9 @@ async def test_run_chat_cluster_finishes_runtime_run(web_manager: MultiBotManage
     result = await api_service.run_chat(web_manager, "main", 1001, "hi", cluster=True)
 
     assert result["output"] == "ok"
-    assert api_service._CLUSTER_RUNTIME.get_run(captured["run_id"]) is None
+    run = api_service._CLUSTER_RUNTIME.get_run(captured["run_id"])
+    assert run is not None
+    assert run.status == "completed"
 
 
 def test_cluster_prompt_includes_run_id():
@@ -317,6 +319,11 @@ def test_cluster_prompt_includes_run_id():
     assert "当前集群 run_id: clr_test" in prompt
     assert "调用 ask_agent 时带 run_id" in prompt
     assert "用户显式提及的子 agent: tester" in prompt
+    assert "ask_agent 会异步启动任务并返回 task_id" in prompt
+    assert "poll_agent_tasks" in prompt
+    assert "同一轮对话内多轮指挥集群" in prompt
+    assert "wait_seconds" in prompt
+    assert "可先结束并说明任务仍在运行" in prompt
 
 
 @pytest.mark.asyncio
@@ -351,10 +358,160 @@ async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBo
         {"agent_id": "reviewer", "message": "审查", "model_tier": "low"},
     )
 
-    assert result["data"]["output"] == "ok"
+    assert result["data"]["status"] == "queued"
+    assert result["data"]["model_tier"] == "low"
+    task_id = result["data"]["task_id"]
+    await asyncio.sleep(0)
+    poll = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [task_id], "include_output": True},
+    )
+    assert poll["data"]["tasks"][0]["status"] == "completed"
+    assert poll["data"]["tasks"][0]["output"] == "ok"
     assert captured["agent_id"] == "reviewer"
     assert captured["model"] == "fast-model"
     api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
+
+
+@pytest.mark.asyncio
+async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster_config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=2)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_run_cli_chat(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return {"output": "done"}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+
+    assert result["ok"] is True
+    task_id = result["data"]["task_id"]
+    assert result["data"]["status"] == "queued"
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    poll = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [task_id]},
+    )
+    assert poll["data"]["running_count"] == 1
+
+    release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_cluster_ask_agent_runs_multiple_agents_concurrently(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster_config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=2)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    await web_manager.create_bot_agent("main", {"id": "reviewer", "name": "代码审查"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+    started: list[str] = []
+    release = asyncio.Event()
+
+    async def fake_run_cli_chat(_manager, _alias, _user_id, _text, *, agent_id="main", **_kwargs):
+        started.append(agent_id)
+        await release.wait()
+        return {"output": f"{agent_id} done"}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+
+    first = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+    second = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "reviewer", "message": "审查代码"},
+    )
+    await asyncio.sleep(0)
+
+    assert first["data"]["task_id"] != second["data"]["task_id"]
+    assert set(started) == {"tester", "reviewer"}
+
+    release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_cluster_poll_agent_tasks_can_wait_for_completion(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster_config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=1)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+
+    async def fake_run_cli_chat(*_args, **_kwargs):
+        await asyncio.sleep(0.05)
+        return {"output": "done"}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+    task_id = result["data"]["task_id"]
+
+    poll = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
+    )
+
+    assert poll["data"]["pending_count"] == 0
+    assert poll["data"]["tasks"][0]["status"] == "completed"
+    assert poll["data"]["tasks"][0]["output"] == "done"
+
+
+def test_get_cluster_task_status_requires_owned_run(web_manager: MultiBotManager):
+    from bot.cluster_config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+
+    data = api_service.get_cluster_task_status(web_manager, "main", 1001, run.run_id)
+
+    assert data["tasks"] == []
+    with pytest.raises(api_service.WebApiError) as exc_info:
+        api_service.get_cluster_task_status(web_manager, "main", 2002, run.run_id)
+    assert exc_info.value.status == 404
 
 
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):

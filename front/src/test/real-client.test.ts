@@ -166,6 +166,67 @@ describe("RealWebBotClient", () => {
     expect(status.agents[0].allowWrite).toBe(false);
   });
 
+  test("getClusterTaskStatus maps async task output", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            tasks: [
+              {
+                task_id: "clt_1",
+                agent_id: "tester",
+                status: "completed",
+                model_tier: "low",
+                allow_write: false,
+                created_at: "2026-05-06T10:00:00+08:00",
+                started_at: "2026-05-06T10:00:01+08:00",
+                completed_at: "2026-05-06T10:00:02+08:00",
+                output: "3 passed",
+                error: "",
+              },
+            ],
+            queued_count: 0,
+            running_count: 0,
+            completed_count: 1,
+            failed_count: 0,
+            pending_count: 0,
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const status = await client.getClusterTaskStatus("main", "clr_1");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/cluster/runs/clr_1/tasks?include_output=1",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    expect(status.completedCount).toBe(1);
+    expect(status.tasks[0]).toMatchObject({
+      taskId: "clt_1",
+      agentId: "tester",
+      status: "completed",
+      output: "3 passed",
+    });
+  });
+
   test("sendMessage includes cluster mention payload", async () => {
     const encoder = new TextEncoder();
     fetchMock.mockResolvedValue({

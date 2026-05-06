@@ -67,6 +67,8 @@ import type {
   ClusterModelTiers,
   ClusterSetupPrepareResult,
   ClusterStatus,
+  ClusterAgentTask,
+  ClusterTaskStatus,
   ConversationListResult,
   ConversationSelectResult,
   ConversationSummary,
@@ -258,6 +260,28 @@ type RawChatTraceDetails = {
   tool_call_count?: number;
   process_count?: number;
   trace?: RawChatTraceEvent[];
+};
+
+type RawClusterAgentTask = {
+  task_id?: string;
+  agent_id?: string;
+  status?: string;
+  model_tier?: string;
+  allow_write?: boolean;
+  created_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  output?: string;
+  error?: string;
+};
+
+type RawClusterTaskStatus = {
+  tasks?: RawClusterAgentTask[];
+  queued_count?: number;
+  running_count?: number;
+  completed_count?: number;
+  failed_count?: number;
+  pending_count?: number;
 };
 
 type RawFileEntry = {
@@ -1017,6 +1041,33 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
         allowWrite: Boolean(agent.allow_write ?? agent.allowWrite ?? false),
       };
     }) : [],
+  };
+}
+
+function mapClusterAgentTask(raw: RawClusterAgentTask): ClusterAgentTask {
+  return {
+    taskId: String(raw.task_id || ""),
+    agentId: String(raw.agent_id || ""),
+    status: String(raw.status || "queued") as ClusterAgentTask["status"],
+    modelTier: String(raw.model_tier || "") as ClusterAgentTask["modelTier"],
+    allowWrite: Boolean(raw.allow_write),
+    createdAt: String(raw.created_at || ""),
+    startedAt: String(raw.started_at || ""),
+    completedAt: String(raw.completed_at || ""),
+    output: typeof raw.output === "string" ? raw.output : undefined,
+    error: String(raw.error || ""),
+  };
+}
+
+function mapClusterTaskStatus(raw: unknown): ClusterTaskStatus {
+  const value = raw && typeof raw === "object" ? raw as RawClusterTaskStatus : {};
+  return {
+    tasks: (value.tasks || []).map(mapClusterAgentTask),
+    queuedCount: Number(value.queued_count || 0),
+    runningCount: Number(value.running_count || 0),
+    completedCount: Number(value.completed_count || 0),
+    failedCount: Number(value.failed_count || 0),
+    pendingCount: Number(value.pending_count || 0),
   };
 }
 
@@ -2304,6 +2355,14 @@ export class RealWebBotClient implements WebBotClient {
     return mapClusterStatus(data);
   }
 
+  async getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus> {
+    const params = new URLSearchParams({ include_output: "1" });
+    const data = await this.requestJson<unknown>(
+      `/api/bots/${encodeURIComponent(botAlias)}/cluster/runs/${encodeURIComponent(runId)}/tasks?${params.toString()}`,
+    );
+    return mapClusterTaskStatus(data);
+  }
+
   async prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult> {
     const data = await this.requestJson<unknown>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/setup/prepare`, {
       method: "POST",
@@ -2520,6 +2579,11 @@ export class RealWebBotClient implements WebBotClient {
         if (event.type === "delta" && event.text) {
           streamedText += event.text;
           onChunk(event.text);
+        } else if (event.type === "meta") {
+          const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
+          if (clusterRunId) {
+            onStatus?.({ clusterRunId });
+          }
         } else if (event.type === "status") {
           if (typeof event.elapsed_seconds === "number") {
             finalElapsedSeconds = event.elapsed_seconds;

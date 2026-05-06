@@ -18,6 +18,8 @@ import type {
   BotOverview,
   BotSummary,
   ChatAttachmentUploadResult,
+  ClusterAgentTask,
+  ClusterTaskStatus,
   ChatMessage,
   ChatMessageMetaInfo,
   ChatSendOptions,
@@ -77,6 +79,7 @@ type ParsedUserAttachment = {
 
 const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
 const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
+const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
@@ -531,6 +534,64 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
   });
 }
 
+function clusterTaskStatusText(task: ClusterAgentTask) {
+  if (task.status === "completed") return "已完成";
+  if (task.status === "failed") return "失败";
+  if (task.status === "running") return "运行中";
+  if (task.status === "queued") return "排队中";
+  if (task.status === "cancelled") return "已取消";
+  return task.status || "未知";
+}
+
+function clusterTaskStatusClass(task: ClusterAgentTask) {
+  if (task.status === "completed") return "bg-emerald-100 text-emerald-700";
+  if (task.status === "failed") return "bg-red-100 text-red-700";
+  if (task.status === "running") return "bg-amber-100 text-amber-700";
+  return "bg-slate-100 text-slate-700";
+}
+
+function ClusterTaskPanel({ status }: { status: ClusterTaskStatus }) {
+  if (status.tasks.length === 0) {
+    return null;
+  }
+  return (
+    <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-950">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">智能体集群任务</span>
+        {status.pendingCount > 0 ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs text-emerald-800">
+            <LoaderCircle className="h-3 w-3 animate-spin" />
+            {status.pendingCount} 项进行中
+          </span>
+        ) : (
+          <span className="rounded-full bg-white px-2 py-0.5 text-xs text-emerald-800">已汇总</span>
+        )}
+      </div>
+      <div className="mt-3 space-y-2">
+        {status.tasks.map((task) => (
+          <div key={task.taskId} className="rounded-md border border-emerald-100 bg-white px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">@{task.agentId || "agent"}</span>
+              <span className={`rounded-full px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
+                {clusterTaskStatusText(task)}
+              </span>
+              {task.modelTier ? <span className="text-xs text-emerald-800">{task.modelTier}</span> : null}
+            </div>
+            {task.output ? (
+              <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-50">
+                {task.output}
+              </pre>
+            ) : null}
+            {task.error ? (
+              <p className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700">{task.error}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 type ChatMessageRowProps = {
   item: ChatMessage;
   messageClientStateKey: string;
@@ -736,6 +797,9 @@ export function ChatScreen({
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
   const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias));
+  const [clusterRunId, setClusterRunId] = useState("");
+  const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
+  const [clusterTaskError, setClusterTaskError] = useState("");
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
@@ -756,6 +820,8 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
+  const clusterTaskPollTimerRef = useRef<number | null>(null);
+  const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const hasActivatedRef = useRef(false);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient } | null>(null);
@@ -769,6 +835,14 @@ export function ChatScreen({
     setHistoryPanelOpen(false);
     setConversationQuery("");
     setConversations([]);
+    if (clusterTaskPollTimerRef.current !== null) {
+      window.clearTimeout(clusterTaskPollTimerRef.current);
+      clusterTaskPollTimerRef.current = null;
+    }
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+    clusterRunIdRef.current = "";
     const storedAgentId = readStoredAgentId(botAlias);
     setActiveAgentId(storedAgentId);
     activeAgentIdRef.current = storedAgentId;
@@ -785,6 +859,13 @@ export function ChatScreen({
   useEffect(() => {
     streamModeRef.current = streamMode;
   }, [streamMode]);
+
+  useEffect(() => () => {
+    if (clusterTaskPollTimerRef.current !== null) {
+      window.clearTimeout(clusterTaskPollTimerRef.current);
+      clusterTaskPollTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -813,6 +894,10 @@ export function ChatScreen({
   useEffect(() => {
     activeAgentIdRef.current = activeAgentId;
   }, [activeAgentId]);
+
+  useEffect(() => {
+    clusterRunIdRef.current = clusterRunId;
+  }, [clusterRunId]);
 
   useEffect(() => {
     let active = true;
@@ -875,6 +960,40 @@ export function ChatScreen({
       sseRecoveryTimerRef.current = null;
     }
   }, []);
+
+  const stopClusterTaskPoll = useCallback(() => {
+    if (clusterTaskPollTimerRef.current !== null) {
+      window.clearTimeout(clusterTaskPollTimerRef.current);
+      clusterTaskPollTimerRef.current = null;
+    }
+  }, []);
+
+  const pollClusterTasks = useCallback(async () => {
+    const runId = clusterRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    try {
+      const status = await client.getClusterTaskStatus(botAlias, runId);
+      if (clusterRunIdRef.current !== runId) {
+        return;
+      }
+      setClusterTaskStatus(status);
+      setClusterTaskError("");
+      if (status.pendingCount > 0 || isSseStreaming()) {
+        stopClusterTaskPoll();
+        clusterTaskPollTimerRef.current = window.setTimeout(() => {
+          clusterTaskPollTimerRef.current = null;
+          void pollClusterTasks();
+        }, CLUSTER_TASK_POLL_INTERVAL_MS);
+      }
+    } catch (err) {
+      if (clusterRunIdRef.current !== runId) {
+        return;
+      }
+      setClusterTaskError(err instanceof Error ? err.message : "集群任务状态获取失败");
+    }
+  }, [botAlias, client, stopClusterTaskPoll]);
 
   const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_ASSISTANT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
@@ -1444,6 +1563,11 @@ export function ChatScreen({
       const data = await selectScopedConversation(client, botAlias, conversationId, activeAgentIdRef.current);
       stopAssistantPoll();
       stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      setClusterRunId("");
+      setClusterTaskStatus(null);
+      setClusterTaskError("");
+      clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
       setItems(data.messages);
@@ -1467,6 +1591,11 @@ export function ChatScreen({
       const data = await createScopedConversation(client, botAlias, activeAgentIdRef.current);
       stopAssistantPoll();
       stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      setClusterRunId("");
+      setClusterTaskStatus(null);
+      setClusterTaskError("");
+      clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
       setItems(data.messages);
@@ -1487,9 +1616,14 @@ export function ChatScreen({
     assistantSendVersionRef.current += 1;
     stopAssistantPoll();
     stopSseRecoveryWatch();
+    stopClusterTaskPoll();
     setLoading(true);
     setError("");
     setItems([]);
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+    clusterRunIdRef.current = "";
     setConversations([]);
     setExpandedTracePanels({});
     setTraceLoadState({});
@@ -1522,7 +1656,7 @@ export function ChatScreen({
         setError(err.message || "切换 agent 失败");
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, client, stopAssistantPoll, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
 
   useEffect(() => {
     if (!botOverview?.cluster?.enabled || activeAgentIdRef.current === "main") {
@@ -1643,6 +1777,11 @@ export function ChatScreen({
     }
     stopAssistantPoll();
     stopSseRecoveryWatch();
+    stopClusterTaskPoll();
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+    clusterRunIdRef.current = "";
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
@@ -1675,6 +1814,13 @@ export function ChatScreen({
         markSseActivity();
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
+        }
+        if (status.clusterRunId && status.clusterRunId !== clusterRunIdRef.current) {
+          clusterRunIdRef.current = status.clusterRunId;
+          setClusterRunId(status.clusterRunId);
+          setClusterTaskStatus(null);
+          setClusterTaskError("");
+          void pollClusterTasks();
         }
         if (status.previewText) {
           usingPreviewReplace = true;
@@ -1736,6 +1882,9 @@ export function ChatScreen({
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
       }
+      if (clusterRunIdRef.current) {
+        void pollClusterTasks();
+      }
     } catch (err) {
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
@@ -1759,7 +1908,7 @@ export function ChatScreen({
       setStreamStartedAtMs(null);
       emitBotActivityForActiveAgent("idle");
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, stopAssistantPoll, stopSseRecoveryWatch]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
 
   const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
@@ -2037,6 +2186,14 @@ export function ChatScreen({
               />
             );
           })}
+          {clusterTaskStatus ? (
+            <ClusterTaskPanel status={clusterTaskStatus} />
+          ) : null}
+          {clusterTaskError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {clusterTaskError}
+            </div>
+          ) : null}
           <div ref={bottomAnchorRef} aria-hidden="true" />
         </div>
       </section>

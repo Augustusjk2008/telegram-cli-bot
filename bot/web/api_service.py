@@ -138,6 +138,16 @@ from bot.web.terminal_actions import (
 logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLUSTER_RUNTIME = ClusterRuntime()
+
+
+@dataclass
+class _ClusterRunControl:
+    semaphore: asyncio.Semaphore
+    agent_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+
+
+_CLUSTER_RUN_CONTROLS: dict[str, _ClusterRunControl] = {}
 UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -868,6 +878,49 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
     return {"cluster": cluster, "status": get_cluster_status(manager, alias)}
 
 
+def get_cluster_task_status(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    run_id: str,
+    *,
+    task_ids: list[str] | None = None,
+    include_output: bool = True,
+) -> dict[str, Any]:
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    if run is None or run.bot_alias != alias or run.user_id != user_id:
+        _raise(404, "cluster_run_not_found", "未找到集群任务")
+    _ = get_profile_or_raise(manager, alias)
+    return _CLUSTER_RUNTIME.build_task_status(run_id, task_ids, include_output=include_output)
+
+
+def _cluster_task_wait_seconds(payload: dict[str, Any]) -> float:
+    raw = payload.get("wait_seconds", payload.get("waitSeconds", 0))
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    return max(0.0, min(60.0, seconds))
+
+
+async def _wait_for_cluster_tasks_if_requested(
+    run_id: str,
+    task_ids: list[str] | None,
+    wait_seconds: float,
+) -> None:
+    if wait_seconds <= 0:
+        return
+    deadline = asyncio.get_running_loop().time() + wait_seconds
+    while True:
+        status = _CLUSTER_RUNTIME.build_task_status(run_id, task_ids, include_output=False)
+        if status["pending_count"] <= 0:
+            return
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(0.2, remaining))
+
+
 async def handle_cluster_mcp_tool(
     manager: MultiBotManager,
     run_id: str,
@@ -879,6 +932,12 @@ async def handle_cluster_mcp_tool(
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
         if tool_name == "list_agents":
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)["agents"]}
+        if tool_name == "poll_agent_tasks":
+            raw_task_ids = payload.get("task_ids", payload.get("taskIds"))
+            task_ids = [str(item) for item in raw_task_ids] if isinstance(raw_task_ids, list) else None
+            include_output = payload.get("include_output", payload.get("includeOutput", True)) is not False
+            await _wait_for_cluster_tasks_if_requested(run_id, task_ids, _cluster_task_wait_seconds(payload))
+            return {"ok": True, "data": _CLUSTER_RUNTIME.build_task_status(run_id, task_ids, include_output=include_output)}
         if tool_name != "ask_agent":
             _raise(404, "cluster_tool_not_found", "未知集群工具")
 
@@ -886,30 +945,22 @@ async def handle_cluster_mcp_tool(
         run = _CLUSTER_RUNTIME.get_run(run_id)
         if run is None:
             _raise(404, "cluster_run_not_found", "未找到集群任务")
-        _CLUSTER_RUNTIME.append_event(
-            run_id,
-            {
-                "kind": "agent_started",
-                "agent_id": request.agent_id,
-                "model_tier": request.model_tier,
-                "message_preview": request.message[:120],
+        task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
+        control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
+        background_task = asyncio.create_task(_run_cluster_agent_task(manager, run_id, task.task_id))
+        control.tasks.add(background_task)
+        background_task.add_done_callback(control.tasks.discard)
+        background_task.add_done_callback(lambda _task, current_run_id=run_id: _cleanup_cluster_run_control_if_idle(current_run_id))
+        return {
+            "ok": True,
+            "data": {
+                "task_id": task.task_id,
+                "agent_id": task.agent_id,
+                "status": task.status,
+                "model_tier": task.model_tier,
+                "created_at": task.created_at,
             },
-        )
-        cli_params_override = build_cluster_cli_params_override(run.profile, request.model_tier)
-        result = await run_cli_chat(
-            manager,
-            run.bot_alias,
-            run.user_id,
-            request.message,
-            agent_id=request.agent_id,
-            cli_params_override=cli_params_override,
-        )
-        output = str(result.get("output") or "")
-        _CLUSTER_RUNTIME.append_event(
-            run_id,
-            {"kind": "agent_completed", "agent_id": request.agent_id, "summary": output[:200]},
-        )
-        return {"ok": True, "data": {"agent_id": request.agent_id, "status": "completed", "output": output}}
+        }
     except KeyError:
         _raise(404, "cluster_run_not_found", "未找到集群任务")
     except ClusterToolError as exc:
@@ -2780,6 +2831,70 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     return CliParamsConfig.from_dict(params)
 
 
+def _cluster_run_control(run_id: str, max_parallel_agents: int) -> _ClusterRunControl:
+    control = _CLUSTER_RUN_CONTROLS.get(run_id)
+    if control is None:
+        control = _ClusterRunControl(asyncio.Semaphore(max(1, int(max_parallel_agents or 1))))
+        _CLUSTER_RUN_CONTROLS[run_id] = control
+    return control
+
+
+def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
+    control = _CLUSTER_RUN_CONTROLS.get(run_id)
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    if control is None or run is None:
+        return
+    if control.tasks:
+        return
+    if run.status not in {"completed", "failed", "error", "cancelled"}:
+        return
+    if any(task.status in {"queued", "running"} for task in run.tasks.values()):
+        return
+    _CLUSTER_RUN_CONTROLS.pop(run_id, None)
+
+
+async def _run_cluster_agent_task(
+    manager: MultiBotManager,
+    run_id: str,
+    task_id: str,
+) -> None:
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    if run is None:
+        return
+    task = run.tasks.get(task_id)
+    if task is None:
+        return
+    control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
+    agent_lock = control.agent_locks.setdefault(task.agent_id, asyncio.Lock())
+    try:
+        async with control.semaphore:
+            async with agent_lock:
+                live_run = _CLUSTER_RUNTIME.get_run(run_id)
+                if live_run is None:
+                    return
+                live_task = live_run.tasks.get(task_id)
+                if live_task is None or live_task.status != "queued":
+                    return
+                live_task = _CLUSTER_RUNTIME.mark_agent_task_running(run_id, task_id)
+                cli_params_override = build_cluster_cli_params_override(live_run.profile, live_task.model_tier)
+                result = await asyncio.wait_for(
+                    run_cli_chat(
+                        manager,
+                        live_run.bot_alias,
+                        live_run.user_id,
+                        live_task.message,
+                        agent_id=live_task.agent_id,
+                        cli_params_override=cli_params_override,
+                    ),
+                    timeout=live_task.timeout_seconds,
+                )
+                _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, str(result.get("output") or ""))
+    except asyncio.TimeoutError:
+        _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, "子 agent 执行超时")
+    except Exception as exc:
+        _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, str(exc))
+
+
 def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "") -> str:
     mentioned = ", ".join(
         str(item.get("agent_id") or item.get("agentId") or "").strip()
@@ -2791,6 +2906,10 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "
         "你处于 TCB 集群模式。可用 MCP server: tcb-cluster。\n"
         "需要委派时，调用 MCP 工具 ask_agent。不要要求用户切换子 agent 页面。\n"
         f"当前集群 run_id: {run_id or '无'}。调用 ask_agent 时带 run_id。\n"
+        "ask_agent 会异步启动任务并返回 task_id，不会自动等子 agent 完成。\n"
+        "你可在同一轮对话内多轮指挥集群：连续 ask_agent 并发启动多个任务，调用 poll_agent_tasks 查看结果，再按结果追加新任务或汇总。\n"
+        "如果需要等待结果，调用 poll_agent_tasks 时传 wait_seconds；如果用户只要求启动或你判断可后台运行，可先结束并说明任务仍在运行。\n"
+        "最终回答前自行选择：等待并汇总已完成任务，或明确说明哪些任务仍在后台运行。\n"
         f"用户显式提及的子 agent: {mentioned or '无'}\n"
         "</tcb_cluster_mode>\n\n"
     )
@@ -3958,6 +4077,7 @@ async def _stream_cli_chat(
                     "cli_type": cli_type,
                     "working_dir": session.working_dir,
                     "resume_session": attempt.resume_session,
+                    "cluster_run_id": cluster_run_id,
                 }
                 meta_sent = True
 
@@ -4648,6 +4768,7 @@ async def run_chat(
         finally:
             if cluster_run:
                 _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+                _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
 
@@ -4715,6 +4836,7 @@ async def stream_chat(
             finally:
                 if cluster_run:
                     _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+                    _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
             return
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
     except WebApiError as exc:

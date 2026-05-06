@@ -54,6 +54,7 @@ import type {
   ClusterConfigUpdateResult,
   ClusterSetupPrepareResult,
   ClusterStatus,
+  ClusterTaskStatus,
   CreateBotInput,
   DebugProfile,
   DebugState,
@@ -2251,6 +2252,17 @@ export class MockWebBotClient implements WebBotClient {
           allowCluster: agent.cluster?.allowCluster !== false,
           allowWrite: Boolean(agent.cluster?.allowWrite),
         })),
+    };
+  }
+
+  async getClusterTaskStatus(_botAlias: string, _runId: string): Promise<ClusterTaskStatus> {
+    return {
+      tasks: [],
+      queuedCount: 0,
+      runningCount: 0,
+      completedCount: 0,
+      failedCount: 0,
+      pendingCount: 0,
     };
   }
 

@@ -106,6 +106,7 @@ from .api_service import (
     get_history_trace,
     get_assistant_diagnostics,
     get_overview,
+    get_cluster_task_status,
     get_terminal_actions_config,
     list_avatar_assets,
     list_assistant_upgrade_targets,
@@ -1068,6 +1069,23 @@ class WebApiServer:
         await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_cluster_status(self.manager, alias)})
+
+    async def get_cluster_run_tasks_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        run_id = request.match_info.get("run_id", "")
+        raw_task_ids = request.query.get("task_ids", "")
+        task_ids = [item.strip() for item in raw_task_ids.split(",") if item.strip()] if raw_task_ids else None
+        include_output = request.query.get("include_output", "1") not in {"0", "false", "False"}
+        data = get_cluster_task_status(
+            self.manager,
+            alias,
+            auth.user_id,
+            run_id,
+            task_ids=task_ids,
+            include_output=include_output,
+        )
+        return _json({"ok": True, "data": data})
 
     async def post_cluster_setup_prepare(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -2999,6 +3017,7 @@ class WebApiServer:
         app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
         app.router.add_get("/api/bots/{alias}/agents", self.get_agents_view)
         app.router.add_get("/api/bots/{alias}/cluster/status", self.get_cluster_status_view)
+        app.router.add_get("/api/bots/{alias}/cluster/runs/{run_id}/tasks", self.get_cluster_run_tasks_view)
         app.router.add_post("/api/admin/bots/{alias}/agents", self.post_agent_view)
         app.router.add_patch("/api/admin/bots/{alias}/agents/{agent_id}", self.patch_agent_view)
         app.router.add_delete("/api/admin/bots/{alias}/agents/{agent_id}", self.delete_agent_view)

@@ -44,7 +44,8 @@ def test_cluster_runtime_finish_removes_run():
 
     runtime.finish_run(run.run_id)
 
-    assert runtime.get_run(run.run_id) is None
+    assert runtime.get_run(run.run_id) is run
+    assert runtime.get_run(run.run_id).status == "completed"
 
 
 def test_cluster_runtime_rejects_main_agent_target():
@@ -104,3 +105,67 @@ def test_cluster_runtime_defaults_invalid_model_tier_to_medium():
     )
 
     assert request.model_tier == "medium"
+
+
+def test_cluster_runtime_creates_agent_task():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(
+        run.run_id,
+        {"agent_id": "tester", "message": "跑测试", "model_tier": "low"},
+    )
+
+    task = runtime.create_agent_task(run.run_id, request)
+
+    assert task.task_id.startswith("clt_")
+    assert task.agent_id == "tester"
+    assert task.status == "queued"
+    status = runtime.build_task_status(run.run_id, [task.task_id], include_output=True)
+    assert status["queued_count"] == 1
+    assert status["tasks"][0]["task_id"] == task.task_id
+
+
+def test_cluster_runtime_completes_agent_task():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = runtime.create_agent_task(run.run_id, request)
+
+    runtime.mark_agent_task_running(run.run_id, task.task_id)
+    runtime.complete_agent_task(run.run_id, task.task_id, "843 passed")
+
+    status = runtime.build_task_status(run.run_id, [task.task_id], include_output=True)
+    assert status["completed_count"] == 1
+    assert status["tasks"][0]["status"] == "completed"
+    assert status["tasks"][0]["output"] == "843 passed"
+
+
+def test_cluster_runtime_fails_agent_task():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = runtime.create_agent_task(run.run_id, request)
+
+    runtime.fail_agent_task(run.run_id, task.task_id, "boom")
+
+    status = runtime.build_task_status(run.run_id, [task.task_id], include_output=True)
+    assert status["failed_count"] == 1
+    assert status["tasks"][0]["status"] == "failed"
+    assert status["tasks"][0]["error"] == "boom"
+
+
+def test_cluster_runtime_keeps_finished_run_with_tasks_for_polling():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = runtime.create_agent_task(run.run_id, request)
+
+    runtime.finish_run(run.run_id, "completed")
+
+    assert runtime.get_run(run.run_id) is not None
+    status = runtime.build_task_status(run.run_id, [task.task_id], include_output=False)
+    assert status["queued_count"] == 1

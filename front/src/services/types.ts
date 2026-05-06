@@ -148,6 +148,28 @@ export type ClusterStatus = {
   agents: ClusterAgentStatus[];
 };
 
+export type ClusterAgentTask = {
+  taskId: string;
+  agentId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  modelTier: ClusterModelTier | string;
+  allowWrite: boolean;
+  createdAt: string;
+  startedAt: string;
+  completedAt: string;
+  output?: string;
+  error: string;
+};
+
+export type ClusterTaskStatus = {
+  tasks: ClusterAgentTask[];
+  queuedCount: number;
+  runningCount: number;
+  completedCount: number;
+  failedCount: number;
+  pendingCount: number;
+};
+
 export type ClusterSetupPrepareResult = {
   serverName: string;
   launcherPath: string;
@@ -343,6 +365,7 @@ export type ConversationSelectResult = {
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;
+  clusterRunId?: string;
 };
 
 export type ChatTaskMode = "standard" | "dream" | "proposal_patch";

@@ -64,6 +64,7 @@ import type {
   ClusterConfigUpdateResult,
   ClusterSetupPrepareResult,
   ClusterStatus,
+  ClusterTaskStatus,
   ConversationListResult,
   ConversationSelectResult,
   HistoryDeltaResult,
@@ -113,6 +114,7 @@ export interface WebBotClient {
   updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult>;
   deleteAgent(botAlias: string, agentId: string): Promise<void>;
   getClusterStatus(botAlias: string): Promise<ClusterStatus>;
+  getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus>;
   prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult>;
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
