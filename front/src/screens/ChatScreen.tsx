@@ -43,6 +43,7 @@ import {
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
 } from "../utils/filePreview";
+import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 
 type Props = {
@@ -59,7 +60,7 @@ type Props = {
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onUnreadResult?: (botAlias: string) => void;
-  onBotActivityChange?: (botAlias: string, activity: Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">) => void;
+  onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
 };
@@ -1857,10 +1858,13 @@ export function ChatScreen({
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";
     const agent = agentsRef.current.find((item) => item.id === agentId) || activeAgent;
+    const agentName = agent.name || agentId;
     onBotActivityChange?.(botAlias, {
       activityStatus,
+      agentId,
+      agentName,
       busyAgentIds: activityStatus === "busy" ? [agentId] : [],
-      busyAgentNames: activityStatus === "busy" ? [agent.name || agentId] : [],
+      busyAgentNames: activityStatus === "busy" ? [agentName] : [],
       busyAgentCount: activityStatus === "busy" ? 1 : 0,
     });
   }

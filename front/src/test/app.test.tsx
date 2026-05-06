@@ -161,10 +161,42 @@ test("desktop bot switching requires confirmation when there are dirty editor ta
 
   expect(confirmSpy).toHaveBeenCalledWith("当前桌面工作台有未保存文件，切换智能体会丢失这些修改。确定继续吗？");
   expect(screen.getByRole("button", { name: "main" })).toBeInTheDocument();
-  expect(await screen.findByText("智能体切换")).toBeInTheDocument();
+  expect(await screen.findByRole("dialog", { name: "智能体切换" })).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /team2/i }));
   expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
+});
+
+test("desktop bot switcher uses anchored popover and leaves mobile sheet untouched", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+
+  expect(await screen.findByTestId("desktop-bot-switcher-popover")).toBeInTheDocument();
+  expect(screen.getByLabelText("搜索智能体")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "智能体管理" })).toBeInTheDocument();
+});
+
+test("mobile bot switcher still uses bottom sheet", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+
+  expect(await screen.findByRole("dialog", { name: "智能体切换" })).toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-bot-switcher-popover")).not.toBeInTheDocument();
 });
 
 test("super admin can open invite code management from bot switcher", async () => {
@@ -182,6 +214,23 @@ test("super admin can open invite code management from bot switcher", async () =
 
   expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+});
+
+test("super admin can open invite code management from desktop bot switcher", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({ ...SUPER_ADMIN_SESSION });
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "127.0.0.1");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "邀请码" }));
+
+  expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
 });
 
 test("main settings can switch and persist appearance preferences", async () => {
@@ -308,6 +357,47 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
   expect(listBotsSpy).toHaveBeenCalledTimes(2);
   expect(await screen.findByText(/处理中/)).toBeInTheDocument();
   expect(screen.getByText("codex: C:\\workspace\\demo")).toBeInTheDocument();
+});
+
+test("desktop bot switcher searches busy agent names", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "main",
+      cliType: "codex",
+      status: "busy",
+      workingDir: "C:\\workspace\\demo",
+      lastActiveText: "处理中",
+      activityStatus: "busy",
+      busyAgentIds: ["main", "reviewer"],
+      busyAgentNames: ["主 agent", "代码审查"],
+      busyAgentCount: 2,
+      serviceStatus: "online",
+    },
+    {
+      alias: "team2",
+      cliType: "claude",
+      status: "running",
+      workingDir: "C:\\workspace\\plans",
+      lastActiveText: "运行中",
+      serviceStatus: "online",
+    },
+  ] satisfies BotSummary[]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.type(await screen.findByLabelText("搜索智能体"), "代码审查");
+
+  const popover = await screen.findByTestId("desktop-bot-switcher-popover");
+  expect(within(popover).getAllByText("2 个 agent 处理中").length).toBeGreaterThan(0);
+  expect(within(popover).getByText("代码审查")).toBeInTheDocument();
+  expect(within(popover).queryByText("team2")).not.toBeInTheDocument();
 });
 
 test("marks a bot unread after a hidden reply completes and clears it on return", async () => {
@@ -523,6 +613,60 @@ test("bot switcher disables offline bots", async () => {
 
   expect(await screen.findByText("离线中，暂不可切换")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /team2/i })).toBeDisabled();
+});
+
+test("desktop bot switcher focuses offline bot but does not switch to it", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\demo",
+      lastActiveText: "运行中",
+      serviceStatus: "online",
+    },
+    {
+      alias: "offline-team",
+      cliType: "claude",
+      status: "offline",
+      workingDir: "C:\\workspace\\offline",
+      lastActiveText: "离线",
+      serviceStatus: "offline",
+    },
+  ] satisfies BotSummary[]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await screen.findByTestId("desktop-bot-switcher-popover");
+  await user.keyboard("{ArrowDown}{Enter}");
+
+  expect(screen.getByRole("button", { name: "main" })).toBeInTheDocument();
+  expect(screen.getByText("离线中，暂不可切换")).toBeInTheDocument();
+});
+
+test("desktop bot switcher supports arrow navigation and enter selection", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await screen.findByTestId("desktop-bot-switcher-popover");
+
+  await user.keyboard("{ArrowDown}{Enter}");
+
+  expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
 });
 
 test("bot switcher sorts bots by main first, then status, then alias", async () => {

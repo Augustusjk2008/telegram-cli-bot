@@ -100,7 +100,7 @@ type Props = {
   chatStatus?: ChatWorkbenchStatus;
   onUnreadResult?: (botAlias: string) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
-  onOpenBotSwitcher?: () => void;
+  onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;
   onDirtyTabsChange?: (hasDirtyTabs: boolean) => void;
   onChatPaneVisibilityChange?: (visible: boolean) => void;
 };
@@ -831,7 +831,7 @@ export function DesktopWorkbench({
         onToggleTerminal={toggleTerminal}
         onToggleChat={toggleChat}
         onViewModeChange={(nextMode) => onViewModeChange?.(nextMode)}
-        onOpenBotSwitcher={() => onOpenBotSwitcher?.()}
+        onOpenBotSwitcher={(anchorRect) => onOpenBotSwitcher?.(anchorRect)}
       />
 
       <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden">

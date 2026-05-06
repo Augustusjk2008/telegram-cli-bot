@@ -1072,6 +1072,8 @@ test("chat screen reports active child agent activity when sending", async () =>
   await waitFor(() => {
     expect(onBotActivityChange).toHaveBeenCalledWith("main", expect.objectContaining({
       activityStatus: "busy",
+      agentId: "reviewer",
+      agentName: "代码审查",
       busyAgentIds: ["reviewer"],
       busyAgentNames: ["代码审查"],
       busyAgentCount: 1,
@@ -1086,6 +1088,17 @@ test("chat screen reports active child agent activity when sending", async () =>
       createdAt: new Date().toISOString(),
       state: "done",
     });
+  });
+
+  await waitFor(() => {
+    expect(onBotActivityChange).toHaveBeenLastCalledWith("main", expect.objectContaining({
+      activityStatus: "idle",
+      agentId: "reviewer",
+      agentName: "代码审查",
+      busyAgentIds: [],
+      busyAgentNames: [],
+      busyAgentCount: 0,
+    }));
   });
 });
 

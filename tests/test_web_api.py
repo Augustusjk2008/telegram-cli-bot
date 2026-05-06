@@ -355,6 +355,30 @@ async def test_list_bots_reports_busy_child_agents(web_manager: MultiBotManager)
     assert items[0]["busy_agent_count"] == 1
     assert items[0]["is_processing"] is True
 
+
+@pytest.mark.asyncio
+async def test_list_bots_reports_multiple_busy_agents(web_manager: MultiBotManager):
+    await create_agent(web_manager, "main", {"id": "reviewer", "name": "代码审查"})
+    main = get_session_for_alias(web_manager, "main", 1001)
+    _profile, _agent, reviewer = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")
+
+    with main._lock:
+        main.is_processing = True
+    with reviewer._lock:
+        reviewer.is_processing = True
+
+    items = list_bots(web_manager, 1001)
+    overview = get_overview(web_manager, "main", 1001)
+
+    assert items[0]["activity_status"] == "busy"
+    assert items[0]["busy_agent_ids"] == ["main", "reviewer"]
+    assert items[0]["busy_agent_names"] == ["主 agent", "代码审查"]
+    assert items[0]["busy_agent_count"] == 2
+    assert items[0]["is_processing"] is True
+    assert overview["bot"]["busy_agent_ids"] == ["main", "reviewer"]
+    assert overview["bot"]["busy_agent_names"] == ["主 agent", "代码审查"]
+    assert overview["bot"]["busy_agent_count"] == 2
+
 def test_user_session_debounces_hot_path_persistence(monkeypatch: pytest.MonkeyPatch):
     persisted_preview_texts: list[str] = []
     session = UserSession(

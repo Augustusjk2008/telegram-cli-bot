@@ -13,7 +13,14 @@ import {
   storeViewMode,
   type ViewMode,
 } from "./layoutMode";
+import {
+  applyBotActivityOverrides,
+  updateBotAgentActivityOverrides,
+  type BotActivityChange,
+  type BotAgentActivityOverrides,
+} from "./botActivity";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
+import { DesktopBotSwitcherPopover } from "../components/DesktopBotSwitcherPopover";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import type { BotStatus, BotSummary, PublicHostInfo, SessionState } from "../services/types";
@@ -166,25 +173,6 @@ function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
   });
 }
 
-function applyBotActivityOverrides(
-  bots: BotSummary[],
-  overrides: Record<string, Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">>,
-) {
-  return bots.map((bot) => {
-    const override = overrides[bot.alias];
-    if (!override) {
-      return bot;
-    }
-    const busy = override.activityStatus === "busy" || (override.busyAgentCount || 0) > 0 || (override.busyAgentIds?.length || 0) > 0;
-    return {
-      ...bot,
-      ...override,
-      status: busy ? "busy" as const : bot.serviceStatus === "offline" || bot.status === "offline" ? "offline" as const : "running" as const,
-      lastActiveText: busy ? "处理中" : bot.serviceStatus === "offline" || bot.status === "offline" ? "离线" : "运行中",
-    };
-  });
-}
-
 const BOT_SWITCHER_STATUS_PRIORITY: Record<BotStatus, number> = {
   unread: 0,
   running: 1,
@@ -219,7 +207,7 @@ function sortBotsForSwitcher(bots: BotSummary[]) {
 function buildDisplayBots(
   bots: BotSummary[],
   unreadBots: string[],
-  botActivityOverrides: Record<string, Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">>,
+  botActivityOverrides: BotAgentActivityOverrides,
 ) {
   return sortBotsForSwitcher(applyUnreadStatus(applyBotActivityOverrides(bots, botActivityOverrides), unreadBots));
 }
@@ -252,10 +240,11 @@ export function App() {
   const [showBotManager, setShowBotManager] = useState(false);
   const [showInviteCodeManager, setShowInviteCodeManager] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [botSwitcherAnchorRect, setBotSwitcherAnchorRect] = useState<DOMRect | null>(null);
   const [desktopHasDirtyTabs, setDesktopHasDirtyTabs] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
-  const [botActivityOverrides, setBotActivityOverrides] = useState<Record<string, Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">>>({});
+  const [botActivityOverrides, setBotActivityOverrides] = useState<BotAgentActivityOverrides>({});
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [publicHostInfo, setPublicHostInfo] = useState<PublicHostInfo | null>(null);
@@ -321,7 +310,8 @@ export function App() {
     return true;
   }
 
-  async function openBotSwitcher() {
+  async function openBotSwitcher(anchorRect?: DOMRect) {
+    setBotSwitcherAnchorRect(anchorRect || null);
     setShowSwitcher(true);
     try {
       const nextBots = await client.listBots();
@@ -329,6 +319,11 @@ export function App() {
     } catch {
       // Keep the current list so the switcher can open immediately even if refresh fails.
     }
+  }
+
+  function closeBotSwitcher() {
+    setShowSwitcher(false);
+    setBotSwitcherAnchorRect(null);
   }
 
   function openInviteCodeManager() {
@@ -649,24 +644,8 @@ export function App() {
     setUnreadBots((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
   }
 
-  function handleBotActivityChange(
-    alias: string,
-    activity: Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount">,
-  ) {
-    setBotActivityOverrides((prev) => {
-      if (activity.activityStatus !== "busy" && (activity.busyAgentCount || 0) <= 0 && (activity.busyAgentIds?.length || 0) <= 0) {
-        if (!prev[alias]) {
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[alias];
-        return next;
-      }
-      return {
-        ...prev,
-        [alias]: activity,
-      };
-    });
+  function handleBotActivityChange(alias: string, activity: BotActivityChange) {
+    setBotActivityOverrides((prev) => updateBotAgentActivityOverrides(prev, alias, activity));
   }
 
   if (!isLoggedIn) {
@@ -806,26 +785,50 @@ export function App() {
   }
 
   const switcher = showSwitcher ? (
-    <BotSwitcherSheet
-      bots={displayBots}
-      currentAlias={currentBot}
-      onSelect={(alias) => {
-        return requestBotSelection(alias);
-      }}
-      onManage={() => {
-        setShowBotManager(true);
-        setShowInviteCodeManager(false);
-        setShowSwitcher(false);
-        setIsChatImmersive(false);
-        setIsTerminalImmersive(false);
-      }}
-      showInviteManager={canManageRegisterCodes}
-      inviteManagerActive={showInviteCodeManager}
-      onOpenInviteManager={() => {
-        openInviteCodeManager();
-      }}
-      onClose={() => setShowSwitcher(false)}
-    />
+    effectiveLayoutMode === "desktop" ? (
+      <DesktopBotSwitcherPopover
+        bots={displayBots}
+        currentAlias={currentBot}
+        anchorRect={botSwitcherAnchorRect}
+        onSelect={(alias) => {
+          return requestBotSelection(alias);
+        }}
+        onManage={() => {
+          setShowBotManager(true);
+          setShowInviteCodeManager(false);
+          closeBotSwitcher();
+          setIsChatImmersive(false);
+          setIsTerminalImmersive(false);
+        }}
+        showInviteManager={canManageRegisterCodes}
+        inviteManagerActive={showInviteCodeManager}
+        onOpenInviteManager={() => {
+          openInviteCodeManager();
+        }}
+        onClose={closeBotSwitcher}
+      />
+    ) : (
+      <BotSwitcherSheet
+        bots={displayBots}
+        currentAlias={currentBot}
+        onSelect={(alias) => {
+          return requestBotSelection(alias);
+        }}
+        onManage={() => {
+          setShowBotManager(true);
+          setShowInviteCodeManager(false);
+          closeBotSwitcher();
+          setIsChatImmersive(false);
+          setIsTerminalImmersive(false);
+        }}
+        showInviteManager={canManageRegisterCodes}
+        inviteManagerActive={showInviteCodeManager}
+        onOpenInviteManager={() => {
+          openInviteCodeManager();
+        }}
+        onClose={closeBotSwitcher}
+      />
+    )
   ) : null;
 
   if (effectiveLayoutMode === "desktop") {
@@ -897,8 +900,8 @@ export function App() {
               </div>
             )}
             onViewModeChange={setViewMode}
-            onOpenBotSwitcher={() => {
-              void openBotSwitcher();
+            onOpenBotSwitcher={(anchorRect) => {
+              void openBotSwitcher(anchorRect);
             }}
             onDirtyTabsChange={setDesktopHasDirtyTabs}
             onChatPaneVisibilityChange={setDesktopChatPaneVisible}

@@ -25,7 +25,7 @@ type Props = {
   onToggleTerminal: () => void;
   onToggleChat: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
-  onOpenBotSwitcher: () => void;
+  onOpenBotSwitcher: (anchorRect?: DOMRect) => void;
 };
 
 export function WorkbenchHeader({
@@ -82,7 +82,7 @@ export function WorkbenchHeader({
       <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"
-          onClick={onOpenBotSwitcher}
+          onClick={(event) => onOpenBotSwitcher(event.currentTarget.getBoundingClientRect())}
           className={clsx(
             "relative rounded-lg border border-[var(--border)] px-2.5 py-1 text-sm font-medium hover:bg-[var(--surface)]",
             hasUnreadOtherBots ? "pr-4.5" : "",
