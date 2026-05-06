@@ -1,0 +1,1 @@
+"""Assistant upgrade package."""

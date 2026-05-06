@@ -4953,20 +4953,31 @@ async def _stream_assistant_proposal_patch_request(
     if not target.get("available"):
         _raise_unavailable_upgrade_target(target)
 
-    service = _get_chat_history_service(session)
-    turn_handle = service.start_turn(
-        profile=profile,
-        session=session,
-        user_text=str(request.visible_text or request.text or "").strip(),
-        native_provider=profile.cli_type,
-        assistant_home=str(home.root),
-        managed_prompt_hash=session.managed_prompt_hash_seen,
-        prompt_surface_version="v1",
-    )
-    started_at = time.perf_counter()
-    event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-    worker_done = threading.Event()
-    preview_text = ""
+    with session._lock:
+        if session.is_processing:
+            _raise(409, "session_busy", msg("chat", "busy"))
+        session.stop_requested = False
+        session.is_processing = True
+
+    try:
+        service = _get_chat_history_service(session)
+        turn_handle = service.start_turn(
+            profile=profile,
+            session=session,
+            user_text=str(request.visible_text or request.text or "").strip(),
+            native_provider=profile.cli_type,
+            assistant_home=str(home.root),
+            managed_prompt_hash=session.managed_prompt_hash_seen,
+            prompt_surface_version="v1",
+        )
+        started_at = time.perf_counter()
+        event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        worker_done = threading.Event()
+        preview_text = ""
+    except Exception:
+        with session._lock:
+            session.is_processing = False
+        raise
 
     def on_event(event: dict[str, Any]) -> None:
         event_queue.put(dict(event))
@@ -5027,9 +5038,16 @@ async def _stream_assistant_proposal_patch_request(
                 "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
             })
         finally:
+            with session._lock:
+                session.is_processing = False
             worker_done.set()
 
-    threading.Thread(target=run_generation, daemon=True).start()
+    try:
+        threading.Thread(target=run_generation, daemon=True).start()
+    except Exception:
+        with session._lock:
+            session.is_processing = False
+        raise
 
     while not worker_done.is_set() or not event_queue.empty():
         try:
