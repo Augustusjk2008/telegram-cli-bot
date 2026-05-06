@@ -61,6 +61,7 @@ export type BotSummary = {
   botMode?: string;
   enabled?: boolean;
   isMain?: boolean;
+  cluster?: BotClusterConfig;
 };
 
 export type AgentSummary = {
@@ -74,6 +75,7 @@ export type AgentSummary = {
   activeConversationId?: string;
   createdAt?: string;
   updatedAt?: string;
+  cluster?: AgentClusterConfig;
 };
 
 export type AgentListResult = {
@@ -85,6 +87,96 @@ export type AgentInput = {
   name?: string;
   systemPrompt?: string;
   enabled?: boolean;
+  cluster?: Partial<AgentClusterConfig>;
+};
+
+export type ClusterModelTier = "low" | "medium" | "high";
+
+export type ClusterModelTiers = {
+  low: string;
+  medium: string;
+  high: string;
+};
+
+export type BotClusterConfig = {
+  enabled: boolean;
+  writePolicy: "main_only" | "selected_agents" | "all_agents";
+  conflictPolicy: "warn_only" | "snapshot_diff" | "block_same_file";
+  maxParallelAgents: number;
+  defaultTimeoutSeconds: number;
+  modelTiers: ClusterModelTiers;
+};
+
+export type AgentClusterConfig = {
+  allowCluster: boolean;
+  allowWrite: boolean;
+  sessionPolicy: "persistent" | "ephemeral" | "fork";
+  timeoutSeconds: number;
+};
+
+export type ClusterMcpState =
+  | "not_checked"
+  | "cli_missing"
+  | "launcher_missing"
+  | "mcp_missing"
+  | "installed"
+  | "stale"
+  | "broken"
+  | "app_not_running";
+
+export type ClusterMcpTargetStatus = {
+  state: ClusterMcpState;
+  message: string;
+};
+
+export type ClusterAgentStatus = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  allowCluster: boolean;
+  allowWrite: boolean;
+};
+
+export type ClusterStatus = {
+  enabled: boolean;
+  modelTiers: ClusterModelTiers;
+  mcp: {
+    serverName: string;
+    codex: ClusterMcpTargetStatus;
+    claude: ClusterMcpTargetStatus;
+  };
+  agents: ClusterAgentStatus[];
+};
+
+export type ClusterSetupPrepareResult = {
+  serverName: string;
+  launcherPath: string;
+  configPath: string;
+  tokenPath: string;
+  installCommand: string[];
+  verifyCommand: string[];
+  removeCommand: string[];
+};
+
+export type ClusterConfigUpdateInput = {
+  enabled?: boolean;
+  writePolicy?: BotClusterConfig["writePolicy"];
+  conflictPolicy?: BotClusterConfig["conflictPolicy"];
+  maxParallelAgents?: number;
+  defaultTimeoutSeconds?: number;
+  modelTiers?: ClusterModelTiers;
+};
+
+export type ClusterConfigUpdateResult = {
+  cluster: BotClusterConfig;
+  status: ClusterStatus;
+};
+
+export type AgentMention = {
+  agentId: string;
+  label: string;
+  start: number;
+  end: number;
 };
 
 export type AgentMutationResult = {
@@ -259,6 +351,8 @@ export type ChatSendOptions = {
   taskPayload?: Record<string, unknown>;
   visibleText?: string;
   agentId?: string;
+  cluster?: boolean;
+  mentions?: AgentMention[];
 };
 
 export type TerminalRuntimePlatform = "windows" | "linux";

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import hmac
 import json
 import logging
 import ntpath
@@ -77,7 +78,16 @@ from bot.assistant_state import (
     restore_assistant_runtime_state,
 )
 from bot.agents import build_agent_prompt_input
-from bot.cli_params import get_default_params, get_params_schema, normalize_cli_model_options
+from bot.cli_params import CliParamsConfig, get_default_params, get_params_schema, normalize_cli_model_options
+from bot.cluster_config import normalize_bot_cluster_config
+from bot.cluster_runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
+from bot.cluster_setup import (
+    CLUSTER_MCP_SERVER_NAME,
+    build_cli_install_command,
+    build_cli_remove_command,
+    build_cli_verify_command,
+    prepare_cluster_mcp_launcher,
+)
 from bot.config import CLI_MODEL_OPTIONS
 from bot.cli import (
     build_cli_command,
@@ -126,6 +136,8 @@ from bot.web.terminal_actions import (
 )
 
 logger = logging.getLogger(__name__)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_CLUSTER_RUNTIME = ClusterRuntime()
 UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -719,6 +731,7 @@ def build_bot_summary(
         "is_main": alias == manager.main_profile.alias,
         "status": run_status,
         "service_status": service_status,
+        "cluster": profile.cluster.to_dict(),
         **activity,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(profile, alias == manager.main_profile.alias),
@@ -746,6 +759,124 @@ def list_agents(manager: MultiBotManager, alias: str, user_id: int | None = None
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
     return {"items": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))}
+
+
+def _cluster_token_path() -> Path:
+    return Path.home() / ".tcb" / "cluster-mcp" / "token"
+
+
+def verify_cluster_mcp_request(request_headers: dict[str, str]) -> None:
+    auth = str(request_headers.get("Authorization") or "")
+    if not auth.startswith("Bearer "):
+        _raise(401, "cluster_mcp_unauthorized", "cluster MCP 未授权")
+    token = auth.removeprefix("Bearer ").strip()
+    token_path = _cluster_token_path()
+    try:
+        expected = token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        _raise(401, "cluster_mcp_unauthorized", "cluster MCP token 不存在")
+    if not token or not expected or not hmac.compare_digest(token, expected):
+        _raise(401, "cluster_mcp_unauthorized", "cluster MCP 未授权")
+
+
+def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    return {
+        "enabled": bool(profile.cluster.enabled),
+        "model_tiers": dict(profile.cluster.model_tiers),
+        "mcp": {
+            "server_name": CLUSTER_MCP_SERVER_NAME,
+            "codex": {"state": "not_checked", "message": "未检测"},
+            "claude": {"state": "not_checked", "message": "未检测"},
+        },
+        "agents": [
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "enabled": agent.enabled,
+                "allow_cluster": agent.cluster.allow_cluster,
+                "allow_write": agent.cluster.allow_write,
+            }
+            for agent in profile.normalized_agents()
+            if agent.id != "main"
+        ],
+    }
+
+
+def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    launcher = prepare_cluster_mcp_launcher(
+        home_dir=Path.home(),
+        repo_root=_REPO_ROOT,
+        bridge_url="http://127.0.0.1:8765",
+    )
+    return {
+        **launcher.to_dict(),
+        "install_command": build_cli_install_command(
+            cli_type=profile.cli_type,
+            cli_path=profile.cli_path,
+            launcher_path=launcher.launcher_path,
+        ),
+        "verify_command": build_cli_verify_command(profile.cli_type, profile.cli_path),
+        "remove_command": build_cli_remove_command(profile.cli_type, profile.cli_path),
+    }
+
+
+async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
+        cluster = await manager.update_bot_cluster(alias, normalize_bot_cluster_config(source).to_dict())
+    except ValueError as exc:
+        _raise(400, "invalid_cluster_config", str(exc))
+    return {"cluster": cluster, "status": get_cluster_status(manager, alias)}
+
+
+async def handle_cluster_mcp_tool(
+    manager: MultiBotManager,
+    run_id: str,
+    tool_name: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        if tool_name == "cluster_status":
+            return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
+        if tool_name == "list_agents":
+            return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)["agents"]}
+        if tool_name != "ask_agent":
+            _raise(404, "cluster_tool_not_found", "未知集群工具")
+
+        request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
+        run = _CLUSTER_RUNTIME.get_run(run_id)
+        if run is None:
+            _raise(404, "cluster_run_not_found", "未找到集群任务")
+        _CLUSTER_RUNTIME.append_event(
+            run_id,
+            {
+                "kind": "agent_started",
+                "agent_id": request.agent_id,
+                "model_tier": request.model_tier,
+                "message_preview": request.message[:120],
+            },
+        )
+        cli_params_override = build_cluster_cli_params_override(run.profile, request.model_tier)
+        result = await run_cli_chat(
+            manager,
+            run.bot_alias,
+            run.user_id,
+            request.message,
+            agent_id=request.agent_id,
+            cli_params_override=cli_params_override,
+        )
+        output = str(result.get("output") or "")
+        _CLUSTER_RUNTIME.append_event(
+            run_id,
+            {"kind": "agent_completed", "agent_id": request.agent_id, "summary": output[:200]},
+        )
+        return {"ok": True, "data": {"agent_id": request.agent_id, "status": "completed", "output": output}}
+    except KeyError:
+        _raise(404, "cluster_run_not_found", "未找到集群任务")
+    except ClusterToolError as exc:
+        _raise(400, exc.code, exc.message)
 
 
 async def create_agent(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -2601,6 +2732,32 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     return env
 
 
+def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> CliParamsConfig:
+    params = profile.cli_params.to_dict()
+    cli_type = normalize_cli_type(profile.cli_type)
+    tier = model_tier if model_tier in {"low", "medium", "high"} else "medium"
+    model = str(profile.cluster.model_tiers.get(tier) or "").strip()
+    if model:
+        params.setdefault(cli_type, {})
+        params[cli_type]["model"] = model
+    return CliParamsConfig.from_dict(params)
+
+
+def _build_cluster_prompt(mentions: list[dict[str, Any]] | None) -> str:
+    mentioned = ", ".join(
+        str(item.get("agent_id") or item.get("agentId") or "").strip()
+        for item in (mentions or [])
+        if str(item.get("agent_id") or item.get("agentId") or "").strip()
+    )
+    return (
+        "<tcb_cluster_mode>\n"
+        "你处于 TCB 集群模式。可用 MCP server: tcb-cluster。\n"
+        "需要委派时，调用 MCP 工具 ask_agent。不要要求用户切换子 agent 页面。\n"
+        f"用户显式提及的子 agent: {mentioned or '无'}\n"
+        "</tcb_cluster_mode>\n\n"
+    )
+
+
 def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     normalized = normalize_cli_type(cli_type)
     if normalized == "codex":
@@ -3632,6 +3789,9 @@ async def _stream_cli_chat(
     *,
     request: AssistantRunRequest | None = None,
     agent_id: str = "main",
+    cli_params_override: CliParamsConfig | None = None,
+    cluster_run_id: str = "",
+    cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
@@ -3644,6 +3804,8 @@ async def _stream_cli_chat(
     if text.startswith("//"):
         text = "/" + text[2:]
     prompt_text = text
+    if cluster_run_id:
+        prompt_text = _build_cluster_prompt(cluster_mentions) + prompt_text
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False
@@ -3651,6 +3813,11 @@ async def _stream_cli_chat(
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
+    if cluster_run_id:
+        env["TCB_CLUSTER_ACTIVE"] = "1"
+        env["TCB_CLUSTER_RUN_ID"] = cluster_run_id
+        env["TCB_CLUSTER_BOT_ALIAS"] = alias
+        env["TCB_CLUSTER_USER_ID"] = str(user_id)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
@@ -3711,7 +3878,7 @@ async def _stream_cli_chat(
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
                     json_output=(cli_type in ("codex", "claude")),
-                    params_config=profile.cli_params,
+                    params_config=cli_params_override or profile.cli_params,
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
@@ -4086,6 +4253,9 @@ async def run_cli_chat(
     *,
     request: AssistantRunRequest | None = None,
     agent_id: str = "main",
+    cli_params_override: CliParamsConfig | None = None,
+    cluster_run_id: str = "",
+    cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
@@ -4098,6 +4268,8 @@ async def run_cli_chat(
     if text.startswith("//"):
         text = "/" + text[2:]
     prompt_text = text
+    if cluster_run_id:
+        prompt_text = _build_cluster_prompt(cluster_mentions) + prompt_text
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False
@@ -4108,6 +4280,11 @@ async def run_cli_chat(
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
+    if cluster_run_id:
+        env["TCB_CLUSTER_ACTIVE"] = "1"
+        env["TCB_CLUSTER_RUN_ID"] = cluster_run_id
+        env["TCB_CLUSTER_BOT_ALIAS"] = alias
+        env["TCB_CLUSTER_USER_ID"] = str(user_id)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
@@ -4180,7 +4357,7 @@ async def run_cli_chat(
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
                     json_output=(cli_type in ("codex", "claude")),
-                    params_config=profile.cli_params,
+                    params_config=cli_params_override or profile.cli_params,
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
@@ -4385,6 +4562,8 @@ async def run_chat(
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
     agent_id: str = "main",
+    cluster: bool = False,
+    mentions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     if profile.bot_mode == "assistant":
@@ -4402,7 +4581,35 @@ async def run_chat(
         )
         return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
-        return await run_cli_chat(manager, alias, user_id, user_text, agent_id=agent_id)
+        if cluster and not profile.cluster.enabled:
+            _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+        cluster_run = None
+        if cluster:
+            cluster_run = _CLUSTER_RUNTIME.start_run(
+                ClusterRunRequest(
+                    bot_alias=alias,
+                    user_id=user_id,
+                    profile=profile,
+                    mentions=list(mentions or []),
+                )
+            )
+        run_status = "completed"
+        try:
+            return await run_cli_chat(
+                manager,
+                alias,
+                user_id,
+                user_text,
+                agent_id=agent_id,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_mentions=list(mentions or []),
+            )
+        except Exception:
+            run_status = "error"
+            raise
+        finally:
+            if cluster_run:
+                _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
     _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
 
@@ -4416,6 +4623,8 @@ async def stream_chat(
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
     agent_id: str = "main",
+    cluster: bool = False,
+    mentions: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -4436,8 +4645,38 @@ async def stream_chat(
                 yield event
             return
         if _supports_cli_runtime(profile):
-            async for event in _stream_cli_chat(manager, alias, user_id, user_text, agent_id=agent_id):
-                yield event
+            if cluster and not profile.cluster.enabled:
+                _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+            cluster_run = None
+            if cluster:
+                cluster_run = _CLUSTER_RUNTIME.start_run(
+                    ClusterRunRequest(
+                        bot_alias=alias,
+                        user_id=user_id,
+                        profile=profile,
+                        mentions=list(mentions or []),
+                    )
+                )
+            run_status = "completed"
+            try:
+                async for event in _stream_cli_chat(
+                    manager,
+                    alias,
+                    user_id,
+                    user_text,
+                    agent_id=agent_id,
+                    cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    cluster_mentions=list(mentions or []),
+                ):
+                    if event.get("type") == "error":
+                        run_status = "error"
+                    yield event
+            except Exception:
+                run_status = "error"
+                raise
+            finally:
+                if cluster_run:
+                    _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
             return
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
     except WebApiError as exc:

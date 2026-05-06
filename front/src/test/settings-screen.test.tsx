@@ -147,6 +147,27 @@ test("settings screen creates child agent", async () => {
   expect(await screen.findByText("agent 已新增")).toBeInTheDocument();
 });
 
+test("agent settings save cluster write permission", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const createAgent = vi.spyOn(client, "createAgent");
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.click(await screen.findByRole("button", { name: "新增 agent" }));
+  await user.type(screen.getByLabelText("Agent ID"), "impl");
+  await user.type(screen.getByLabelText("名称"), "实现");
+  await user.click(screen.getByLabelText("允许修改文件"));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => {
+    expect(createAgent).toHaveBeenCalledWith("main", expect.objectContaining({
+      id: "impl",
+      cluster: expect.objectContaining({ allowWrite: true }),
+    }));
+  });
+});
+
 test("settings screen hides agent management for assistant bot", async () => {
   const client = new MockWebBotClient();
   await client.addBot({

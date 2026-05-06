@@ -19,12 +19,16 @@ import { AvatarPicker } from "../components/AvatarPicker";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ChatAvatar } from "../components/ChatAvatar";
+import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
+import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   BotSummary,
   CliType,
+  CliParamsPayload,
+  ClusterStatus,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -323,6 +327,10 @@ function EditPanel({
   const [draft, setDraft] = useState<EditDraft>(draftFromBot(bot));
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
+  const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null);
+  const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
+  const [clusterSaving, setClusterSaving] = useState(false);
+  const [clusterError, setClusterError] = useState("");
   const dirty = !draftEquals(draft, draftFromBot(bot));
   const directoryBrowserAlias = manager.bots.find((item) => isMainBot(item))?.alias || manager.bots[0]?.alias || "main";
 
@@ -335,6 +343,34 @@ function EditPanel({
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
 
+  useEffect(() => {
+    if ((bot.botMode || "cli") !== "cli") {
+      setClusterStatus(null);
+      setCliParams(null);
+      return;
+    }
+    let cancelled = false;
+    setClusterError("");
+    void Promise.all([
+      manager.client.getClusterStatus(bot.alias),
+      manager.client.getCliParams(bot.alias),
+    ])
+      .then(([nextCluster, nextCliParams]) => {
+        if (!cancelled) {
+          setClusterStatus(nextCluster);
+          setCliParams(nextCliParams);
+        }
+      })
+      .catch((err: Error) => {
+        if (!cancelled) {
+          setClusterError(err.message || "加载集群配置失败");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bot.alias, bot.botMode, manager.client]);
+
   async function submit(options: UpdateBotWorkdirOptions = {}) {
     const result = await manager.saveBotEdits(bot, draft, options);
     if (result.ok) {
@@ -344,6 +380,22 @@ function EditPanel({
     }
     if ("conflict" in result && result.conflict) {
       setPendingWorkdirConflict(result.conflict);
+    }
+  }
+
+  async function saveCluster(next: ClusterStatus) {
+    setClusterSaving(true);
+    setClusterError("");
+    try {
+      const result = await manager.client.updateClusterConfig(bot.alias, {
+        enabled: next.enabled,
+        modelTiers: next.modelTiers,
+      });
+      setClusterStatus(result.status);
+    } catch (err) {
+      setClusterError(err instanceof Error ? err.message : "保存集群配置失败");
+    } finally {
+      setClusterSaving(false);
     }
   }
 
@@ -467,6 +519,36 @@ function EditPanel({
           onPick={(workingDir) => setDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />
+      ) : null}
+
+      {(bot.botMode || "cli") === "cli" ? (
+        <div className="space-y-4 border-t border-[var(--border)] pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <label className="inline-flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={Boolean(clusterStatus?.enabled)}
+                disabled={!canManage || clusterSaving || !clusterStatus}
+                onChange={(event) => {
+                  if (!clusterStatus) return;
+                  void saveCluster({ ...clusterStatus, enabled: event.target.checked });
+                }}
+              />
+              启用集群模式
+            </label>
+            {clusterSaving ? <span className="text-xs text-[var(--muted)]">保存中...</span> : null}
+          </div>
+          {clusterError ? <div className="text-sm text-red-700">{clusterError}</div> : null}
+          {clusterStatus ? (
+            <ClusterModelTiersPanel
+              value={clusterStatus.modelTiers}
+              modelOptions={cliParams?.schema.model?.enum ?? []}
+              disabled={!canManage || clusterSaving}
+              onChange={(modelTiers) => void saveCluster({ ...clusterStatus, modelTiers })}
+            />
+          ) : null}
+          <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canManage} />
+        </div>
       ) : null}
 
       <BotCliParamsPanel

@@ -13,6 +13,7 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AssistantRuntimePendingRun,
+  AgentMention,
   AgentSummary,
   BotOverview,
   BotSummary,
@@ -1685,7 +1686,7 @@ export function ChatScreen({
           onChunk,
           onStatus,
           onTrace,
-          activeAgentIdRef.current === "main"
+          options.sendOptions.cluster || activeAgentIdRef.current === "main"
             ? options.sendOptions
             : { ...options.sendOptions, agentId: activeAgentIdRef.current },
         )
@@ -1742,12 +1743,15 @@ export function ChatScreen({
     }
   }, [botAlias, client, markSseActivity, onUnreadResult, stopAssistantPoll, stopSseRecoveryWatch]);
 
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
+    const clusterMode = Boolean(botOverview?.cluster?.enabled);
+    const clusterSend = clusterMode || mentions.length > 0;
     await sendMessageInternal(text, {
       attachments: pendingAttachments,
       clearPendingAttachments: true,
+      sendOptions: clusterSend ? { cluster: true, mentions } : undefined,
     });
-  }, [pendingAttachments, sendMessageInternal]);
+  }, [botOverview?.cluster?.enabled, pendingAttachments, sendMessageInternal]);
 
   useEffect(() => {
     const handleAssistantProposalPatchRequested = (event: Event) => {
@@ -1845,7 +1849,9 @@ export function ChatScreen({
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
-  const showAgentSwitcher = agents.length > 1;
+  const clusterMode = Boolean(botOverview?.cluster?.enabled);
+  const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
+  const showAgentSwitcher = agents.length > 1 && !clusterMode;
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
@@ -2046,10 +2052,12 @@ export function ChatScreen({
           onAttachFiles={handleAttachFiles}
           onRemoveAttachment={handleRemoveAttachment}
           attachments={pendingAttachments}
+          agents={clusterAgents}
+          clusterMode={clusterMode}
           disabled={isStreaming || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
-          placeholder={showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"}
+          placeholder={clusterMode ? "@ 可指定子 agent" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
         />
       ) : null}
 

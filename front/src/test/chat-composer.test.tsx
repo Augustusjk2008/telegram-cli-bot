@@ -26,3 +26,33 @@ test("attachment input forwards selected files to the upload handler", async () 
     }),
   ]);
 });
+
+test("cluster mode collects agent mentions", async () => {
+  const user = userEvent.setup();
+  const onSend = vi.fn();
+
+  render(
+    <ChatComposer
+      onSend={onSend}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      clusterMode
+      agents={[{
+        id: "reviewer",
+        name: "代码审查",
+        systemPrompt: "",
+        enabled: true,
+        isMain: false,
+      }]}
+    />,
+  );
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "@reviewer 看一下");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(onSend).toHaveBeenCalledWith(
+    "@reviewer 看一下",
+    [expect.objectContaining({ agentId: "reviewer" })],
+  );
+});

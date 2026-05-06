@@ -138,6 +138,62 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("cluster setup endpoints map snake case responses", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          enabled: true,
+          model_tiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
+          mcp: {
+            server_name: "tcb-cluster",
+            codex: { state: "installed", message: "已安装" },
+            claude: { state: "mcp_missing", message: "未安装" },
+          },
+          agents: [{ id: "reviewer", name: "代码审查", enabled: true, allow_cluster: true, allow_write: false }],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const status = await client.getClusterStatus("main");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/bots/main/cluster/status", expect.objectContaining({ cache: "no-store" }));
+    expect(status.enabled).toBe(true);
+    expect(status.mcp.serverName).toBe("tcb-cluster");
+    expect(status.modelTiers.low).toBe("fast-model");
+    expect(status.agents[0].allowWrite).toBe(false);
+  });
+
+  test("sendMessage includes cluster mention payload", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode("data: {\"type\":\"done\",\"output\":\"ok\"}\n\n"),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+    await client.sendMessage("main", "@reviewer 看一下", vi.fn(), undefined, undefined, {
+      cluster: true,
+      mentions: [{ agentId: "reviewer", label: "代码审查", start: 0, end: 9 }],
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body.cluster).toBe(true);
+    expect(body.mentions[0]).toMatchObject({ agent_id: "reviewer", label: "代码审查" });
+  });
+
   test("login posts username/password and maps account session fields", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

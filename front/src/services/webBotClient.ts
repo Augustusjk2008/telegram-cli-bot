@@ -60,6 +60,10 @@ import type {
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   ChatSendOptions,
+  ClusterConfigUpdateInput,
+  ClusterConfigUpdateResult,
+  ClusterSetupPrepareResult,
+  ClusterStatus,
   ConversationListResult,
   ConversationSelectResult,
   HistoryDeltaResult,
@@ -108,6 +112,9 @@ export interface WebBotClient {
   createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult>;
   updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult>;
   deleteAgent(botAlias: string, agentId: string): Promise<void>;
+  getClusterStatus(botAlias: string): Promise<ClusterStatus>;
+  prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult>;
+  updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
   createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;

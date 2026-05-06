@@ -50,6 +50,10 @@ import type {
   ChatTraceDetails,
   ChatTraceEvent,
   CliParamsPayload,
+  ClusterConfigUpdateInput,
+  ClusterConfigUpdateResult,
+  ClusterSetupPrepareResult,
+  ClusterStatus,
   CreateBotInput,
   DebugProfile,
   DebugState,
@@ -163,6 +167,20 @@ const MOCK_CLI_MODEL_OPTIONS = [
   "claude-sonnet-4-6",
   "none",
 ];
+const DEFAULT_CLUSTER = {
+  enabled: false,
+  writePolicy: "selected_agents" as const,
+  conflictPolicy: "snapshot_diff" as const,
+  maxParallelAgents: 2,
+  defaultTimeoutSeconds: 600,
+  modelTiers: { low: "", medium: "", high: "" },
+};
+const DEFAULT_AGENT_CLUSTER = {
+  allowCluster: true,
+  allowWrite: false,
+  sessionPolicy: "persistent" as const,
+  timeoutSeconds: 600,
+};
 
 function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
   if (typeof localStorage === "undefined") {
@@ -855,6 +873,10 @@ export class MockWebBotClient implements WebBotClient {
         busyAgentIds: [],
         busyAgentNames: [],
         busyAgentCount: item.status === "busy" ? 1 : 0,
+        cluster: {
+          ...DEFAULT_CLUSTER,
+          modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
+        },
       },
     ]),
   );
@@ -1250,6 +1272,7 @@ export class MockWebBotClient implements WebBotClient {
         botMode: "cli",
         enabled: true,
         isMain: false,
+        cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
       };
     }
     const workingDir = this.workdirOverrides.get(base.alias) || base.workingDir;
@@ -1266,6 +1289,9 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentNames,
       busyAgentCount,
       workingDir,
+      cluster: base.cluster
+        ? { ...base.cluster, modelTiers: { ...base.cluster.modelTiers } }
+        : { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
     };
   }
 
@@ -1493,6 +1519,7 @@ export class MockWebBotClient implements WebBotClient {
       systemPrompt: "",
       enabled: true,
       isMain: true,
+      cluster: { ...DEFAULT_AGENT_CLUSTER },
     };
   }
 
@@ -1507,7 +1534,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private cloneAgent(agent: AgentSummary): AgentSummary {
-    return { ...agent };
+    return { ...agent, cluster: agent.cluster ? { ...agent.cluster } : { ...DEFAULT_AGENT_CLUSTER } };
   }
 
   private buildAssistantUpgradeState(botAlias: string, proposal: AssistantProposal) {
@@ -2144,6 +2171,10 @@ export class MockWebBotClient implements WebBotClient {
       isMain: false,
       createdAt: now,
       updatedAt: now,
+      cluster: {
+        ...DEFAULT_AGENT_CLUSTER,
+        ...(input.cluster || {}),
+      },
     };
     this.agentsByBot.set(botAlias, [...agents, agent]);
     return { agent: this.cloneAgent(agent) };
@@ -2165,6 +2196,7 @@ export class MockWebBotClient implements WebBotClient {
       name: typeof input.name === "string" ? input.name.trim() : current.name,
       systemPrompt: typeof input.systemPrompt === "string" ? input.systemPrompt : current.systemPrompt,
       enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
+      cluster: input.cluster ? { ...(current.cluster || DEFAULT_AGENT_CLUSTER), ...input.cluster } : current.cluster,
       updatedAt: new Date().toISOString(),
     };
     const next = [...agents];
@@ -2183,6 +2215,72 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("未找到 agent", { status: 404, code: "agent_not_found" });
     }
     this.agentsByBot.set(botAlias, agents.filter((agent) => agent.id !== id));
+  }
+
+  setClusterStatus(botAlias: string, input: Partial<ClusterStatus>): void {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      cluster: {
+        ...(current.cluster || DEFAULT_CLUSTER),
+        enabled: typeof input.enabled === "boolean" ? input.enabled : current.cluster?.enabled ?? false,
+        modelTiers: input.modelTiers
+          ? { ...input.modelTiers }
+          : { ...(current.cluster?.modelTiers || DEFAULT_CLUSTER.modelTiers) },
+      },
+    });
+  }
+
+  async getClusterStatus(botAlias: string): Promise<ClusterStatus> {
+    const bot = this.getBotSummary(botAlias);
+    const cluster = bot.cluster || DEFAULT_CLUSTER;
+    return {
+      enabled: Boolean(cluster.enabled),
+      modelTiers: { ...cluster.modelTiers },
+      mcp: {
+        serverName: "tcb-cluster",
+        codex: { state: "mcp_missing", message: "未安装" },
+        claude: { state: "mcp_missing", message: "未安装" },
+      },
+      agents: this.ensureAgents(botAlias)
+        .filter((agent) => !agent.isMain)
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          enabled: agent.enabled,
+          allowCluster: agent.cluster?.allowCluster !== false,
+          allowWrite: Boolean(agent.cluster?.allowWrite),
+        })),
+    };
+  }
+
+  async prepareClusterSetup(_botAlias: string): Promise<ClusterSetupPrepareResult> {
+    return {
+      serverName: "tcb-cluster",
+      launcherPath: "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd",
+      configPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\config.json",
+      tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
+      installCommand: ["codex", "mcp", "add", "tcb-cluster", "--", "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd"],
+      verifyCommand: ["codex", "mcp", "get", "tcb-cluster"],
+      removeCommand: ["codex", "mcp", "remove", "tcb-cluster"],
+    };
+  }
+
+  async updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult> {
+    const current = this.getBotSummary(botAlias);
+    const cluster = {
+      ...(current.cluster || DEFAULT_CLUSTER),
+      ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
+      ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
+      ...(input.conflictPolicy ? { conflictPolicy: input.conflictPolicy } : {}),
+      ...(typeof input.maxParallelAgents === "number" ? { maxParallelAgents: input.maxParallelAgents } : {}),
+      ...(typeof input.defaultTimeoutSeconds === "number" ? { defaultTimeoutSeconds: input.defaultTimeoutSeconds } : {}),
+      modelTiers: input.modelTiers
+        ? { ...input.modelTiers }
+        : { ...(current.cluster?.modelTiers || DEFAULT_CLUSTER.modelTiers) },
+    };
+    this.bots.set(botAlias, { ...current, cluster });
+    return { cluster, status: await this.getClusterStatus(botAlias) };
   }
 
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
@@ -4537,6 +4635,7 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentIds: [],
       busyAgentNames: [],
       busyAgentCount: 0,
+      cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
     };
     this.bots.set(alias, bot);
     this.currentPaths.set(alias, bot.workingDir);

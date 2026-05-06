@@ -58,6 +58,15 @@ import type {
   ChatTraceEvent,
   CliParamsPayload,
   CliType,
+  AgentClusterConfig,
+  BotClusterConfig,
+  ClusterConfigUpdateInput,
+  ClusterConfigUpdateResult,
+  ClusterMcpState,
+  ClusterMcpTargetStatus,
+  ClusterModelTiers,
+  ClusterSetupPrepareResult,
+  ClusterStatus,
   ConversationListResult,
   ConversationSelectResult,
   ConversationSummary,
@@ -143,6 +152,7 @@ type RawBotSummary = {
   bot_mode?: string;
   enabled?: boolean;
   is_main?: boolean;
+  cluster?: Record<string, unknown>;
 };
 
 type RawAgentSummary = {
@@ -163,6 +173,7 @@ type RawAgentSummary = {
   createdAt?: string;
   updated_at?: string;
   updatedAt?: string;
+  cluster?: Record<string, unknown>;
 };
 
 type RawAvatarAsset = {
@@ -889,11 +900,16 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     busyAgentIds: resolvedBusyAgentIds,
     busyAgentNames: resolvedBusyAgentNames,
     busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,
-    agents: Array.isArray(raw.agents) ? raw.agents.map(mapAgentSummary) : undefined,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
     avatarName: raw.avatar_name || "",
   };
+  if (Array.isArray(raw.agents)) {
+    summary.agents = raw.agents.map(mapAgentSummary);
+  }
+  if (raw.cluster) {
+    summary.cluster = mapBotClusterConfig(raw.cluster);
+  }
   if (raw.cli_path) {
     summary.cliPath = raw.cli_path;
   }
@@ -909,6 +925,37 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   return summary;
 }
 
+function mapClusterModelTiers(raw: unknown): ClusterModelTiers {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    low: String(value.low || ""),
+    medium: String(value.medium || ""),
+    high: String(value.high || ""),
+  };
+}
+
+function mapBotClusterConfig(raw: unknown): BotClusterConfig {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    enabled: Boolean(value.enabled),
+    writePolicy: String(value.write_policy ?? value.writePolicy ?? "selected_agents") as BotClusterConfig["writePolicy"],
+    conflictPolicy: String(value.conflict_policy ?? value.conflictPolicy ?? "snapshot_diff") as BotClusterConfig["conflictPolicy"],
+    maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 2),
+    defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 600),
+    modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
+  };
+}
+
+function mapAgentClusterConfig(raw: unknown): AgentClusterConfig {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    allowCluster: value.allow_cluster !== false && value.allowCluster !== false,
+    allowWrite: Boolean(value.allow_write ?? value.allowWrite ?? false),
+    sessionPolicy: String(value.session_policy ?? value.sessionPolicy ?? "persistent") as AgentClusterConfig["sessionPolicy"],
+    timeoutSeconds: Number(value.timeout_seconds ?? value.timeoutSeconds ?? 600),
+  };
+}
+
 function mapAgentSummary(raw: RawAgentSummary): AgentSummary {
   return {
     id: String(raw.id || "main"),
@@ -921,6 +968,7 @@ function mapAgentSummary(raw: RawAgentSummary): AgentSummary {
     activeConversationId: String(raw.active_conversation_id ?? raw.activeConversationId ?? ""),
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
     updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
+    cluster: mapAgentClusterConfig(raw.cluster),
   };
 }
 
@@ -930,6 +978,73 @@ function mapAgentInput(input: AgentInput): Record<string, unknown> {
     ...(typeof input.name !== "undefined" ? { name: input.name } : {}),
     ...(typeof input.systemPrompt !== "undefined" ? { system_prompt: input.systemPrompt } : {}),
     ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
+    ...(input.cluster ? {
+      cluster: {
+        ...(typeof input.cluster.allowCluster !== "undefined" ? { allow_cluster: input.cluster.allowCluster } : {}),
+        ...(typeof input.cluster.allowWrite !== "undefined" ? { allow_write: input.cluster.allowWrite } : {}),
+        ...(input.cluster.sessionPolicy ? { session_policy: input.cluster.sessionPolicy } : {}),
+        ...(typeof input.cluster.timeoutSeconds !== "undefined" ? { timeout_seconds: input.cluster.timeoutSeconds } : {}),
+      },
+    } : {}),
+  };
+}
+
+function mapClusterStatus(raw: unknown): ClusterStatus {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const mcp = value.mcp && typeof value.mcp === "object" ? value.mcp as Record<string, unknown> : {};
+  const mapTarget = (target: unknown): ClusterMcpTargetStatus => {
+    const item = target && typeof target === "object" ? target as Record<string, unknown> : {};
+    return {
+      state: String(item.state || "not_checked") as ClusterMcpState,
+      message: String(item.message || ""),
+    };
+  };
+  return {
+    enabled: Boolean(value.enabled),
+    modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
+    mcp: {
+      serverName: String(mcp.server_name || mcp.serverName || "tcb-cluster"),
+      codex: mapTarget(mcp.codex),
+      claude: mapTarget(mcp.claude),
+    },
+    agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
+      const agent = rawAgent && typeof rawAgent === "object" ? rawAgent as Record<string, unknown> : {};
+      return {
+        id: String(agent.id || ""),
+        name: String(agent.name || agent.id || ""),
+        enabled: agent.enabled !== false,
+        allowCluster: agent.allow_cluster !== false && agent.allowCluster !== false,
+        allowWrite: Boolean(agent.allow_write ?? agent.allowWrite ?? false),
+      };
+    }) : [],
+  };
+}
+
+function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const list = (snake: string, camel: string) => {
+    const rawList = value[snake] ?? value[camel];
+    return Array.isArray(rawList) ? rawList.map((item) => String(item)) : [];
+  };
+  return {
+    serverName: String(value.server_name || value.serverName || "tcb-cluster"),
+    launcherPath: String(value.launcher_path || value.launcherPath || ""),
+    configPath: String(value.config_path || value.configPath || ""),
+    tokenPath: String(value.token_path || value.tokenPath || ""),
+    installCommand: list("install_command", "installCommand"),
+    verifyCommand: list("verify_command", "verifyCommand"),
+    removeCommand: list("remove_command", "removeCommand"),
+  };
+}
+
+function mapClusterConfigInput(input: ClusterConfigUpdateInput): Record<string, unknown> {
+  return {
+    ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
+    ...(input.writePolicy ? { write_policy: input.writePolicy } : {}),
+    ...(input.conflictPolicy ? { conflict_policy: input.conflictPolicy } : {}),
+    ...(typeof input.maxParallelAgents !== "undefined" ? { max_parallel_agents: input.maxParallelAgents } : {}),
+    ...(typeof input.defaultTimeoutSeconds !== "undefined" ? { default_timeout_seconds: input.defaultTimeoutSeconds } : {}),
+    ...(input.modelTiers ? { model_tiers: input.modelTiers } : {}),
   };
 }
 
@@ -2184,6 +2299,34 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
+  async getClusterStatus(botAlias: string): Promise<ClusterStatus> {
+    const data = await this.requestJson<unknown>(`/api/bots/${encodeURIComponent(botAlias)}/cluster/status`);
+    return mapClusterStatus(data);
+  }
+
+  async prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult> {
+    const data = await this.requestJson<unknown>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/setup/prepare`, {
+      method: "POST",
+      headers: this.headers(),
+    });
+    return mapClusterSetupPrepare(data);
+  }
+
+  async updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult> {
+    const data = await this.requestJson<{ cluster?: unknown; status?: unknown }>(
+      `/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/config`,
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ cluster: mapClusterConfigInput(input) }),
+      },
+    );
+    return {
+      cluster: mapBotClusterConfig(data.cluster),
+      status: mapClusterStatus(data.status),
+    };
+  }
+
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
@@ -2323,6 +2466,15 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
+        ...(options?.cluster ? { cluster: true } : {}),
+        ...(options?.mentions ? {
+          mentions: options.mentions.map((mention) => ({
+            agent_id: mention.agentId,
+            label: mention.label,
+            start: mention.start,
+            end: mention.end,
+          })),
+        } : {}),
       }),
     });
 

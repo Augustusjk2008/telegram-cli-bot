@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
 from bot.cli_params import CliParamsConfig
+from bot.cluster_config import (
+    AgentClusterConfig,
+    BotClusterConfig,
+    normalize_agent_cluster_config,
+    normalize_bot_cluster_config,
+)
 from bot.platform.processes import terminate_process_tree_sync
 
 if TYPE_CHECKING:
@@ -31,6 +37,7 @@ class AgentProfile:
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
+    cluster: AgentClusterConfig = field(default_factory=AgentClusterConfig)
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +47,7 @@ class AgentProfile:
             "enabled": self.enabled,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "cluster": self.cluster.to_dict(),
         }
 
     @classmethod
@@ -53,6 +61,7 @@ class AgentProfile:
             enabled=bool(data.get("enabled", True)),
             created_at=str(data.get("created_at") or ""),
             updated_at=str(data.get("updated_at") or ""),
+            cluster=normalize_agent_cluster_config(data.get("cluster")),
         )
 
 
@@ -69,6 +78,7 @@ class BotProfile:
     avatar_name: str = ""
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
     agents: List[AgentProfile] = field(default_factory=list)
+    cluster: BotClusterConfig = field(default_factory=BotClusterConfig)
 
     def to_dict(self) -> dict:
         result = {
@@ -96,6 +106,8 @@ class BotProfile:
         child_agents = [agent.to_dict() for agent in self.agents if agent.id != "main"]
         if child_agents:
             result["agents"] = child_agents
+        if self.cluster != BotClusterConfig():
+            result["cluster"] = self.cluster.to_dict()
         return result
 
     def normalized_agents(self) -> list[AgentProfile]:
@@ -133,6 +145,7 @@ class BotProfile:
             avatar_name=str(data.get("avatar_name", "") or ""),
             cli_params=cli_params,
             agents=agents,
+            cluster=normalize_bot_cluster_config(data.get("cluster")),
         )
 
 

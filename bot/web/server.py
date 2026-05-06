@@ -114,6 +114,7 @@ from .api_service import (
     get_assistant_proposal_detail,
     get_assistant_upgrade_apply_log,
     get_cli_params_payload,
+    get_cluster_status,
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
@@ -136,6 +137,7 @@ from .api_service import (
     reset_cli_params,
     resolve_terminal_action_for_bot,
     run_chat,
+    handle_cluster_mcp_tool,
     run_assistant_memory_eval_task,
     run_assistant_cron_job_now,
     dry_run_assistant_upgrade,
@@ -155,6 +157,7 @@ from .api_service import (
     delete_chat_attachment,
     delete_assistant_cron_job,
     update_cli_params,
+    update_cluster_config,
     update_assistant_cron_job,
     update_agent,
     update_bot_avatar,
@@ -165,6 +168,8 @@ from .api_service import (
     write_file_content,
     generate_assistant_proposal_patch,
     stream_generate_assistant_proposal_patch,
+    prepare_cluster_setup,
+    verify_cluster_mcp_request,
 )
 from bot.assistant_admin_audit import list_admin_audit, summarize_request, write_admin_audit
 from .git_service import (
@@ -1059,6 +1064,34 @@ class WebApiServer:
         agent_id = request.match_info.get("agent_id", "")
         return _json({"ok": True, "data": await delete_agent(self.manager, alias, agent_id)})
 
+    async def get_cluster_status_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_VIEW_BOT_STATUS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_cluster_status(self.manager, alias)})
+
+    async def post_cluster_setup_prepare(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": prepare_cluster_setup(self.manager, alias)})
+
+    async def post_cluster_config(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await update_cluster_config(self.manager, alias, dict(body or {}))})
+
+    async def cluster_mcp_ping(self, request: web.Request) -> web.Response:
+        verify_cluster_mcp_request(request.headers)
+        return _json({"ok": True, "data": {"status": "ok"}})
+
+    async def cluster_mcp_tool(self, request: web.Request) -> web.Response:
+        verify_cluster_mcp_request(request.headers)
+        run_id = request.headers.get("X-TCB-Cluster-Run-Id", "")
+        tool_name = request.match_info.get("tool_name", "")
+        body = await self._parse_json(request)
+        data = await handle_cluster_mcp_tool(self.manager, run_id, tool_name, dict(body or {}))
+        return _json({"ok": True, "data": data})
+
     async def post_chat(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
@@ -1067,6 +1100,8 @@ class WebApiServer:
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
         agent_id = self._request_agent_id(request, body)
+        cluster_enabled = bool(body.get("cluster"))
+        mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         if task_mode or isinstance(task_payload, dict) or visible_text is not None:
             data = await run_chat(
                 self.manager,
@@ -1077,9 +1112,19 @@ class WebApiServer:
                 task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
                 visible_text=str(visible_text) if visible_text is not None else None,
                 agent_id=agent_id,
+                cluster=cluster_enabled,
+                mentions=mentions,
             )
         else:
-            data = await run_chat(self.manager, alias, auth.user_id, body.get("message", ""), agent_id=agent_id)
+            data = await run_chat(
+                self.manager,
+                alias,
+                auth.user_id,
+                body.get("message", ""),
+                agent_id=agent_id,
+                cluster=cluster_enabled,
+                mentions=mentions,
+            )
         return _json({"ok": True, "data": data})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
@@ -1090,6 +1135,8 @@ class WebApiServer:
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
         agent_id = self._request_agent_id(request, body)
+        cluster_enabled = bool(body.get("cluster"))
+        mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
 
         response = web.StreamResponse(
             status=200,
@@ -1110,6 +1157,9 @@ class WebApiServer:
             }
             if agent_id != "main":
                 stream_kwargs["agent_id"] = agent_id
+            if cluster_enabled:
+                stream_kwargs["cluster"] = True
+                stream_kwargs["mentions"] = mentions
             event_stream = stream_chat(
                 self.manager,
                 alias,
@@ -1118,8 +1168,12 @@ class WebApiServer:
                 **stream_kwargs,
             )
         else:
+            stream_kwargs = {
+                "cluster": cluster_enabled,
+                "mentions": mentions,
+            } if cluster_enabled else {}
             if agent_id == "main":
-                event_stream = stream_chat(self.manager, alias, auth.user_id, body.get("message", ""))
+                event_stream = stream_chat(self.manager, alias, auth.user_id, body.get("message", ""), **stream_kwargs)
             else:
                 event_stream = stream_chat(
                     self.manager,
@@ -1127,6 +1181,7 @@ class WebApiServer:
                     auth.user_id,
                     body.get("message", ""),
                     agent_id=agent_id,
+                    **stream_kwargs,
                 )
         async for event in event_stream:
             if client_disconnected:
@@ -2892,6 +2947,8 @@ class WebApiServer:
         # Upload routes still enforce their own explicit limits in api_service.
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=0)
         app.router.add_get("/api/health", self.health)
+        app.router.add_get("/api/internal/cluster/mcp/ping", self.cluster_mcp_ping)
+        app.router.add_post("/api/internal/cluster/mcp/tools/{tool_name}", self.cluster_mcp_tool)
         app.router.add_get("/api/auth/me", self.auth_me)
         app.router.add_post("/api/auth/login", self.auth_login)
         app.router.add_post("/api/auth/register", self.auth_register)
@@ -2941,9 +2998,12 @@ class WebApiServer:
         app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
         app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
         app.router.add_get("/api/bots/{alias}/agents", self.get_agents_view)
+        app.router.add_get("/api/bots/{alias}/cluster/status", self.get_cluster_status_view)
         app.router.add_post("/api/admin/bots/{alias}/agents", self.post_agent_view)
         app.router.add_patch("/api/admin/bots/{alias}/agents/{agent_id}", self.patch_agent_view)
         app.router.add_delete("/api/admin/bots/{alias}/agents/{agent_id}", self.delete_agent_view)
+        app.router.add_post("/api/admin/bots/{alias}/cluster/setup/prepare", self.post_cluster_setup_prepare)
+        app.router.add_post("/api/admin/bots/{alias}/cluster/config", self.post_cluster_config)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
         app.router.add_get("/api/bots/{alias}/history/delta", self.get_history_delta_view)
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)

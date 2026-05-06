@@ -177,6 +177,156 @@ def test_no_cli_message_points_to_web_settings_not_legacy_command():
     assert "设置页" in text
     assert "CLI 路径" in text
 
+
+@pytest.mark.asyncio
+async def test_cluster_status_reports_mcp_missing(web_manager: MultiBotManager):
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/cluster/status")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert payload["data"]["enabled"] is False
+    assert payload["data"]["mcp"]["server_name"] == "tcb-cluster"
+
+
+@pytest.mark.asyncio
+async def test_cluster_setup_prepare_returns_launcher_paths(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr("bot.web.api_service.Path.home", lambda: tmp_path)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/admin/bots/main/cluster/setup/prepare")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    data = payload["data"]
+    assert data["server_name"] == "tcb-cluster"
+    assert data["launcher_path"].endswith(("tcb-cluster-mcp.cmd", "tcb-cluster-mcp.sh"))
+    assert data["config_path"].endswith("config.json")
+
+
+@pytest.mark.asyncio
+async def test_cluster_internal_ping_requires_token(web_manager: MultiBotManager):
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/internal/cluster/mcp/ping")
+            payload = await resp.json()
+
+    assert resp.status == 401
+    assert payload["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_cluster_requires_enabled_cluster(web_manager: MultiBotManager):
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post(
+                "/api/bots/main/chat/stream",
+                json={"message": "@reviewer 看一下", "cluster": True, "mentions": [{"agent_id": "reviewer"}]},
+            )
+            text = await resp.text()
+
+    assert resp.status == 200
+    assert "cluster_not_enabled" in text
+
+
+@pytest.mark.asyncio
+async def test_cluster_config_persists_model_tiers(web_manager: MultiBotManager):
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post(
+                "/api/admin/bots/main/cluster/config",
+                json={
+                    "cluster": {
+                        "enabled": True,
+                        "model_tiers": {
+                            "low": "fast-model",
+                            "medium": "balanced-model",
+                            "high": "strong-model",
+                        },
+                    }
+                },
+            )
+            status_resp = await client.get("/api/bots/main/cluster/status")
+            payload = await status_resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["model_tiers"] == {
+        "low": "fast-model",
+        "medium": "balanced-model",
+        "high": "strong-model",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_chat_cluster_finishes_runtime_run(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster_config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    captured = {}
+
+    async def fake_run_cli_chat(_manager, _alias, _user_id, _text, *, cluster_run_id="", **_kwargs):
+        captured["run_id"] = cluster_run_id
+        assert api_service._CLUSTER_RUNTIME.get_run(cluster_run_id) is not None
+        return {"output": "ok"}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+
+    result = await api_service.run_chat(web_manager, "main", 1001, "hi", cluster=True)
+
+    assert result["output"] == "ok"
+    assert api_service._CLUSTER_RUNTIME.get_run(captured["run_id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster_config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(
+        enabled=True,
+        model_tiers={"low": "fast-model", "medium": "balanced-model", "high": "strong-model"},
+    )
+    await web_manager.create_bot_agent("main", {"id": "reviewer", "name": "代码审查"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+    captured = {}
+
+    async def fake_run_cli_chat(_manager, alias, user_id, text, *, agent_id="main", cli_params_override=None, **_kwargs):
+        captured["alias"] = alias
+        captured["user_id"] = user_id
+        captured["agent_id"] = agent_id
+        captured["model"] = cli_params_override.get_params(profile.cli_type).get("model")
+        captured["reasoning_effort"] = cli_params_override.get_params(profile.cli_type).get("reasoning_effort")
+        return {"output": "ok"}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "reviewer", "message": "审查", "model_tier": "low"},
+    )
+
+    assert result["data"]["output"] == "ok"
+    assert captured["agent_id"] == "reviewer"
+    assert captured["model"] == "fast-model"
+    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
+
+
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):
     subdir = temp_dir / "workspace"
     subdir.mkdir()

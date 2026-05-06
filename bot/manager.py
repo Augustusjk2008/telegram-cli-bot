@@ -17,6 +17,7 @@ from bot.assistant_home import bootstrap_assistant_home
 from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
+from bot.cluster_config import normalize_agent_cluster_config, normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import AgentProfile, BotProfile
@@ -118,6 +119,8 @@ class MultiBotManager:
                 profile_data["cli_params"] = item["cli_params"]
             if "agents" in item:
                 profile_data["agents"] = item["agents"]
+            if "cluster" in item:
+                profile_data["cluster"] = item["cluster"]
             self.managed_profiles[alias] = BotProfile.from_dict(profile_data)
 
         assistant_aliases = [
@@ -185,6 +188,10 @@ class MultiBotManager:
                 for item in agents
                 if isinstance(item, dict)
             ]
+
+        cluster = profile_data.get("cluster")
+        if isinstance(cluster, dict):
+            self.main_profile.cluster = normalize_bot_cluster_config(cluster)
 
     def _persist_main_profile(self) -> None:
         app_settings.update_main_bot_profile(self.main_profile.to_dict(), self.app_settings_file)
@@ -258,6 +265,7 @@ class MultiBotManager:
                 enabled=bool(data.get("enabled", True)),
                 created_at=now,
                 updated_at=now,
+                cluster=normalize_agent_cluster_config(data.get("cluster")),
             )
             profile.agents.append(agent)
             self._persist_profile_agents(profile)
@@ -278,9 +286,23 @@ class MultiBotManager:
                 agent.system_prompt = normalize_agent_prompt(data.get("system_prompt", data.get("systemPrompt")))
             if "enabled" in data:
                 agent.enabled = bool(data.get("enabled"))
+            if "cluster" in data and isinstance(data.get("cluster"), dict):
+                agent.cluster = normalize_agent_cluster_config(data.get("cluster"))
             agent.updated_at = now_iso()
             self._persist_profile_agents(profile)
             return self._agent_to_summary(profile, agent)
+
+    async def update_bot_cluster(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
+        async with self._lock:
+            profile = self._get_profile_for_update(alias)
+            if profile.bot_mode != "cli":
+                raise ValueError("仅 CLI Bot 支持集群模式")
+            profile.cluster = normalize_bot_cluster_config(data)
+            if profile.alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
+            return profile.cluster.to_dict()
 
     async def delete_bot_agent(self, alias: str, agent_id: str) -> None:
         async with self._lock:

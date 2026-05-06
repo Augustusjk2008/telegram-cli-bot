@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from bot.cluster_mcp_client import load_mcp_bridge_config, post_mcp_tool
+
+
+def _write(message: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def _tools_for_environment() -> list[dict[str, Any]]:
+    if os.environ.get("TCB_CLUSTER_ACTIVE") != "1":
+        return []
+    return [
+        {
+            "name": "cluster_status",
+            "description": "查看当前 TCB 集群运行状态和可用子 agent。",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "list_agents",
+            "description": "列出当前 TCB 集群可调用子 agent。",
+            "inputSchema": {"type": "object", "properties": {"include_disabled": {"type": "boolean"}}},
+        },
+        {
+            "name": "ask_agent",
+            "description": "向一个 TCB 子 agent 发送任务并返回结果。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
+            "inputSchema": {
+                "type": "object",
+                "required": ["agent_id", "message"],
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "message": {"type": "string"},
+                    "model_tier": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "timeout_seconds": {"type": "integer"},
+                    "allow_write": {"type": "boolean"},
+                },
+            },
+        },
+    ]
+
+
+def _content_text(text: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": text}]}
+
+
+def handle_request(config_path: Path, request: dict[str, Any]) -> dict[str, Any] | None:
+    method = str(request.get("method") or "")
+    request_id = request.get("id")
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "tcb-cluster", "version": "1.0.0"},
+            },
+        }
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _tools_for_environment()}}
+    if method == "tools/call":
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        name = str(params.get("name") or "")
+        arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        run_id = os.environ.get("TCB_CLUSTER_RUN_ID", "")
+        config = load_mcp_bridge_config(config_path)
+        result = post_mcp_tool(config, name, arguments, run_id=run_id)
+        return {"jsonrpc": "2.0", "id": request_id, "result": _content_text(json.dumps(result, ensure_ascii=False))}
+    if method == "notifications/initialized":
+        return None
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": -32601, "message": f"unknown method: {method}"},
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args(argv)
+    config_path = Path(args.config)
+    if args.self_test:
+        loaded = load_mcp_bridge_config(config_path)
+        print(json.dumps({"ok": True, "bridge_url": loaded.bridge_url}, ensure_ascii=False))
+        return 0
+    for line in sys.stdin:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        response = handle_request(config_path, json.loads(stripped))
+        if response is not None:
+            _write(response)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

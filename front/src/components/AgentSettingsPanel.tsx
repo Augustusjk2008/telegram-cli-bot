@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pencil, Plus, Save, Trash2 } from "lucide-react";
-import type { AgentSummary } from "../services/types";
+import type { AgentInput, AgentSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type AgentSettingsPanelProps = {
@@ -16,6 +16,10 @@ type FormState = {
   name: string;
   systemPrompt: string;
   enabled: boolean;
+  allowCluster: boolean;
+  allowWrite: boolean;
+  sessionPolicy: "persistent" | "ephemeral" | "fork";
+  timeoutSeconds: number;
 };
 
 const EMPTY_FORM: FormState = {
@@ -23,6 +27,10 @@ const EMPTY_FORM: FormState = {
   name: "",
   systemPrompt: "",
   enabled: true,
+  allowCluster: true,
+  allowWrite: false,
+  sessionPolicy: "persistent",
+  timeoutSeconds: 600,
 };
 
 function slugifyAgentName(name: string) {
@@ -130,6 +138,10 @@ export function AgentSettingsPanel({
       name: agent.name,
       systemPrompt: agent.systemPrompt,
       enabled: agent.enabled,
+      allowCluster: agent.cluster?.allowCluster ?? true,
+      allowWrite: agent.cluster?.allowWrite ?? false,
+      sessionPolicy: agent.cluster?.sessionPolicy ?? "persistent",
+      timeoutSeconds: agent.cluster?.timeoutSeconds ?? 600,
     });
     setIdTouched(true);
     setError("");
@@ -152,11 +164,24 @@ export function AgentSettingsPanel({
     setError("");
     setNotice("");
     try {
-      const input = {
+      const input: AgentInput = {
         name: form.name.trim(),
         systemPrompt: form.systemPrompt,
         enabled: form.enabled,
       };
+      if (
+        form.allowCluster !== true
+        || form.allowWrite !== false
+        || form.sessionPolicy !== "persistent"
+        || form.timeoutSeconds !== 600
+      ) {
+        input.cluster = {
+          allowCluster: form.allowCluster,
+          allowWrite: form.allowWrite,
+          sessionPolicy: form.sessionPolicy,
+          timeoutSeconds: form.timeoutSeconds,
+        };
+      }
       const result = editingId
         ? await client.updateAgent(botAlias, editingId, input)
         : await client.createAgent(botAlias, { ...input, id: form.id.trim() });
@@ -296,6 +321,51 @@ export function AgentSettingsPanel({
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm disabled:opacity-60"
               />
             </label>
+          </div>
+          <div className="mt-3 grid gap-2 border-t border-[var(--border)] pt-3">
+            <label className="inline-flex items-center gap-2 text-sm text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={form.allowCluster}
+                onChange={(event) => setForm((prev) => ({ ...prev, allowCluster: event.target.checked }))}
+              />
+              允许集群调用
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={form.allowWrite}
+                onChange={(event) => setForm((prev) => ({ ...prev, allowWrite: event.target.checked }))}
+              />
+              允许修改文件
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-[var(--text)]">会话策略</span>
+                <select
+                  aria-label="会话策略"
+                  value={form.sessionPolicy}
+                  onChange={(event) => setForm((prev) => ({ ...prev, sessionPolicy: event.target.value as FormState["sessionPolicy"] }))}
+                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
+                >
+                  <option value="persistent">persistent</option>
+                  <option value="ephemeral">ephemeral</option>
+                  <option value="fork">fork</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-[var(--text)]">超时秒数</span>
+                <input
+                  aria-label="超时秒数"
+                  type="number"
+                  min={60}
+                  max={3600}
+                  value={form.timeoutSeconds}
+                  onChange={(event) => setForm((prev) => ({ ...prev, timeoutSeconds: Number(event.target.value || 600) }))}
+                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
+                />
+              </label>
+            </div>
           </div>
           <label className="mt-3 block space-y-1">
             <span className="text-sm font-medium text-[var(--text)]">系统提示词</span>

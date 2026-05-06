@@ -1,4 +1,5 @@
 import { LoaderCircle, Paperclip, X } from "lucide-react";
+import type { AgentMention, AgentSummary } from "../services/types";
 
 type ComposerAttachment = {
   id: string;
@@ -7,21 +8,38 @@ type ComposerAttachment = {
 };
 
 type Props = {
-  onSend: (text: string) => void;
+  onSend: (text: string, mentions?: AgentMention[]) => void;
   onAttachFiles: (files: File[]) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   attachments: ComposerAttachment[];
+  agents?: AgentSummary[];
+  clusterMode?: boolean;
   disabled?: boolean;
   compact?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
 };
 
+function collectMentions(text: string, agents: AgentSummary[] = []): AgentMention[] {
+  const result: AgentMention[] = [];
+  for (const agent of agents) {
+    const needle = `@${agent.id}`;
+    let index = text.indexOf(needle);
+    while (index >= 0) {
+      result.push({ agentId: agent.id, label: agent.name, start: index, end: index + needle.length });
+      index = text.indexOf(needle, index + needle.length);
+    }
+  }
+  return result;
+}
+
 export function ChatComposer({
   onSend,
   onAttachFiles,
   onRemoveAttachment,
   attachments,
+  agents = [],
+  clusterMode = false,
   disabled,
   compact = false,
   uploadingAttachments = false,
@@ -72,7 +90,7 @@ export function ChatComposer({
           const formData = new FormData(event.currentTarget);
           const text = String(formData.get("message") || "").trim();
           if (!text && attachments.length === 0) return;
-          onSend(text);
+          onSend(text, clusterMode ? collectMentions(text, agents) : []);
           event.currentTarget.reset();
         }}
       >
