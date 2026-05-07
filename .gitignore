@@ -9,6 +9,7 @@ __pycache__/
 managed_bots.json
 .env
 *.log
+docs/
 docs/superpowers/
 .worktrees/
 .release-local/
