@@ -114,8 +114,10 @@ from .api_service import (
     list_assistant_proposals,
     get_assistant_proposal_detail,
     get_assistant_upgrade_apply_log,
+    get_cluster_bundle_schema,
     get_cli_params_payload,
     get_cluster_status,
+    get_cluster_templates,
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
@@ -170,6 +172,10 @@ from .api_service import (
     generate_assistant_proposal_patch,
     stream_generate_assistant_proposal_patch,
     prepare_cluster_setup,
+    preview_cluster_config_bundle,
+    preview_cluster_template,
+    apply_cluster_config_bundle,
+    apply_cluster_template,
     verify_cluster_mcp_request,
 )
 from bot.assistant.admin_audit import list_admin_audit, summarize_request, write_admin_audit
@@ -1097,6 +1103,39 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": await update_cluster_config(self.manager, alias, dict(body or {}))})
+
+    async def get_cluster_templates_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_cluster_templates(self.manager, alias)})
+
+    async def get_cluster_schema_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": get_cluster_bundle_schema()})
+
+    async def post_cluster_template_preview(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": preview_cluster_template(self.manager, alias, dict(body or {}))})
+
+    async def post_cluster_template_apply(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await apply_cluster_template(self.manager, alias, dict(body or {}))})
+
+    async def post_cluster_bundle_preview(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": preview_cluster_config_bundle(self.manager, alias, dict(body or {}))})
+
+    async def post_cluster_bundle_apply(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": await apply_cluster_config_bundle(self.manager, alias, dict(body or {}))})
 
     async def cluster_mcp_ping(self, request: web.Request) -> web.Response:
         verify_cluster_mcp_request(request.headers)
@@ -3023,6 +3062,12 @@ class WebApiServer:
         app.router.add_delete("/api/admin/bots/{alias}/agents/{agent_id}", self.delete_agent_view)
         app.router.add_post("/api/admin/bots/{alias}/cluster/setup/prepare", self.post_cluster_setup_prepare)
         app.router.add_post("/api/admin/bots/{alias}/cluster/config", self.post_cluster_config)
+        app.router.add_get("/api/admin/bots/{alias}/cluster/templates", self.get_cluster_templates_view)
+        app.router.add_get("/api/admin/bots/{alias}/cluster/schema", self.get_cluster_schema_view)
+        app.router.add_post("/api/admin/bots/{alias}/cluster/templates/preview", self.post_cluster_template_preview)
+        app.router.add_post("/api/admin/bots/{alias}/cluster/templates/apply", self.post_cluster_template_apply)
+        app.router.add_post("/api/admin/bots/{alias}/cluster/config-bundle/preview", self.post_cluster_bundle_preview)
+        app.router.add_post("/api/admin/bots/{alias}/cluster/config-bundle/apply", self.post_cluster_bundle_apply)
         app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
         app.router.add_get("/api/bots/{alias}/history/delta", self.get_history_delta_view)
         app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)

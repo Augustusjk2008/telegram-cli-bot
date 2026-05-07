@@ -62,9 +62,13 @@ import type {
   ChatSendOptions,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
+  ClusterBundleApplyResult,
+  ClusterBundlePreviewResult,
+  ClusterBundleSchemaResult,
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterTaskStatus,
+  ClusterTemplateListResult,
   ConversationListResult,
   ConversationSelectResult,
   HistoryDeltaResult,
@@ -117,6 +121,12 @@ export interface WebBotClient {
   getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus>;
   prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult>;
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
+  getClusterTemplates(botAlias: string): Promise<ClusterTemplateListResult>;
+  getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult>;
+  previewClusterTemplate(botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult>;
+  applyClusterTemplate(botAlias: string, templateId: string, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult>;
+  previewClusterConfigBundle(botAlias: string, bundle: unknown): Promise<ClusterBundlePreviewResult>;
+  applyClusterConfigBundle(botAlias: string, bundle: unknown, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult>;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
   createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;

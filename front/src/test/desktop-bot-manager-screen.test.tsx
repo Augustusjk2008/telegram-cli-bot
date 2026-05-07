@@ -373,6 +373,20 @@ test("desktop bot manager requires confirmation before deleting managed bot", as
   expect(removeSpy).toHaveBeenCalledWith("review");
 });
 
+test("desktop bot manager exposes cluster templates in config tab", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "聚焦 main" }));
+  await user.click(screen.getByRole("button", { name: "配置" }));
+
+  expect(await screen.findByText("集群模板")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "预览 全量测试集群" })).toBeInTheDocument();
+});
+
 test("desktop bot manager confirms before leaving dirty edit", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();

@@ -316,6 +316,37 @@ class MultiBotManager:
                 raise KeyError(normalized_agent_id)
             self._persist_profile_agents(profile)
 
+    async def replace_bot_cluster_bundle(
+        self,
+        alias: str,
+        cluster: dict[str, Any],
+        agents: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        async with self._lock:
+            profile = self._ensure_cli_agent_profile(alias)
+            profile.cluster = normalize_bot_cluster_config(cluster)
+            now = now_iso()
+            replaced_agents: list[AgentProfile] = []
+            for item in agents:
+                normalized_id = normalize_agent_id(item.get("id"), allow_main=False)
+                replaced_agents.append(
+                    AgentProfile(
+                        id=normalized_id,
+                        name=normalize_agent_name(item.get("name")),
+                        system_prompt=normalize_agent_prompt(item.get("system_prompt", item.get("systemPrompt"))),
+                        enabled=bool(item.get("enabled", True)),
+                        created_at=str(item.get("created_at") or now),
+                        updated_at=str(item.get("updated_at") or now),
+                        cluster=normalize_agent_cluster_config(item.get("cluster")),
+                    )
+                )
+            profile.agents = replaced_agents
+            self._persist_profile_agents(profile)
+            return {
+                "cluster": profile.cluster.to_dict(),
+                "agents": [self._agent_to_summary(profile, agent) for agent in profile.normalized_agents() if agent.id != "main"],
+            }
+
     async def _ensure_assistant_runtime(self) -> None:
         if self._assistant_result_executor is None:
             return

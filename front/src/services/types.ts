@@ -194,6 +194,62 @@ export type ClusterConfigUpdateResult = {
   status: ClusterStatus;
 };
 
+export type ClusterTemplateSummary = {
+  id: string;
+  name: string;
+  description: string;
+  agentCount: number;
+  writeAgentCount: number;
+  maxParallelAgents: number;
+};
+
+export type ClusterConfigBundleAgent = {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  enabled: boolean;
+  cluster: AgentClusterConfig;
+};
+
+export type ClusterConfigBundle = {
+  id: string;
+  name: string;
+  description: string;
+  cluster: BotClusterConfig;
+  agents: ClusterConfigBundleAgent[];
+};
+
+export type ClusterBundleDiff = {
+  deleteAgents: string[];
+  createAgents: string[];
+  updateAgents: string[];
+  clusterChanges: Record<string, { before: unknown; after: unknown }>;
+  overwritesAgents: boolean;
+};
+
+export type ClusterTemplateListResult = {
+  templates: ClusterTemplateSummary[];
+};
+
+export type ClusterBundlePreviewResult = {
+  bundle: ClusterConfigBundle;
+  diff: ClusterBundleDiff;
+};
+
+export type ClusterBundleApplyResult = {
+  cluster: BotClusterConfig;
+  agents: AgentSummary[];
+  bundle: ClusterConfigBundle;
+  diff: ClusterBundleDiff;
+  status: ClusterStatus;
+};
+
+export type ClusterBundleSchemaResult = {
+  version: number;
+  schema: Record<string, unknown>;
+  instructions: string;
+};
+
 export type AgentMention = {
   agentId: string;
   label: string;

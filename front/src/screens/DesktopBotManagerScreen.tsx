@@ -21,6 +21,7 @@ import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
+import { ClusterTemplatePanel } from "../components/ClusterTemplatePanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -547,6 +548,15 @@ function EditPanel({
               onChange={(modelTiers) => void saveCluster({ ...clusterStatus, modelTiers })}
             />
           ) : null}
+          <ClusterTemplatePanel
+            botAlias={bot.alias}
+            client={manager.client}
+            canManage={canManage && !clusterSaving}
+            onApplied={() => {
+              void manager.loadBots();
+              void manager.client.getClusterStatus(bot.alias).then(setClusterStatus).catch(() => undefined);
+            }}
+          />
           <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canManage} />
         </div>
       ) : null}

@@ -235,6 +235,91 @@ async def test_cluster_setup_prepare_returns_launcher_paths(
 
 
 @pytest.mark.asyncio
+async def test_cluster_templates_list_and_preview(web_manager: MultiBotManager):
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            list_resp = await client.get("/api/admin/bots/main/cluster/templates")
+            preview_resp = await client.post(
+                "/api/admin/bots/main/cluster/templates/preview",
+                json={"template_id": "full_test"},
+            )
+            list_payload = await list_resp.json()
+            preview_payload = await preview_resp.json()
+
+    assert list_resp.status == 200
+    assert list_payload["data"]["templates"][0]["id"] == "full_test"
+    assert preview_payload["data"]["bundle"]["id"] == "full_test"
+
+
+@pytest.mark.asyncio
+async def test_cluster_template_apply_overwrites_agents(web_manager: MultiBotManager):
+    await web_manager.create_bot_agent("main", {"id": "legacy", "name": "旧 agent", "system_prompt": "旧提示"})
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            reject_resp = await client.post(
+                "/api/admin/bots/main/cluster/templates/apply",
+                json={"template_id": "full_test"},
+            )
+            apply_resp = await client.post(
+                "/api/admin/bots/main/cluster/templates/apply",
+                json={"template_id": "full_test", "confirm_overwrite_agents": True},
+            )
+            reject_payload = await reject_resp.json()
+            apply_payload = await apply_resp.json()
+
+    assert reject_resp.status == 409
+    assert reject_payload["error"]["code"] == "cluster_bundle_overwrite_not_confirmed"
+    assert apply_resp.status == 200
+    assert [item["id"] for item in apply_payload["data"]["agents"]] == ["tester", "failure-analyst", "regression-reviewer"]
+
+
+@pytest.mark.asyncio
+async def test_cluster_bundle_schema_preview_and_apply(web_manager: MultiBotManager):
+    bundle = {
+        "id": "custom_review",
+        "name": "自定义集群",
+        "description": "测试",
+        "cluster": {
+            "enabled": True,
+            "write_policy": "main_only",
+            "conflict_policy": "snapshot_diff",
+            "max_parallel_agents": 1,
+            "default_timeout_seconds": 600,
+            "model_tiers": {"low": "", "medium": "", "high": ""},
+        },
+        "agents": [
+            {
+                "id": "tester",
+                "name": "测试",
+                "system_prompt": "跑测试",
+                "enabled": True,
+                "cluster": {"allow_cluster": True, "allow_write": False, "session_policy": "ephemeral", "timeout_seconds": 600},
+            }
+        ],
+    }
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            schema_resp = await client.get("/api/admin/bots/main/cluster/schema")
+            schema_payload = await schema_resp.json()
+            preview_resp = await client.post("/api/admin/bots/main/cluster/config-bundle/preview", json={"bundle": bundle})
+            preview_payload = await preview_resp.json()
+            apply_resp = await client.post(
+                "/api/admin/bots/main/cluster/config-bundle/apply",
+                json={"bundle": bundle, "confirm_overwrite_agents": True},
+            )
+            apply_payload = await apply_resp.json()
+
+    assert schema_resp.status == 200
+    assert "只输出 JSON bundle" in schema_payload["data"]["instructions"]
+    assert preview_payload["data"]["bundle"]["id"] == "custom_review"
+    assert apply_resp.status == 200
+    assert apply_payload["data"]["bundle"]["id"] == "custom_review"
+
+
+@pytest.mark.asyncio
 async def test_cluster_internal_ping_requires_token(web_manager: MultiBotManager):
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:

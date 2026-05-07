@@ -52,9 +52,15 @@ import type {
   CliParamsPayload,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
+  ClusterBundleApplyResult,
+  ClusterBundlePreviewResult,
+  ClusterBundleSchemaResult,
+  ClusterConfigBundle,
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterTaskStatus,
+  ClusterTemplateListResult,
+  ClusterTemplateSummary,
   CreateBotInput,
   DebugProfile,
   DebugState,
@@ -182,6 +188,52 @@ const DEFAULT_AGENT_CLUSTER = {
   sessionPolicy: "persistent" as const,
   timeoutSeconds: 600,
 };
+const DEFAULT_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
+  {
+    id: "full_test",
+    name: "全量测试集群",
+    description: "并行运行测试、失败归因和回归复核。",
+    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "snapshot_diff", maxParallelAgents: 3, defaultTimeoutSeconds: 900, modelTiers: { low: "", medium: "", high: "" } },
+    agents: [
+      { id: "tester", name: "测试专家", systemPrompt: "负责完整执行测试命令，记录失败用例、错误堆栈和复现步骤。只报告事实，不修改代码。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "failure-analyst", name: "失败分析", systemPrompt: "负责分析测试失败根因，区分产品缺陷、测试陈旧和环境问题。输出原因、证据和建议处理方式。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "regression-reviewer", name: "回归复核", systemPrompt: "负责复核修复是否覆盖原问题，检查相关回归风险和必要测试范围。只读工作区。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+    ],
+  },
+  {
+    id: "code_review",
+    name: "代码审查集群",
+    description: "并行做代码审查、安全审查和测试规划。",
+    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "snapshot_diff", maxParallelAgents: 3, defaultTimeoutSeconds: 900, modelTiers: { low: "", medium: "", high: "" } },
+    agents: [
+      { id: "reviewer", name: "代码审查", systemPrompt: "负责审查代码正确性、边界条件、可维护性和回归风险。按严重程度输出发现。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "security-reviewer", name: "安全审查", systemPrompt: "负责检查权限、输入校验、路径处理、命令执行和敏感信息风险。只报告可证实问题。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "test-planner", name: "测试规划", systemPrompt: "负责识别需要新增或调整的测试，给出具体测试文件、用例名和验证命令。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+    ],
+  },
+  {
+    id: "feature_dev",
+    name: "功能开发集群",
+    description: "实现、测试和审查并行协作。",
+    cluster: { enabled: true, writePolicy: "selected_agents", conflictPolicy: "snapshot_diff", maxParallelAgents: 3, defaultTimeoutSeconds: 1200, modelTiers: { low: "", medium: "", high: "" } },
+    agents: [
+      { id: "implementer", name: "实现专家", systemPrompt: "负责在明确文件范围内实现功能。修改前说明写入范围，修改后列出变更文件和验证结果。", enabled: true, cluster: { allowCluster: true, allowWrite: true, sessionPolicy: "fork", timeoutSeconds: 1200 } },
+      { id: "tester", name: "测试专家", systemPrompt: "负责执行相关测试、补充测试建议和归因失败。默认不修改代码。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "reviewer", name: "代码审查", systemPrompt: "负责审查实现结果，重点检查行为回归、接口一致性和缺失验证。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+    ],
+  },
+  {
+    id: "research_plan",
+    name: "调研规划集群",
+    description: "资料整理、架构分析和风险评估。",
+    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "warn_only", maxParallelAgents: 3, defaultTimeoutSeconds: 900, modelTiers: { low: "", medium: "", high: "" } },
+    agents: [
+      { id: "researcher", name: "资料整理", systemPrompt: "负责收集项目内相关文件、接口和已有约束，输出事实清单和引用位置。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "architect", name: "架构分析", systemPrompt: "负责拆解方案边界、数据流和模块职责，指出替代方案和权衡。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+      { id: "risk-reviewer", name: "风险评估", systemPrompt: "负责识别实现风险、测试风险、迁移风险和运维风险，输出优先级。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
+    ],
+  },
+];
 
 function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
   if (typeof localStorage === "undefined") {
@@ -2295,6 +2347,60 @@ export class MockWebBotClient implements WebBotClient {
     return { cluster, status: await this.getClusterStatus(botAlias) };
   }
 
+  async getClusterTemplates(_botAlias: string): Promise<ClusterTemplateListResult> {
+    return {
+      templates: DEFAULT_CLUSTER_TEMPLATES.map((item): ClusterTemplateSummary => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        agentCount: item.agents.length,
+        writeAgentCount: item.agents.filter((agent) => agent.cluster.allowWrite).length,
+        maxParallelAgents: item.cluster.maxParallelAgents,
+      })),
+    };
+  }
+
+  async getClusterBundleSchema(_botAlias: string): Promise<ClusterBundleSchemaResult> {
+    return {
+      version: 1,
+      schema: {
+        type: "object",
+        required: ["cluster", "agents"],
+        properties: {
+          id: { type: "string", pattern: "^[a-z][a-z0-9_-]{1,31}$" },
+          agents: { type: "array", maxItems: 8 },
+        },
+      },
+      instructions: "只输出 JSON bundle。默认所有 agent 只读。只有用户明确要求并行写代码时，才设置某个 agent 的 cluster.allow_write=true。",
+    };
+  }
+
+  async previewClusterTemplate(_botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult> {
+    const bundle = this.findTemplate(templateId);
+    return { bundle, diff: this.buildBundleDiff(bundle) };
+  }
+
+  async applyClusterTemplate(botAlias: string, templateId: string, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult> {
+    if (!confirmOverwriteAgents) {
+      throw new WebApiClientError("应用模板会覆盖当前子 agent 配置，请确认后重试", { status: 409, code: "cluster_bundle_overwrite_not_confirmed" });
+    }
+    const bundle = this.findTemplate(templateId);
+    return this.applyBundle(botAlias, bundle);
+  }
+
+  async previewClusterConfigBundle(botAlias: string, bundle: unknown): Promise<ClusterBundlePreviewResult> {
+    const normalized = this.coerceBundle(bundle);
+    const diff = this.buildBundleDiff(normalized, botAlias);
+    return { bundle: normalized, diff };
+  }
+
+  async applyClusterConfigBundle(botAlias: string, bundle: unknown, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult> {
+    if (!confirmOverwriteAgents) {
+      throw new WebApiClientError("应用配置会覆盖当前子 agent 配置，请确认后重试", { status: 409, code: "cluster_bundle_overwrite_not_confirmed" });
+    }
+    return this.applyBundle(botAlias, this.coerceBundle(bundle));
+  }
+
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
     const bot = this.getBotSummary(botAlias);
     const agentId = options.agentId || "main";
@@ -2312,6 +2418,100 @@ export class MockWebBotClient implements WebBotClient {
       agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
       busyAgentIds: [],
+    };
+  }
+
+  private findTemplate(templateId: string): ClusterConfigBundle {
+    const found = DEFAULT_CLUSTER_TEMPLATES.find((item) => item.id === templateId);
+    if (!found) {
+      throw new WebApiClientError("集群模板不存在", { status: 404, code: "cluster_template_not_found" });
+    }
+    return structuredClone(found);
+  }
+
+  private coerceBundle(raw: unknown): ClusterConfigBundle {
+    const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    return {
+      id: String(value.id || "custom_review"),
+      name: String(value.name || "自定义集群"),
+      description: String(value.description || ""),
+      cluster: {
+        ...(DEFAULT_CLUSTER),
+        ...(value.cluster && typeof value.cluster === "object" ? value.cluster as typeof DEFAULT_CLUSTER : {}),
+      },
+      agents: Array.isArray(value.agents)
+        ? value.agents.map((agent) => {
+            const item = agent && typeof agent === "object" ? agent as Record<string, unknown> : {};
+            return {
+              id: String(item.id || ""),
+              name: String(item.name || ""),
+              systemPrompt: String(item.system_prompt ?? item.systemPrompt ?? ""),
+              enabled: item.enabled !== false,
+              cluster: {
+                ...DEFAULT_AGENT_CLUSTER,
+                ...(item.cluster && typeof item.cluster === "object" ? item.cluster as typeof DEFAULT_AGENT_CLUSTER : {}),
+              },
+            };
+          })
+        : [],
+    };
+  }
+
+  private buildBundleDiff(bundle: ClusterConfigBundle, botAlias = "main") {
+    const current = this.ensureAgents(botAlias).filter((agent) => !agent.isMain);
+    const currentMap = new Map(current.map((agent) => [agent.id, agent]));
+    const nextMap = new Map(bundle.agents.map((agent) => [agent.id, agent]));
+    const deleteAgents = current.filter((agent) => !nextMap.has(agent.id)).map((agent) => agent.id).sort();
+    const createAgents = bundle.agents.filter((agent) => !currentMap.has(agent.id)).map((agent) => agent.id).sort();
+    const updateAgents = bundle.agents
+      .filter((agent) => {
+        const prev = currentMap.get(agent.id);
+        return prev && JSON.stringify({
+          id: prev.id,
+          name: prev.name,
+          systemPrompt: prev.systemPrompt,
+          enabled: prev.enabled,
+          cluster: prev.cluster,
+        }) !== JSON.stringify(agent);
+      })
+      .map((agent) => agent.id)
+      .sort();
+    return {
+      deleteAgents,
+      createAgents,
+      updateAgents,
+      clusterChanges: {},
+      overwritesAgents: deleteAgents.length > 0 || createAgents.length > 0 || updateAgents.length > 0,
+    };
+  }
+
+  private async applyBundle(botAlias: string, bundle: ClusterConfigBundle): Promise<ClusterBundleApplyResult> {
+    const current = this.getBotSummary(botAlias);
+    const nextAgents: AgentSummary[] = bundle.agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      systemPrompt: agent.systemPrompt,
+      enabled: agent.enabled,
+      isMain: false,
+      cluster: { ...agent.cluster },
+      createdAt: "",
+      updatedAt: "",
+    }));
+    this.agentsByBot.set(botAlias, [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true, cluster: { ...DEFAULT_AGENT_CLUSTER } },
+      ...nextAgents,
+    ]);
+    this.bots.set(botAlias, {
+      ...current,
+      cluster: { ...bundle.cluster },
+      agents: this.ensureAgents(botAlias).map((item) => this.cloneAgent(item)),
+    });
+    return {
+      cluster: { ...bundle.cluster },
+      agents: nextAgents.map((item) => this.cloneAgent(item)),
+      bundle: structuredClone(bundle),
+      diff: this.buildBundleDiff(bundle, botAlias),
+      status: await this.getClusterStatus(botAlias),
     };
   }
 

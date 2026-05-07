@@ -166,6 +166,88 @@ describe("RealWebBotClient", () => {
     expect(status.agents[0].allowWrite).toBe(false);
   });
 
+  test("cluster template endpoints map preview and apply results", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          templates: [{ id: "full_test", name: "全量测试", description: "跑测试", agent_count: 3, write_agent_count: 0, max_parallel_agents: 3 }],
+        },
+      }),
+    }).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          version: 1,
+          schema: { type: "object" },
+          instructions: "只输出 JSON bundle",
+        },
+      }),
+    }).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          bundle: {
+            id: "full_test",
+            name: "全量测试集群",
+            description: "跑测试",
+            cluster: { enabled: true, write_policy: "main_only", conflict_policy: "snapshot_diff", max_parallel_agents: 3, default_timeout_seconds: 900, model_tiers: { low: "", medium: "", high: "" } },
+            agents: [{ id: "tester", name: "测试专家", system_prompt: "跑测试", enabled: true, cluster: { allow_cluster: true, allow_write: false, session_policy: "ephemeral", timeout_seconds: 900 } }],
+          },
+          diff: { delete_agents: [], create_agents: ["tester"], update_agents: [], cluster_changes: {}, overwrites_agents: true },
+        },
+      }),
+    }).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          cluster: { enabled: true, write_policy: "main_only", conflict_policy: "snapshot_diff", max_parallel_agents: 3, default_timeout_seconds: 900, model_tiers: { low: "", medium: "", high: "" } },
+          agents: [{ id: "tester", name: "测试专家", system_prompt: "跑测试", enabled: true, is_main: false, cluster: { allow_cluster: true, allow_write: false, session_policy: "ephemeral", timeout_seconds: 900 } }],
+          bundle: {
+            id: "full_test",
+            name: "全量测试集群",
+            description: "跑测试",
+            cluster: { enabled: true, write_policy: "main_only", conflict_policy: "snapshot_diff", max_parallel_agents: 3, default_timeout_seconds: 900, model_tiers: { low: "", medium: "", high: "" } },
+            agents: [{ id: "tester", name: "测试专家", system_prompt: "跑测试", enabled: true, cluster: { allow_cluster: true, allow_write: false, session_policy: "ephemeral", timeout_seconds: 900 } }],
+          },
+          diff: { delete_agents: [], create_agents: ["tester"], update_agents: [], cluster_changes: {}, overwrites_agents: true },
+          status: {
+            enabled: true,
+            model_tiers: { low: "", medium: "", high: "" },
+            mcp: {
+              server_name: "tcb-cluster",
+              codex: { state: "installed", message: "已安装" },
+              claude: { state: "mcp_missing", message: "未安装" },
+            },
+            agents: [{ id: "tester", name: "测试专家", enabled: true, allow_cluster: true, allow_write: false }],
+          },
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const list = await client.getClusterTemplates("main");
+    const schema = await client.getClusterBundleSchema("main");
+    const preview = await client.previewClusterTemplate("main", "full_test");
+    const apply = await client.applyClusterTemplate("main", "full_test", true);
+
+    expect(list.templates[0].agentCount).toBe(3);
+    expect(schema.instructions).toContain("只输出 JSON bundle");
+    expect(preview.bundle.agents[0].systemPrompt).toBe("跑测试");
+    expect(apply.bundle.id).toBe("full_test");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/bots/main/cluster/templates/preview",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ template_id: "full_test" }),
+      }),
+    );
+  });
+
   test("getClusterTaskStatus maps async task output", async () => {
     fetchMock
       .mockResolvedValueOnce({
