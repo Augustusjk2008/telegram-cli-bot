@@ -96,7 +96,7 @@ from bot.cluster.setup import (
     build_cli_verify_command,
     prepare_cluster_mcp_launcher,
 )
-from bot.config import CLI_MODEL_OPTIONS
+from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
 from bot.cli import (
     build_cli_command,
     extract_codex_error_output,
@@ -783,6 +783,10 @@ def _cluster_token_path() -> Path:
     return Path.home() / ".tcb" / "cluster-mcp" / "token"
 
 
+def _cluster_bridge_url() -> str:
+    return f"http://127.0.0.1:{WEB_PORT}"
+
+
 def verify_cluster_mcp_request(request_headers: dict[str, str]) -> None:
     auth = str(request_headers.get("Authorization") or "")
     if not auth.startswith("Bearer "):
@@ -805,7 +809,32 @@ def _cluster_cli_path(profile: BotProfile, cli_type: str) -> str:
     return profile.cli_path if active_cli_type == cli_type and profile.cli_path else cli_type
 
 
-def _cluster_mcp_target_status(profile: BotProfile, cli_type: str) -> dict[str, str]:
+def _cluster_runtime_mcp_status() -> dict[str, str]:
+    launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
+    launcher_path = Path.home() / ".tcb" / "bin" / launcher_name
+    config_path = Path.home() / ".tcb" / "cluster-mcp" / "config.json"
+    token_path = _cluster_token_path()
+    if not launcher_path.exists() or not config_path.exists():
+        return {"state": "launcher_missing", "message": "未生成运行配置"}
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"state": "broken", "message": f"运行配置无效: {exc}"}
+    if str(config.get("server_name") or "") != CLUSTER_MCP_SERVER_NAME:
+        return {"state": "stale", "message": "运行配置需更新"}
+    configured_token_path = Path(str(config.get("token_file") or token_path))
+    if not configured_token_path.exists():
+        return {"state": "broken", "message": "运行 token 不存在"}
+    return {"state": "runtime_ready", "message": "运行态可用"}
+
+
+def _cluster_inactive_target_status() -> dict[str, str]:
+    return {"state": "not_checked", "message": "未使用"}
+
+
+def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, str]:
+    if cli_type != active_cli_type:
+        return _cluster_inactive_target_status()
     cli_path = _cluster_cli_path(profile, cli_type)
     command = build_cli_verify_command(cli_type, cli_path)
     try:
@@ -829,6 +858,9 @@ def _cluster_mcp_target_status(profile: BotProfile, cli_type: str) -> dict[str, 
         if "enabled: false" in output.lower():
             return {"state": "broken", "message": "已安装但未启用"}
         return {"state": "installed", "message": "已安装"}
+    runtime_status = _cluster_runtime_mcp_status()
+    if runtime_status["state"] == "runtime_ready":
+        return runtime_status
     if "not found" in output.lower() or "no mcp" in output.lower() or completed.returncode != 0:
         return {"state": "mcp_missing", "message": "未安装"}
     return {"state": "mcp_missing", "message": "未安装"}
@@ -836,13 +868,19 @@ def _cluster_mcp_target_status(profile: BotProfile, cli_type: str) -> dict[str, 
 
 def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
+    try:
+        active_cli_type = normalize_cli_type(profile.cli_type)
+    except ValueError:
+        active_cli_type = ""
     return {
         "enabled": bool(profile.cluster.enabled),
         "model_tiers": dict(profile.cluster.model_tiers),
         "mcp": {
             "server_name": CLUSTER_MCP_SERVER_NAME,
-            "codex": _cluster_mcp_target_status(profile, "codex"),
-            "claude": _cluster_mcp_target_status(profile, "claude"),
+            "active_cli_type": active_cli_type,
+            "runtime": _cluster_runtime_mcp_status(),
+            "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
+            "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
         },
         "agents": [
             {
@@ -863,7 +901,7 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
     launcher = prepare_cluster_mcp_launcher(
         home_dir=Path.home(),
         repo_root=_REPO_ROOT,
-        bridge_url="http://127.0.0.1:8765",
+        bridge_url=_cluster_bridge_url(),
     )
     return {
         **launcher.to_dict(),
@@ -2902,6 +2940,35 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     return CliParamsConfig.from_dict(params)
 
 
+def _quote_toml_string(value: str) -> str:
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsConfig) -> CliParamsConfig:
+    cli_type = normalize_cli_type(profile.cli_type)
+    launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
+    launcher_path = Path.home() / ".tcb" / "bin" / launcher_name
+    params = params_config.to_dict()
+    cli_params = params.setdefault(cli_type, {})
+    extra_args = [str(item) for item in cli_params.get("extra_args", []) if str(item).strip()]
+    if cli_type == "codex":
+        injection = ["-c", f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.command={_quote_toml_string(str(launcher_path))}"]
+    elif cli_type == "claude":
+        config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}
+        injection = ["--mcp-config", json.dumps(config, ensure_ascii=False)]
+    else:
+        injection = []
+    if injection and not all(arg in extra_args for arg in injection):
+        cli_params["extra_args"] = [*extra_args, *injection]
+    return CliParamsConfig.from_dict(params)
+
+
+def _effective_cli_params(profile: BotProfile, params_config: CliParamsConfig, cluster_run_id: str) -> CliParamsConfig:
+    if not cluster_run_id:
+        return params_config
+    return _cluster_mcp_injected_params(profile, params_config)
+
+
 def _cluster_run_control(run_id: str, max_parallel_agents: int) -> _ClusterRunControl:
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     if control is None:
@@ -4097,6 +4164,7 @@ async def _stream_cli_chat(
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
+            params_for_attempt = _effective_cli_params(profile, cli_params_override or profile.cli_params, cluster_run_id)
             try:
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
@@ -4106,7 +4174,7 @@ async def _stream_cli_chat(
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
                     json_output=(cli_type in ("codex", "claude")),
-                    params_config=cli_params_override or profile.cli_params,
+                    params_config=params_for_attempt,
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
@@ -4577,6 +4645,7 @@ async def run_cli_chat(
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
+            params_for_attempt = _effective_cli_params(profile, cli_params_override or profile.cli_params, cluster_run_id)
             try:
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
@@ -4586,7 +4655,7 @@ async def run_cli_chat(
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
                     json_output=(cli_type in ("codex", "claude")),
-                    params_config=cli_params_override or profile.cli_params,
+                    params_config=params_for_attempt,
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))

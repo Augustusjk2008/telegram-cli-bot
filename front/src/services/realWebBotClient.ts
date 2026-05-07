@@ -1045,6 +1045,8 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
     modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
     mcp: {
       serverName: String(mcp.server_name || mcp.serverName || "tcb-cluster"),
+      activeCliType: String(mcp.active_cli_type || mcp.activeCliType || "codex"),
+      runtime: mapTarget(mcp.runtime),
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
     },

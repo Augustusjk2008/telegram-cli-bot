@@ -13,6 +13,10 @@ function commandText(command: string[]) {
   return command.map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(" ");
 }
 
+function cliLabel(cliType: string) {
+  return cliType === "claude" ? "Claude" : "Codex";
+}
+
 export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props) {
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [prepare, setPrepare] = useState<ClusterSetupPrepareResult | null>(null);
@@ -83,8 +87,11 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
       {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
       {status ? (
         <div className="mt-3 grid gap-2 text-sm">
-          <div>Codex：{status.mcp.codex.message || status.mcp.codex.state}</div>
-          <div>Claude：{status.mcp.claude.message || status.mcp.claude.state}</div>
+          {(() => {
+            const activeCliType = status.mcp.activeCliType === "claude" ? "claude" : "codex";
+            const activeStatus = activeCliType === "claude" ? status.mcp.claude : status.mcp.codex;
+            return <div>{cliLabel(activeCliType)}：{activeStatus.message || activeStatus.state}</div>;
+          })()}
         </div>
       ) : null}
       {prepare ? (

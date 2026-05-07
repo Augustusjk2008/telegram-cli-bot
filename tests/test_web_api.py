@@ -197,7 +197,10 @@ async def test_cluster_status_detects_installed_codex_mcp(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    commands = []
+
     def fake_run(command, **_kwargs):
+        commands.append(command)
         if command[:3] == ["codex", "mcp", "get"]:
             return subprocess.CompletedProcess(command, 0, "tcb-cluster\n  enabled: true\n", "")
         return subprocess.CompletedProcess(command, 1, "", "not found")
@@ -210,8 +213,53 @@ async def test_cluster_status_detects_installed_codex_mcp(
             payload = await resp.json()
 
     assert resp.status == 200
+    assert payload["data"]["mcp"]["active_cli_type"] == "codex"
     assert payload["data"]["mcp"]["codex"]["state"] == "installed"
     assert payload["data"]["mcp"]["codex"]["message"] == "已安装"
+    assert payload["data"]["mcp"]["claude"]["state"] == "not_checked"
+    assert all(command[0] != "claude" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_cluster_status_uses_runtime_bridge_when_codex_mcp_config_is_missing(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    launcher = home / ".tcb" / "bin" / "tcb-cluster-mcp.cmd"
+    config = home / ".tcb" / "cluster-mcp" / "config.json"
+    token = home / ".tcb" / "cluster-mcp" / "token"
+    launcher.parent.mkdir(parents=True)
+    config.parent.mkdir(parents=True)
+    launcher.write_text("@echo off\n", encoding="utf-8")
+    token.write_text("secret", encoding="utf-8")
+    config.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "repo_root": str(api_service._REPO_ROOT),
+            "bridge_url": "http://127.0.0.1:8765",
+            "token_file": str(token),
+            "server_name": "tcb-cluster",
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("bot.web.api_service.Path.home", lambda: home)
+    monkeypatch.setattr(
+        api_service.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", "No MCP server named 'tcb-cluster' found."),
+    )
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/cluster/status")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["mcp"]["codex"]["state"] == "runtime_ready"
+    assert payload["data"]["mcp"]["codex"]["message"] == "运行态可用"
 
 
 @pytest.mark.asyncio
@@ -458,6 +506,31 @@ async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBo
     assert captured["agent_id"] == "reviewer"
     assert captured["model"] == "fast-model"
     api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_injects_cluster_mcp_config_for_codex(web_manager: MultiBotManager, tmp_path: Path):
+    fake_process = MagicMock()
+    captured = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["params"] = kwargs["params_config"].get_params("codex")
+        return ["codex"], False
+
+    with patch("bot.web.api_service.Path.home", lambda: tmp_path), \
+         patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("ok", "thread-1", 0),
+         ):
+        await run_cli_chat(web_manager, "main", 1001, "hello", cluster_run_id="clr_test")
+
+    extra_args = captured["params"]["extra_args"]
+    assert "-c" in extra_args
+    assert any("mcp_servers.tcb-cluster.command" in arg for arg in extra_args)
 
 
 @pytest.mark.asyncio

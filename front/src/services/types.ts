@@ -119,6 +119,7 @@ export type ClusterMcpState =
   | "cli_missing"
   | "launcher_missing"
   | "mcp_missing"
+  | "runtime_ready"
   | "installed"
   | "stale"
   | "broken"
@@ -142,6 +143,8 @@ export type ClusterStatus = {
   modelTiers: ClusterModelTiers;
   mcp: {
     serverName: string;
+    activeCliType: CliType | string;
+    runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
   };

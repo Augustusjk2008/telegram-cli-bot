@@ -148,8 +148,10 @@ describe("RealWebBotClient", () => {
           model_tiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
           mcp: {
             server_name: "tcb-cluster",
+            active_cli_type: "codex",
+            runtime: { state: "runtime_ready", message: "运行态可用" },
             codex: { state: "installed", message: "已安装" },
-            claude: { state: "mcp_missing", message: "未安装" },
+            claude: { state: "not_checked", message: "未使用" },
           },
           agents: [{ id: "reviewer", name: "代码审查", enabled: true, allow_cluster: true, allow_write: false }],
         },
@@ -162,6 +164,8 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/bots/main/cluster/status", expect.objectContaining({ cache: "no-store" }));
     expect(status.enabled).toBe(true);
     expect(status.mcp.serverName).toBe("tcb-cluster");
+    expect(status.mcp.activeCliType).toBe("codex");
+    expect(status.mcp.runtime?.state).toBe("runtime_ready");
     expect(status.modelTiers.low).toBe("fast-model");
     expect(status.agents[0].allowWrite).toBe(false);
   });
@@ -220,8 +224,10 @@ describe("RealWebBotClient", () => {
             model_tiers: { low: "", medium: "", high: "" },
             mcp: {
               server_name: "tcb-cluster",
+              active_cli_type: "codex",
+              runtime: { state: "runtime_ready", message: "运行态可用" },
               codex: { state: "installed", message: "已安装" },
-              claude: { state: "mcp_missing", message: "未安装" },
+              claude: { state: "not_checked", message: "未使用" },
             },
             agents: [{ id: "tester", name: "测试专家", enabled: true, allow_cluster: true, allow_write: false }],
           },

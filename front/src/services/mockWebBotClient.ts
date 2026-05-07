@@ -2292,8 +2292,10 @@ export class MockWebBotClient implements WebBotClient {
       modelTiers: { ...cluster.modelTiers },
       mcp: {
         serverName: "tcb-cluster",
-        codex: { state: "mcp_missing", message: "未安装" },
-        claude: { state: "mcp_missing", message: "未安装" },
+        activeCliType: bot.cliType,
+        runtime: { state: "runtime_ready", message: "运行态可用" },
+        codex: bot.cliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        claude: bot.cliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
         .filter((agent) => !agent.isMain)
