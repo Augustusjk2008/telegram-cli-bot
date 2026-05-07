@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
 from bot.cli_params import CliParamsConfig
-from bot.cluster_config import (
+from bot.cluster.config import (
     AgentClusterConfig,
     BotClusterConfig,
     normalize_agent_cluster_config,

@@ -2,8 +2,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_proposals import create_proposal
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.proposals import create_proposal
 
 
 def _init_git_repo(repo: Path) -> str:
@@ -14,7 +14,7 @@ def _init_git_repo(repo: Path) -> str:
 
 
 def test_describe_upgrade_repo_marks_dirty_repo_unavailable(tmp_path):
-    from bot.assistant_upgrade_targets import describe_upgrade_repo
+    from bot.assistant.upgrade.targets import describe_upgrade_repo
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -35,7 +35,7 @@ def test_describe_upgrade_repo_marks_dirty_repo_unavailable(tmp_path):
 
 
 def test_apply_approved_upgrade_runs_git_apply_check_and_marks_applied(tmp_path, monkeypatch):
-    from bot.assistant_upgrade import apply_approved_upgrade
+    from bot.assistant.upgrade.service import apply_approved_upgrade
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -59,7 +59,7 @@ def test_apply_approved_upgrade_runs_git_apply_check_and_marks_applied(tmp_path,
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr("bot.assistant_upgrade.subprocess.run", fake_run)
+    monkeypatch.setattr("bot.assistant.upgrade.service.subprocess.run", fake_run)
 
     result = apply_approved_upgrade(home, proposal["id"], repo_root=repo)
 
@@ -69,7 +69,7 @@ def test_apply_approved_upgrade_runs_git_apply_check_and_marks_applied(tmp_path,
 
 
 def test_apply_approved_upgrade_rejects_dirty_target(tmp_path):
-    from bot.assistant_upgrade import apply_approved_upgrade
+    from bot.assistant.upgrade.service import apply_approved_upgrade
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -100,7 +100,7 @@ def test_apply_approved_upgrade_rejects_dirty_target(tmp_path):
 
 
 def test_apply_approved_upgrade_rejects_non_approved_proposal(tmp_path, monkeypatch):
-    from bot.assistant_upgrade import apply_approved_upgrade
+    from bot.assistant.upgrade.service import apply_approved_upgrade
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -112,7 +112,7 @@ def test_apply_approved_upgrade_rejects_non_approved_proposal(tmp_path, monkeypa
     patch_path.parent.mkdir(parents=True, exist_ok=True)
     patch_path.write_text("diff --git a/a.txt b/a.txt\n", encoding="utf-8")
     monkeypatch.setattr(
-        "bot.assistant_upgrade.subprocess.run",
+        "bot.assistant.upgrade.service.subprocess.run",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("subprocess should not run")),
     )
 
@@ -125,7 +125,7 @@ def test_apply_approved_upgrade_rejects_non_approved_proposal(tmp_path, monkeypa
 
 
 def test_write_upgrade_apply_failure_persists_audit(tmp_path):
-    from bot.assistant_upgrade import write_upgrade_apply_failure
+    from bot.assistant.upgrade.service import write_upgrade_apply_failure
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -152,7 +152,7 @@ def test_write_upgrade_apply_failure_persists_audit(tmp_path):
 
 
 def test_write_upgrade_dry_run_result_updates_approved_metadata(tmp_path):
-    from bot.assistant_upgrade import read_upgrade_metadata, write_upgrade_dry_run_result, write_upgrade_metadata
+    from bot.assistant.upgrade.service import read_upgrade_metadata, write_upgrade_dry_run_result, write_upgrade_metadata
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -180,7 +180,7 @@ def test_write_upgrade_dry_run_result_updates_approved_metadata(tmp_path):
 
 
 def test_upgrade_metadata_round_trip_and_approved_resolution(tmp_path):
-    from bot.assistant_upgrade import (
+    from bot.assistant.upgrade.service import (
         read_upgrade_metadata,
         resolve_approved_upgrade_patch_path,
         write_upgrade_metadata,
@@ -223,7 +223,7 @@ def test_upgrade_metadata_round_trip_and_approved_resolution(tmp_path):
 
 
 def test_approve_pending_upgrade_patch_copies_patch_and_metadata(tmp_path):
-    from bot.assistant_upgrade import approve_pending_upgrade_patch, read_upgrade_metadata
+    from bot.assistant.upgrade.service import approve_pending_upgrade_patch, read_upgrade_metadata
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -274,7 +274,7 @@ def test_approve_pending_upgrade_patch_copies_patch_and_metadata(tmp_path):
 
 
 def test_apply_approved_upgrade_uses_metadata_target_repo(tmp_path, monkeypatch):
-    from bot.assistant_upgrade import apply_approved_upgrade, write_upgrade_metadata
+    from bot.assistant.upgrade.service import apply_approved_upgrade, write_upgrade_metadata
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -320,7 +320,7 @@ def test_apply_approved_upgrade_uses_metadata_target_repo(tmp_path, monkeypatch)
             return subprocess.CompletedProcess(cmd, 0, "deadbeef\n", "")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr("bot.assistant_upgrade.subprocess.run", fake_run)
+    monkeypatch.setattr("bot.assistant.upgrade.service.subprocess.run", fake_run)
 
     result = apply_approved_upgrade(home, proposal["id"], repo_root=host_repo)
 
@@ -330,7 +330,7 @@ def test_apply_approved_upgrade_uses_metadata_target_repo(tmp_path, monkeypatch)
 
 
 def test_generate_pending_patch_exports_diff_and_metadata(tmp_path, monkeypatch):
-    from bot.assistant_patch_generation import generate_pending_patch
+    from bot.assistant.upgrade.patch_generation import generate_pending_patch
 
     assistant_dir = tmp_path / "assistant-root"
     assistant_dir.mkdir()
@@ -354,7 +354,7 @@ def test_generate_pending_patch_exports_diff_and_metadata(tmp_path, monkeypatch)
         (worktree_path / "a.txt").write_text("new\n", encoding="utf-8")
         return {"status": "succeeded", "elapsed_seconds": 1, "stdout_tail": "", "stderr_tail": ""}
 
-    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation._run_generator_cli", fake_cli)
 
     result = generate_pending_patch(
         home,
@@ -379,7 +379,7 @@ def test_generate_pending_patch_exports_diff_and_metadata(tmp_path, monkeypatch)
 
 
 def test_generate_pending_patch_writes_lf_patch_bytes(tmp_path, monkeypatch):
-    from bot.assistant_patch_generation import generate_pending_patch
+    from bot.assistant.upgrade.patch_generation import generate_pending_patch
 
     assistant_dir = tmp_path / "assistant-root"
     assistant_dir.mkdir()
@@ -402,7 +402,7 @@ def test_generate_pending_patch_writes_lf_patch_bytes(tmp_path, monkeypatch):
         (worktree_path / "a.txt").write_text("new\n", encoding="utf-8", newline="\n")
         return {"status": "succeeded", "elapsed_seconds": 1, "stdout_tail": "", "stderr_tail": ""}
 
-    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation._run_generator_cli", fake_cli)
 
     generate_pending_patch(
         home,
@@ -427,7 +427,7 @@ def test_generate_pending_patch_writes_lf_patch_bytes(tmp_path, monkeypatch):
 
 
 def test_generate_pending_patch_marks_sensitive_hits(tmp_path, monkeypatch):
-    from bot.assistant_patch_generation import generate_pending_patch
+    from bot.assistant.upgrade.patch_generation import generate_pending_patch
 
     assistant_dir = tmp_path / "assistant-root"
     assistant_dir.mkdir()
@@ -450,7 +450,7 @@ def test_generate_pending_patch_marks_sensitive_hits(tmp_path, monkeypatch):
         (worktree_path / ".env").write_text("TOKEN=x\n", encoding="utf-8")
         return {"status": "succeeded", "elapsed_seconds": 1, "stdout_tail": "", "stderr_tail": ""}
 
-    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation._run_generator_cli", fake_cli)
 
     result = generate_pending_patch(
         home,
@@ -471,7 +471,7 @@ def test_generate_pending_patch_marks_sensitive_hits(tmp_path, monkeypatch):
 
 
 def test_generate_pending_patch_recovers_stale_running_metadata_and_worktree(tmp_path, monkeypatch):
-    from bot.assistant_patch_generation import generate_pending_patch
+    from bot.assistant.upgrade.patch_generation import generate_pending_patch
 
     assistant_dir = tmp_path / "assistant-root"
     assistant_dir.mkdir()
@@ -536,7 +536,7 @@ def test_generate_pending_patch_recovers_stale_running_metadata_and_worktree(tmp
             "assistant_text": "done",
         }
 
-    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation._run_generator_cli", fake_cli)
 
     result = generate_pending_patch(
         home,
@@ -560,8 +560,8 @@ def test_generate_pending_patch_recovers_stale_running_metadata_and_worktree(tmp
 
 
 def test_generate_pending_patch_writes_failed_metadata_on_cli_error(tmp_path, monkeypatch):
-    from bot.assistant_patch_generation import generate_pending_patch
-    from bot.assistant_upgrade import read_upgrade_metadata
+    from bot.assistant.upgrade.patch_generation import generate_pending_patch
+    from bot.assistant.upgrade.service import read_upgrade_metadata
 
     assistant_dir = tmp_path / "assistant-root"
     assistant_dir.mkdir()
@@ -583,7 +583,7 @@ def test_generate_pending_patch_writes_failed_metadata_on_cli_error(tmp_path, mo
     def fake_cli(worktree_path: Path, prompt: str, metadata: dict):
         raise subprocess.CalledProcessError(1, ["codex"], output="", stderr="cli failed")
 
-    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_cli)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation._run_generator_cli", fake_cli)
 
     try:
         generate_pending_patch(
@@ -614,7 +614,7 @@ def test_generate_pending_patch_writes_failed_metadata_on_cli_error(tmp_path, mo
 
 
 def test_approve_pending_upgrade_patch_rejects_sensitive_paths(tmp_path):
-    from bot.assistant_upgrade import approve_pending_upgrade_patch
+    from bot.assistant.upgrade.service import approve_pending_upgrade_patch
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()

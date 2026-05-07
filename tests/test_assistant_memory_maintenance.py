@@ -1,6 +1,6 @@
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_maintenance import find_duplicate_memories, invalidate_duplicate_memories
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.maintenance import find_duplicate_memories, invalidate_duplicate_memories
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 def test_find_duplicate_memories_groups_active_duplicate_summaries(tmp_path):

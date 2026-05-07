@@ -4,8 +4,8 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_perf import list_perf_records
+from bot.assistant.home import AssistantHome
+from bot.assistant.perf import list_perf_records
 
 _STAGES = ("sync_ms", "index_ms", "recall_ms", "cli_ms", "db_ms", "trace_ms", "plugin_ms")
 

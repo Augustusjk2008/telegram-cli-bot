@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_knowledge_indexer import index_knowledge_memories
-from bot.assistant_memory_writer import DreamMemoryInput, write_dream_memories
-from bot.assistant_proposals import create_proposal
+from bot.assistant.home import AssistantHome
+from bot.assistant.memory.knowledge_indexer import index_knowledge_memories
+from bot.assistant.memory.writer import DreamMemoryInput, write_dream_memories
+from bot.assistant.proposals import create_proposal
 from bot.models import BotProfile, UserSession
 
 if TYPE_CHECKING:

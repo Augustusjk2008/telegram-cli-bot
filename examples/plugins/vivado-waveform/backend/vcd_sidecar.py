@@ -106,6 +106,7 @@ def _metadata_from_index(index: VcdIndex, sidecar_dir: Path) -> dict[str, Any]:
         "timescale": index.timescale,
         "start_time": index.start_time,
         "end_time": index.end_time,
+        "segment_end_time": index.segment_end_time,
         "display": index.display,
         "signals": signals,
     }
@@ -185,6 +186,7 @@ def build_or_load_sidecar(path: Path) -> SidecarHandle:
             timescale=str(metadata["timescale"]),
             start_time=metadata["start_time"],
             end_time=metadata["end_time"],
+            segment_end_time=metadata.get("segment_end_time", metadata["end_time"]),
             display=dict(metadata["display"]),
             signals=tuple(signals),
             series_by_signal=series_by_signal,

@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_eval import MemoryEvalCase, run_memory_eval
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.eval import MemoryEvalCase, run_memory_eval
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 def test_run_memory_eval_reports_hits_and_stale_recall_rate(tmp_path: Path):

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 
-from bot.assistant_context import build_managed_memory_prompt, build_managed_memory_tail
-from bot.assistant_home import AssistantHome
+from bot.assistant.context import build_managed_memory_prompt, build_managed_memory_tail
+from bot.assistant.home import AssistantHome
 
 BEGIN_HOST_MANAGED_MEMORY_PROMPT = "<!-- BEGIN HOST_MANAGED_MEMORY_PROMPT -->"
 END_HOST_MANAGED_MEMORY_PROMPT = "<!-- END HOST_MANAGED_MEMORY_PROMPT -->"

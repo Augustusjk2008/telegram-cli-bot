@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_recall import recall_assistant_memories
-from bot.assistant_memory_writer import DreamMemoryInput, extract_hot_path_memories, write_dream_memories, write_hot_path_memories
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.recall import recall_assistant_memories
+from bot.assistant.memory.writer import DreamMemoryInput, extract_hot_path_memories, write_dream_memories, write_hot_path_memories
 
 
 def test_extract_hot_path_memories_from_explicit_preference():

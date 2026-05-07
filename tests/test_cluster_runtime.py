@@ -1,7 +1,7 @@
 import pytest
 
-from bot.cluster_config import AgentClusterConfig
-from bot.cluster_runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
+from bot.cluster.config import AgentClusterConfig
+from bot.cluster.runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
 from bot.models import AgentProfile, BotProfile
 
 

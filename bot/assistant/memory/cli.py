@@ -4,10 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_eval import MemoryEvalCase, run_memory_eval
-from bot.assistant_memory_recall import recall_assistant_memories
-from bot.assistant_memory_store import AssistantMemoryStore
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.eval import MemoryEvalCase, run_memory_eval
+from bot.assistant.memory.recall import recall_assistant_memories
+from bot.assistant.memory.store import AssistantMemoryStore
 
 
 def _print_json(payload: dict) -> None:

@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from bot.assistant_home import AssistantHome
+from bot.assistant.home import AssistantHome
 
 
 def _proposal_path(home: AssistantHome, proposal_id: str) -> Path:

@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from bot import app_settings
-from bot.assistant_cron import AssistantCronService
-from bot.assistant_docs import sync_managed_prompt_files
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
+from bot.assistant.cron.service import AssistantCronService
+from bot.assistant.docs import sync_managed_prompt_files
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
-from bot.cluster_config import normalize_agent_cluster_config, normalize_bot_cluster_config
+from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import AgentProfile, BotProfile

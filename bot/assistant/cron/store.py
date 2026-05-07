@@ -6,8 +6,8 @@ from typing import Any
 
 import yaml
 
-from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState, validate_cron_job_id
-from bot.assistant_home import AssistantHome
+from bot.assistant.cron.types import AssistantCronJob, AssistantCronJobState, validate_cron_job_id
+from bot.assistant.home import AssistantHome
 
 
 def _jobs_dir(home: AssistantHome) -> Path:

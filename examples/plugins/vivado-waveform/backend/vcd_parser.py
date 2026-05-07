@@ -94,6 +94,7 @@ class VcdIndex:
     timescale: str
     start_time: int | float
     end_time: int | float
+    segment_end_time: int | float
     display: dict[str, object]
     signals: tuple[VcdSignal, ...]
     series_by_signal: dict[str, VcdSeries]
@@ -134,6 +135,26 @@ def _is_visible_scope(scope: list[tuple[str, str]]) -> bool:
 def _append_change(changes: dict[str, _SeriesBuilder], id_code: str, current_time: int, value: str) -> None:
     builder = changes.setdefault(id_code, _SeriesBuilder.create())
     builder.append(current_time, value)
+
+
+def _infer_segment_end_time_raw(changes: dict[str, _SeriesBuilder], end_time_raw: int) -> int:
+    last_time = 0
+    min_positive_interval: int | None = None
+    for builder in changes.values():
+        raw_times = builder.raw_times
+        if not raw_times:
+            continue
+        last_time = max(last_time, int(raw_times[-1]))
+        previous = int(raw_times[0])
+        for raw_time in raw_times[1:]:
+            current = int(raw_time)
+            interval = current - previous
+            if interval > 0 and (min_positive_interval is None or interval < min_positive_interval):
+                min_positive_interval = interval
+            previous = current
+    if last_time <= 0 and min_positive_interval is None:
+        return end_time_raw if not any(builder.raw_times for builder in changes.values()) else end_time_raw + 1
+    return last_time + max(1, min_positive_interval or 1)
 
 
 def _build_zoom_levels(default_zoom: int | float) -> list[int | float]:
@@ -343,10 +364,12 @@ def build_vcd_index(path: Path) -> VcdIndex:
                     _append_change(changes, id_code, current_time, line[0].lower())
 
     end_time_raw = max((int(builder.raw_times[-1]) for builder in changes.values() if builder.raw_times), default=0)
+    segment_end_time_raw = _infer_segment_end_time_raw(changes, end_time_raw)
     duration_seconds = end_time_raw * source_timescale_amount * UNIT_SECONDS[source_timescale_unit]
     display_unit = _choose_display_unit(duration_seconds, source_timescale_unit)
     scale_factor = source_timescale_amount * UNIT_SECONDS[source_timescale_unit] / UNIT_SECONDS[display_unit]
     end_time = _scale_time(end_time_raw, scale_factor)
+    segment_end_time = _scale_time(segment_end_time_raw, scale_factor)
 
     signals: list[VcdSignal] = []
     series_by_signal: dict[str, VcdSeries] = {}
@@ -376,6 +399,7 @@ def build_vcd_index(path: Path) -> VcdIndex:
         timescale=f"1{display_unit}",
         start_time=0,
         end_time=end_time,
+        segment_end_time=segment_end_time,
         display=_display_options(end_time, min_scalar_interval),
         signals=tuple(signals),
         series_by_signal=series_by_signal,
@@ -422,7 +446,8 @@ def query_waveform_window(
         series = index.series_by_signal.get(signal_id)
         if series is None:
             continue
-        segments = _window_segments(series, start, end, index.end_time)
+        overall_end = index.segment_end_time if float(end) >= float(index.end_time) else index.end_time
+        segments = _window_segments(series, start, end, overall_end)
         segments = _compress_segments(
             segments,
             start_time=start,
@@ -452,7 +477,7 @@ def parse_vcd(path: Path, *, lod_enabled: bool = True) -> dict[str, Any]:
     full_window = query_waveform_window(
         index,
         start_time=summary["startTime"],
-        end_time=summary["endTime"],
+        end_time=index.segment_end_time,
         signal_ids=[signal["signalId"] for signal in summary["signals"]],
         pixel_width=MAX_PARSE_SEGMENTS_PER_TRACK,
         max_segments_per_track=MAX_PARSE_SEGMENTS_PER_TRACK,

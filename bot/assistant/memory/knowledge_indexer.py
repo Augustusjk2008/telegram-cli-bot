@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import AssistantHome
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 @dataclass(frozen=True)

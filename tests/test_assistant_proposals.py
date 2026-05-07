@@ -1,8 +1,8 @@
-from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant.home import bootstrap_assistant_home
 
 
 def test_create_and_approve_proposal(tmp_path):
-    from bot.assistant_proposals import create_proposal, list_proposals, set_proposal_status
+    from bot.assistant.proposals import create_proposal, list_proposals, set_proposal_status
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()

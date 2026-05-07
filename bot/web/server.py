@@ -172,7 +172,7 @@ from .api_service import (
     prepare_cluster_setup,
     verify_cluster_mcp_request,
 )
-from bot.assistant_admin_audit import list_admin_audit, summarize_request, write_admin_audit
+from bot.assistant.admin_audit import list_admin_audit, summarize_request, write_admin_audit
 from .git_service import (
     apply_git_stash,
     commit_git_changes,

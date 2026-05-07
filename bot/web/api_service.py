@@ -26,39 +26,39 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 from xml.etree import ElementTree
 
-from bot.assistant_cron_store import (
+from bot.assistant.cron.store import (
     delete_job_run_audit,
     delete_job_runtime_state,
     read_job_definition,
     read_job_run_audit,
 )
-from bot.assistant_dream import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
-from bot.assistant_dream_managed_context import collect_managed_bot_dream_context
-from bot.assistant_cron_types import AssistantCronJob
-from bot.assistant_diagnostics import get_perf_diagnostics
-from bot.assistant_compaction import (
+from bot.assistant.dream.service import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
+from bot.assistant.dream.managed_context import collect_managed_bot_dream_context
+from bot.assistant.cron.types import AssistantCronJob
+from bot.assistant.diagnostics import get_perf_diagnostics
+from bot.assistant.compaction import (
     finalize_compaction,
     is_compaction_prompt_active,
     list_pending_capture_ids,
     refresh_compaction_state,
     snapshot_managed_surface,
 )
-from bot.assistant_context import compile_assistant_prompt
-from bot.assistant_knowledge_indexer import index_knowledge_memories
-from bot.assistant_memory_eval import MemoryEvalCase, run_memory_eval
-from bot.assistant_memory_store import AssistantMemoryStore, MemorySearchRow
-from bot.assistant_memory_recall import recall_assistant_memories
-from bot.assistant_perf import activate_perf_capture, list_perf_records, new_stage_durations, write_perf_record
-from bot.assistant_working_memory_indexer import index_working_memories
-from bot.assistant_memory_writer import write_hot_path_memories
+from bot.assistant.context import compile_assistant_prompt
+from bot.assistant.memory.knowledge_indexer import index_knowledge_memories
+from bot.assistant.memory.eval import MemoryEvalCase, run_memory_eval
+from bot.assistant.memory.store import AssistantMemoryStore, MemorySearchRow
+from bot.assistant.memory.recall import recall_assistant_memories
+from bot.assistant.perf import activate_perf_capture, list_perf_records, new_stage_durations, write_perf_record
+from bot.assistant.memory.working_indexer import index_working_memories
+from bot.assistant.memory.writer import write_hot_path_memories
 from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
-from bot.assistant_docs import sync_managed_prompt_files
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_patch_generation import generate_pending_patch
-from bot.assistant_upgrade_diff import parse_patch_files, run_upgrade_dry_run
-from bot.assistant_proposals import get_proposal, list_proposals, set_proposal_status
-from bot.assistant_runtime import AssistantRunRequest
-from bot.assistant_upgrade import (
+from bot.assistant.docs import sync_managed_prompt_files
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.upgrade.patch_generation import generate_pending_patch
+from bot.assistant.upgrade.diff import parse_patch_files, run_upgrade_dry_run
+from bot.assistant.proposals import get_proposal, list_proposals, set_proposal_status
+from bot.assistant.runtime import AssistantRunRequest
+from bot.assistant.upgrade.service import (
     approve_pending_upgrade_patch,
     apply_approved_upgrade,
     read_upgrade_apply_failure,
@@ -70,8 +70,8 @@ from bot.assistant_upgrade import (
     write_upgrade_dry_run_result,
     write_upgrade_metadata,
 )
-from bot.assistant_upgrade_targets import list_upgrade_targets, resolve_upgrade_target
-from bot.assistant_state import (
+from bot.assistant.upgrade.targets import list_upgrade_targets, resolve_upgrade_target
+from bot.assistant.state import (
     attach_assistant_persist_hook,
     clear_assistant_runtime_state,
     record_assistant_capture,
@@ -79,9 +79,9 @@ from bot.assistant_state import (
 )
 from bot.agents import build_agent_prompt_input
 from bot.cli_params import CliParamsConfig, get_default_params, get_params_schema, normalize_cli_model_options
-from bot.cluster_config import normalize_bot_cluster_config
-from bot.cluster_runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
-from bot.cluster_setup import (
+from bot.cluster.config import normalize_bot_cluster_config
+from bot.cluster.runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
+from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
     build_cli_install_command,
     build_cli_remove_command,

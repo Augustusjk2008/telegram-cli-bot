@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 def test_memory_store_bootstraps_schema_and_supports_upsert_and_search(tmp_path: Path):

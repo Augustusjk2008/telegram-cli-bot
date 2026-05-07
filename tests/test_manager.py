@@ -310,7 +310,7 @@ class TestManagerLoadSave:
 
         with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
              patch.object(manager, "_start_profile", AsyncMock(return_value=None)), \
-             patch("bot.assistant_docs.resolve_assistant_managed_template_path", return_value=template_path):
+             patch("bot.assistant.docs.resolve_assistant_managed_template_path", return_value=template_path):
             await manager.add_bot("assistant1", "", "codex", "codex", str(assistant_dir), "assistant")
 
         agents_text = (assistant_dir / "AGENTS.md").read_text(encoding="utf-8")
@@ -390,7 +390,7 @@ class TestManagerLoadSave:
         template_path = temp_dir / "managed_prompt_template.md"
         template_path.write_text("assistant template", encoding="utf-8")
 
-        with patch("bot.assistant_docs.resolve_assistant_managed_template_path", return_value=template_path):
+        with patch("bot.assistant.docs.resolve_assistant_managed_template_path", return_value=template_path):
             manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
         assert "assistant1" in manager.managed_profiles

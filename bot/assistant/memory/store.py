@@ -9,8 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_perf import add_db_duration
+from bot.assistant.home import AssistantHome
+from bot.assistant.perf import add_db_duration
 
 _CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
 

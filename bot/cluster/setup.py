@@ -33,7 +33,7 @@ def _is_windows_launcher(path: Path) -> bool:
 
 def _write_launcher(path: Path, *, python_executable: Path, repo_root: Path, config_path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    script_path = repo_root / "bot" / "cluster_mcp_stdio.py"
+    script_path = repo_root / "bot" / "cluster" / "mcp_stdio.py"
     if _is_windows_launcher(path):
         content = "\n".join([
             "@echo off",

@@ -2,14 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from bot.assistant_docs import (
+from bot.assistant.docs import (
     compute_managed_prompt_hash,
     read_current_managed_prompt_hash,
     resolve_assistant_managed_template_path,
     sync_managed_prompt_files,
 )
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_compaction import save_compaction_state
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.compaction import save_compaction_state
 
 
 def test_resolve_assistant_managed_template_path_points_to_repo_asset():
@@ -250,8 +250,8 @@ def test_sync_managed_prompt_files_changes_managed_prompt_hash_for_compaction_on
 
     first = sync_managed_prompt_files(home, template_path=template_path)
 
-    from bot.assistant_state import record_assistant_capture
-    from bot.assistant_compaction import refresh_compaction_state
+    from bot.assistant.state import record_assistant_capture
+    from bot.assistant.compaction import refresh_compaction_state
 
     capture = record_assistant_capture(home, 1001, "assistant 是全局的，工作路径固定，不允许修改", "记住了")
     refresh_compaction_state(home, latest_capture=capture)

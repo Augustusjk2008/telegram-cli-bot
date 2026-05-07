@@ -6,7 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
-from bot.assistant_home import AssistantHome
+from bot.assistant.home import AssistantHome
 
 STATE_PATH = Path("state/compaction.json")
 CAPTURE_THRESHOLD = 6

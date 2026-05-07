@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from bot.assistant_dream_managed_context import collect_managed_bot_dream_context
+from bot.assistant.dream.managed_context import collect_managed_bot_dream_context
 from bot.manager import MultiBotManager
 from bot.models import BotProfile, UserSession
 

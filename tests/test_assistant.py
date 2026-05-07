@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from bot.assistant_cron_store import load_job_runtime_state
-from bot.assistant_cron_types import AssistantCronJob
-from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant.cron.store import load_job_runtime_state
+from bot.assistant.cron.types import AssistantCronJob
+from bot.assistant.home import bootstrap_assistant_home
 from bot.models import BotProfile
 
 
@@ -176,7 +176,7 @@ class TestMultiBotManagerWithAssistant:
 
 @pytest.mark.asyncio
 async def test_assistant_runtime_stop_cancels_active_background_run():
-    from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
+    from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -214,7 +214,7 @@ async def test_assistant_runtime_stop_cancels_active_background_run():
 
 @pytest.mark.asyncio
 async def test_assistant_runtime_snapshot_reports_active_and_queued_runs():
-    from bot.assistant_runtime import AssistantRunRequest, AssistantRuntimeCoordinator
+    from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 
     started = asyncio.Event()
     release = asyncio.Event()

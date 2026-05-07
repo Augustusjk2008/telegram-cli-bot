@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_recall import plan_memory_recall, recall_assistant_memories
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.recall import plan_memory_recall, recall_assistant_memories
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 def test_plan_memory_recall_classifies_preference_queries():

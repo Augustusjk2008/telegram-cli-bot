@@ -3,9 +3,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from bot.cluster_mcp_client import load_mcp_bridge_config
-from bot import cluster_mcp_stdio
-from bot.cluster_setup import (
+from bot.cluster.mcp_client import load_mcp_bridge_config
+from bot.cluster import mcp_stdio as cluster_mcp_stdio
+from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
     build_cli_install_command,
     build_cli_remove_command,
@@ -32,7 +32,9 @@ def test_prepare_cluster_mcp_launcher_writes_files(tmp_path: Path):
     assert result.token_path.exists()
     assert result.launcher_path.exists()
     launcher_text = result.launcher_path.read_text(encoding="utf-8")
-    assert "cluster_mcp_stdio.py" in launcher_text
+    assert "bot" in launcher_text
+    assert "cluster" in launcher_text
+    assert "mcp_stdio.py" in launcher_text
     assert "PYTHONUTF8=1" in launcher_text
     assert "PYTHONIOENCODING=utf-8" in launcher_text
 
@@ -99,7 +101,7 @@ def test_cluster_mcp_stdio_script_self_test_runs_as_file(tmp_path: Path):
         json.dumps({"bridge_url": "http://127.0.0.1:8765", "token_file": str(token)}),
         encoding="utf-8",
     )
-    script = Path(__file__).resolve().parents[1] / "bot" / "cluster_mcp_stdio.py"
+    script = Path(__file__).resolve().parents[1] / "bot" / "cluster" / "mcp_stdio.py"
 
     completed = subprocess.run(
         [sys.executable, str(script), "--config", str(config), "--self-test"],

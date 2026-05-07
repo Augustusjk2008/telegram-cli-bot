@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_cli import run_cli
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.cli import run_cli
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 def test_memory_cli_search_outputs_json(tmp_path: Path, capsys):

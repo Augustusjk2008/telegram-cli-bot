@@ -10,9 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_upgrade import ensure_upgrade_repo_clean, read_upgrade_metadata, write_upgrade_metadata
-from bot.assistant_upgrade_diff import parse_patch_files
+from bot.assistant.home import AssistantHome
+from bot.assistant.upgrade.service import ensure_upgrade_repo_clean, read_upgrade_metadata, write_upgrade_metadata
+from bot.assistant.upgrade.diff import parse_patch_files
 from bot.cli import build_cli_command, normalize_cli_type, resolve_cli_executable
 from bot.cli_params import CliParamsConfig
 from bot.platform.processes import build_hidden_process_kwargs

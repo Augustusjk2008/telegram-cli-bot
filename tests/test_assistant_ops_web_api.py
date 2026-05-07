@@ -11,10 +11,10 @@ from unittest.mock import patch
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
-from bot.assistant_proposals import create_proposal
-from bot.assistant_runtime import AssistantRunRequest
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.proposals import create_proposal
+from bot.assistant.runtime import AssistantRunRequest
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_service import (
@@ -289,7 +289,7 @@ async def test_admin_assistant_proposal_apply_failure_writes_last_error_audit(
                 ["git", "apply", "--check", str(patch_path)],
                 stderr="patch does not apply",
             )
-            with patch("bot.assistant_upgrade.subprocess.run", side_effect=error):
+            with patch("bot.assistant.upgrade.service.subprocess.run", side_effect=error):
                 resp = await client.post(
                     f"/api/admin/bots/assistant1/assistant/upgrades/{proposal['id']}/apply"
                 )
@@ -691,7 +691,7 @@ async def test_assistant_chat_patch_handoff_stream_updates_history_and_ops_detai
             "assistant_text": "已改 a.txt 并导出 diff",
         }
 
-    monkeypatch.setattr("bot.assistant_patch_generation._run_generator_cli", fake_generator_cli)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation._run_generator_cli", fake_generator_cli)
     await web_manager.start_background_services(
         result_executor=partial(execute_assistant_run_request, web_manager),
         stream_executor=partial(stream_assistant_run_request, web_manager),
@@ -1013,7 +1013,7 @@ async def test_admin_assistant_diagnostics_filters_and_summarizes(
     _add_assistant_profile(web_manager, workdir)
     home = bootstrap_assistant_home(workdir)
 
-    from bot.assistant_perf import write_perf_record
+    from bot.assistant.perf import write_perf_record
 
     write_perf_record(
         home,
@@ -1161,7 +1161,7 @@ async def test_admin_assistant_proposal_detail_has_files_and_dry_run(
         assert args[:3] == ["git", "apply", "--check"]
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("bot.assistant_upgrade_diff.subprocess.run", fake_run)
+    monkeypatch.setattr("bot.assistant.upgrade.diff.subprocess.run", fake_run)
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:

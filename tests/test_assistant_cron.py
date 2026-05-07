@@ -7,10 +7,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from bot.assistant_cron import AssistantCronService
-from bot.assistant_cron_store import append_job_run_audit, load_job_runtime_state, read_job_run_audit, save_job_runtime_state
-from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
-from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant.cron.service import AssistantCronService
+from bot.assistant.cron.store import append_job_run_audit, load_job_runtime_state, read_job_run_audit, save_job_runtime_state
+from bot.assistant.cron.types import AssistantCronJob, AssistantCronJobState
+from bot.assistant.home import bootstrap_assistant_home
 
 
 class _FakeAssistantRuntimeCoordinator:
@@ -86,7 +86,7 @@ def test_cron_job_rejects_unsafe_id_values():
 
 
 def test_cron_store_rejects_unsafe_runtime_ids(tmp_path: Path):
-    from bot.assistant_cron_store import (
+    from bot.assistant.cron.store import (
         append_job_run_audit,
         delete_job_definition,
         delete_job_run_audit,

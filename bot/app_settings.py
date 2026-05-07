@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from bot.cluster_config import (
+from bot.cluster.config import (
     AgentClusterConfig,
     BotClusterConfig,
     normalize_agent_cluster_config,

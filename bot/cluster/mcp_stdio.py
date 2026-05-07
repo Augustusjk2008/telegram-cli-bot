@@ -11,7 +11,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from bot.cluster_mcp_client import load_mcp_bridge_config, post_mcp_tool
+from bot.cluster.mcp_client import load_mcp_bridge_config, post_mcp_tool
 
 
 def _write(message: dict[str, Any]) -> None:

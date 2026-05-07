@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_memory_store import AssistantMemoryStore, MemorySearchRow
+from bot.assistant.home import AssistantHome
+from bot.assistant.memory.store import AssistantMemoryStore, MemorySearchRow
 
 
 @dataclass(frozen=True)

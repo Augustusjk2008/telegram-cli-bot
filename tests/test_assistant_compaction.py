@@ -1,6 +1,6 @@
 import json
 
-from bot.assistant_compaction import (
+from bot.assistant.compaction import (
     build_compaction_memory_block,
     finalize_compaction,
     load_compaction_state,
@@ -8,8 +8,8 @@ from bot.assistant_compaction import (
     list_pending_capture_ids,
     snapshot_managed_surface,
 )
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_state import record_assistant_capture
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.state import record_assistant_capture
 
 
 def test_refresh_compaction_state_marks_pending_after_six_new_captures(tmp_path):
@@ -136,7 +136,7 @@ def test_list_pending_capture_ids_returns_full_cursor_range(tmp_path):
     second = record_assistant_capture(home, 1001, "user 2", "assistant 2")
     save_state = load_compaction_state(home)
     save_state["cursor_capture_id"] = first["id"]
-    from bot.assistant_compaction import save_compaction_state
+    from bot.assistant.compaction import save_compaction_state
     save_compaction_state(home, save_state)
 
     assert list_pending_capture_ids(home) == [second["id"]]
@@ -149,7 +149,7 @@ def test_finalize_compaction_writes_real_consumed_capture_range_to_audit(tmp_pat
 
     old_capture = record_assistant_capture(home, 1001, "old", "done")
     state = load_compaction_state(home)
-    from bot.assistant_compaction import save_compaction_state
+    from bot.assistant.compaction import save_compaction_state
     save_compaction_state(
         home,
         {

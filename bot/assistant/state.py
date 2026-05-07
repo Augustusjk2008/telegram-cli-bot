@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from bot.assistant_home import AssistantHome
+from bot.assistant.home import AssistantHome
 from bot.session_store import LOCAL_HISTORY_BACKEND, migrate_local_history_snapshot
 
 logger = logging.getLogger(__name__)

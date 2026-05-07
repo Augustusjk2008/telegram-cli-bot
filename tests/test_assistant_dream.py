@@ -7,13 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot.assistant_dream import (
+from bot.assistant.dream.service import (
     AssistantDreamConfig,
     apply_dream_result,
     prepare_dream_prompt,
 )
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_recall import recall_assistant_memories
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.recall import recall_assistant_memories
 
 
 class _FakeHistoryService:

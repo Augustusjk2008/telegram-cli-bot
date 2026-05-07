@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_proposals import get_proposal
+from bot.assistant.home import AssistantHome
+from bot.assistant.proposals import get_proposal
 
 
 def _upgrade_state_dir(home: AssistantHome, state: str) -> Path:

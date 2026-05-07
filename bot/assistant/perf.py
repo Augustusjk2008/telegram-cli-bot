@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from bot.assistant_home import AssistantHome
+from bot.assistant.home import AssistantHome
 
 _STAGE_KEYS = ("sync_ms", "index_ms", "recall_ms", "cli_ms", "db_ms", "trace_ms", "plugin_ms")
 _ACTIVE_CAPTURE: ContextVar[dict[str, int] | None] = ContextVar("assistant_perf_capture", default=None)

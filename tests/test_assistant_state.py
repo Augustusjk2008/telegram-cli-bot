@@ -1,11 +1,11 @@
 import json
 
-from bot.assistant_home import bootstrap_assistant_home
+from bot.assistant.home import bootstrap_assistant_home
 from bot.models import UserSession
 
 
 def test_assistant_session_persist_writes_user_state_file(tmp_path):
-    from bot.assistant_state import attach_assistant_persist_hook
+    from bot.assistant.state import attach_assistant_persist_hook
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -34,7 +34,7 @@ def test_assistant_session_persist_writes_user_state_file(tmp_path):
 
 
 def test_clear_assistant_runtime_state_deletes_user_state_only(tmp_path):
-    from bot.assistant_state import clear_assistant_runtime_state, save_assistant_runtime_state
+    from bot.assistant.state import clear_assistant_runtime_state, save_assistant_runtime_state
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -51,7 +51,7 @@ def test_clear_assistant_runtime_state_deletes_user_state_only(tmp_path):
 
 
 def test_assistant_runtime_state_roundtrips_managed_prompt_hash_seen(tmp_path):
-    from bot.assistant_state import attach_assistant_persist_hook, restore_assistant_runtime_state
+    from bot.assistant.state import attach_assistant_persist_hook, restore_assistant_runtime_state
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -73,7 +73,7 @@ def test_assistant_runtime_state_roundtrips_managed_prompt_hash_seen(tmp_path):
 
 
 def test_assistant_runtime_state_cutover_drops_legacy_visible_history_fields(tmp_path):
-    from bot.assistant_state import restore_assistant_runtime_state, save_assistant_runtime_state
+    from bot.assistant.state import restore_assistant_runtime_state, save_assistant_runtime_state
 
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()

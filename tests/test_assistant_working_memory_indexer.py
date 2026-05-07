@@ -1,6 +1,6 @@
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_memory_recall import recall_assistant_memories
-from bot.assistant_working_memory_indexer import index_working_memories
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.memory.recall import recall_assistant_memories
+from bot.assistant.memory.working_indexer import index_working_memories
 
 
 def test_index_working_memories_makes_recent_summary_recallable(tmp_path):

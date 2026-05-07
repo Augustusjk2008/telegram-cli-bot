@@ -23,16 +23,16 @@ from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
 
 import bot.runtime_paths as runtime_paths
-from bot.assistant_context import AssistantPromptPayload
-from bot.assistant_cron import AssistantCronService
-from bot.assistant_cron_store import load_job_runtime_state, read_job_run_audit, save_job_runtime_state
-from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
-from bot.assistant_dream import AssistantDreamPreparedPrompt, AssistantDreamApplyResult
-from bot.assistant_dream_managed_context import ManagedBotDreamContext
-from bot.assistant_docs import ManagedPromptSyncResult
-from bot.assistant_home import bootstrap_assistant_home
-from bot.assistant_runtime import AssistantRunRequest
-from bot.assistant_state import save_assistant_runtime_state
+from bot.assistant.context import AssistantPromptPayload
+from bot.assistant.cron.service import AssistantCronService
+from bot.assistant.cron.store import load_job_runtime_state, read_job_run_audit, save_job_runtime_state
+from bot.assistant.cron.types import AssistantCronJob, AssistantCronJobState
+from bot.assistant.dream.service import AssistantDreamPreparedPrompt, AssistantDreamApplyResult
+from bot.assistant.dream.managed_context import ManagedBotDreamContext
+from bot.assistant.docs import ManagedPromptSyncResult
+from bot.assistant.home import bootstrap_assistant_home
+from bot.assistant.runtime import AssistantRunRequest
+from bot.assistant.state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import BotProfile, UserSession
@@ -100,7 +100,7 @@ from bot.web.git_service import (
     switch_git_branch,
 )
 from bot.web.native_history_locator import LocatedTranscript
-from bot.assistant_proposals import create_proposal
+from bot.assistant.proposals import create_proposal
 
 def _png_bytes(width: int, height: int) -> bytes:
     row = b"\x00" + (b"\x00\x00\x00" * width)
@@ -292,7 +292,7 @@ async def test_cluster_config_persists_model_tiers(web_manager: MultiBotManager)
 
 @pytest.mark.asyncio
 async def test_run_chat_cluster_finishes_runtime_run(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    from bot.cluster_config import BotClusterConfig
+    from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True)
@@ -328,7 +328,7 @@ def test_cluster_prompt_includes_run_id():
 
 @pytest.mark.asyncio
 async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    from bot.cluster_config import BotClusterConfig
+    from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(
@@ -377,7 +377,7 @@ async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBo
 
 @pytest.mark.asyncio
 async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    from bot.cluster_config import BotClusterConfig
+    from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=2)
@@ -421,7 +421,7 @@ async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: Multi
 
 @pytest.mark.asyncio
 async def test_cluster_ask_agent_runs_multiple_agents_concurrently(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    from bot.cluster_config import BotClusterConfig
+    from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=2)
@@ -463,7 +463,7 @@ async def test_cluster_ask_agent_runs_multiple_agents_concurrently(web_manager: 
 
 @pytest.mark.asyncio
 async def test_cluster_poll_agent_tasks_can_wait_for_completion(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    from bot.cluster_config import BotClusterConfig
+    from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=1)
@@ -498,7 +498,7 @@ async def test_cluster_poll_agent_tasks_can_wait_for_completion(web_manager: Mul
 
 
 def test_get_cluster_task_status_requires_owned_run(web_manager: MultiBotManager):
-    from bot.cluster_config import BotClusterConfig
+    from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True)

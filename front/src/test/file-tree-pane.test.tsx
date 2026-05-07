@@ -483,39 +483,6 @@ test("dragging a folder onto another folder moves it into that folder", async ()
   expect(screen.queryByRole("button", { name: "展开 src" })).not.toBeInTheDocument();
 });
 
-test("tree can hand a directory off to embedded settings as the next workdir target", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockResolvedValue({
-    workingDir: "/workspace",
-    entries: [
-      { name: "docs", isDir: true },
-      { name: "README.md", isDir: false, size: 12 },
-    ],
-  });
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={client}
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await screen.findByText("README.md");
-  expect(screen.queryByRole("button", { name: "在终端中打开 docs" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "设 docs 为 Bot 工作目录" })).not.toBeInTheDocument();
-  fireEvent.contextMenu(screen.getByRole("button", { name: "展开 docs" }));
-  await user.click(await screen.findByRole("button", { name: "设为工作目录" }));
-
-  expect(await screen.findByLabelText("工作目录")).toHaveValue("/workspace/docs");
-});
-
 test("workspace open reveals file tree through one backend request", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

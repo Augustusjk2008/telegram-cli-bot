@@ -3,8 +3,8 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_memory_store import AssistantMemoryStore
+from bot.assistant.home import AssistantHome
+from bot.assistant.memory.store import AssistantMemoryStore
 
 
 @dataclass(frozen=True)

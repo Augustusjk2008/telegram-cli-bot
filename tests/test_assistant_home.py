@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bot.assistant_home import ASSISTANT_SCHEMA_VERSION, bootstrap_assistant_home, load_assistant_home
+from bot.assistant.home import ASSISTANT_SCHEMA_VERSION, bootstrap_assistant_home, load_assistant_home
 
 
 def test_bootstrap_assistant_home_creates_manifest_and_required_directories(tmp_path: Path):

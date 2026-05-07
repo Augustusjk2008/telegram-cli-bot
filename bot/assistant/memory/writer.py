@@ -4,8 +4,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import AssistantHome
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 
 @dataclass(frozen=True)

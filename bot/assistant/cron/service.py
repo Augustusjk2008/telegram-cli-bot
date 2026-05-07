@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from bot.config import WEB_DEFAULT_USER_ID
-from bot.assistant_cron_store import (
+from bot.assistant.cron.store import (
     append_job_run_audit,
     delete_job_definition,
     list_job_definitions,
@@ -17,9 +17,9 @@ from bot.assistant_cron_store import (
     upsert_job_run_audit,
     save_job_runtime_state,
 )
-from bot.assistant_cron_types import AssistantCronJob, AssistantCronJobState
-from bot.assistant_home import AssistantHome
-from bot.assistant_runtime import AssistantRunRequest
+from bot.assistant.cron.types import AssistantCronJob, AssistantCronJobState
+from bot.assistant.home import AssistantHome
+from bot.assistant.runtime import AssistantRunRequest
 
 
 class AssistantCronService:

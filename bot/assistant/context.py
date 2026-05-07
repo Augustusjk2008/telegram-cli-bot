@@ -4,8 +4,8 @@ import re
 from dataclasses import dataclass
 import yaml
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_compaction import build_compaction_memory_block
+from bot.assistant.home import AssistantHome
+from bot.assistant.compaction import build_compaction_memory_block
 
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)")
 

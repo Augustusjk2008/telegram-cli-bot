@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
-from bot.assistant_home import AssistantHome
-from bot.assistant_memory_store import AssistantMemoryStore, MemoryRecordInput
+from bot.assistant.home import AssistantHome
+from bot.assistant.memory.store import AssistantMemoryStore, MemoryRecordInput
 
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)")
 _WORKING_KINDS = {
