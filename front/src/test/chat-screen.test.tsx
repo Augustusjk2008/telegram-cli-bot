@@ -1093,7 +1093,26 @@ test("chat screen hides agent switcher when there are no child agents", async ()
   await waitFor(() => {
     expect(listAgents).toHaveBeenCalledWith("main");
   });
-  expect(screen.queryByRole("button", { name: /当前 agent/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+});
+
+test("chat screen shows agent dropdown in non-cluster mode", async () => {
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+      { id: "tester", name: "测试专家", systemPrompt: "先跑测试", enabled: true, isMain: false },
+    ],
+  }));
+  const client = createClient({ listAgents });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const selector = await screen.findByRole("combobox", { name: "当前 agent" });
+  expect(selector).toHaveValue("main");
+  expect(screen.getByRole("option", { name: "主 agent" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "代码审查" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "测试专家" })).toBeInTheDocument();
 });
 
 test("cluster mode shows child agent mention chips", async () => {
@@ -1125,7 +1144,7 @@ test("cluster mode shows child agent mention chips", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByRole("button", { name: "@reviewer 代码审查" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /当前 agent/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
 });
 
 test("cluster mode loads main conversation when a child agent was previously active", async () => {
@@ -1207,7 +1226,7 @@ test("chat screen switches agent and scopes history requests", async () => {
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await user.click(await screen.findByRole("button", { name: /代码审查/ }));
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前 agent" }), "reviewer");
 
   await waitFor(() => {
     expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
@@ -1245,7 +1264,7 @@ test("chat screen reports active child agent activity when sending", async () =>
     />,
   );
 
-  await user.click(await screen.findByRole("button", { name: /代码审查/ }));
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前 agent" }), "reviewer");
   await user.type(screen.getByPlaceholderText("发给 代码审查..."), "检查实现");
   await user.click(screen.getByRole("button", { name: "发送" }));
 

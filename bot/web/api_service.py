@@ -4175,6 +4175,7 @@ async def _stream_cli_chat(
                     resume_session=attempt.resume_session,
                     json_output=(cli_type in ("codex", "claude")),
                     params_config=params_for_attempt,
+                    working_dir=session.working_dir,
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
@@ -4656,6 +4657,7 @@ async def run_cli_chat(
                     resume_session=attempt.resume_session,
                     json_output=(cli_type in ("codex", "claude")),
                     params_config=params_for_attempt,
+                    working_dir=session.working_dir,
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))

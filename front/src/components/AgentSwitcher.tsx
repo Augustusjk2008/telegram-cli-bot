@@ -1,4 +1,4 @@
-import { Check, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import type { AgentSummary } from "../services/types";
 
 type AgentSwitcherProps = {
@@ -13,44 +13,30 @@ export function AgentSwitcher({ agents, activeAgentId, disabled, onSelect }: Age
     return null;
   }
   const active = agents.find((item) => item.id === activeAgentId) || agents[0];
+  const shellClassName = disabled
+    ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] opacity-60"
+    : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)]";
 
   return (
-    <div className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-1">
-      {agents.slice(0, 4).map((agent) => {
-        const selected = agent.id === active.id;
-        return (
-          <button
-            key={agent.id}
-            type="button"
-            aria-label={`当前 agent：${agent.name}`}
-            aria-pressed={selected}
-            disabled={disabled || (!agent.enabled && !selected)}
-            onClick={() => onSelect(agent.id)}
-            className={selected
-              ? "inline-flex h-8 max-w-[9rem] items-center gap-1.5 rounded-md bg-[var(--accent)] px-2.5 text-sm font-medium text-white disabled:opacity-60"
-              : "inline-flex h-8 max-w-[9rem] items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)] disabled:opacity-50"}
-          >
-            {agent.isProcessing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-            <span className="truncate">{agent.name}</span>
-            {selected ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
-          </button>
-        );
-      })}
-      {agents.length > 4 ? (
+    <div className={shellClassName}>
+      {active.isProcessing ? (
+        <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-[var(--accent)]" />
+      ) : null}
+      <div className="relative">
         <select
-          aria-label="更多 agent"
+          aria-label="当前 agent"
           value={active.id}
           disabled={disabled}
           onChange={(event) => onSelect(event.target.value)}
-          className="h-8 max-w-[10rem] rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+          className="h-full min-w-[8rem] max-w-[14rem] appearance-none bg-transparent pr-6 text-sm font-medium text-[var(--text)] outline-none"
         >
           {agents.map((agent) => (
             <option key={agent.id} value={agent.id} disabled={!agent.enabled && agent.id !== active.id}>
-              {agent.name}
+              {agent.isProcessing ? "处理中 · " : ""}{agent.name}{!agent.enabled ? "（停用）" : ""}
             </option>
           ))}
         </select>
-      ) : null}
+      </div>
     </div>
   );
 }

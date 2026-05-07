@@ -176,6 +176,7 @@ def _run_generator_cli(worktree_path: Path, prompt: str, metadata: dict[str, Any
         user_text=prompt,
         env=env,
         params_config=CliParamsConfig(),
+        working_dir=str(worktree_path),
     )
     started_at = time.perf_counter()
     completed = subprocess.run(

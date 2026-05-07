@@ -6,6 +6,7 @@
 import copy
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -182,6 +183,24 @@ def normalize_cli_model_options(options: Optional[List[str]]) -> List[str]:
     return normalized
 
 
+def normalize_codex_project_path(working_dir: Optional[str]) -> Optional[str]:
+    """Return the path key format Codex stores under [projects]."""
+    value = str(working_dir or "").strip()
+    if not value:
+        return None
+    normalized = os.path.abspath(os.path.expanduser(value))
+    if os.name == "nt":
+        normalized = normalized.replace("/", "\\").lower()
+    return normalized
+
+
+def build_codex_project_trust_config_arg(working_dir: Optional[str]) -> Optional[str]:
+    project_path = normalize_codex_project_path(working_dir)
+    if not project_path:
+        return None
+    return f"projects.{json.dumps(project_path, ensure_ascii=False)}.trust_level=\"trusted\""
+
+
 def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
     """根据 schema 将外部输入转换为内部参数值。"""
     cli_type = cli_type.lower().strip()
@@ -262,6 +281,7 @@ def build_cli_args_from_config(
     user_text: str,
     session_id: Optional[str] = None,
     resume_session: bool = False,
+    working_dir: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     """根据配置构建 CLI 命令行参数
     
@@ -278,7 +298,7 @@ def build_cli_args_from_config(
         return _build_claude_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, resume_session)
 
     if cli_type == "codex":
-        return _build_codex_args(resolved_cli, params, user_text, is_cli_subcommand, session_id)
+        return _build_codex_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, working_dir)
 
     raise ValueError(f"不支持的 CLI 类型: {cli_type}")
 
@@ -345,6 +365,7 @@ def _build_codex_args(
     user_text: str,
     is_cli_subcommand: bool,
     session_id: Optional[str],
+    working_dir: Optional[str],
 ) -> Tuple[List[str], bool]:
     """构建 Codex CLI 参数"""
     
@@ -362,6 +383,10 @@ def _build_codex_args(
         exec_options.append("--dangerously-bypass-approvals-and-sandbox")
     if params.get("skip_git_check"):
         exec_options.append("--skip-git-repo-check")
+
+    trust_config_arg = build_codex_project_trust_config_arg(working_dir)
+    if trust_config_arg:
+        exec_options.extend(["-c", trust_config_arg])
     
     # reasoning_effort
     reasoning_effort = params.get("reasoning_effort")

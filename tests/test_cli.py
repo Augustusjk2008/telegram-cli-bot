@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from bot.cli import (
+    _build_codex_status_terminal_argv,
     _should_finish_codex_status_poll,
     build_cli_command,
     extract_codex_status,
@@ -187,6 +188,29 @@ class TestBuildCliCommand:
         )
 
         assert "--model" not in cmd
+
+    def test_codex_injects_project_trust_override_when_working_dir_is_known(self, temp_dir: Path):
+        env = {}
+
+        cmd, use_stdin = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env=env,
+            params_config=CliParamsConfig(),
+            working_dir=str(temp_dir),
+        )
+
+        config_values = [cmd[index + 1] for index, item in enumerate(cmd[:-1]) if item == "-c"]
+        assert any(value.startswith("projects.") and value.endswith('.trust_level="trusted"') for value in config_values)
+        assert use_stdin is True
+
+    def test_codex_status_terminal_injects_project_trust_override(self, temp_dir: Path):
+        cmd = _build_codex_status_terminal_argv("codex", str(temp_dir))
+
+        config_values = [cmd[index + 1] for index, item in enumerate(cmd[:-1]) if item == "-c"]
+        assert any(value.startswith("projects.") and value.endswith('.trust_level="trusted"') for value in config_values)
+        assert "--no-alt-screen" in cmd
 
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""

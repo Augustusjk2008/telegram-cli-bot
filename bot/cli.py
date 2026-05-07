@@ -10,7 +10,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
-from bot.cli_params import build_cli_args_from_config, CliParamsConfig
+from bot.cli_params import build_cli_args_from_config, build_codex_project_trust_config_arg, CliParamsConfig
 from bot.platform.executables import resolve_cli_executable as _resolve_cli_executable
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ def build_cli_command(
     session_id: Optional[str] = None,
     resume_session: bool = False,
     json_output: bool = False,
+    working_dir: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。
 
@@ -69,6 +70,7 @@ def build_cli_command(
         user_text=user_text,
         session_id=session_id,
         resume_session=resume_session,
+        working_dir=working_dir,
     )
     if kind == "claude":
         params = params_config.get_params("claude")
@@ -516,7 +518,13 @@ def extract_codex_status(raw_output: str) -> Dict[str, Optional[str]]:
     return {"status_line": None, "source": None, "cleaned_output": cleaned_output}
 
 
-def _build_codex_status_terminal_argv(resolved_cli: str) -> List[str]:
+def _build_codex_status_terminal_argv(resolved_cli: str, working_dir: Optional[str] = None) -> List[str]:
+    codex_args: List[str] = []
+    trust_config_arg = build_codex_project_trust_config_arg(working_dir)
+    if trust_config_arg:
+        codex_args.extend(["-c", trust_config_arg])
+    codex_args.append("--no-alt-screen")
+
     ext = os.path.splitext(resolved_cli)[1].lower()
     if ext == ".ps1":
         return [
@@ -526,11 +534,11 @@ def _build_codex_status_terminal_argv(resolved_cli: str) -> List[str]:
             "Bypass",
             "-File",
             resolved_cli,
-            "--no-alt-screen",
+            *codex_args,
         ]
     if ext in {".cmd", ".bat"}:
-        return ["cmd.exe", "/d", "/c", resolved_cli, "--no-alt-screen"]
-    return [resolved_cli, "--no-alt-screen"]
+        return ["cmd.exe", "/d", "/c", resolved_cli, *codex_args]
+    return [resolved_cli, *codex_args]
 
 
 def _should_finish_codex_status_poll(
@@ -564,7 +572,7 @@ def _run_codex_status_terminal(resolved_cli: str, working_dir: str, timeout: flo
     except ImportError as exc:
         raise RuntimeError("pty_unavailable") from exc
 
-    process = PtyProcess.spawn(_build_codex_status_terminal_argv(resolved_cli), cwd=working_dir)
+    process = PtyProcess.spawn(_build_codex_status_terminal_argv(resolved_cli, working_dir), cwd=working_dir)
     output_queue: "queue.Queue[str]" = queue.Queue()
 
     def _reader() -> None:
