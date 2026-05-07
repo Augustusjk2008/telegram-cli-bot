@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { clsx } from "clsx";
 import {
   CheckSquare,
@@ -40,7 +40,6 @@ import {
   detectBotIssues,
   draftFromBot,
   getBotManagerStatus,
-  getBusyAgentNames,
   getVisibleManagedBots,
   isBotOffline,
   isMainBot,
@@ -65,6 +64,12 @@ type Props = {
 
 type Mode = "inspect" | "create";
 type InspectorTab = "overview" | "config" | "agents";
+
+const LIST_MIN_WIDTH = 520;
+const RESIZER_WIDTH = 8;
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_WIDTH = 720;
+const INSPECTOR_DEFAULT_WIDTH = 400;
 
 const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
   { id: "all", label: "全部" },
@@ -114,6 +119,13 @@ function issueClassName(severity: "info" | "warning") {
   return severity === "warning"
     ? "border-amber-200 bg-amber-50 text-amber-700"
     : "border-[var(--border)] bg-[var(--surface-strong)] text-[var(--muted)]";
+}
+
+function clampInspectorWidth(width: number, availableWidth?: number) {
+  const maxBySpace = availableWidth
+    ? Math.max(INSPECTOR_MIN_WIDTH, availableWidth - LIST_MIN_WIDTH - RESIZER_WIDTH)
+    : INSPECTOR_MAX_WIDTH;
+  return Math.min(Math.min(INSPECTOR_MAX_WIDTH, maxBySpace), Math.max(INSPECTOR_MIN_WIDTH, Math.round(width)));
 }
 
 function bulkActionVerb(action: BulkAction) {
@@ -626,6 +638,8 @@ export function DesktopBotManagerScreen({
   const [selectedAliases, setSelectedAliases] = useState<Set<string>>(() => new Set());
   const [dirty, setDirty] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkActionResult | null>(null);
+  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
+  const layoutRef = useRef<HTMLDivElement>(null);
 
   const visibleBots = useMemo(() => getVisibleManagedBots({
     bots: manager.bots,
@@ -729,6 +743,33 @@ export function DesktopBotManagerScreen({
     const delta = event.key === "ArrowDown" ? 1 : -1;
     const nextBot = visibleBots[(currentIndex + delta + visibleBots.length) % visibleBots.length];
     focusBot(nextBot.alias);
+  }
+
+  function startPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const layout = layoutRef.current;
+    const rect = layout?.getBoundingClientRect();
+    const pointerId = event.pointerId;
+    event.currentTarget.setPointerCapture?.(pointerId);
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      if (!layout) {
+        return;
+      }
+      const nextRect = layout.getBoundingClientRect();
+      setInspectorWidth(clampInspectorWidth(nextRect.right - moveEvent.clientX, nextRect.width));
+    }
+
+    function handlePointerUp() {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    if (rect) {
+      setInspectorWidth(clampInspectorWidth(rect.right - event.clientX, rect.width));
+    }
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
   }
 
   async function runBulkAction(action: BulkAction) {
@@ -924,19 +965,25 @@ export function DesktopBotManagerScreen({
         <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">{manager.notice}</div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(680px,1fr)_400px]">
+      <div
+        ref={layoutRef}
+        className="grid min-h-0 flex-1"
+        style={{
+          gridTemplateColumns: `minmax(${LIST_MIN_WIDTH}px, 1fr) ${RESIZER_WIDTH}px ${inspectorWidth}px`,
+        }}
+      >
         <section
           data-testid="desktop-bot-manager-list"
           tabIndex={0}
           onKeyDown={handleTableKeyDown}
-          className="min-h-0 overflow-auto border-r border-[var(--border)] bg-[var(--surface)] focus:outline-none"
+          className="min-h-0 overflow-auto bg-[var(--surface)] focus:outline-none"
         >
           {manager.loading ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载中...</div>
           ) : visibleBots.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">没有匹配的智能体</div>
           ) : (
-            <table aria-label="智能体舰队" className="w-full min-w-[900px] table-fixed border-separate border-spacing-0 text-sm">
+            <table aria-label="智能体舰队" className="w-full min-w-[680px] table-fixed border-separate border-spacing-0 text-sm">
               <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-xs text-[var(--muted)]">
                 <tr className="border-b border-[var(--border)]">
                   <th className="w-10 px-3 py-2">
@@ -952,9 +999,7 @@ export function DesktopBotManagerScreen({
                   <th className="w-[220px] px-2 py-2">智能体</th>
                   <th className="w-[110px] px-2 py-2">状态</th>
                   <th className="w-[120px] px-2 py-2">类型</th>
-                  <th className="w-[170px] px-2 py-2">Agent</th>
                   <th className="px-2 py-2">工作目录</th>
-                  <th className="w-[120px] px-2 py-2">最近活动</th>
                   <th className="w-[96px] px-2 py-2 text-right">操作</th>
                 </tr>
               </thead>
@@ -964,7 +1009,6 @@ export function DesktopBotManagerScreen({
                   const current = bot.alias === currentAlias;
                   const checked = selectedAliases.has(bot.alias);
                   const issues = detectBotIssues(bot, manager.bots);
-                  const busyNames = getBusyAgentNames(bot);
 
                   return (
                     <tr
@@ -1022,14 +1066,8 @@ export function DesktopBotManagerScreen({
                         </div>
                       </td>
                       <td className="px-2 py-2 align-middle text-xs text-[var(--muted)]">{bot.botMode || "cli"} · {bot.cliType}</td>
-                      <td className="px-2 py-2 align-middle text-xs text-[var(--muted)]">
-                        {busyNames.length > 1 ? `${busyNames.length} 个 agent 处理中` : busyNames[0] || "空闲"}
-                      </td>
                       <td className="truncate px-2 py-2 align-middle font-mono text-xs text-[var(--muted)]" title={bot.workingDir}>
                         {bot.workingDir || "未设置"}
-                      </td>
-                      <td className="truncate px-2 py-2 align-middle text-xs text-[var(--muted)]" title={bot.lastActiveText}>
-                        {bot.lastActiveText}
                       </td>
                       <td className="px-2 py-2 align-middle">
                         <div className="flex justify-end gap-1">
@@ -1062,6 +1100,20 @@ export function DesktopBotManagerScreen({
             </table>
           )}
         </section>
+
+        <div
+          role="separator"
+          aria-label="调整智能体列表和详情宽度"
+          aria-orientation="vertical"
+          aria-valuemin={INSPECTOR_MIN_WIDTH}
+          aria-valuemax={INSPECTOR_MAX_WIDTH}
+          aria-valuenow={inspectorWidth}
+          title="拖动调整左右宽度"
+          onPointerDown={startPaneResize}
+          className="group flex cursor-col-resize items-stretch justify-center border-x border-[var(--border)] bg-[var(--bg)] hover:bg-[var(--surface-strong)]"
+        >
+          <span className="my-2 w-px bg-[var(--border)] group-hover:bg-[var(--accent)]" />
+        </div>
 
         <aside className="min-h-0 overflow-y-auto bg-[var(--bg)] p-4">
           {mode === "create" ? (

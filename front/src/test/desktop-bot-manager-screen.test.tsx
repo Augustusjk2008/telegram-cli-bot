@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
@@ -413,6 +413,7 @@ test("desktop bot manager shows fleet table, attention filter, and agent inspect
   expect(await screen.findByRole("table", { name: "智能体舰队" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "需处理" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Agent" })).toBeInTheDocument();
+  expect(screen.queryByRole("columnheader", { name: "最近活动" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "需处理" }));
   const table = screen.getByRole("table", { name: "智能体舰队" });
@@ -429,6 +430,35 @@ test("desktop bot manager shows fleet table, attention filter, and agent inspect
   expect(within(agentPanel as HTMLElement).getAllByText("主 agent").length).toBeGreaterThan(0);
   expect(within(agentPanel as HTMLElement).getByText("代码审查")).toBeInTheDocument();
   expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
+});
+
+test("desktop bot manager resizes list and inspector panes", async () => {
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  const layout = screen.getByTestId("desktop-bot-manager-list").parentElement as HTMLElement;
+  vi.spyOn(layout, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    width: 1000,
+    height: 600,
+    top: 0,
+    right: 1000,
+    bottom: 600,
+    left: 0,
+    toJSON: () => ({}),
+  });
+
+  const separator = screen.getByRole("separator", { name: "调整智能体列表和详情宽度" });
+  fireEvent.pointerDown(separator, { pointerId: 1, clientX: 600 });
+  fireEvent.pointerMove(window, { clientX: 520 });
+  fireEvent.pointerUp(window);
+
+  await waitFor(() => {
+    expect(layout.style.gridTemplateColumns).toBe("minmax(520px, 1fr) 8px 472px");
+  });
 });
 
 test("desktop bot manager agent tab loads real child agents and config tab embeds cli params", async () => {
