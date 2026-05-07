@@ -2065,6 +2065,90 @@ test("opens a file preview dialog when clicking a local absolute file link outsi
   expect(await screen.findByRole("dialog", { name: "C:/logs/app.log" })).toBeInTheDocument();
 });
 
+test("opens a file preview dialog when clicking a same-origin absolute file url", async () => {
+  const user = userEvent.setup();
+  const readSpy = vi.fn(async () => ({
+    content: "# 文档\n\n可预览",
+    mode: "head" as const,
+    fileSizeBytes: 128,
+    isFullContent: true,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [({
+      id: "assistant-1",
+      role: "assistant",
+      text: "[查看文档](http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1)",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    })],
+    readFile: readSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("link", { name: "查看文档" }));
+
+  expect(readSpy).toHaveBeenCalledWith("main", "docs/guide.md");
+  expect(await screen.findByRole("dialog", { name: "docs/guide.md" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "文档" })).toBeInTheDocument();
+});
+
+test("opens a file preview dialog when clicking a bare same-origin absolute file url", async () => {
+  const user = userEvent.setup();
+  const readSpy = vi.fn(async () => ({
+    content: "# 文档\n\n可预览",
+    mode: "head" as const,
+    fileSizeBytes: 128,
+    isFullContent: true,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [({
+      id: "assistant-1",
+      role: "assistant",
+      text: "http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    })],
+    readFile: readSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("link", { name: "http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1" }));
+
+  expect(readSpy).toHaveBeenCalledWith("main", "docs/guide.md");
+  expect(await screen.findByRole("dialog", { name: "docs/guide.md" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "文档" })).toBeInTheDocument();
+});
+
+test("opens a file preview dialog when clicking an abs-path file url", async () => {
+  const user = userEvent.setup();
+  const readSpy = vi.fn(async () => ({
+    content: "# 文档\n\n可预览",
+    mode: "head" as const,
+    fileSizeBytes: 128,
+    isFullContent: true,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [({
+      id: "assistant-1",
+      role: "assistant",
+      text: "[查看文档](/abs/path/C:/workspace/docs/guide.md:1)",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    })],
+    readFile: readSpy,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("link", { name: "查看文档" }));
+
+  expect(readSpy).toHaveBeenCalledWith("main", "docs/guide.md");
+  expect(await screen.findByRole("dialog", { name: "docs/guide.md" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "文档" })).toBeInTheDocument();
+});
+
 test("chat screen trusts the history streaming row instead of merging overview.runningReply", async () => {
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [

@@ -1,12 +1,41 @@
 const EXTERNAL_PROTOCOL_RE = /^(https?:|mailto:|tel:)/i;
 const BLOCKED_PROTOCOL_RE = /^(javascript|vbscript|data):/i;
+const ABS_PATH_PREFIX = "/abs/path/";
+
+function unwrapLocalFileUrl(href: string) {
+  if (href.startsWith(ABS_PATH_PREFIX)) {
+    return href.slice(ABS_PATH_PREFIX.length) || "";
+  }
+
+  if (!EXTERNAL_PROTOCOL_RE.test(href)) {
+    return href;
+  }
+
+  try {
+    const url = new URL(href);
+    const pathname = decodeURIComponent(url.pathname || "");
+
+    if (pathname.startsWith(ABS_PATH_PREFIX)) {
+      return pathname.slice(ABS_PATH_PREFIX.length) || "";
+    }
+
+    if (/^\/[A-Za-z]:\//.test(pathname)) {
+      return pathname;
+    }
+  } catch {
+    return href;
+  }
+
+  return href;
+}
 
 function cleanHref(href: string) {
   const decoded = decodeURIComponent((href || "").trim());
   if (!decoded) {
     return "";
   }
-  return decoded
+  const unwrapped = unwrapLocalFileUrl(decoded);
+  return unwrapped
     .replace(/^file:\/\/\/?/i, "")
     .split("#")[0]
     .split("?")[0]

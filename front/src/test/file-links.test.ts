@@ -17,6 +17,18 @@ test("strips trailing line numbers from file links before preview", () => {
   ).toBe("C:/logs/app.log");
 });
 
+test("resolves same-origin absolute file urls for preview", () => {
+  expect(
+    resolvePreviewFilePath("http://127.0.0.1:8765/abs/path/C:/workspace/project/docs/guide.md:1", "C:/workspace/project"),
+  ).toBe("docs/guide.md");
+});
+
+test("resolves abs-path file urls for preview", () => {
+  expect(
+    resolvePreviewFilePath("/abs/path/C:/workspace/project/docs/guide.md:1", "C:/workspace/project"),
+  ).toBe("docs/guide.md");
+});
+
 test("resolves markdown image paths relative to the markdown file", () => {
   expect(resolveMarkdownImagePath("assets/diagram.png", "docs/README.md")).toBe("docs/assets/diagram.png");
   expect(resolveMarkdownImagePath("../shared/logo.svg", "docs/guides/intro.md")).toBe("docs/guides/../shared/logo.svg");

@@ -69,6 +69,54 @@ test("routes local file links through onFileLinkClick", async () => {
   expect(onFileLinkClick).toHaveBeenCalledWith("C:/workspace/README.md");
 });
 
+test("routes same-origin absolute file urls through onFileLinkClick", async () => {
+  const user = userEvent.setup();
+  const onFileLinkClick = vi.fn();
+
+  render(
+    <MarkdownPreview
+      content="[查看文档](http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1)"
+      onFileLinkClick={onFileLinkClick}
+    />,
+  );
+
+  await user.click(screen.getByRole("link", { name: "查看文档" }));
+
+  expect(onFileLinkClick).toHaveBeenCalledWith("http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1");
+});
+
+test("routes bare same-origin absolute file urls through onFileLinkClick", async () => {
+  const user = userEvent.setup();
+  const onFileLinkClick = vi.fn();
+
+  render(
+    <MarkdownPreview
+      content="http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1"
+      onFileLinkClick={onFileLinkClick}
+    />,
+  );
+
+  await user.click(screen.getByRole("link", { name: "http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1" }));
+
+  expect(onFileLinkClick).toHaveBeenCalledWith("http://127.0.0.1:8765/abs/path/C:/workspace/docs/guide.md:1");
+});
+
+test("routes abs-path file urls through onFileLinkClick", async () => {
+  const user = userEvent.setup();
+  const onFileLinkClick = vi.fn();
+
+  render(
+    <MarkdownPreview
+      content="[查看文档](/abs/path/C:/workspace/docs/guide.md:1)"
+      onFileLinkClick={onFileLinkClick}
+    />,
+  );
+
+  await user.click(screen.getByRole("link", { name: "查看文档" }));
+
+  expect(onFileLinkClick).toHaveBeenCalledWith("/abs/path/C:/workspace/docs/guide.md:1");
+});
+
 test("keeps original href on local file links", () => {
   render(
     <MarkdownPreview
