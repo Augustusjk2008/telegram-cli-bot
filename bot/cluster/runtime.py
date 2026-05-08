@@ -107,6 +107,22 @@ class ClusterRuntime:
     def get_run(self, run_id: str) -> ClusterRun | None:
         return self._runs.get(str(run_id or "").strip())
 
+    def find_active_run(self, bot_alias: str, user_id: int) -> ClusterRun | None:
+        self.cleanup_finished_runs()
+        alias = str(bot_alias or "").strip()
+        active_runs = [
+            run
+            for run in self._runs.values()
+            if run.bot_alias == alias
+            and run.user_id == user_id
+            and (
+                run.status == "running"
+                or any(task.status in {"queued", "running"} for task in run.tasks.values())
+            )
+        ]
+        active_runs.sort(key=lambda item: item.updated_at or item.started_at, reverse=True)
+        return active_runs[0] if active_runs else None
+
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
         run = self._runs[str(run_id)]
         item = {"created_at": self._now_iso(), **dict(event)}

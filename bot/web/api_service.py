@@ -765,11 +765,21 @@ def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[d
 def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     bot_id = resolve_session_bot_id(manager, alias)
+    active_cluster_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
     return {
         "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
         "agents": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id)),
         "active_agent_id": session.agent_id,
+        "active_cluster_run": (
+            {
+                "run_id": active_cluster_run.run_id,
+                "status": active_cluster_run.status,
+                "tasks": _CLUSTER_RUNTIME.build_task_status(active_cluster_run.run_id, include_output=True),
+            }
+            if active_cluster_run is not None
+            else None
+        ),
     }
 
 

@@ -173,6 +173,12 @@ export type ClusterTaskStatus = {
   pendingCount: number;
 };
 
+export type ActiveClusterRun = {
+  runId: string;
+  status: string;
+  tasks?: ClusterTaskStatus;
+};
+
 export type ClusterSetupPrepareResult = {
   serverName: string;
   launcherPath: string;
@@ -338,6 +344,7 @@ export type BotOverview = {
   assistantRuntime?: AssistantRuntimeSnapshot | null;
   agents?: AgentSummary[];
   cluster?: BotClusterConfig;
+  activeClusterRun?: ActiveClusterRun | null;
   activeAgentId?: string;
   busyAgentIds?: string[];
   busyAgentNames?: string[];

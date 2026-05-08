@@ -292,6 +292,12 @@ type RawClusterTaskStatus = {
   pending_count?: number;
 };
 
+type RawActiveClusterRun = {
+  run_id?: string;
+  status?: string;
+  tasks?: RawClusterTaskStatus;
+};
+
 type RawClusterTemplateSummary = {
   id?: string;
   name?: string;
@@ -1087,6 +1093,19 @@ function mapClusterTaskStatus(raw: unknown): ClusterTaskStatus {
     completedCount: Number(value.completed_count || 0),
     failedCount: Number(value.failed_count || 0),
     pendingCount: Number(value.pending_count || 0),
+  };
+}
+
+function mapActiveClusterRun(raw: unknown) {
+  const value = raw && typeof raw === "object" ? raw as RawActiveClusterRun : null;
+  const runId = String(value?.run_id || "");
+  if (!runId) {
+    return null;
+  }
+  return {
+    runId,
+    status: String(value?.status || ""),
+    tasks: value?.tasks ? mapClusterTaskStatus(value.tasks) : undefined,
   };
 }
 
@@ -2546,6 +2565,7 @@ export class RealWebBotClient implements WebBotClient {
       agents?: RawAgentSummary[];
       active_agent_id?: string;
       busy_agent_ids?: string[];
+      active_cluster_run?: RawActiveClusterRun | null;
     }>(`/api/bots/${encodeURIComponent(botAlias)}${suffix}`);
 
     const summary = mapBotSummary(data.bot, data.session.is_processing);
@@ -2558,6 +2578,7 @@ export class RealWebBotClient implements WebBotClient {
       runningReply: mapRunningReply(data.session.running_reply),
       assistantRuntime: mapAssistantRuntimeSnapshot(data.bot.assistant_runtime),
       agents: (data.agents || []).map(mapAgentSummary),
+      activeClusterRun: mapActiveClusterRun(data.active_cluster_run),
       activeAgentId: String(data.active_agent_id || options.agentId || "main"),
       busyAgentIds: summary.busyAgentIds || [],
       busyAgentNames: summary.busyAgentNames || [],

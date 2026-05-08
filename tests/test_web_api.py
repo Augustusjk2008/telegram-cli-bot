@@ -672,6 +672,38 @@ def test_get_cluster_task_status_requires_owned_run(web_manager: MultiBotManager
     assert exc_info.value.status == 404
 
 
+def test_overview_includes_active_cluster_run_with_pending_child_task(web_manager: MultiBotManager):
+    from bot.cluster.config import BotClusterConfig
+    from bot.cluster.runtime import AskAgentRequest
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=8101, profile=profile)
+    )
+    task = api_service._CLUSTER_RUNTIME.create_agent_task(
+        run.run_id,
+        AskAgentRequest(
+            agent_id="tester",
+            message="跑测试",
+            model_tier="medium",
+            timeout_seconds=600,
+            allow_write=False,
+        ),
+    )
+    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
+
+    overview = get_overview(web_manager, "main", 8101)
+
+    assert overview["active_cluster_run"]["run_id"] == run.run_id
+    assert overview["active_cluster_run"]["tasks"]["pending_count"] == 1
+    assert overview["active_cluster_run"]["tasks"]["tasks"][0]["agent_id"] == "tester"
+    assert get_overview(web_manager, "main", 8102)["active_cluster_run"] is None
+
+    api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
+    assert get_overview(web_manager, "main", 8101)["active_cluster_run"] is None
+
+
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):
     subdir = temp_dir / "workspace"
     subdir.mkdir()

@@ -256,6 +256,7 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
 
 afterEach(() => {
   vi.useRealTimers();
+  window.localStorage.clear();
 });
 
 test("shows model selector in chat action bar and saves selected model", async () => {
@@ -547,7 +548,7 @@ test("keeps history streaming rows active while overview is processing", async (
   expect(screen.getByText("正在输出")).toBeInTheDocument();
 });
 
-test("shows cluster task output after main reply finishes", async () => {
+test("shows cluster task summary after main reply finishes", async () => {
   let pollCount = 0;
   const taskStatuses: ClusterTaskStatus[] = [
     {
@@ -638,10 +639,93 @@ test("shows cluster task output after main reply finishes", async () => {
   await user.type(screen.getByPlaceholderText("@ 可指定智能体集群"), "跑测试");
   await user.click(screen.getByRole("button", { name: "发送" }));
 
-  expect(await screen.findByText("智能体集群任务")).toBeInTheDocument();
+  const panelTitle = await screen.findByText("智能体集群任务");
+  const panel = panelTitle.closest("section") as HTMLElement | null;
+  expect(panel).not.toBeNull();
   expect(await screen.findByText("已完成")).toBeInTheDocument();
-  expect(await screen.findByText("3 passed")).toBeInTheDocument();
+  expect(screen.queryByText("3 passed")).not.toBeInTheDocument();
+  expect(within(panel as HTMLElement).getByText("@tester")).toBeInTheDocument();
+  expect(within(panel as HTMLElement).getByText("测试专家")).toBeInTheDocument();
   await waitFor(() => expect(client.getClusterTaskStatus).toHaveBeenCalledWith("main", "clr_1"));
+});
+
+test("restores active cluster tasks from bot overview", async () => {
+  const getClusterTaskStatus = vi.fn(async (): Promise<ClusterTaskStatus> => ({
+    tasks: [
+      {
+        taskId: "clt_restore",
+        agentId: "tester",
+        status: "running",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-05-06T10:00:00+08:00",
+        startedAt: "2026-05-06T10:00:01+08:00",
+        completedAt: "",
+        error: "",
+      },
+    ],
+    queuedCount: 0,
+    runningCount: 1,
+    completedCount: 0,
+    failedCount: 0,
+    pendingCount: 1,
+  }));
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "", medium: "", high: "" },
+      },
+      activeClusterRun: {
+        runId: "clr_restore",
+        status: "completed",
+        tasks: {
+          tasks: [
+            {
+              taskId: "clt_restore",
+              agentId: "tester",
+              status: "running",
+              modelTier: "medium",
+              allowWrite: false,
+              createdAt: "2026-05-06T10:00:00+08:00",
+              startedAt: "2026-05-06T10:00:01+08:00",
+              completedAt: "",
+              error: "",
+            },
+          ],
+          queuedCount: 0,
+          runningCount: 1,
+          completedCount: 0,
+          failedCount: 0,
+          pendingCount: 1,
+        },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    getClusterTaskStatus,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const panelTitle = await screen.findByText("智能体集群任务");
+  const panel = panelTitle.closest("section") as HTMLElement | null;
+  expect(panel).not.toBeNull();
+  expect(within(panel as HTMLElement).getByText("@tester")).toBeInTheDocument();
+  expect(within(panel as HTMLElement).getByText("测试专家")).toBeInTheDocument();
+  expect(screen.getByText("运行中")).toBeInTheDocument();
+  await waitFor(() => expect(getClusterTaskStatus).toHaveBeenCalledWith("main", "clr_restore"));
 });
 
 test("renders empty tool call payloads with readable fallback instead of raw empty json", async () => {
@@ -1144,10 +1228,10 @@ test("cluster mode shows child agent mention chips", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByRole("button", { name: "@reviewer 代码审查" })).toBeInTheDocument();
-  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+  expect(await screen.findByRole("combobox", { name: "当前 agent" })).toHaveValue("main");
 });
 
-test("cluster mode loads main conversation when a child agent was previously active", async () => {
+test("cluster mode keeps a previously active child agent as read-only", async () => {
   window.localStorage.setItem("tcb.activeAgent.main", "reviewer");
   const listAgents = vi.fn(async () => ({
     items: [
@@ -1192,10 +1276,70 @@ test("cluster mode loads main conversation when a child agent was previously act
 
   render(<ChatScreen botAlias="main" client={client} />);
 
+  expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
+  expect(screen.queryByText("main-history")).not.toBeInTheDocument();
+  expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
+  expect(await screen.findByRole("combobox", { name: "当前 agent" })).toHaveValue("reviewer");
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+  expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("reviewer");
+});
+
+test("cluster mode can switch to a child agent for read-only history", async () => {
+  const user = userEvent.setup();
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+    ],
+  }));
+  const listMessages = vi.fn(async (_botAlias: string, options?: { agentId?: string }): Promise<ChatMessage[]> => {
+    if (options?.agentId === "reviewer") {
+      return [{
+        id: "reviewer-1",
+        role: "assistant",
+        text: "reviewer-history",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      }];
+    }
+    return [{
+      id: "main-1",
+      role: "assistant",
+      text: "main-history",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }];
+  });
+  const getBotOverview = vi.fn(async (): Promise<BotOverview> => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: false,
+    cluster: {
+      enabled: true,
+      writePolicy: "selected_agents",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 2,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+    },
+  }));
+  const client = createClient({ listAgents, listMessages, getBotOverview });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
   expect(await screen.findByText("main-history")).toBeInTheDocument();
-  expect(screen.queryByText("reviewer-history")).not.toBeInTheDocument();
-  expect(listMessages).toHaveBeenLastCalledWith("main");
-  expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("main");
+
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前 agent" }), "reviewer");
+
+  await waitFor(() => {
+    expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
+  });
+  expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
 });
 
 test("chat screen switches agent and scopes history requests", async () => {

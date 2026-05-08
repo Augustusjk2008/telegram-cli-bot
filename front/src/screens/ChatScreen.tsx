@@ -550,10 +550,11 @@ function clusterTaskStatusClass(task: ClusterAgentTask) {
   return "bg-slate-100 text-slate-700";
 }
 
-function ClusterTaskPanel({ status }: { status: ClusterTaskStatus }) {
+function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agents: AgentSummary[] }) {
   if (status.tasks.length === 0) {
     return null;
   }
+  const agentNameMap = new Map(agents.map((agent) => [agent.id, agent.name || agent.id]));
   return (
     <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-950">
       <div className="flex flex-wrap items-center gap-2">
@@ -568,25 +569,27 @@ function ClusterTaskPanel({ status }: { status: ClusterTaskStatus }) {
         )}
       </div>
       <div className="mt-3 space-y-2">
-        {status.tasks.map((task) => (
-          <div key={task.taskId} className="rounded-md border border-emerald-100 bg-white px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">@{task.agentId || "agent"}</span>
-              <span className={`rounded-full px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
-                {clusterTaskStatusText(task)}
-              </span>
-              {task.modelTier ? <span className="text-xs text-emerald-800">{task.modelTier}</span> : null}
+        {status.tasks.map((task) => {
+          const agentId = task.agentId || "agent";
+          const agentName = agentNameMap.get(agentId) || "";
+          return (
+            <div key={task.taskId} className="rounded-md border border-emerald-100 bg-white px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">@{agentId}</span>
+                {agentName && agentName !== agentId ? (
+                  <span className="text-xs text-emerald-800">{agentName}</span>
+                ) : null}
+                <span className={`rounded-full px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
+                  {clusterTaskStatusText(task)}
+                </span>
+                {task.modelTier ? <span className="text-xs text-emerald-800">{task.modelTier}</span> : null}
+              </div>
+              {task.error ? (
+                <p className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700">{task.error}</p>
+              ) : null}
             </div>
-            {task.output ? (
-              <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-50">
-                {task.output}
-              </pre>
-            ) : null}
-            {task.error ? (
-              <p className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700">{task.error}</p>
-            ) : null}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
@@ -995,6 +998,22 @@ export function ChatScreen({
     }
   }, [botAlias, client, stopClusterTaskPoll]);
 
+  const restoreClusterRunFromOverview = useCallback((overview: BotOverview) => {
+    const activeRun = overview.activeClusterRun;
+    if (!activeRun?.runId || activeAgentIdRef.current !== "main") {
+      return;
+    }
+    if (clusterRunIdRef.current !== activeRun.runId) {
+      clusterRunIdRef.current = activeRun.runId;
+      setClusterRunId(activeRun.runId);
+    }
+    if (activeRun.tasks) {
+      setClusterTaskStatus(activeRun.tasks);
+    }
+    setClusterTaskError("");
+    void pollClusterTasks();
+  }, [pollClusterTasks]);
+
   const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_ASSISTANT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
     assistantPollTimerRef.current = window.setTimeout(() => {
@@ -1029,6 +1048,7 @@ export function ChatScreen({
 
           setBotOverview(overview);
           setWorkingDir(overview.workingDir || "");
+          restoreClusterRunFromOverview(overview);
           const runtimePendingCount = overview.assistantRuntime?.pendingCount || 0;
 
           if (overview.isProcessing || runtimePendingCount > 0) {
@@ -1057,7 +1077,7 @@ export function ChatScreen({
         }
       })();
     }, delayMs);
-  }, [applyHistoryView, botAlias, client, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, stopSseRecoveryWatch]);
 
   const markSseActivity = useCallback(() => {
     sseLastActivityAtRef.current = Date.now();
@@ -1081,6 +1101,7 @@ export function ChatScreen({
 
       setBotOverview(overview);
       setWorkingDir(overview.workingDir || "");
+      restoreClusterRunFromOverview(overview);
       const previousItems = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
       const previousCount = countPersistedHistoryItems(itemsRef.current);
       const hasStreamingAssistant = hasPersistedStreamingAssistant(previousItems);
@@ -1212,9 +1233,7 @@ export function ChatScreen({
       .then(async ([agentData, initialMessages, initialOverview]) => {
         if (cancelled) return;
         const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
-        const nextAgentId = initialOverview.cluster?.enabled
-          ? "main"
-          : (nextAgents.some((agent) => agent.id === requestedAgentId) ? requestedAgentId : "main");
+        const nextAgentId = nextAgents.some((agent) => agent.id === requestedAgentId) ? requestedAgentId : "main";
         let messages = initialMessages;
         let overview = initialOverview;
         if (nextAgentId !== requestedAgentId) {
@@ -1232,6 +1251,7 @@ export function ChatScreen({
         setAgents(nextAgents);
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
+        restoreClusterRunFromOverview(overview);
         applyHistoryView(messages, overview, []);
         setLoading(false);
         if (isVisibleRef.current && (overview.isProcessing || overview.botMode === "assistant")) {
@@ -1253,7 +1273,16 @@ export function ChatScreen({
       stopAssistantPoll();
       stopSseRecoveryWatch();
     };
-  }, [applyHistoryView, botAlias, client, isVisible, scheduleAssistantPoll, stopAssistantPoll, stopSseRecoveryWatch]);
+  }, [
+    applyHistoryView,
+    botAlias,
+    client,
+    isVisible,
+    restoreClusterRunFromOverview,
+    scheduleAssistantPoll,
+    stopAssistantPoll,
+    stopSseRecoveryWatch,
+  ]);
 
   useEffect(() => {
     const handleAssistantCronRunEnqueued = (event: Event) => {
@@ -1585,6 +1614,10 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    if (botOverview?.cluster?.enabled && activeAgentIdRef.current !== "main") {
+      setError("子 agent 仅支持查看历史，请切回主 agent 后继续");
+      return;
+    }
     setConversationLoading(true);
     setError("");
     try {
@@ -1643,6 +1676,7 @@ export function ChatScreen({
         }
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
+        restoreClusterRunFromOverview(overview);
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
         }
@@ -1656,14 +1690,7 @@ export function ChatScreen({
         setError(err.message || "切换 agent 失败");
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, client, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
-
-  useEffect(() => {
-    if (!botOverview?.cluster?.enabled || activeAgentIdRef.current === "main") {
-      return;
-    }
-    handleSelectAgent("main");
-  }, [botOverview?.cluster?.enabled, handleSelectAgent]);
+  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -1912,6 +1939,10 @@ export function ChatScreen({
 
   const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
+    if (clusterMode && activeAgentIdRef.current !== "main") {
+      setError("子 agent 仅支持查看历史，请切回主 agent 后继续");
+      return;
+    }
     const clusterSend = clusterMode || mentions.length > 0;
     await sendMessageInternal(text, {
       attachments: pendingAttachments,
@@ -2017,8 +2048,9 @@ export function ChatScreen({
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
+  const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
-  const showAgentSwitcher = agents.length > 1 && !clusterMode;
+  const showAgentSwitcher = agents.length > 1;
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
@@ -2105,7 +2137,7 @@ export function ChatScreen({
             <button
               type="button"
               onClick={() => void handleNewConversation()}
-              disabled={conversationLoading || isStreaming}
+              disabled={conversationLoading || isStreaming || activeClusterChildReadOnly}
               className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
             >
               <Plus className="h-4 w-4" />
@@ -2187,7 +2219,10 @@ export function ChatScreen({
             );
           })}
           {clusterTaskStatus ? (
-            <ClusterTaskPanel status={clusterTaskStatus} />
+            <ClusterTaskPanel
+              status={clusterTaskStatus}
+              agents={botOverview?.agents && botOverview.agents.length > 0 ? botOverview.agents : agents}
+            />
           ) : null}
           {clusterTaskError ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -2221,7 +2256,7 @@ export function ChatScreen({
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
-      {!readOnly ? (
+      {!readOnly && !activeClusterChildReadOnly ? (
         <ChatComposer
           onSend={handleSend}
           onAttachFiles={handleAttachFiles}
