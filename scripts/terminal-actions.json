@@ -50,6 +50,16 @@
       "cwd": ".",
       "confirm": false,
       "enabled": true
+    },
+    {
+      "id": "Publish",
+      "label": "发布",
+      "icon": "Terminal",
+      "windowsCommand": "$next = ([version]((Get-Content VERSION -Raw).Trim())); $v = \"{0}.{1}.{2}\" -f $next.Major, $next.Minor, ($next.Build + 1); pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version $v -RunChecks -AutoConfirmDirtyWorktree -SkipWindowsPortable",
+      "linuxCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }

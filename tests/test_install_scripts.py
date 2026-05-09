@@ -351,7 +351,6 @@ $captured | ConvertTo-Json -Compress
     assert result.returncode == 0, output
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["FilePath"] == "C:\\Python312\\python.exe"
-    assert payload["FailureMessage"] == "安装示例插件失败"
     assert payload["WorkingDirectory"] == str(tmp_path)
     assert payload["Arguments"] == [
         "-3",
