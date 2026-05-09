@@ -25,6 +25,23 @@ def test_removed_legacy_cli_types_literal_is_explicit():
     assert "kimi" in REMOVED_LEGACY_CLI_TYPES
 
 
+def test_profile_store_save_matches_manager_private_wrapper(temp_dir: Path):
+    from bot.profile_store import save_managed_profiles
+
+    storage = temp_dir / "bots.json"
+    profile = BotProfile(alias="main", token="main_tok")
+    manager = MultiBotManager(main_profile=profile, storage_file=str(storage))
+    manager.managed_profiles["sub1"] = BotProfile(alias="sub1", cli_type="claude", cli_path="claude")
+
+    manager._save_profiles()
+    manager_payload = json.loads(storage.read_text(encoding="utf-8"))
+
+    save_managed_profiles(storage, manager.managed_profiles)
+    helper_payload = json.loads(storage.read_text(encoding="utf-8"))
+
+    assert helper_payload == manager_payload
+
+
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 

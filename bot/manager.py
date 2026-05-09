@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -16,13 +15,20 @@ from bot.assistant.docs import sync_managed_prompt_files
 from bot.assistant.home import bootstrap_assistant_home
 from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
-from bot.cli_params import CliParamsConfig, coerce_param_value
+from bot.cli_params import coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import AgentProfile, BotProfile
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
+from bot.profile_store import (
+    apply_persisted_avatar_names,
+    apply_persisted_main_profile,
+    load_managed_profiles,
+    persist_main_profile,
+    save_managed_profiles,
+)
 from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
@@ -62,139 +68,25 @@ class MultiBotManager:
         sync_managed_prompt_files(home)
 
     def _load_profiles(self) -> None:
-        self.managed_profiles = {}
-        if not self.storage_file.exists():
-            return
-
-        try:
-            raw = self.storage_file.read_text(encoding="utf-8")
-            data = json.loads(raw)
-        except Exception as exc:
-            logger.error("读取托管 Bot 配置失败: %s", exc)
-            return
-
-        items = data.get("bots", []) if isinstance(data, dict) else data
-        if not isinstance(items, list):
-            logger.warning("托管 Bot 配置格式无效，已忽略")
-            return
-
-        migrated_legacy_mode = False
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-
-            alias = str(item.get("alias", "")).strip().lower()
-            token = str(item.get("token", "")).strip()
-            if not alias or alias in RESERVED_ALIASES:
-                continue
-
-            raw_cli_type = str(item.get("cli_type", CLI_TYPE)).strip() or CLI_TYPE
-            if raw_cli_type.lower() in REMOVED_LEGACY_CLI_TYPES:
-                raise ValueError(f"子Bot `{alias}` 使用了已移除的 legacy cli_type: {raw_cli_type}")
-            try:
-                cli_type = validate_cli_type(raw_cli_type)
-            except ValueError:
-                logger.warning("子Bot `%s` 的 cli_type 无效(%s)，回退为 %s", alias, raw_cli_type, CLI_TYPE)
-                cli_type = CLI_TYPE
-
-            bot_mode = str(item.get("bot_mode", "cli")).strip().lower() or "cli"
-            if bot_mode == "webcli":
-                logger.warning("子Bot `%s` 的 webcli 模式已弃用，自动回退为 cli", alias)
-                bot_mode = "cli"
-                migrated_legacy_mode = True
-
-            profile_data = {
-                "alias": alias,
-                "token": token,
-                "cli_type": cli_type,
-                "cli_path": str(item.get("cli_path", CLI_PATH)).strip() or CLI_PATH,
-                "working_dir": os.path.abspath(
-                    os.path.expanduser(str(item.get("working_dir", WORKING_DIR)).strip() or WORKING_DIR)
-                ),
-                "enabled": bool(item.get("enabled", True)),
-                "bot_mode": bot_mode,
-                "avatar_name": str(item.get("avatar_name", "") or ""),
-            }
-            if "cli_params" in item:
-                profile_data["cli_params"] = item["cli_params"]
-            if "agents" in item:
-                profile_data["agents"] = item["agents"]
-            if "cluster" in item:
-                profile_data["cluster"] = item["cluster"]
-            self.managed_profiles[alias] = BotProfile.from_dict(profile_data)
-
-        assistant_aliases = [
-            alias for alias, profile in self.managed_profiles.items() if profile.bot_mode == "assistant"
-        ]
-        if len(assistant_aliases) > 1:
-            raise ValueError("配置中只允许一个 assistant 型 Bot")
-        if len(assistant_aliases) == 1:
-            self._bootstrap_and_sync_assistant_home(self.managed_profiles[assistant_aliases[0]].working_dir)
-
+        self.managed_profiles, migrated_legacy_mode = load_managed_profiles(
+            self.storage_file,
+            removed_legacy_cli_types=REMOVED_LEGACY_CLI_TYPES,
+            bootstrap_assistant_home=self._bootstrap_and_sync_assistant_home,
+        )
         if migrated_legacy_mode:
             self._save_profiles()
 
     def _save_profiles(self) -> None:
-        payload = {
-            "bots": [self.managed_profiles[key].to_dict() for key in sorted(self.managed_profiles.keys())]
-        }
-        self.storage_file.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        save_managed_profiles(self.storage_file, self.managed_profiles)
 
     def _apply_persisted_avatar_names(self) -> None:
-        main_avatar_name = app_settings.get_bot_avatar_name(self.main_profile.alias, self.app_settings_file)
-        if main_avatar_name:
-            self.main_profile.avatar_name = main_avatar_name
-
-        for alias, profile in self.managed_profiles.items():
-            avatar_name = app_settings.get_bot_avatar_name(alias, self.app_settings_file)
-            if avatar_name:
-                profile.avatar_name = avatar_name
+        apply_persisted_avatar_names(self.main_profile, self.managed_profiles, self.app_settings_file)
 
     def _apply_persisted_main_profile(self) -> None:
-        profile_data = app_settings.get_main_bot_profile(self.app_settings_file)
-        if not profile_data:
-            return
-
-        raw_cli_type = str(profile_data.get("cli_type") or "").strip()
-        if raw_cli_type:
-            try:
-                self.main_profile.cli_type = validate_cli_type(raw_cli_type)
-            except ValueError:
-                logger.warning("主 Bot 持久化 cli_type 无效(%s)，已忽略", raw_cli_type)
-
-        cli_path = str(profile_data.get("cli_path") or "").strip()
-        if cli_path:
-            self.main_profile.cli_path = cli_path
-
-        working_dir = str(profile_data.get("working_dir") or "").strip()
-        if working_dir:
-            self.main_profile.working_dir = os.path.abspath(os.path.expanduser(working_dir))
-
-        bot_mode = str(profile_data.get("bot_mode") or "").strip().lower()
-        if bot_mode in {"cli", "assistant"}:
-            self.main_profile.bot_mode = bot_mode
-
-        cli_params = profile_data.get("cli_params")
-        if isinstance(cli_params, dict):
-            self.main_profile.cli_params = CliParamsConfig.from_dict(cli_params)
-
-        agents = profile_data.get("agents")
-        if isinstance(agents, list):
-            self.main_profile.agents = [
-                AgentProfile.from_dict(item)
-                for item in agents
-                if isinstance(item, dict)
-            ]
-
-        cluster = profile_data.get("cluster")
-        if isinstance(cluster, dict):
-            self.main_profile.cluster = normalize_bot_cluster_config(cluster)
+        apply_persisted_main_profile(self.main_profile, self.app_settings_file)
 
     def _persist_main_profile(self) -> None:
-        app_settings.update_main_bot_profile(self.main_profile.to_dict(), self.app_settings_file)
+        persist_main_profile(self.main_profile, self.app_settings_file)
 
     def get_profile(self, alias: str) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
