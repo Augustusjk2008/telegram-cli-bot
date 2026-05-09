@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import copy
 import hmac
 import json
 import logging
-import ntpath
 import os
 import queue
 import re
-import shutil
 import struct
 import subprocess
 import sys
@@ -115,7 +112,6 @@ from bot.messages import msg
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
-from bot.runtime_paths import get_chat_attachments_dir
 from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
 from bot.sessions import (
     align_session_paths,
@@ -144,20 +140,33 @@ from bot.web.api_common import (
 from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_TERMINAL_EXEC, CAP_VIEW_PLUGINS, CAP_WRITE_FILES
 from bot.web.files_service import (
     change_working_directory,
+    copy_path,
+    create_directory,
+    create_text_file,
+    delete_chat_attachment,
+    delete_path,
     display_browser_directory as _display_browser_directory,
     ensure_path_within_base_dir as _ensure_path_within_base_dir,
     get_browser_directory as _get_browser_directory,
     get_directory_listing,
+    get_file_metadata,
     get_working_directory,
+    invalidate_workspace_indexes as _invalidate_workspace_indexes,
     is_windows_drive_root as _is_windows_drive_root,
     is_windows_drives_virtual_root as _is_windows_drives_virtual_root,
     list_directory_entries as _list_directory_entries,
     list_directory_entry_items as _list_directory_entry_items,
     looks_like_windows_path as _looks_like_windows_path,
+    move_path,
     normalize_windows_drive_root as _normalize_windows_drive_root,
+    read_file_content,
     require_real_browser_directory as _require_real_browser_directory,
     resolve_browser_target_path as _resolve_browser_target_path,
     reveal_directory_tree,
+    rename_path,
+    save_chat_attachment,
+    save_uploaded_file,
+    write_file_content,
 )
 from bot.web.plugin_api_service import (
     dispose_plugin_view,
@@ -172,7 +181,6 @@ from bot.web.plugin_api_service import (
     resolve_plugin_file_target,
     update_plugin,
 )
-from bot.web import workspace_index_service
 from bot.web.terminal_actions import (
     TerminalActionConfigConflict,
     TerminalActionValidationError,
@@ -195,7 +203,6 @@ class _ClusterRunControl:
 
 
 _CLUSTER_RUN_CONTROLS: dict[str, _ClusterRunControl] = {}
-UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 _ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
@@ -205,15 +212,6 @@ _WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WORKDIR_CHANGE_REQUIRES_RESET = "workdir_change_requires_reset"
 WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
-_RASTER_IMAGE_CONTENT_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-}
-
-
 @dataclass
 class CliAttemptState:
     """单次 CLI 尝试的会话状态。"""
@@ -1845,410 +1843,6 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
     return get_cli_params_payload(manager, alias, resolved_cli_type)
-
-
-def _resolve_safe_path(base_dir: str, filename: str) -> str:
-    candidate = str(filename or "").strip()
-    if not candidate or candidate == "." or "\x00" in candidate:
-        _raise(400, "unsafe_path", "文件路径不安全")
-    if os.path.isabs(candidate):
-        return os.path.abspath(os.path.expanduser(candidate))
-    return os.path.abspath(os.path.join(base_dir, os.path.expanduser(candidate)))
-
-
-def _resolve_safe_write_path(base_dir: str, path: str) -> str:
-    candidate = str(path or "").strip()
-    if not candidate or candidate == "." or "\x00" in candidate:
-        _raise(400, "unsafe_write_path", "文件路径不安全")
-    if os.path.isabs(candidate):
-        _raise(400, "unsafe_write_path", "不允许写入绝对路径")
-
-    resolved_base = os.path.abspath(base_dir)
-    resolved_path = os.path.abspath(os.path.join(resolved_base, os.path.expanduser(candidate)))
-
-    try:
-        if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
-            _raise(400, "unsafe_write_path", "文件路径不安全")
-    except ValueError:
-        _raise(400, "unsafe_write_path", "文件路径不安全")
-
-    return resolved_path
-
-
-def _ensure_editable_text_file(path: str) -> None:
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            while handle.read(1024 * 1024):
-                pass
-    except UnicodeDecodeError:
-        _raise(400, "not_text_file", "文件不是可编辑的文本文件")
-
-
-def _write_text_file_atomically(path: str, content: str) -> None:
-    directory = os.path.dirname(path)
-    temporary_path = os.path.join(directory, f".{os.path.basename(path)}.{uuid.uuid4().hex}.tmp")
-    try:
-        with open(temporary_path, "w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
-        os.replace(temporary_path, path)
-    finally:
-        try:
-            if os.path.exists(temporary_path):
-                os.remove(temporary_path)
-        except OSError:
-            pass
-
-
-def _stat_file_version(path: str) -> int:
-    return os.stat(path).st_mtime_ns
-
-
-def _ensure_file_version_advanced(path: str, previous_mtime_ns: int) -> int:
-    current_mtime_ns = _stat_file_version(path)
-    if current_mtime_ns > previous_mtime_ns:
-        return current_mtime_ns
-
-    for step_ns in (
-        100,
-        1_000,
-        10_000,
-        100_000,
-        1_000_000,
-        10_000_000,
-        100_000_000,
-        1_000_000_000,
-        2_000_000_000,
-    ):
-        adjusted_mtime_ns = previous_mtime_ns + step_ns
-        os.utime(path, ns=(adjusted_mtime_ns, adjusted_mtime_ns))
-        current_mtime_ns = _stat_file_version(path)
-        if current_mtime_ns > previous_mtime_ns:
-            return current_mtime_ns
-
-    _raise(500, "write_file_failed", "文件版本更新失败")
-
-
-def _resolve_new_directory_path(base_dir: str, name: str) -> tuple[str, str]:
-    candidate = str(name or "").strip()
-    if not candidate or candidate in {".", ".."} or "\x00" in candidate:
-        _raise(400, "invalid_directory_name", "文件夹名称不合法")
-
-    path_separators = {os.path.sep}
-    if os.path.altsep:
-        path_separators.add(os.path.altsep)
-    if any(separator and separator in candidate for separator in path_separators):
-        _raise(400, "invalid_directory_name", "文件夹名称不能包含路径分隔符")
-
-    return candidate, os.path.abspath(os.path.join(base_dir, candidate))
-
-
-def _validate_text_filename(name: str) -> str:
-    candidate = str(name or "").strip()
-    if not candidate or candidate in {".", ".."} or "\x00" in candidate:
-        _raise(400, "invalid_filename", "文件名不合法")
-
-    path_separators = {os.path.sep}
-    if os.path.altsep:
-        path_separators.add(os.path.altsep)
-    if any(separator and separator in candidate for separator in path_separators):
-        _raise(400, "invalid_filename", "文件名不能包含路径分隔符")
-
-    return candidate
-
-
-def _resolve_action_parent_dir(session: UserSession, parent_path: str | None = None) -> str:
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    candidate = str(parent_path or "").strip()
-    if not candidate:
-        return browser_dir
-
-    resolved_base = os.path.abspath(browser_dir)
-    if os.path.isabs(candidate):
-        resolved_path = os.path.abspath(os.path.expanduser(candidate))
-    else:
-        resolved_path = os.path.abspath(os.path.join(resolved_base, os.path.expanduser(candidate)))
-
-    try:
-        if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
-            _raise(400, "unsafe_write_path", "文件路径不安全")
-    except ValueError:
-        _raise(400, "unsafe_write_path", "文件路径不安全")
-
-    if not os.path.isdir(resolved_path):
-        _raise(404, "dir_not_found", f"目录不存在: {resolved_path}")
-    return resolved_path
-
-
-def _ensure_file_browser_supported(manager: MultiBotManager, alias: str) -> BotProfile:
-    profile = get_profile_or_raise(manager, alias)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持文件操作")
-    return profile
-
-
-def _sanitize_uploaded_filename(filename: str) -> str:
-    candidate = os.path.basename(ntpath.basename(str(filename or "").strip()))
-    if not candidate or candidate in {".", ".."} or "\x00" in candidate:
-        _raise(400, "unsafe_filename", "文件名不合法")
-    return candidate
-
-
-def _build_chat_attachment_dir(alias: str, user_id: int) -> str:
-    return str(get_chat_attachments_dir(alias, user_id))
-
-
-def _resolve_unique_upload_path(base_dir: str, filename: str) -> tuple[str, str]:
-    safe_name = _sanitize_uploaded_filename(filename)
-    stem, suffix = os.path.splitext(safe_name)
-    resolved_name = safe_name
-    resolved_path = os.path.join(base_dir, resolved_name)
-    counter = 1
-    while os.path.exists(resolved_path):
-        resolved_name = f"{stem}-{counter}{suffix}"
-        resolved_path = os.path.join(base_dir, resolved_name)
-        counter += 1
-    return resolved_path, resolved_name
-
-
-def _resolve_chat_attachment_path(alias: str, user_id: int, saved_path: str) -> Path:
-    candidate = Path(str(saved_path or "").strip())
-    if not str(candidate):
-        _raise(400, "missing_saved_path", "附件路径不能为空")
-    if not candidate.is_absolute():
-        _raise(400, "invalid_saved_path", "附件路径必须是绝对路径")
-
-    attachment_dir = get_chat_attachments_dir(alias, user_id).resolve()
-    resolved_candidate = candidate.expanduser().resolve(strict=False)
-    try:
-        resolved_candidate.relative_to(attachment_dir)
-    except ValueError:
-        _raise(403, "attachment_delete_forbidden", "只能删除当前 Bot 当前用户上传的附件")
-    return resolved_candidate
-
-
-def _invalidate_workspace_indexes(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    *paths: str | os.PathLike[str] | None,
-) -> None:
-    session = get_session_for_alias(manager, alias, user_id)
-    candidates = [session.working_dir, _get_browser_directory(session), *paths]
-    for candidate in candidates:
-        if candidate:
-            workspace_index_service.invalidate_workspace_index(candidate)
-
-
-def create_directory(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    name: str,
-    parent_path: str | None = None,
-) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    parent_dir = _resolve_action_parent_dir(session, parent_path)
-    directory_name, target_path = _resolve_new_directory_path(parent_dir, name)
-
-    if os.path.exists(target_path):
-        _raise(409, "path_exists", "目标已存在")
-
-    try:
-        os.mkdir(target_path)
-    except FileExistsError:
-        _raise(409, "path_exists", "目标已存在")
-    except Exception as exc:
-        _raise(500, "create_directory_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    return {
-        "name": directory_name,
-        "created_path": target_path,
-        "working_dir": browser_dir,
-    }
-
-
-def create_text_file(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    filename: str,
-    content: str = "",
-    parent_path: str | None = None,
-) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    parent_dir = _resolve_action_parent_dir(session, parent_path)
-    file_name = _validate_text_filename(filename)
-    target_path = os.path.abspath(os.path.join(parent_dir, file_name))
-
-    if os.path.exists(target_path):
-        _raise(409, "file_already_exists", "文件已存在")
-
-    try:
-        with open(target_path, "x", encoding="utf-8", newline="") as handle:
-            handle.write(content)
-    except FileExistsError:
-        _raise(409, "file_already_exists", "文件已存在")
-    except Exception as exc:
-        _raise(500, "create_file_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    return {
-        "path": os.path.relpath(target_path, browser_dir).replace("\\", "/"),
-        "file_size_bytes": os.path.getsize(target_path),
-        "last_modified_ns": _stat_file_version(target_path),
-    }
-
-
-def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, new_name: str) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    source_rel = str(path or "").strip().replace("\\", "/")
-    if not source_rel:
-        _raise(400, "invalid_rename_path", "缺少待重命名路径")
-
-    source_path = _resolve_safe_write_path(browser_dir, source_rel)
-    target_name = _validate_text_filename(new_name)
-
-    if not os.path.isfile(source_path):
-        _raise(404, "file_not_found", "文件不存在")
-
-    target_path = os.path.abspath(os.path.join(os.path.dirname(source_path), target_name))
-    if os.path.exists(target_path):
-        _raise(409, "rename_target_exists", "目标已存在")
-
-    try:
-        os.rename(source_path, target_path)
-    except FileExistsError:
-        _raise(409, "rename_target_exists", "目标已存在")
-    except Exception as exc:
-        _raise(500, "rename_path_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
-    return {
-        "old_path": source_rel,
-        "path": target_relative_path,
-    }
-
-
-def _build_copy_filename(source_name: str, directory: str) -> str:
-    stem, suffix = os.path.splitext(source_name)
-    candidate = f"{stem} 副本{suffix}"
-    counter = 2
-    while os.path.exists(os.path.join(directory, candidate)):
-        candidate = f"{stem} 副本 {counter}{suffix}"
-        counter += 1
-    return candidate
-
-
-def copy_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    source_rel = str(path or "").strip().replace("\\", "/")
-    if not source_rel:
-        _raise(400, "invalid_copy_path", "缺少待复制路径")
-
-    source_path = _resolve_safe_write_path(browser_dir, source_rel)
-    if not os.path.isfile(source_path):
-        _raise(404, "file_not_found", "文件不存在")
-
-    target_name = _build_copy_filename(os.path.basename(source_path), os.path.dirname(source_path))
-    target_path = os.path.abspath(os.path.join(os.path.dirname(source_path), target_name))
-
-    try:
-        shutil.copy2(source_path, target_path)
-    except FileExistsError:
-        _raise(409, "copy_target_exists", "目标已存在")
-    except Exception as exc:
-        _raise(500, "copy_path_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
-    return {
-        "source_path": source_rel,
-        "path": target_relative_path,
-        "file_size_bytes": os.path.getsize(target_path),
-        "last_modified_ns": _stat_file_version(target_path),
-    }
-
-
-def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, target_parent_path: str) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    source_rel = str(path or "").strip().replace("\\", "/")
-    if not source_rel:
-        _raise(400, "invalid_move_path", "缺少待移动路径")
-
-    source_path = _resolve_safe_write_path(browser_dir, source_rel)
-    if not os.path.exists(source_path):
-        _raise(404, "path_not_found", "路径不存在")
-
-    target_dir = _resolve_action_parent_dir(session, target_parent_path)
-    target_path = os.path.abspath(os.path.join(target_dir, os.path.basename(source_path)))
-    source_abs = os.path.abspath(source_path)
-
-    if os.path.isdir(source_abs):
-        try:
-            if os.path.commonpath([source_abs, os.path.abspath(target_dir)]) == source_abs:
-                _raise(400, "invalid_move_target", "不能将文件夹移动到自身或其子文件夹中")
-        except ValueError:
-            _raise(400, "invalid_move_target", "不能将文件夹移动到自身或其子文件夹中")
-
-    if os.path.normcase(source_abs) == os.path.normcase(target_path):
-        _raise(400, "same_move_target", "路径已在目标文件夹中")
-    if os.path.exists(target_path):
-        _raise(409, "move_target_exists", "目标已存在")
-
-    try:
-        shutil.move(source_path, target_path)
-    except FileExistsError:
-        _raise(409, "move_target_exists", "目标已存在")
-    except Exception as exc:
-        _raise(500, "move_path_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    target_relative_path = os.path.relpath(target_path, browser_dir).replace("\\", "/")
-    return {
-        "old_path": source_rel,
-        "path": target_relative_path,
-    }
-
-
-def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    target_path = _resolve_safe_path(browser_dir, path)
-
-    if os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(browser_dir)):
-        _raise(400, "cannot_delete_current_dir", "不能删除当前目录")
-    if not os.path.exists(target_path):
-        _raise(404, "path_not_found", "文件或文件夹不存在")
-
-    try:
-        if os.path.isdir(target_path):
-            shutil.rmtree(target_path)
-            deleted_type = "directory"
-        else:
-            os.remove(target_path)
-            deleted_type = "file"
-    except Exception as exc:
-        _raise(500, "delete_path_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    return {
-        "path": path,
-        "deleted_type": deleted_type,
-        "working_dir": browser_dir,
-    }
 
 
 def get_history(
@@ -4894,206 +4488,6 @@ async def stream_assistant_run_request(
         request=request,
     ):
         yield event
-
-
-def save_chat_attachment(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    if not data:
-        _raise(400, "empty_file", "文件内容不能为空")
-    if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
-        _raise(400, "file_too_large", msg("upload", "file_too_large"))
-
-    attachment_dir = _build_chat_attachment_dir(alias, user_id)
-    os.makedirs(attachment_dir, exist_ok=True)
-    file_path, stored_filename = _resolve_unique_upload_path(attachment_dir, filename)
-    with open(file_path, "wb") as handle:
-        handle.write(data)
-    return {
-        "filename": stored_filename,
-        "saved_path": file_path,
-        "size": len(data),
-    }
-
-
-def delete_chat_attachment(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    saved_path: str,
-) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    target_path = _resolve_chat_attachment_path(alias, user_id, saved_path)
-
-    if target_path.exists() and not target_path.is_file():
-        _raise(400, "invalid_saved_path", "附件路径必须指向文件")
-
-    existed = target_path.exists()
-    if existed:
-        try:
-            target_path.unlink()
-        except FileNotFoundError:
-            existed = False
-        except Exception as exc:
-            _raise(500, "delete_attachment_failed", str(exc))
-
-    return {
-        "filename": target_path.name,
-        "saved_path": str(target_path),
-        "existed": existed,
-        "deleted": existed,
-    }
-
-
-def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    if not data:
-        _raise(400, "empty_file", "文件内容不能为空")
-    if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
-        _raise(400, "file_too_large", msg("upload", "file_too_large"))
-
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    file_path = _resolve_safe_path(browser_dir, filename)
-    with open(file_path, "wb") as handle:
-        handle.write(data)
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    return {
-        "filename": filename,
-        "saved_path": file_path,
-        "size": len(data),
-    }
-
-
-def write_file_content(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    path: str,
-    content: str,
-    *,
-    expected_mtime_ns: int | None = None,
-) -> dict[str, Any]:
-    _ensure_file_browser_supported(manager, alias)
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    file_path = _resolve_safe_write_path(browser_dir, path)
-    if not os.path.isfile(file_path):
-        _raise(404, "file_not_found", "文件不存在")
-
-    current_mtime_ns = _stat_file_version(file_path)
-    if expected_mtime_ns is not None and int(expected_mtime_ns) != current_mtime_ns:
-        _raise(409, "file_version_conflict", "文件已被修改，请重新打开后再试")
-
-    _ensure_editable_text_file(file_path)
-
-    try:
-        _write_text_file_atomically(file_path, content)
-        next_mtime_ns = _ensure_file_version_advanced(file_path, current_mtime_ns)
-    except Exception as exc:
-        _raise(500, "write_file_failed", str(exc))
-
-    _invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
-    return {
-        "path": path,
-        "file_size_bytes": os.path.getsize(file_path),
-        "last_modified_ns": next_mtime_ns,
-    }
-
-
-def get_file_metadata(manager: MultiBotManager, alias: str, user_id: int, filename: str) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    file_path = _resolve_safe_path(browser_dir, filename)
-    if not os.path.isfile(file_path):
-        _raise(404, "file_not_found", "文件不存在")
-    return {
-        "filename": filename,
-        "path": file_path,
-        "size": os.path.getsize(file_path),
-        "content_type": "application/octet-stream",
-    }
-
-
-def read_file_content(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    filename: str,
-    mode: str = "cat",
-    lines: int = 20,
-) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    file_path = _resolve_safe_path(browser_dir, filename)
-    if not os.path.isfile(file_path):
-        _raise(404, "file_not_found", "文件不存在")
-
-    file_size = os.path.getsize(file_path)
-    raster_preview = _build_raster_image_preview(
-        filename=filename,
-        file_path=file_path,
-        working_dir=browser_dir,
-        mode=mode,
-        file_size=file_size,
-    )
-    if raster_preview is not None:
-        return raster_preview
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            if mode == "head":
-                content_lines = []
-                truncated = False
-                for index, line in enumerate(handle):
-                    if index >= lines:
-                        truncated = True
-                        break
-                    content_lines.append(line.rstrip("\n"))
-                content = "\n".join(content_lines)
-                is_full_content = not truncated
-            else:
-                content = handle.read()
-                is_full_content = True
-    except UnicodeDecodeError:
-        _raise(400, "unsupported_encoding", "文件不是文本文件或编码不支持")
-    except Exception as exc:
-        _raise(500, "read_file_failed", str(exc))
-
-    return {
-        "filename": filename,
-        "mode": mode,
-        "content": content,
-        "working_dir": browser_dir,
-        "file_size_bytes": file_size,
-        "is_full_content": is_full_content,
-        "last_modified_ns": _stat_file_version(file_path),
-    }
-
-
-def _build_raster_image_preview(
-    *,
-    filename: str,
-    file_path: str,
-    working_dir: str,
-    mode: str,
-    file_size: int,
-) -> dict[str, Any] | None:
-    content_type = _RASTER_IMAGE_CONTENT_TYPES.get(Path(filename).suffix.lower())
-    if not content_type:
-        return None
-
-    return {
-        "filename": filename,
-        "mode": mode,
-        "content": "",
-        "preview_kind": "image",
-        "content_type": content_type,
-        "content_base64": base64.b64encode(Path(file_path).read_bytes()).decode("ascii"),
-        "working_dir": working_dir,
-        "file_size_bytes": file_size,
-        "is_full_content": True,
-        "last_modified_ns": _stat_file_version(file_path),
-    }
 
 
 def get_terminal_actions_config(manager: MultiBotManager, alias: str, auth: AuthContext) -> dict[str, Any]:
