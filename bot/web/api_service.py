@@ -19,7 +19,6 @@ import sys
 import threading
 import time
 import uuid
-import zlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,7 +131,17 @@ from bot.utils import is_dangerous_command
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
-from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_TERMINAL_EXEC, CAP_VIEW_PLUGINS, CAP_WRITE_FILES, MEMBER_CAPABILITIES
+from bot.web.api_common import (
+    AuthContext,
+    WebApiError,
+    _raise,
+    _require_capability,
+    get_chat_session_for_alias,
+    get_profile_or_raise,
+    get_session_for_alias,
+    resolve_session_bot_id,
+)
+from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_TERMINAL_EXEC, CAP_VIEW_PLUGINS, CAP_WRITE_FILES
 from bot.web import workspace_index_service
 from bot.web.terminal_actions import (
     TerminalActionConfigConflict,
@@ -175,29 +184,6 @@ _RASTER_IMAGE_CONTENT_TYPES = {
 }
 
 
-class WebApiError(Exception):
-    """Web API 业务异常。"""
-
-    def __init__(self, status: int, code: str, message: str, data: dict[str, Any] | None = None):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.message = message
-        self.data = data or {}
-
-
-@dataclass
-class AuthContext:
-    """Web 请求的认证上下文。"""
-
-    user_id: int
-    token_used: bool
-    account_id: str = "legacy-default"
-    username: str = "legacy"
-    role: str = "member"
-    capabilities: set[str] = field(default_factory=lambda: set(MEMBER_CAPABILITIES))
-
-
 @dataclass
 class CliAttemptState:
     """单次 CLI 尝试的会话状态。"""
@@ -205,16 +191,6 @@ class CliAttemptState:
     cli_session_id: Optional[str]
     resume_session: bool
     codex_session_id: Optional[str] = None
-
-
-def _raise(status: int, code: str, message: str, data: dict[str, Any] | None = None):
-    raise WebApiError(status=status, code=code, message=message, data=data)
-
-
-def _require_capability(auth: AuthContext, capability: str) -> None:
-    if capability in auth.capabilities:
-        return
-    _raise(403, "forbidden", "当前账号无权限执行此操作")
 
 
 def _avatar_asset_dirs() -> list[Path]:
@@ -452,43 +428,6 @@ def _build_assistant_runtime_item(manager: MultiBotManager, profile: BotProfile)
         return None
     snapshot = snapshot_for_bot(profile.alias)
     return snapshot if isinstance(snapshot, dict) else None
-
-
-def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
-    alias = (alias or "").strip().lower()
-    if alias == manager.main_profile.alias:
-        return manager.main_profile
-    profile = manager.managed_profiles.get(alias)
-    if profile is None:
-        _raise(404, "bot_not_found", f"未找到别名为 `{alias}` 的 Bot")
-    return profile
-
-
-def resolve_session_bot_id(manager: MultiBotManager, alias: str) -> int:
-    app = manager.applications.get(alias)
-    if app:
-        bot_id = app.bot_data.get("bot_id")
-        if isinstance(bot_id, int):
-            return bot_id
-    return -int(zlib.adler32(f"web:{alias}".encode("utf-8")))
-
-
-def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) -> UserSession:
-    profile = get_profile_or_raise(manager, alias)
-    session = get_or_create_session(
-        bot_id=resolve_session_bot_id(manager, alias),
-        bot_alias=alias,
-        user_id=user_id,
-        default_working_dir=profile.working_dir,
-        load_persisted_state=profile.bot_mode != "assistant",
-    )
-
-    if profile.bot_mode == "assistant" and session.persist_hook is None:
-        home = bootstrap_assistant_home(profile.working_dir)
-        attach_assistant_persist_hook(session, home, user_id)
-        restore_assistant_runtime_state(session, home, user_id)
-
-    return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
 
 def get_chat_session_for_alias(

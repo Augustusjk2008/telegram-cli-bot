@@ -102,6 +102,16 @@ from bot.web.git_service import (
 from bot.web.native_history_locator import LocatedTranscript
 from bot.assistant.proposals import create_proposal
 
+
+def test_web_api_common_imports_remain_compatible():
+    from bot.web.api_common import WebApiError as CommonWebApiError
+    from bot.web.api_common import get_profile_or_raise as common_get_profile_or_raise
+    from bot.web.api_service import WebApiError, get_profile_or_raise
+
+    assert WebApiError is CommonWebApiError
+    assert get_profile_or_raise is common_get_profile_or_raise
+
+
 def _png_bytes(width: int, height: int) -> bytes:
     row = b"\x00" + (b"\x00\x00\x00" * width)
     raw = row * height
