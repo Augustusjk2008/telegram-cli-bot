@@ -20,6 +20,20 @@ def test_build_source_fingerprint_can_skip_file_content_hash(tmp_path: Path) -> 
     assert '"sha256":""' in fingerprint
 
 
+def test_plugin_manifest_payload_serializer_matches_service(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "home" / ".tcb" / "plugins"
+    plugins_root.mkdir(parents=True)
+    _write_wave_plugin(plugins_root)
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    manifest = service.registry.list_manifests()[0]
+    from bot.plugins.manifest_payloads import build_manifest_payload
+
+    assert build_manifest_payload(manifest)["id"] == service._manifest_payload(manifest)["id"]
+
+
 def _write_wave_plugin(root: Path) -> None:
     plugin_dir = root / "vivado-waveform"
     backend_dir = plugin_dir / "backend"

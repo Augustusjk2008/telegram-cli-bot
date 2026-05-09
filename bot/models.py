@@ -16,7 +16,6 @@ from bot.cluster.config import (
     normalize_agent_cluster_config,
     normalize_bot_cluster_config,
 )
-from bot.platform.processes import terminate_process_tree_sync
 
 if TYPE_CHECKING:
     # 避免循环导入
@@ -253,12 +252,11 @@ class UserSession:
         self.persist()
 
     def terminate_process(self):
+        from bot.session_runtime import terminate_session_process
+
+        terminate_session_process(self)
         with self._lock:
-            process = self.process
-            if process is not None:
-                if process.poll() is None:
-                    terminate_process_tree_sync(process)
-                self.process = None
+            self.process = None
             self.stop_requested = False
             self.is_processing = False
             self.running_user_text = None

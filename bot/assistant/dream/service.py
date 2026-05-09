@@ -11,6 +11,7 @@ from bot.assistant.home import AssistantHome
 from bot.assistant.memory.knowledge_indexer import index_knowledge_memories
 from bot.assistant.memory.writer import DreamMemoryInput, write_dream_memories
 from bot.assistant.proposals import create_proposal
+from bot.assistant.shared.text import clip_text, parse_iso_datetime
 from bot.models import BotProfile, UserSession
 
 if TYPE_CHECKING:
@@ -100,23 +101,11 @@ def _read_optional_text(path: Path) -> str:
 
 
 def _clip_text(value: str, *, limit: int) -> str:
-    compact = str(value or "").strip()
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 3].rstrip() + "..."
+    return clip_text(value, limit=limit, strip=True, ellipsis="...")
 
 
 def _parse_iso_datetime(value: str) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return parse_iso_datetime(value, assume_tz=UTC, normalize_tz=UTC)
 
 
 def _iter_recent_capture_records(home: AssistantHome, *, capture_limit: int, cutoff: datetime) -> list[dict[str, Any]]:

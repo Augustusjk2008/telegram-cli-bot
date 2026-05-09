@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.assistant.home import AssistantHome
+from bot.assistant.shared.text import parse_iso_datetime
 from bot.session_store import LOCAL_HISTORY_BACKEND, migrate_local_history_snapshot
 
 logger = logging.getLogger(__name__)
@@ -73,12 +74,7 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
 
 
 def _parse_datetime(value: Any) -> datetime | None:
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    return None
+    return parse_iso_datetime(value)
 
 
 def _normalize_optional_str(value: Any) -> str | None:

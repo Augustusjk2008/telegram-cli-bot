@@ -18,6 +18,13 @@ from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.sessions import get_or_create_session
 
+
+def test_removed_legacy_cli_types_literal_is_explicit():
+    from bot.manager import REMOVED_LEGACY_CLI_TYPES
+
+    assert "kimi" in REMOVED_LEGACY_CLI_TYPES
+
+
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 

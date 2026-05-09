@@ -13,6 +13,14 @@ from .audit import append_plugin_audit_event
 from .host_api import PluginHostApi
 from .host_api import resolve_workspace_path
 from .manifest import load_plugin_manifest
+from .manifest_payloads import (
+    build_manifest_payload,
+    build_manifest_signature,
+    serialize_action,
+    serialize_config_schema,
+    serialize_permissions,
+    stable_config_fingerprint,
+)
 from .paths import default_plugins_root
 from .registry import PluginRegistry
 from .runtime import PluginRuntime
@@ -80,64 +88,13 @@ class PluginService:
         raise KeyError(f"未知插件视图: {plugin_id}/{view_id}")
 
     def _serialize_permissions(self, manifest) -> dict[str, Any]:
-        return {
-            "workspaceRead": manifest.runtime.permissions.workspace_read,
-            "workspaceList": manifest.runtime.permissions.workspace_list,
-            "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
-        }
+        return serialize_permissions(manifest)
 
     def _serialize_config_schema(self, manifest) -> dict[str, Any] | None:
-        if manifest.config_schema is None:
-            return None
-        return {
-            "title": manifest.config_schema.title,
-            "sections": [
-                {
-                    "id": section.id,
-                    "title": section.title,
-                    "description": section.description,
-                    "fields": [
-                        {
-                            "key": field.key,
-                            "label": field.label,
-                            "type": field.field_type,
-                            "default": field.default,
-                            "description": field.description,
-                            "placeholder": field.placeholder,
-                            "minimum": field.minimum,
-                            "maximum": field.maximum,
-                            "step": field.step,
-                            "options": [
-                                {"value": option.value, "label": option.label}
-                                for option in field.options
-                            ],
-                        }
-                        for field in section.fields
-                    ],
-                }
-                for section in manifest.config_schema.sections
-            ],
-        }
+        return serialize_config_schema(manifest)
 
     def _serialize_action(self, action) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "id": action.id,
-            "label": action.label,
-            "target": action.target,
-            "location": action.location,
-            "variant": action.variant,
-            "disabled": action.disabled,
-            "payload": dict(action.payload or {}),
-        }
-        if action.icon:
-            payload["icon"] = action.icon
-        if action.tooltip:
-            payload["tooltip"] = action.tooltip
-        if action.confirm is not None:
-            payload["confirm"] = dict(action.confirm)
-        if action.host_action is not None:
-            payload["hostAction"] = dict(action.host_action)
-        return payload
+        return serialize_action(action)
 
     def _get_session_record(
         self,
@@ -157,43 +114,10 @@ class PluginService:
         return record
 
     def _manifest_signature(self, manifest) -> str:
-        manifest_path = manifest.root / "plugin.json"
-        try:
-            stat = manifest_path.stat()
-        except OSError:
-            return "missing"
-        return json.dumps(
-            {
-                "root": str(manifest.root),
-                "mtime_ns": stat.st_mtime_ns,
-                "size": stat.st_size,
-                "schema_version": manifest.schema_version,
-                "name": manifest.name,
-                "version": manifest.version,
-                "description": manifest.description,
-                "enabled": manifest.enabled,
-                "config": dict(manifest.config),
-                "runtime": {
-                    "type": manifest.runtime.runtime_type,
-                    "entry": manifest.runtime.entry,
-                    "protocol": manifest.runtime.protocol,
-                    "permissions": {
-                        "workspaceRead": manifest.runtime.permissions.workspace_read,
-                        "workspaceList": manifest.runtime.permissions.workspace_list,
-                        "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
-                    },
-                },
-                "views": [(view.id, view.renderer, view.view_mode, view.data_profile) for view in manifest.views],
-                "handlers": [(handler.id, handler.extensions, handler.view_id) for handler in manifest.file_handlers],
-                "config_schema": self._serialize_config_schema(manifest),
-                "catalog_actions": [self._serialize_action(action) for action in manifest.catalog_actions],
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        return build_manifest_signature(manifest)
 
     def _stable_config_fingerprint(self, manifest) -> str:
-        return json.dumps(dict(manifest.config), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return stable_config_fingerprint(manifest)
 
     def _snapshot_cache_remember(self, plugin_id: str, cache_key: str, payload: dict[str, Any]) -> None:
         self._snapshot_cache[cache_key] = copy.deepcopy(payload)
@@ -221,44 +145,20 @@ class PluginService:
         return resolved_input
 
     def _manifest_payload(self, manifest) -> dict[str, Any]:
-        payload = {
-            "id": manifest.plugin_id,
-            "schemaVersion": manifest.schema_version,
-            "name": manifest.name,
-            "version": manifest.version,
-            "description": manifest.description,
-            "enabled": manifest.enabled,
-            "config": dict(manifest.config),
-            "views": [
-                {
-                    "id": view.id,
-                    "title": view.title,
-                    "renderer": view.renderer,
-                    "viewMode": view.view_mode,
-                    "dataProfile": view.data_profile,
-                }
-                for view in manifest.views
-            ],
-            "fileHandlers": [
-                {
-                    "id": handler.id,
-                    "label": handler.label,
-                    "extensions": list(handler.extensions),
-                    "viewId": handler.view_id,
-                }
-                for handler in manifest.file_handlers
-            ],
-            "catalogActions": [self._serialize_action(action) for action in manifest.catalog_actions],
-            "runtime": {
-                "type": manifest.runtime.runtime_type,
-                "entry": manifest.runtime.entry,
-                "protocol": manifest.runtime.protocol,
-                "permissions": self._serialize_permissions(manifest),
-            },
-        }
-        if manifest.config_schema is not None:
-            payload["configSchema"] = self._serialize_config_schema(manifest)
-        return payload
+        return build_manifest_payload(manifest)
+
+    async def _invalidate_plugin(self, plugin_id: str, *, dispose_sessions: bool = False) -> None:
+        stale_records = self.sessions.clear_plugin(plugin_id)
+        if dispose_sessions:
+            for record in stale_records:
+                try:
+                    current_manifest = self.registry.get_manifest(plugin_id)
+                    await self.runtime.dispose_view(record.bot_alias, current_manifest, record.session_id)
+                except Exception:
+                    pass
+        self.artifacts.clear_plugin(plugin_id)
+        self._snapshot_cache_clear_plugin(plugin_id)
+        await self.runtime.stop_plugin_instances(plugin_id)
 
     def _read_manifest_json(self, path: Path) -> dict[str, Any] | None:
         try:
@@ -477,10 +377,7 @@ class PluginService:
             if before.get(plugin_id) != after.get(plugin_id)
         )
         for plugin_id in affected:
-            self.sessions.clear_plugin(plugin_id)
-            self.artifacts.clear_plugin(plugin_id)
-            self._snapshot_cache_clear_plugin(plugin_id)
-            await self.runtime.stop_plugin_instances(plugin_id)
+            await self._invalidate_plugin(plugin_id)
         return [self._manifest_payload(manifest) for manifest in manifests.values()]
 
     async def install_plugin(
@@ -536,16 +433,7 @@ class PluginService:
         manifest_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.registry.discover()
 
-        stale_records = self.sessions.clear_plugin(plugin_id)
-        for record in stale_records:
-            try:
-                current_manifest = self.registry.get_manifest(plugin_id)
-                await self.runtime.dispose_view(record.bot_alias, current_manifest, record.session_id)
-            except Exception:
-                pass
-        self.artifacts.clear_plugin(plugin_id)
-        self._snapshot_cache_clear_plugin(plugin_id)
-        await self.runtime.stop_plugin_instances(plugin_id)
+        await self._invalidate_plugin(plugin_id, dispose_sessions=True)
         return self._manifest_payload(self.registry.get_manifest(plugin_id))
 
     def resolve_file_target(self, path: str) -> dict[str, Any]:

@@ -26,7 +26,7 @@ from bot.platform.paths import truncate_path_for_display
 from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
-REMOVED_LEGACY_CLI_TYPES = {"ki" "mi"}
+REMOVED_LEGACY_CLI_TYPES = {"kimi"}
 
 
 class MultiBotManager:

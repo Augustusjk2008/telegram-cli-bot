@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from bot.assistant.shared.text import clip_text, parse_iso_datetime
 from bot.manager import MultiBotManager
 from bot.models import BotProfile, UserSession
 
@@ -17,23 +18,11 @@ class ManagedBotDreamContext:
 
 
 def _clip_text(value: str, *, limit: int) -> str:
-    compact = str(value or "").strip()
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 3].rstrip() + "..."
+    return clip_text(value, limit=limit, strip=True, ellipsis="...")
 
 
 def _parse_iso_datetime(value: str) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return parse_iso_datetime(value, allow_z=True, assume_tz=UTC, normalize_tz=UTC)
 
 
 def _iter_managed_profiles(manager: MultiBotManager, *, current_alias: str) -> list[BotProfile]:
