@@ -72,6 +72,18 @@ from .auth_store import (
 )
 from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, TerminalSessionManager
 from .tunnel_service import TunnelService
+from .routes import (
+    admin_routes,
+    assistant_routes,
+    auth_routes,
+    chat_routes,
+    cluster_routes,
+    debug_routes,
+    files_routes,
+    git_routes,
+    plugin_routes,
+    terminal_routes,
+)
 from .api_service import (
     approve_assistant_proposal,
     approve_assistant_proposal_patch,
@@ -3003,224 +3015,19 @@ class WebApiServer:
         # Desktop file editing/preview can legitimately exceed the default aiohttp body cap.
         # Upload routes still enforce their own explicit limits in api_service.
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=0)
-        app.router.add_get("/api/health", self.health)
-        app.router.add_get("/api/internal/cluster/mcp/ping", self.cluster_mcp_ping)
-        app.router.add_post("/api/internal/cluster/mcp/tools/{tool_name}", self.cluster_mcp_tool)
-        app.router.add_get("/api/auth/me", self.auth_me)
-        app.router.add_post("/api/auth/login", self.auth_login)
-        app.router.add_post("/api/auth/register", self.auth_register)
-        app.router.add_post("/api/auth/guest", self.auth_guest)
-        app.router.add_post("/api/auth/logout", self.auth_logout)
-        app.router.add_get("/api/admin/register-codes", self.admin_register_codes)
-        app.router.add_post("/api/admin/register-codes", self.admin_register_code_create)
-        app.router.add_patch("/api/admin/register-codes/{code_id}", self.admin_register_code_patch)
-        app.router.add_delete("/api/admin/register-codes/{code_id}", self.admin_register_code_delete)
-        app.router.add_get("/api/bots", self.get_bots)
-        app.router.add_get("/api/plugins", self.get_plugins)
-        app.router.add_get("/api/plugins/installable", self.get_installable_plugins)
-        app.router.add_post("/api/plugins/install", self.post_install_plugin)
-        app.router.add_patch("/api/plugins/{plugin_id}", self.patch_plugin)
-        app.router.add_get("/api/bots/{alias}", self.get_bot_overview)
-        app.router.add_post("/api/bots/{alias}/chat", self.post_chat)
-        app.router.add_post("/api/bots/{alias}/chat/stream", self.post_chat_stream)
-        app.router.add_post("/api/bots/{alias}/exec", self.post_exec)
-        app.router.add_get("/api/bots/{alias}/terminal-actions/config", self.get_terminal_actions_config)
-        app.router.add_put("/api/bots/{alias}/terminal-actions/config", self.put_terminal_actions_config)
-        app.router.add_post("/api/bots/{alias}/terminal-actions/{action_id}/run", self.post_run_terminal_action)
-        app.router.add_get("/api/terminal/session", self.get_terminal_session)
-        app.router.add_post("/api/terminal/session/rebuild", self.post_terminal_rebuild)
-        app.router.add_post("/api/terminal/session/close", self.post_terminal_close)
-        app.router.add_get("/api/bots/{alias}/debug/profile", self.get_debug_profile)
-        app.router.add_patch("/api/bots/{alias}/debug/profile", self.patch_debug_profile_overrides)
-        app.router.add_patch("/api/bots/{alias}/debug/profile-overrides", self.patch_debug_profile_overrides)
-        app.router.add_get("/api/bots/{alias}/debug/state", self.get_debug_state)
-        app.router.add_post("/api/bots/{alias}/debug/launch", self.post_debug_launch)
-        app.router.add_post("/api/bots/{alias}/debug/stop", self.post_debug_stop)
-        app.router.add_post("/api/bots/{alias}/debug/command", self.post_debug_command)
-        app.router.add_post("/api/bots/{alias}/debug/control", self.post_debug_command)
-        app.router.add_post("/api/bots/{alias}/debug/breakpoints", self.post_debug_breakpoints)
-        app.router.add_post("/api/bots/{alias}/debug/evaluate", self.post_debug_evaluate)
-        app.router.add_get("/debug/ws", self.debug_ws)
-        app.router.add_get("/terminal/ws", self.terminal_ws)
-        app.router.add_get("/api/bots/{alias}/pwd", self.get_pwd)
-        app.router.add_get("/api/bots/{alias}/ls", self.get_ls)
-        app.router.add_get("/api/bots/{alias}/workspace/quick-open", self.get_workspace_quick_open)
-        app.router.add_get("/api/bots/{alias}/workspace/search", self.get_workspace_search)
-        app.router.add_get("/api/bots/{alias}/workspace/outline", self.get_workspace_outline)
-        app.router.add_post("/api/bots/{alias}/workspace/resolve-definition", self.post_workspace_resolve_definition)
-        app.router.add_post("/api/bots/{alias}/cd", self.post_cd)
-        app.router.add_post("/api/bots/{alias}/reset", self.post_reset)
-        app.router.add_post("/api/bots/{alias}/kill", self.post_kill)
-        app.router.add_get("/api/bots/{alias}/cli-params", self.get_cli_params)
-        app.router.add_patch("/api/bots/{alias}/cli-params", self.patch_cli_params)
-        app.router.add_post("/api/bots/{alias}/cli-params/reset", self.post_cli_params_reset)
-        app.router.add_get("/api/bots/{alias}/agents", self.get_agents_view)
-        app.router.add_get("/api/bots/{alias}/cluster/status", self.get_cluster_status_view)
-        app.router.add_get("/api/bots/{alias}/cluster/runs/{run_id}/tasks", self.get_cluster_run_tasks_view)
-        app.router.add_post("/api/admin/bots/{alias}/agents", self.post_agent_view)
-        app.router.add_patch("/api/admin/bots/{alias}/agents/{agent_id}", self.patch_agent_view)
-        app.router.add_delete("/api/admin/bots/{alias}/agents/{agent_id}", self.delete_agent_view)
-        app.router.add_post("/api/admin/bots/{alias}/cluster/setup/prepare", self.post_cluster_setup_prepare)
-        app.router.add_post("/api/admin/bots/{alias}/cluster/config", self.post_cluster_config)
-        app.router.add_get("/api/admin/bots/{alias}/cluster/templates", self.get_cluster_templates_view)
-        app.router.add_get("/api/admin/bots/{alias}/cluster/schema", self.get_cluster_schema_view)
-        app.router.add_post("/api/admin/bots/{alias}/cluster/templates/preview", self.post_cluster_template_preview)
-        app.router.add_post("/api/admin/bots/{alias}/cluster/templates/apply", self.post_cluster_template_apply)
-        app.router.add_post("/api/admin/bots/{alias}/cluster/config-bundle/preview", self.post_cluster_bundle_preview)
-        app.router.add_post("/api/admin/bots/{alias}/cluster/config-bundle/apply", self.post_cluster_bundle_apply)
-        app.router.add_get("/api/bots/{alias}/history", self.get_history_view)
-        app.router.add_get("/api/bots/{alias}/history/delta", self.get_history_delta_view)
-        app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", self.get_history_trace_view)
-        app.router.add_get("/api/bots/{alias}/conversations", self.get_conversations_view)
-        app.router.add_post("/api/bots/{alias}/conversations", self.post_conversation_view)
-        app.router.add_post("/api/bots/{alias}/conversations/{conversation_id}/select", self.post_conversation_select_view)
-        app.router.add_get("/api/bots/{alias}/git", self.get_git_overview_view)
-        app.router.add_get("/api/bots/{alias}/git/tree-status", self.get_git_tree_status_view)
-        app.router.add_get("/api/bots/{alias}/git/branches", self.get_git_branches_view)
-        app.router.add_post("/api/bots/{alias}/git/branches", self.post_git_branch_create)
-        app.router.add_post("/api/bots/{alias}/git/branches/switch", self.post_git_branch_switch)
-        app.router.add_get("/api/bots/{alias}/git/stashes", self.get_git_stashes_view)
-        app.router.add_post("/api/bots/{alias}/git/stashes/apply", self.post_git_stash_apply)
-        app.router.add_post("/api/bots/{alias}/git/stashes/drop", self.post_git_stash_drop)
-        app.router.add_get("/api/bots/{alias}/git/blame", self.get_git_blame_view)
-        app.router.add_post("/api/bots/{alias}/git/init", self.post_git_init)
-        app.router.add_get("/api/bots/{alias}/git/diff", self.get_git_diff_view)
-        app.router.add_post("/api/bots/{alias}/git/stage", self.post_git_stage)
-        app.router.add_post("/api/bots/{alias}/git/unstage", self.post_git_unstage)
-        app.router.add_post("/api/bots/{alias}/git/discard", self.post_git_discard)
-        app.router.add_post("/api/bots/{alias}/git/discard-all", self.post_git_discard_all)
-        app.router.add_post("/api/bots/{alias}/git/commit", self.post_git_commit)
-        app.router.add_post("/api/bots/{alias}/git/fetch", self.post_git_fetch)
-        app.router.add_post("/api/bots/{alias}/git/pull", self.post_git_pull)
-        app.router.add_post("/api/bots/{alias}/git/push", self.post_git_push)
-        app.router.add_post("/api/bots/{alias}/git/stash", self.post_git_stash)
-        app.router.add_post("/api/bots/{alias}/git/stash/pop", self.post_git_stash_pop)
-        app.router.add_post("/api/bots/{alias}/files/upload", self.upload_file)
-        app.router.add_post("/api/bots/{alias}/chat/attachments", self.upload_chat_attachment)
-        app.router.add_post("/api/bots/{alias}/chat/attachments/delete", self.delete_chat_attachment_view)
-        app.router.add_post("/api/bots/{alias}/files/mkdir", self.create_directory_view)
-        app.router.add_post("/api/bots/{alias}/files/reveal", self.post_files_reveal)
-        app.router.add_post("/api/bots/{alias}/files/write", self.write_file_view)
-        app.router.add_post("/api/bots/{alias}/files/create", self.create_text_file_view)
-        app.router.add_post("/api/bots/{alias}/files/rename", self.rename_path_view)
-        app.router.add_post("/api/bots/{alias}/files/copy", self.copy_path_view)
-        app.router.add_post("/api/bots/{alias}/files/move", self.move_path_view)
-        app.router.add_post("/api/bots/{alias}/files/delete", self.delete_path_view)
-        app.router.add_get("/api/bots/{alias}/files/download", self.download_file)
-        app.router.add_get("/api/bots/{alias}/files/read", self.read_file)
-        app.router.add_post("/api/bots/{alias}/plugins/resolve-file-target", self.resolve_file_plugin_target)
-        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/render", self.post_render_plugin_view)
-        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/open", self.post_open_plugin_view)
-        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}/window", self.post_plugin_view_window)
-        app.router.add_delete("/api/bots/{alias}/plugins/{plugin_id}/sessions/{session_id}", self.delete_plugin_view_session)
-        app.router.add_post("/api/bots/{alias}/plugins/{plugin_id}/actions/invoke", self.post_invoke_plugin_action)
-        app.router.add_get("/api/bots/{alias}/plugins/artifacts/{artifact_id}", self.download_plugin_artifact)
-        app.router.add_get("/api/admin/bots", self.admin_bots)
-        app.router.add_get("/api/admin/assets/avatars", self.admin_list_avatar_assets)
-        app.router.add_get("/api/admin/bots/{alias}/processing", self.admin_processing)
-        app.router.add_post("/api/admin/bots", self.admin_add_bot)
-        app.router.add_get("/api/admin/bots/{alias}", self.admin_single_bot)
-        app.router.add_delete("/api/admin/bots/{alias}", self.admin_remove_bot)
-        app.router.add_post("/api/admin/bots/{alias}/start", self.admin_start_bot)
-        app.router.add_post("/api/admin/bots/{alias}/stop", self.admin_stop_bot)
-        app.router.add_patch("/api/admin/bots/{alias}/cli", self.admin_update_cli)
-        app.router.add_patch("/api/admin/bots/{alias}/alias", self.admin_rename_bot)
-        app.router.add_patch("/api/admin/bots/{alias}/workdir", self.admin_update_workdir)
-        app.router.add_patch("/api/admin/bots/{alias}/avatar", self.admin_update_avatar)
-        app.router.add_get("/api/admin/bots/{alias}/assistant/proposals", self.admin_assistant_proposals)
-        app.router.add_get(
-            "/api/admin/bots/{alias}/assistant/upgrade-targets",
-            self.admin_assistant_upgrade_targets,
-        )
-        app.router.add_get(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}",
-            self.admin_assistant_proposal_detail,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch",
-            self.admin_assistant_proposal_patch_generate,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch/stream",
-            self.admin_assistant_proposal_patch_generate_stream,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/patch/approve",
-            self.admin_assistant_proposal_patch_approve,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/approve",
-            self.admin_assistant_proposal_approve,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/reject",
-            self.admin_assistant_proposal_reject,
-        )
-        app.router.add_get(
-            "/api/admin/bots/{alias}/assistant/proposals/{proposal_id}/apply-log",
-            self.admin_assistant_upgrade_apply_log,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/upgrades/{proposal_id}/dry-run",
-            self.admin_assistant_upgrade_dry_run,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/upgrades/{proposal_id}/apply",
-            self.admin_assistant_upgrade_apply,
-        )
-        app.router.add_get("/api/admin/bots/{alias}/assistant/memory/search", self.admin_assistant_memory_search)
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/memory/{memory_id}/invalidate",
-            self.admin_assistant_memory_invalidate,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/memory/bulk-invalidate",
-            self.admin_assistant_memory_bulk_invalidate,
-        )
-        app.router.add_post("/api/admin/bots/{alias}/assistant/memory/reindex", self.admin_assistant_memory_reindex)
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/evals/memory/run",
-            self.admin_assistant_memory_eval_run,
-        )
-        app.router.add_get(
-            "/api/admin/bots/{alias}/assistant/evals/memory/reports",
-            self.admin_assistant_memory_eval_reports,
-        )
-        app.router.add_get(
-            "/api/admin/bots/{alias}/assistant/diagnostics/perf",
-            self.admin_assistant_diagnostics,
-        )
-        app.router.add_get("/api/admin/bots/{alias}/assistant/cron/jobs", self.admin_assistant_cron_jobs)
-        app.router.add_post("/api/admin/bots/{alias}/assistant/cron/jobs", self.admin_assistant_cron_job_create)
-        app.router.add_patch(
-            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}",
-            self.admin_assistant_cron_job_update,
-        )
-        app.router.add_delete(
-            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}",
-            self.admin_assistant_cron_job_delete,
-        )
-        app.router.add_post(
-            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}/run",
-            self.admin_assistant_cron_job_run,
-        )
-        app.router.add_get(
-            "/api/admin/bots/{alias}/assistant/cron/jobs/{job_id}/runs",
-            self.admin_assistant_cron_job_runs,
-        )
-        app.router.add_get("/api/admin/bots/{alias}/assistant/audit", self.admin_assistant_audit)
-        app.router.add_get("/api/admin/git-proxy", self.admin_get_git_proxy)
-        app.router.add_patch("/api/admin/git-proxy", self.admin_patch_git_proxy)
-        app.router.add_get("/api/admin/update", self.admin_get_update)
-        app.router.add_patch("/api/admin/update", self.admin_patch_update)
-        app.router.add_post("/api/admin/update/check", self.admin_update_check)
-        app.router.add_post("/api/admin/update/download", self.admin_update_download)
-        app.router.add_post("/api/admin/update/download/stream", self.admin_update_download_stream)
-        app.router.add_post("/api/admin/restart", self.admin_restart)
-        app.router.add_get("/api/admin/tunnel", self.admin_tunnel)
-        app.router.add_post("/api/admin/tunnel/start", self.admin_tunnel_start)
-        app.router.add_post("/api/admin/tunnel/stop", self.admin_tunnel_stop)
-        app.router.add_post("/api/admin/tunnel/restart", self.admin_tunnel_restart)
+        for module in (
+            auth_routes,
+            cluster_routes,
+            chat_routes,
+            terminal_routes,
+            debug_routes,
+            files_routes,
+            plugin_routes,
+            assistant_routes,
+            git_routes,
+            admin_routes,
+        ):
+            module.register(app, self)
         
         # Add static file serving for frontend when dist exists
         assets_dir = Path(self._get_static_dir("assets"))

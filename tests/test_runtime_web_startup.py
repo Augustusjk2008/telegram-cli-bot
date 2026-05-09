@@ -118,6 +118,18 @@ def test_tunnel_service_uses_runtime_port_for_local_url() -> None:
     assert tunnel.snapshot()["local_url"] == "http://127.0.0.1:8769"
 
 
+def test_web_server_routes_still_include_core_endpoints() -> None:
+    server = WebApiServer(object())
+    app = server._build_app()
+    routes = {route.resource.canonical for route in app.router.routes()}
+
+    assert "/api/health" in routes
+    assert "/api/bots/{alias}/chat/stream" in routes
+    assert "/api/bots/{alias}/files/read" in routes
+    assert "/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/open" in routes
+    assert "/api/admin/bots/{alias}/assistant/proposals" in routes
+
+
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_prints_qr_for_quick_tunnel(monkeypatch: pytest.MonkeyPatch) -> None:
     server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())

@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from aiohttp import web
+
+
+def register(app: web.Application, server) -> None:
+    app.router.add_get("/api/bots/{alias}/git", server.get_git_overview_view)
+    app.router.add_get("/api/bots/{alias}/git/tree-status", server.get_git_tree_status_view)
+    app.router.add_get("/api/bots/{alias}/git/branches", server.get_git_branches_view)
+    app.router.add_post("/api/bots/{alias}/git/branches", server.post_git_branch_create)
+    app.router.add_post("/api/bots/{alias}/git/branches/switch", server.post_git_branch_switch)
+    app.router.add_get("/api/bots/{alias}/git/stashes", server.get_git_stashes_view)
+    app.router.add_post("/api/bots/{alias}/git/stashes/apply", server.post_git_stash_apply)
+    app.router.add_post("/api/bots/{alias}/git/stashes/drop", server.post_git_stash_drop)
+    app.router.add_get("/api/bots/{alias}/git/blame", server.get_git_blame_view)
+    app.router.add_post("/api/bots/{alias}/git/init", server.post_git_init)
+    app.router.add_get("/api/bots/{alias}/git/diff", server.get_git_diff_view)
+    app.router.add_post("/api/bots/{alias}/git/stage", server.post_git_stage)
+    app.router.add_post("/api/bots/{alias}/git/unstage", server.post_git_unstage)
+    app.router.add_post("/api/bots/{alias}/git/discard", server.post_git_discard)
+    app.router.add_post("/api/bots/{alias}/git/discard-all", server.post_git_discard_all)
+    app.router.add_post("/api/bots/{alias}/git/commit", server.post_git_commit)
+    app.router.add_post("/api/bots/{alias}/git/fetch", server.post_git_fetch)
+    app.router.add_post("/api/bots/{alias}/git/pull", server.post_git_pull)
+    app.router.add_post("/api/bots/{alias}/git/push", server.post_git_push)
+    app.router.add_post("/api/bots/{alias}/git/stash", server.post_git_stash)
+    app.router.add_post("/api/bots/{alias}/git/stash/pop", server.post_git_stash_pop)
+    app.router.add_get("/api/admin/git-proxy", server.admin_get_git_proxy)
+    app.router.add_patch("/api/admin/git-proxy", server.admin_patch_git_proxy)
+
