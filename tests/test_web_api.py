@@ -112,6 +112,17 @@ def test_web_api_common_imports_remain_compatible():
     assert get_profile_or_raise is common_get_profile_or_raise
 
 
+def test_file_service_imports_remain_compatible():
+    from bot.web.api_service import get_directory_listing, get_working_directory, reveal_directory_tree
+    from bot.web.files_service import get_directory_listing as files_get_directory_listing
+    from bot.web.files_service import get_working_directory as files_get_working_directory
+    from bot.web.files_service import reveal_directory_tree as files_reveal_directory_tree
+
+    assert get_directory_listing is files_get_directory_listing
+    assert get_working_directory is files_get_working_directory
+    assert reveal_directory_tree is files_reveal_directory_tree
+
+
 def _png_bytes(width: int, height: int) -> bytes:
     row = b"\x00" + (b"\x00\x00\x00" * width)
     raw = row * height
