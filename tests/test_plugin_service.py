@@ -34,6 +34,17 @@ def test_plugin_manifest_payload_serializer_matches_service(tmp_path: Path) -> N
     assert build_manifest_payload(manifest)["id"] == service._manifest_payload(manifest)["id"]
 
 
+def test_plugin_api_service_imports_remain_compatible():
+    from bot.web.api_service import get_plugin_view_window, list_plugins, open_plugin_view
+    from bot.web.plugin_api_service import get_plugin_view_window as plugin_get_plugin_view_window
+    from bot.web.plugin_api_service import list_plugins as plugin_list_plugins
+    from bot.web.plugin_api_service import open_plugin_view as plugin_open_plugin_view
+
+    assert list_plugins is plugin_list_plugins
+    assert open_plugin_view is plugin_open_plugin_view
+    assert get_plugin_view_window is plugin_get_plugin_view_window
+
+
 def _write_wave_plugin(root: Path) -> None:
     plugin_dir = root / "vivado-waveform"
     backend_dir = plugin_dir / "backend"
