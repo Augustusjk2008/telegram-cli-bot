@@ -2757,19 +2757,12 @@ def list_conversations(
     }
 
 
-def create_conversation(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
+def _create_agent_conversation(
+    profile: BotProfile,
+    session: UserSession,
+    *,
     title: str = "",
-    agent_id: str = "main",
-) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    with session._lock:
-        is_processing = bool(session.is_processing)
-    if is_processing:
-        _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
-
+) -> tuple[ChatStore, str]:
     store = ChatStore(Path(session.working_dir))
     conversation_id = store.create_conversation(
         bot_id=session.bot_id,
@@ -2789,6 +2782,48 @@ def create_conversation(
         session.claude_session_id = None
         session.claude_session_initialized = False
     session.persist()
+    return store, conversation_id
+
+
+def _create_cluster_child_conversations(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    profile: BotProfile,
+) -> None:
+    if not profile.cluster.enabled:
+        return
+    for agent in profile.normalized_agents():
+        if agent.id == "main" or not agent.enabled:
+            continue
+        _profile, _agent, child_session = get_chat_session_for_alias(manager, alias, user_id, agent.id)
+        with child_session._lock:
+            is_processing = bool(child_session.is_processing)
+        if is_processing:
+            _raise(409, "conversation_switch_blocked", "子 agent 正在运行，先终止或等待完成")
+    for agent in profile.normalized_agents():
+        if agent.id == "main" or not agent.enabled:
+            continue
+        _profile, _agent, child_session = get_chat_session_for_alias(manager, alias, user_id, agent.id)
+        _create_agent_conversation(profile, child_session)
+
+
+def create_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    title: str = "",
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    with session._lock:
+        is_processing = bool(session.is_processing)
+    if is_processing:
+        _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+
+    if session.agent_id == "main":
+        _create_cluster_child_conversations(manager, alias, user_id, profile)
+    store, conversation_id = _create_agent_conversation(profile, session, title=title)
     return {
         "conversation": {
             **store.get_conversation(conversation_id),
@@ -3001,6 +3036,22 @@ def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
     _CLUSTER_RUN_CONTROLS.pop(run_id, None)
 
 
+def _cluster_agent_result_error(result: dict[str, Any]) -> str:
+    output = str(result.get("output") or "").strip()
+    returncode = result.get("returncode")
+    if isinstance(returncode, int) and returncode != 0:
+        return output or f"子 agent 命令退出码 {returncode}"
+
+    message = result.get("message") if isinstance(result.get("message"), dict) else {}
+    state = str(message.get("state") or "").strip()
+    meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+    completion_state = str(meta.get("completion_state") or "").strip()
+    if state == "error" or (completion_state and completion_state != "completed"):
+        reason = completion_state or state or "error"
+        return output or str(message.get("content") or "").strip() or f"子 agent 执行失败: {reason}"
+    return ""
+
+
 async def _run_cluster_agent_task(
     manager: MultiBotManager,
     run_id: str,
@@ -3036,7 +3087,11 @@ async def _run_cluster_agent_task(
                     ),
                     timeout=live_task.timeout_seconds,
                 )
-                _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, str(result.get("output") or ""))
+                error = _cluster_agent_result_error(result)
+                if error:
+                    _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, error)
+                else:
+                    _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, str(result.get("output") or ""))
     except asyncio.TimeoutError:
         _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, "子 agent 执行超时")
     except Exception as exc:

@@ -509,6 +509,42 @@ async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBo
 
 
 @pytest.mark.asyncio
+async def test_cluster_ask_agent_marks_cli_error_result_failed(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+
+    async def fake_run_cli_chat(*_args, **_kwargs):
+        return {"output": "子 agent 进程退出", "returncode": 1}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+    task_id = result["data"]["task_id"]
+
+    poll = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
+    )
+
+    task = poll["data"]["tasks"][0]
+    assert task["status"] == "failed"
+    assert "子 agent 进程退出" in task["error"]
+
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_injects_cluster_mcp_config_for_codex(web_manager: MultiBotManager, tmp_path: Path):
     fake_process = MagicMock()
     captured = {}
@@ -6016,6 +6052,41 @@ def test_conversation_api_create_list_and_select(web_manager: MultiBotManager, t
     assert selected["conversation"]["active"] is True
     assert selected["messages"] == []
     assert session.active_conversation_id == conversation_id
+
+
+@pytest.mark.asyncio
+async def test_cluster_main_new_conversation_resets_child_agent_conversations(web_manager: MultiBotManager, tmp_path: Path):
+    from bot.cluster.config import BotClusterConfig
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    web_manager.main_profile.cluster = BotClusterConfig(enabled=True)
+    await create_agent(web_manager, "main", {"id": "tester", "name": "测试专家"})
+    await create_agent(web_manager, "main", {"id": "reviewer", "name": "代码审查"})
+    main_session = get_session_for_alias(web_manager, "main", 1001)
+    main_session.working_dir = str(tmp_path)
+    _profile, _agent, tester_session = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="tester")
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")
+    tester_session.working_dir = str(tmp_path)
+    reviewer_session.working_dir = str(tmp_path)
+
+    old_tester = create_conversation(web_manager, "main", 1001, "旧测试", agent_id="tester")
+    old_reviewer = create_conversation(web_manager, "main", 1001, "旧审查", agent_id="reviewer")
+    tester_session.codex_session_id = "tester-thread"
+    reviewer_session.codex_session_id = "reviewer-thread"
+
+    created = create_conversation(web_manager, "main", 1001, "主新会话")
+
+    tester_list = list_conversations(web_manager, "main", 1001, agent_id="tester")
+    reviewer_list = list_conversations(web_manager, "main", 1001, agent_id="reviewer")
+    assert main_session.active_conversation_id == created["conversation"]["id"]
+    assert tester_session.active_conversation_id != old_tester["conversation"]["id"]
+    assert reviewer_session.active_conversation_id != old_reviewer["conversation"]["id"]
+    assert tester_session.codex_session_id is None
+    assert reviewer_session.codex_session_id is None
+    assert tester_list["active_conversation_id"] == tester_session.active_conversation_id
+    assert reviewer_list["active_conversation_id"] == reviewer_session.active_conversation_id
+    assert tester_list["items"][0]["active"] is True
+    assert reviewer_list["items"][0]["active"] is True
 
 
 @pytest.mark.asyncio

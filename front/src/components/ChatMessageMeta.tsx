@@ -12,11 +12,25 @@ function formatTime(createdAt: string) {
   if (Number.isNaN(parsed)) {
     return "--:--";
   }
-  return new Date(parsed).toLocaleTimeString("zh-CN", {
+  const createdDate = new Date(parsed);
+  const timeText = createdDate.toLocaleTimeString("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
   });
+  const now = new Date();
+  const isSameDay = createdDate.getFullYear() === now.getFullYear()
+    && createdDate.getMonth() === now.getMonth()
+    && createdDate.getDate() === now.getDate();
+  if (isSameDay) {
+    return timeText;
+  }
+  const dateText = createdDate.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return `${dateText} ${timeText}`;
 }
 
 export function ChatMessageMeta({ name, createdAt, align = "left", avatar }: Props) {
