@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from bot.assistant.home import AssistantHome
+from bot.assistant.shared.text import parse_iso_datetime as _parse_iso_datetime
 
 STATE_PATH = Path("state/compaction.json")
 CAPTURE_THRESHOLD = 6
@@ -60,15 +61,6 @@ def save_compaction_state(home: AssistantHome, payload: dict[str, Any]) -> dict[
         encoding="utf-8",
     )
     return state
-
-
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
 
 
 def _list_capture_records(home: AssistantHome) -> list[dict[str, str]]:

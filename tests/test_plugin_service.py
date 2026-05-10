@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from bot.plugins.catalog import build_installable_plugin_payload
+from bot.plugins.execution import build_payload_metrics, normalize_action_result
 from bot.plugins.service import PluginService
 from bot.plugins.view_sessions import build_source_fingerprint
 
@@ -43,6 +45,35 @@ def test_plugin_api_service_imports_remain_compatible():
     assert list_plugins is plugin_list_plugins
     assert open_plugin_view is plugin_open_plugin_view
     assert get_plugin_view_window is plugin_get_plugin_view_window
+
+
+def test_plugin_catalog_payload_helper_matches_service(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "plugins"
+    source_plugins_root = repo_root / "examples" / "plugins"
+    source_plugins_root.mkdir(parents=True)
+    _write_minimal_plugin(source_plugins_root, "fresh-plugin", name="Fresh Plugin")
+
+    service = PluginService(repo_root, plugins_root=plugins_root, source_plugins_root=source_plugins_root)
+    source_dir = source_plugins_root / "fresh-plugin"
+
+    assert build_installable_plugin_payload(source_dir, plugins_root) == service._build_installable_plugin_payload(source_dir)
+
+
+def test_plugin_execution_helpers_match_service_wrappers(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    service = PluginService(repo_root, plugins_root=tmp_path / "plugins")
+    payload = {
+        "tracks": [{"segments": [{}, {}]}],
+        "rows": [{"id": "row-1"}],
+        "roots": [{"children": [{"children": []}]}],
+    }
+    action_result = {"refresh": "bad-value", "hostEffects": [{"type": "download"}]}
+
+    assert build_payload_metrics(payload) == service._build_payload_metrics(payload)
+    assert normalize_action_result(action_result) == service._normalize_action_result(action_result)
 
 
 def _write_wave_plugin(root: Path) -> None:
