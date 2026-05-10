@@ -16,6 +16,14 @@ def test_plugin_runtime_default_idle_timeout_is_shorter():
     assert runtime._idle_timeout_seconds == 120
 
 
+def test_plugin_runtime_facade_exports_public_methods():
+    runtime = PluginRuntime()
+
+    assert callable(runtime.render_view)
+    assert callable(runtime.open_view)
+    assert callable(runtime.shutdown)
+
+
 def _write_echo_plugin(root: Path) -> None:
     plugin_dir = root / "echo-wave"
     backend_dir = plugin_dir / "backend"
