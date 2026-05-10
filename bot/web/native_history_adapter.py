@@ -525,7 +525,6 @@ def _consume_claude_line(
                 text = _stringify_value(block.get("text"))
                 if text:
                     _append_assistant_text(assistant_messages, text)
-                    _append_trace_event(turn, _trace_event("commentary", raw_type="text", summary=text), include_trace=include_trace)
                 continue
             if block_type == "tool_use":
                 name = _stringify_value(block.get("name")) or "tool_use"
@@ -549,16 +548,6 @@ def _consume_claude_line(
                     tool_name=name,
                 )
                 continue
-            _append_trace_event(
-                turn,
-                _trace_event(
-                    "unknown",
-                    raw_type=block_type or item_type or "unknown",
-                    summary=_safe_json_dumps(block),
-                    payload=block,
-                ),
-                include_trace=include_trace,
-            )
         return
 
     if item_type == "user":
@@ -593,16 +582,7 @@ def _consume_claude_line(
                     parser_state["expect_injection_after_skill"] = True
         return
 
-    _append_trace_event(
-        turn,
-        _trace_event(
-            "unknown",
-            raw_type=item_type or "unknown",
-            summary=_safe_json_dumps(item),
-            payload=item,
-        ),
-        include_trace=include_trace,
-    )
+    return
 
 
 def load_native_transcript(

@@ -38,13 +38,12 @@ def test_build_web_chat_history_maps_claude_tool_use_and_tool_result():
 
     assert turns[-1]["user_text"] == "查看最近变更"
     assert turns[-1]["content"] == "最近有 1 个文件修改。"
-    assert turns[-1]["meta"]["trace"][1]["raw_type"] == "tool_use"
-    assert turns[-1]["meta"]["trace"][2]["raw_type"] == "tool_result"
+    assert [item["raw_type"] for item in turns[-1]["meta"]["trace"]] == ["tool_use", "tool_result"]
     assert [item["summary"] for item in turns[-1]["meta"]["trace"]] == [
-        "我先查看 git 状态。",
         "git status --short",
         "M bot/web/api_service.py",
     ]
+    assert turns[-1]["meta"]["process_count"] == 0
 
 
 def test_claude_skill_injection_text_is_not_promoted_to_user_turn():
@@ -96,9 +95,9 @@ def test_consume_stream_trace_chunk_maps_claude_events_without_type_error():
         state,
     )
 
-    assert [event["kind"] for event in events] == ["commentary", "tool_call"]
-    assert events[1]["raw_type"] == "tool_use"
-    assert events[1]["summary"] == "git status --short"
+    assert [event["kind"] for event in events] == ["tool_call"]
+    assert events[0]["raw_type"] == "tool_use"
+    assert events[0]["summary"] == "git status --short"
 
 
 def test_consume_stream_trace_chunk_maps_codex_response_item_and_event_msg_events():
@@ -143,8 +142,75 @@ def test_consume_claude_line_remains_backward_compatible_without_include_trace_k
         turn,
     )
 
-    assert [event["kind"] for event in turn["trace"]] == ["commentary", "tool_call"]
+    assert [event["kind"] for event in turn["trace"]] == ["tool_call"]
     assert turn["assistant_messages"] == ["我先检查最近变更。"]
+
+
+def test_claude_host_metadata_records_are_ignored(tmp_path: Path):
+    transcript = tmp_path / "claude-host-metadata.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"查看最近变更"}]}}',
+                '{"type":"queue-operation","operation":"queued"}',
+                '{"type":"attachment","file_name":"trace.log"}',
+                '{"type":"ai-title","title":"查看最近变更"}',
+                '{"type":"last-prompt","prompt":"查看最近变更"}',
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"最近有 1 个文件修改。"}]}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    turns = load_native_transcript("claude", transcript, session_id="session-host-metadata")
+
+    assert turns[-1]["content"] == "最近有 1 个文件修改。"
+    assert "trace" not in turns[-1]["meta"]
+    assert turns[-1]["meta"]["trace_count"] == 0
+    assert turns[-1]["meta"]["process_count"] == 0
+
+
+def test_claude_tool_use_and_tool_result_are_retained_without_process_count(tmp_path: Path):
+    transcript = tmp_path / "claude-tool-trace.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"查看最近变更"}]}}',
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git status --short"}}]}}',
+                '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"M bot/web/api_service.py"}]}}',
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"最近有 1 个文件修改。"}]}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    turns = load_native_transcript("claude", transcript, session_id="session-tool-trace")
+
+    assert [item["kind"] for item in turns[-1]["meta"]["trace"]] == ["tool_call", "tool_result"]
+    assert turns[-1]["meta"]["tool_call_count"] == 1
+    assert turns[-1]["meta"]["process_count"] == 0
+
+
+def test_claude_tool_result_does_not_start_new_turn(tmp_path: Path):
+    transcript = tmp_path / "claude-tool-result-turns.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"第一轮"}]}}',
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"pwd"}}]}}',
+                '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"/tmp"}]}}',
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第一轮完成。"}]}}',
+                '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"第二轮"}]}}',
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第二轮完成。"}]}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    turns = load_native_transcript("claude", transcript, session_id="session-tool-result-turns")
+
+    assert [turn["user_text"] for turn in turns] == ["第一轮", "第二轮"]
+    assert [turn["content"] for turn in turns] == ["第一轮完成。", "第二轮完成。"]
 
 
 def test_build_web_chat_history_maps_payload_style_codex_rollout_and_ignores_reasoning(tmp_path: Path):
