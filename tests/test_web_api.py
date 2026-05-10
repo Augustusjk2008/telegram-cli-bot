@@ -5817,8 +5817,8 @@ async def test_stream_cli_chat_assistant_claude_emits_trace_without_include_trac
     done_event = next(event for event in events if event["type"] == "done")
     session = get_session_for_alias(web_manager, "assistant1", 1001)
 
-    assert [event["event"]["kind"] for event in trace_events] == ["commentary", "tool_call"]
-    assert trace_events[1]["event"]["summary"] == "git status --short"
+    assert [event["event"]["kind"] for event in trace_events] == ["tool_call"]
+    assert trace_events[0]["event"]["summary"] == "git status --short"
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "最近有 1 个文件修改。"
     assert session.claude_session_initialized is True
