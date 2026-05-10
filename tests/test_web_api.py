@@ -123,6 +123,17 @@ def test_file_service_imports_remain_compatible():
     assert reveal_directory_tree is files_reveal_directory_tree
 
 
+def test_chat_runtime_service_imports_remain_compatible():
+    from bot.web.api_service import execute_assistant_run_request, run_chat, stream_chat
+    from bot.web.chat_runtime_service import execute_assistant_run_request as runtime_execute_assistant_run_request
+    from bot.web.chat_runtime_service import run_chat as runtime_run_chat
+    from bot.web.chat_runtime_service import stream_chat as runtime_stream_chat
+
+    assert run_chat is runtime_run_chat
+    assert stream_chat is runtime_stream_chat
+    assert execute_assistant_run_request is runtime_execute_assistant_run_request
+
+
 def _png_bytes(width: int, height: int) -> bytes:
     row = b"\x00" + (b"\x00\x00\x00" * width)
     raw = row * height

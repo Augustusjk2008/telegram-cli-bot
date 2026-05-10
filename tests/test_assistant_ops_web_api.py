@@ -25,6 +25,15 @@ from bot.web.api_service import (
 from bot.web.server import WebApiServer
 
 
+def test_assistant_admin_service_imports_remain_compatible():
+    from bot.web.api_service import list_assistant_proposals, search_assistant_memories
+    from bot.web.assistant_admin_service import list_assistant_proposals as admin_list_assistant_proposals
+    from bot.web.assistant_admin_service import search_assistant_memories as admin_search_assistant_memories
+
+    assert list_assistant_proposals is admin_list_assistant_proposals
+    assert search_assistant_memories is admin_search_assistant_memories
+
+
 @pytest.fixture
 def web_manager(temp_dir: Path) -> MultiBotManager:
     storage_file = temp_dir / "managed_bots.json"
