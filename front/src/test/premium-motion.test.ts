@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  compactMotionStagger,
   delightMotion,
   delightMotionDurations,
   delightMotionStagger,
@@ -18,20 +19,32 @@ describe("premium motion presets", () => {
 
   test("exports the surfaces used by the workbench", () => {
     expect(Object.keys(premiumMotion).sort()).toEqual([
+      "anchoredPopover",
+      "detailSwap",
+      "dialogPanel",
       "messageRow",
       "paletteBackdrop",
       "palettePanel",
+      "popoverBackdrop",
       "shell",
+      "sidebarContent",
+      "statusSettle",
       "tracePanel",
     ]);
   });
 
   test("preserves baseline premium motion keys", () => {
     expect(Object.keys(premiumMotion).sort()).toEqual([
+      "anchoredPopover",
+      "detailSwap",
+      "dialogPanel",
       "messageRow",
       "paletteBackdrop",
       "palettePanel",
+      "popoverBackdrop",
       "shell",
+      "sidebarContent",
+      "statusSettle",
       "tracePanel",
     ]);
   });
@@ -46,6 +59,11 @@ describe("premium motion presets", () => {
   test("limits staggered delight animation to visible UI scale", () => {
     expect(delightMotionStagger.itemDelaySeconds).toBeLessThanOrEqual(0.03);
     expect(delightMotionStagger.maxAnimatedItems).toBeLessThanOrEqual(12);
+  });
+
+  test("keeps compact motion stagger bounded", () => {
+    expect(compactMotionStagger.itemDelaySeconds).toBeLessThanOrEqual(0.02);
+    expect(compactMotionStagger.maxAnimatedItems).toBeLessThanOrEqual(8);
   });
 
   test("removes timed animation when reduced motion is requested", () => {

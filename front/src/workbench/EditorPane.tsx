@@ -175,6 +175,7 @@ export function EditorPane({
             return (
               <div
                 key={tab.path}
+                data-editor-tab-active={isActive ? "true" : "false"}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setMenuPath((current) => current === tab.path ? "" : tab.path);

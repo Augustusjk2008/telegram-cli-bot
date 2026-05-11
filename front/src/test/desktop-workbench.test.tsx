@@ -297,10 +297,31 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
 
   await user.click(screen.getByRole("button", { name: "插件" }));
   expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();
-  expect(screen.getByText("Vivado Waveform")).toBeInTheDocument();
+  expect(await screen.findByText("Vivado Waveform")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
+});
+
+test("desktop sidebar view switch keeps selected pane accessible with motion", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "搜索" }));
+
+  expect(await screen.findByTestId("desktop-sidebar-scroll")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "搜索" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "搜索" })).toHaveAttribute("data-active", "true");
 });
 
 test("embedded git opens changed file diffs as read-only editor tabs", async () => {

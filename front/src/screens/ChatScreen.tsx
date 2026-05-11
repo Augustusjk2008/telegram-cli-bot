@@ -2229,7 +2229,12 @@ export function ChatScreen({
         >
           <div className="flex items-center gap-2 text-sm font-medium">
             <LoaderCircle className="h-4 w-4 animate-spin" />
-            <span>{assistantRuntimeHeadline}</span>
+            <span
+              key={assistantRuntimeHeadline}
+              data-runtime-status-settle="true"
+            >
+              {assistantRuntimeHeadline}
+            </span>
           </div>
           {assistantRuntimeActiveLabel ? (
             <p className="mt-1 text-xs text-amber-800 break-all">当前：{assistantRuntimeActiveLabel}</p>

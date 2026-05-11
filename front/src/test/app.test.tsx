@@ -184,6 +184,26 @@ test("desktop bot switcher uses anchored popover and leaves mobile sheet untouch
   expect(screen.getByRole("button", { name: "智能体管理" })).toBeInTheDocument();
 });
 
+test("desktop bot switcher keeps focused bot detail interactive with motion", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByTestId("desktop-workbench-root");
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  const popover = await screen.findByTestId("desktop-bot-switcher-popover");
+  await user.hover(within(popover).getByRole("button", { name: /team2/i }));
+  const detailPanels = within(popover).getAllByTestId("desktop-bot-switcher-detail");
+  const detail = detailPanels[detailPanels.length - 1];
+
+  expect(within(popover).getAllByText(/team2/i).length).toBeGreaterThan(0);
+  expect(within(detail).getByRole("button", { name: /进入|当前/i })).toBeEnabled();
+});
+
 test("mobile bot switcher still uses bottom sheet", async () => {
   const user = userEvent.setup();
 
@@ -520,8 +540,12 @@ test("bot manager can add rename and delete managed bots", async () => {
   expect(await screen.findByText("planner")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "删除 planner" }));
+  expect(await screen.findByText("删除智能体 planner")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "删除" }));
 
-  expect(screen.queryByText("planner")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.queryByText("planner")).not.toBeInTheDocument();
+  });
 });
 
 test("desktop bot manager uses dense desktop screen while mobile keeps old manager", async () => {
@@ -664,7 +688,7 @@ test("desktop bot switcher focuses offline bot but does not switch to it", async
   await user.keyboard("{ArrowDown}{Enter}");
 
   expect(screen.getByRole("button", { name: "main" })).toBeInTheDocument();
-  expect(screen.getByText("离线中，暂不可切换")).toBeInTheDocument();
+  expect(await screen.findByText("离线中，暂不可切换")).toBeInTheDocument();
 });
 
 test("desktop bot switcher supports arrow navigation and enter selection", async () => {

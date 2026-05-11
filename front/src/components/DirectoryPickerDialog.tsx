@@ -180,12 +180,12 @@ export function DirectoryPickerDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="workbench-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
-      <div className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-[var(--surface)] shadow-[var(--shadow-card)]">
+      <div className="workbench-dialog-panel flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-[var(--surface)] shadow-[var(--shadow-card)]">
         <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold text-[var(--text)]">{title}</h2>

@@ -206,14 +206,14 @@ export function FilePreviewDialog({
     return (
       <div
         data-testid="desktop-workbench-preview"
-        className="fixed inset-0 z-50 bg-black/35 pointer-events-none"
+        className="workbench-dialog-backdrop pointer-events-none fixed inset-0 z-50 bg-black/35"
         role="dialog"
         aria-modal="true"
         aria-label={title}
       >
         <div
           data-testid="desktop-workbench-preview-window"
-          className="pointer-events-auto fixed flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-card)]"
+          className="workbench-dialog-panel pointer-events-auto fixed flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-card)]"
           style={{
             left: `${desktopFrame.left}px`,
             top: `${desktopFrame.top}px`,
@@ -300,12 +300,12 @@ export function FilePreviewDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="workbench-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
-      <div className="w-full max-w-3xl rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
+      <div className="workbench-dialog-panel w-full max-w-3xl rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
         <div className="mb-4 flex items-center justify-between gap-4">
           <h2 className="truncate text-lg font-semibold">{title}</h2>
           <button

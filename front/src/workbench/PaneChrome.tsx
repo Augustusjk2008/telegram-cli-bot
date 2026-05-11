@@ -36,7 +36,13 @@ export function PaneChrome({
           {collapsed ? "展开" : "折叠"}
         </button>
       </header>
-      <div className={collapsed ? "hidden min-h-0 flex-1" : "flex min-h-0 flex-1"}>{children}</div>
+      <div
+        data-panechrome-content="true"
+        data-collapsed={collapsed ? "true" : "false"}
+        className={collapsed ? "hidden min-h-0 flex-1" : "flex min-h-0 flex-1"}
+      >
+        {children}
+      </div>
     </section>
   );
 }

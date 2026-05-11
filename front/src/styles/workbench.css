@@ -181,6 +181,65 @@
   z-index: 1;
 }
 
+[data-testid="bot-switcher-unread-indicator"][data-unread-bump="true"] {
+  animation: workbenchBadgeBump 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.workbench-activity-button {
+  position: relative;
+}
+
+.workbench-activity-button[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  transform-origin: center;
+  animation: workbenchActivityGlide 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.workbench-dialog-backdrop {
+  animation: workbenchDialogBackdropIn 120ms ease-out;
+}
+
+.workbench-dialog-panel {
+  transform-origin: top center;
+  animation: workbenchDialogPanelIn 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.workbench-sheet-panel {
+  animation: workbenchSheetIn 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-panechrome-content="true"][data-collapsed="false"] {
+  animation: workbenchPaneContentReveal 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-runtime-status-settle="true"] {
+  display: inline-flex;
+  animation: workbenchRuntimeSettle 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-editor-tab-active="true"] {
+  position: relative;
+}
+
+[data-editor-tab-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: workbenchTabUnderlineIn 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
 @keyframes workbenchShellReveal {
   from {
     opacity: 0.98;
@@ -264,6 +323,102 @@
   }
 }
 
+@keyframes workbenchBadgeBump {
+  0% {
+    transform: scale(0.8);
+  }
+
+  55% {
+    transform: scale(1.16);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes workbenchActivityGlide {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scaleY(0.6);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@keyframes workbenchDialogBackdropIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes workbenchDialogPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes workbenchSheetIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes workbenchPaneContentReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes workbenchRuntimeSettle {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes workbenchTabUnderlineIn {
+  from {
+    opacity: 0;
+    transform: scaleX(0.7);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .desktop-workbench-root,
   .desktop-workbench-root [data-testid="desktop-workbench-columns"],
@@ -275,6 +430,14 @@
   .chat-message-bubble-delight[data-streaming="true"]::after,
   .chat-composer-delight[data-pulse="true"],
   .chat-runtime-banner[data-workbench-status="active"]::before,
+  [data-runtime-status-settle="true"],
+  [data-testid="bot-switcher-unread-indicator"][data-unread-bump="true"],
+  .workbench-activity-button[data-active="true"]::before,
+  .workbench-dialog-backdrop,
+  .workbench-dialog-panel,
+  .workbench-sheet-panel,
+  [data-panechrome-content="true"][data-collapsed="false"],
+  [data-editor-tab-active="true"]::after,
   .desktop-workbench-root [data-testid="desktop-file-drop-overlay"],
   .desktop-workbench-root [data-highlighted="true"] > button {
     animation: none !important;

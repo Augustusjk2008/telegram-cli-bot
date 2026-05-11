@@ -50,9 +50,11 @@ export function WorkbenchActivityRail({
           type="button"
           aria-label={label}
           aria-pressed={id === activeItem}
+          data-workbench-activity-id={id}
+          data-active={id === activeItem ? "true" : "false"}
           onClick={() => onSelectItem(id)}
           className={clsx(
-            "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
+            "workbench-activity-button inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
             id === activeItem && "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]",
           )}
         >

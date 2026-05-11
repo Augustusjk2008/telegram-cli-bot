@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { clsx } from "clsx";
 import { CheckCircle2, Copy, LogIn, Search, Settings, ShieldCheck, X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { BotStatus, BotSummary } from "../services/types";
+import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { BotActivitySummary, getBotActivityText } from "./BotActivitySummary";
 import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
@@ -105,6 +107,10 @@ export function DesktopBotSwitcherPopover({
   const searchRef = useRef<HTMLInputElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
   const style = useMemo(() => resolvePopoverStyle(anchorRect), [anchorRect]);
+  const reduceMotion = useReducedMotion();
+  const backdropMotion = resolveMotionProps(premiumMotion.popoverBackdrop, reduceMotion);
+  const panelMotion = resolveMotionProps(premiumMotion.anchoredPopover, reduceMotion);
+  const detailMotion = resolveMotionProps(premiumMotion.detailSwap, reduceMotion);
 
   const filteredBots = useMemo(() => bots.filter((bot) => {
     const status = effectiveStatus(bot);
@@ -196,14 +202,15 @@ export function DesktopBotSwitcherPopover({
 
   return (
     <div className="fixed inset-0 z-50" onKeyDown={handleKeyDown}>
-      <div className="absolute inset-0 bg-black/20" onClick={onClose} />
-      <div
+      <motion.div className="absolute inset-0 bg-black/20" onClick={onClose} {...backdropMotion} />
+      <motion.div
         role="dialog"
         aria-modal="true"
         aria-label="智能体切换"
         data-testid="desktop-bot-switcher-popover"
-        className="absolute flex min-h-[360px] flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
+        className="absolute flex min-h-[360px] origin-top-left flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
         style={style}
+        {...panelMotion}
       >
         <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
           <div className="relative min-w-0 flex-1">
@@ -301,98 +308,107 @@ export function DesktopBotSwitcherPopover({
           </div>
 
           <aside className="min-h-0 overflow-y-auto bg-[var(--surface-strong)] p-3">
-            {focusedBot ? (
-              <div className="space-y-3">
-                <div className="flex items-start gap-3">
-                  <ChatAvatar alt={`${focusedBot.alias} 头像`} avatarName={focusedBot.avatarName} kind="bot" size={40} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <h2 className="truncate text-base font-semibold text-[var(--text)]">智能体切换</h2>
-                      <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={focusedBot?.alias || "empty"}
+                data-testid="desktop-bot-switcher-detail"
+                className="min-h-0"
+                {...detailMotion}
+              >
+                {focusedBot ? (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3">
+                      <ChatAvatar alt={`${focusedBot.alias} 头像`} avatarName={focusedBot.avatarName} kind="bot" size={40} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <h2 className="truncate text-base font-semibold text-[var(--text)]">智能体切换</h2>
+                          <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
+                        </div>
+                        <div className="mt-1 truncate text-sm font-medium text-[var(--text)]">{focusedBot.alias}</div>
+                        <div className="text-xs text-[var(--muted)]">{focusedBot.botMode || "cli"} · {focusedBot.cliType}</div>
+                      </div>
                     </div>
-                    <div className="mt-1 truncate text-sm font-medium text-[var(--text)]">{focusedBot.alias}</div>
-                    <div className="text-xs text-[var(--muted)]">{focusedBot.botMode || "cli"} · {focusedBot.cliType}</div>
-                  </div>
-                </div>
 
-                <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
-                  <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
-                  <div className="mt-1 break-all font-mono text-xs text-[var(--text)]">{focusedBot.workingDir}</div>
-                </div>
+                    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
+                      <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
+                      <div className="mt-1 break-all font-mono text-xs text-[var(--text)]">{focusedBot.workingDir}</div>
+                    </div>
 
-                <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
-                  <div className="text-xs font-medium text-[var(--muted)]">状态</div>
-                  <div className="mt-1 text-sm text-[var(--text)]">{getBotActivityText(focusedBot)}</div>
-                  {busyNames(focusedBot).length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {busyNames(focusedBot).slice(0, 3).map((name) => (
-                        <span key={name} className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
-                          {name}
-                        </span>
-                      ))}
-                      {busyNames(focusedBot).length > 3 ? (
-                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">
-                          +{busyNames(focusedBot).length - 3}
-                        </span>
+                    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
+                      <div className="text-xs font-medium text-[var(--muted)]">状态</div>
+                      <div className="mt-1 text-sm text-[var(--text)]">{getBotActivityText(focusedBot)}</div>
+                      {busyNames(focusedBot).length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {busyNames(focusedBot).slice(0, 3).map((name) => (
+                            <span key={name} className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                              {name}
+                            </span>
+                          ))}
+                          {busyNames(focusedBot).length > 3 ? (
+                            <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">
+                              +{busyNames(focusedBot).length - 3}
+                            </span>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
-                  ) : null}
-                </div>
 
-                {isOffline(focusedBot) ? (
-                  <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700">
-                    离线中，暂不可切换
+                    {isOffline(focusedBot) ? (
+                      <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700">
+                        离线中，暂不可切换
+                      </div>
+                    ) : null}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        aria-disabled={isOffline(focusedBot)}
+                        onClick={() => void selectBot(focusedBot)}
+                        className={clsx(
+                          "inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white",
+                          isOffline(focusedBot) ? "cursor-not-allowed opacity-60" : "",
+                        )}
+                      >
+                        {focusedBot.alias === currentAlias ? <CheckCircle2 className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}
+                        {focusedBot.alias === currentAlias ? "当前" : "进入"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={copyWorkdir}
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
+                      >
+                        <Copy className="h-4 w-4" />
+                        复制目录
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onManage}
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
+                      >
+                        <Settings className="h-4 w-4" />
+                        智能体管理
+                      </button>
+                      {showInviteManager ? (
+                        <button
+                          type="button"
+                          onClick={onOpenInviteManager}
+                          className={clsx(
+                            "inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium hover:bg-[var(--surface-strong)]",
+                            inviteManagerActive ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-[var(--border)] bg-[var(--surface)]",
+                          )}
+                        >
+                          <ShieldCheck className="h-4 w-4" />
+                          邀请码
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
-
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    aria-disabled={isOffline(focusedBot)}
-                    onClick={() => void selectBot(focusedBot)}
-                    className={clsx(
-                      "inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white",
-                      isOffline(focusedBot) ? "cursor-not-allowed opacity-60" : "",
-                    )}
-                  >
-                    {focusedBot.alias === currentAlias ? <CheckCircle2 className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}
-                    {focusedBot.alias === currentAlias ? "当前" : "进入"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={copyWorkdir}
-                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
-                  >
-                    <Copy className="h-4 w-4" />
-                    复制目录
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onManage}
-                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
-                  >
-                    <Settings className="h-4 w-4" />
-                    智能体管理
-                  </button>
-                  {showInviteManager ? (
-                    <button
-                      type="button"
-                      onClick={onOpenInviteManager}
-                      className={clsx(
-                        "inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium hover:bg-[var(--surface-strong)]",
-                        inviteManagerActive ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-[var(--border)] bg-[var(--surface)]",
-                      )}
-                    >
-                      <ShieldCheck className="h-4 w-4" />
-                      邀请码
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
+              </motion.div>
+            </AnimatePresence>
           </aside>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

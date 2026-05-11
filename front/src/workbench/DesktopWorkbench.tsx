@@ -1,10 +1,12 @@
 import { clsx } from "clsx";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult, GitTreeStatus, HostEffect, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { GitScreen } from "../screens/GitScreen";
 import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
@@ -186,6 +188,7 @@ export function DesktopWorkbench({
   const [definitionMessage, setDefinitionMessage] = useState("");
   const [definitionSource, setDefinitionSource] = useState("");
   const gitDecorationRequestRef = useRef(0);
+  const reduceMotion = useReducedMotion();
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -254,6 +257,8 @@ export function DesktopWorkbench({
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult);
   const canEditPreview = previewResult?.previewKind !== "image";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
+  const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
+  const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
   const availableActivityItems: WorkbenchActivityId[] = structureOnly
     ? ["files"]
     : [
@@ -868,13 +873,21 @@ export function DesktopWorkbench({
               />
 
               {showSidebarContent ? (
-                layoutState.sidebarView === "files" ? (
-                  renderSidebarContent()
-                ) : (
-                  <div data-testid="desktop-sidebar-scroll" className="min-h-0 overflow-y-auto">
-                    {renderSidebarContent()}
-                  </div>
-                )
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={activeSidebarView}
+                    className="min-h-0 min-w-0"
+                    {...sidebarContentMotion}
+                  >
+                    {layoutState.sidebarView === "files" ? (
+                      renderSidebarContent()
+                    ) : (
+                      <div data-testid="desktop-sidebar-scroll" className="min-h-0 overflow-y-auto">
+                        {renderSidebarContent()}
+                      </div>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
               ) : null}
             </div>
           </section>
@@ -1101,9 +1114,10 @@ export function DesktopWorkbench({
 
       {definitionCandidates.length > 0 || definitionMessage ? (
         <div className="absolute inset-0 z-30 flex items-start justify-center bg-black/35 px-4 py-12">
-          <div
+          <motion.div
             data-testid="desktop-definition-picker"
             className="w-full max-w-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
+            {...dialogPanelMotion}
           >
             <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
               <div>
@@ -1148,7 +1162,7 @@ export function DesktopWorkbench({
                 ))}
               </div>
             )}
-          </div>
+          </motion.div>
         </div>
       ) : null}
     </div>

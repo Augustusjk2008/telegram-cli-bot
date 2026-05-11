@@ -25,6 +25,41 @@ export const premiumMotion = {
     animate: { opacity: 1 },
     transition: { duration: premiumMotionDurations.quick, ease: premiumMotionEase },
   },
+  popoverBackdrop: {
+    initial: { opacity: 0 },
+    animate: { opacity: 1 },
+    exit: { opacity: 0 },
+    transition: { duration: premiumMotionDurations.quick, ease: premiumMotionEase },
+  },
+  anchoredPopover: {
+    initial: { opacity: 0, y: -6, scale: 0.985 },
+    animate: { opacity: 1, y: 0, scale: 1 },
+    exit: { opacity: 0, y: -4, scale: 0.99 },
+    transition: { duration: premiumMotionDurations.standard, ease: premiumMotionEase },
+  },
+  detailSwap: {
+    initial: { opacity: 0, x: 8 },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: -6 },
+    transition: { duration: premiumMotionDurations.standard, ease: premiumMotionEase },
+  },
+  sidebarContent: {
+    initial: { opacity: 0, x: 8 },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: -6 },
+    transition: { duration: premiumMotionDurations.standard, ease: premiumMotionEase },
+  },
+  dialogPanel: {
+    initial: { opacity: 0, y: 8, scale: 0.985 },
+    animate: { opacity: 1, y: 0, scale: 1 },
+    exit: { opacity: 0, y: 6, scale: 0.99 },
+    transition: { duration: premiumMotionDurations.calm, ease: premiumMotionEase },
+  },
+  statusSettle: {
+    initial: { opacity: 0, y: -2, scale: 0.98 },
+    animate: { opacity: 1, y: 0, scale: 1 },
+    transition: { duration: premiumMotionDurations.standard, ease: premiumMotionEase },
+  },
   paletteBackdrop: {
     initial: { opacity: 0 },
     animate: { opacity: 1 },
@@ -79,6 +114,11 @@ export const delightMotion = {
 export const delightMotionStagger = {
   itemDelaySeconds: 0.02,
   maxAnimatedItems: 12,
+} as const;
+
+export const compactMotionStagger = {
+  itemDelaySeconds: 0.015,
+  maxAnimatedItems: 8,
 } as const;
 
 export function resolveMotionProps(preset: PremiumMotionPreset, reduceMotion: boolean | null) {

@@ -1,4 +1,5 @@
 import { clsx } from "clsx";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   PanelBottom,
   PanelBottomDashed,
@@ -8,6 +9,7 @@ import {
   PanelRightDashed,
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
+import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 
 type LayoutControlId = "sidebar" | "terminal" | "chat";
 
@@ -44,6 +46,8 @@ export function WorkbenchHeader({
   onViewModeChange,
   onOpenBotSwitcher,
 }: Props) {
+  const reduceMotion = useReducedMotion();
+  const botLabelMotion = resolveMotionProps(premiumMotion.statusSettle, reduceMotion);
   const layoutControls: Array<{
     id: LayoutControlId;
     visible: boolean;
@@ -91,11 +95,20 @@ export function WorkbenchHeader({
           {hasUnreadOtherBots ? (
             <span
               data-testid="bot-switcher-unread-indicator"
+              data-unread-bump={hasUnreadOtherBots ? "true" : "false"}
               aria-hidden="true"
               className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--surface-strong)]"
             />
           ) : null}
-          {currentBot}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={currentBot}
+              className="inline-block"
+              {...botLabelMotion}
+            >
+              {currentBot}
+            </motion.span>
+          </AnimatePresence>
         </button>
         <span className="truncate text-xs text-[var(--muted)]">{workspaceName}</span>
         {branchName ? (

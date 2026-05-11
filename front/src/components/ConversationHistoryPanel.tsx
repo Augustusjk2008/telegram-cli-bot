@@ -56,8 +56,8 @@ export function ConversationHistoryPanel({
   }
 
   return (
-    <div className="absolute inset-0 z-30 flex items-end bg-black/20 sm:items-stretch sm:bg-black/10">
-      <aside className="flex max-h-[85%] w-full flex-col rounded-t-2xl border-t border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] sm:h-full sm:max-h-none sm:w-[360px] sm:rounded-none sm:border-r sm:border-t-0">
+    <div className="workbench-dialog-backdrop absolute inset-0 z-30 flex items-end bg-black/20 sm:items-stretch sm:bg-black/10">
+      <aside className="workbench-sheet-panel flex max-h-[85%] w-full flex-col rounded-t-2xl border-t border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] sm:h-full sm:max-h-none sm:w-[360px] sm:rounded-none sm:border-r sm:border-t-0">
         <header className="border-b border-[var(--border)] p-3">
           <div className="flex items-center justify-between gap-2">
             <div className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
