@@ -176,8 +176,8 @@ function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
 
 const BOT_SWITCHER_STATUS_PRIORITY: Record<BotStatus, number> = {
   unread: 0,
-  running: 1,
-  busy: 2,
+  busy: 1,
+  running: 2,
   offline: 3,
 };
 

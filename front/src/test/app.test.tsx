@@ -760,7 +760,7 @@ test("bot switcher sorts bots by main first, then status, then alias", async () 
     return alias || "";
   });
 
-  expect(orderedAliases).toEqual(["main", "beta", "omega", "delta", "zeta", "alpha", "gamma"]);
+  expect(orderedAliases).toEqual(["main", "beta", "omega", "alpha", "delta", "zeta", "gamma"]);
 });
 
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {
