@@ -115,6 +115,7 @@ from bot.platform.processes import build_hidden_process_kwargs, terminate_proces
 from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
 from bot.sessions import (
     align_session_paths,
+    clear_bot_sessions,
     get_or_create_session,
     rekey_bot_sessions,
     reset_session,
@@ -4619,6 +4620,27 @@ async def add_managed_bot(
 async def remove_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     await manager.remove_bot(alias)
     return {"removed": True, "alias": alias}
+
+
+async def remove_managed_bot_with_history(
+    manager: MultiBotManager,
+    alias: str,
+    *,
+    delete_history: bool = False,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    bot_id = resolve_session_bot_id(manager, alias)
+    history_deleted = 0
+    if delete_history:
+        history_deleted = ChatStore(Path(profile.working_dir)).delete_bot_history(bot_id=bot_id)
+        clear_bot_sessions(bot_id)
+    await manager.remove_bot(alias)
+    return {
+        "removed": True,
+        "alias": alias,
+        "history_deleted": bool(delete_history),
+        "history_deleted_count": history_deleted,
+    }
 
 
 async def start_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:

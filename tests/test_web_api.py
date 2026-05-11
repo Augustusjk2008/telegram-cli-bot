@@ -35,7 +35,7 @@ from bot.assistant.runtime import AssistantRunRequest
 from bot.assistant.state import save_assistant_runtime_state
 from bot.manager import MultiBotManager
 from bot.messages import msg
-from bot.models import BotProfile, UserSession
+from bot.models import AgentProfile, BotProfile, UserSession
 from bot.plugins.service import PluginService
 from bot.session_store import load_session, save_session
 from bot.web.auth_store import WebAuthStore
@@ -4657,6 +4657,96 @@ async def test_admin_rename_bot_route_keeps_existing_chat_history(
     persisted = load_session(new_bot_id, 1001)
     assert persisted is not None
     assert persisted["codex_session_id"] == "thread-old"
+
+
+@pytest.mark.asyncio
+async def test_admin_remove_bot_route_can_delete_history_for_all_agents(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    home = temp_dir / "home"
+    home.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    workdir = temp_dir / "shared"
+    workdir.mkdir()
+    review_profile = BotProfile(
+        alias="review",
+        token="sub-token",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        agents=[AgentProfile(id="reviewer", name="代码审查")],
+    )
+    other_profile = BotProfile(
+        alias="duplicate-a",
+        token="sub-token",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+    )
+    web_manager.managed_profiles["review"] = review_profile
+    web_manager.managed_profiles["duplicate-a"] = other_profile
+
+    review_bot_id = resolve_session_bot_id(web_manager, "review")
+    other_bot_id = resolve_session_bot_id(web_manager, "duplicate-a")
+
+    review_session = get_session_for_alias(web_manager, "review", 1001)
+    review_session.codex_session_id = "review-thread"
+    review_session.persist()
+    other_session = get_session_for_alias(web_manager, "duplicate-a", 1001)
+    other_session.codex_session_id = "other-thread"
+    other_session.persist()
+
+    history_service = ChatHistoryService(ChatStore(workdir))
+    main_handle = history_service.start_turn(
+        profile=review_profile,
+        session=review_session,
+        user_text="review 主问",
+        native_provider="codex",
+    )
+    history_service.complete_turn(main_handle, content="review 主答", completion_state="completed")
+
+    review_child_session = get_chat_session_for_alias(web_manager, "review", 1001, "reviewer")[2]
+    reviewer_handle = history_service.start_turn(
+        profile=review_profile,
+        session=review_child_session,
+        user_text="review 子问",
+        native_provider="codex",
+    )
+    history_service.complete_turn(reviewer_handle, content="review 子答", completion_state="completed")
+
+    other_service = ChatHistoryService(ChatStore(workdir))
+    other_handle = other_service.start_turn(
+        profile=other_profile,
+        session=other_session,
+        user_text="other 问",
+        native_provider="codex",
+    )
+    other_service.complete_turn(other_handle, content="other 答", completion_state="completed")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.delete("/api/admin/bots/review?delete_history=true")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["removed"] is True
+    assert payload["data"]["history_deleted"] is True
+    assert payload["data"]["history_deleted_count"] == 2
+    assert "review" not in web_manager.managed_profiles
+    assert load_session(review_bot_id, 1001) is None
+    assert load_session(other_bot_id, 1001) is not None
+
+    assert get_history(web_manager, "duplicate-a", 1001, limit=10)["items"][-2]["content"] == "other 问"
+    with pytest.raises(WebApiError):
+        get_history(web_manager, "review", 1001, limit=10)
 
 
 @pytest.mark.asyncio

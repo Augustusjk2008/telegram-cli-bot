@@ -75,6 +75,7 @@ import type {
   PublicHostInfo,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
+  RemoveBotOptions,
   InstallablePluginSummary,
   PluginRenderResult,
   PluginSummary,
@@ -227,7 +228,7 @@ export interface WebBotClient {
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;
-  removeBot(botAlias: string): Promise<void>;
+  removeBot(botAlias: string, options?: RemoveBotOptions): Promise<void>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
   listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]>;

@@ -4919,7 +4919,7 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(alias);
   }
 
-  async removeBot(botAlias: string): Promise<void> {
+  async removeBot(botAlias: string, _options: { deleteHistory?: boolean } = {}): Promise<void> {
     if (botAlias === "main") {
       return;
     }

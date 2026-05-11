@@ -4258,8 +4258,13 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
-  async removeBot(botAlias: string): Promise<void> {
-    await this.requestJson(`/api/admin/bots/${encodeURIComponent(botAlias)}`, {
+  async removeBot(botAlias: string, options: { deleteHistory?: boolean } = {}): Promise<void> {
+    const params = new URLSearchParams();
+    if (options.deleteHistory) {
+      params.set("delete_history", "true");
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    await this.requestJson(`/api/admin/bots/${encodeURIComponent(botAlias)}${suffix}`, {
       method: "DELETE",
     });
   }

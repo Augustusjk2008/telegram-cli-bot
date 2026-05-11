@@ -8,6 +8,8 @@ import type { BotSummary, CreateBotInput, DirectoryListing } from "../services/t
 class DesktopManagerClient extends MockWebBotClient {
   browserPath = "C:\\workspace";
   addBotCalls: CreateBotInput[] = [];
+  createDirectoryCalls: Array<{ botAlias: string; name: string; parentPath?: string }> = [];
+  removeBotCalls: Array<{ botAlias: string; deleteHistory: boolean }> = [];
   private readonly directoryMap: Record<string, DirectoryListing["entries"]> = {
     "C:\\workspace": [
       { name: "team3", isDir: true },
@@ -82,6 +84,15 @@ class DesktopManagerClient extends MockWebBotClient {
     return this.browserPath;
   }
 
+  async createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void> {
+    this.createDirectoryCalls.push({ botAlias, name, parentPath });
+    const basePath = parentPath || this.browserPath;
+    const currentEntries = [...(this.directoryMap[basePath] || [])];
+    currentEntries.push({ name, isDir: true });
+    this.directoryMap[basePath] = currentEntries;
+    this.directoryMap[`${basePath}\\${name}`] = [];
+  }
+
   async addBot(input: CreateBotInput) {
     this.addBotCalls.push(input);
     return {
@@ -145,7 +156,7 @@ class DesktopManagerClient extends MockWebBotClient {
 class FleetConsoleClient extends MockWebBotClient {
   startBotCalls: string[] = [];
   stopBotCalls: string[] = [];
-  removeBotCalls: string[] = [];
+  removeBotCalls: Array<{ botAlias: string; deleteHistory: boolean }> = [];
 
   async listBots(): Promise<BotSummary[]> {
     return [
@@ -241,8 +252,8 @@ class FleetConsoleClient extends MockWebBotClient {
     };
   }
 
-  async removeBot(botAlias: string): Promise<void> {
-    this.removeBotCalls.push(botAlias);
+  async removeBot(botAlias: string, options?: { deleteHistory?: boolean }): Promise<void> {
+    this.removeBotCalls.push({ botAlias, deleteHistory: Boolean(options?.deleteHistory) });
   }
 
   async listAgents(botAlias: string) {
@@ -333,6 +344,24 @@ test("desktop bot manager creates a bot from detail panel", async () => {
   });
 });
 
+test("desktop bot manager directory picker can create folder", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
+  await user.type(screen.getByLabelText("新文件夹名称"), "new-folder");
+  await user.click(screen.getByRole("button", { name: "创建" }));
+
+  expect(client.createDirectoryCalls).toEqual([
+    { botAlias: "main", name: "new-folder", parentPath: "C:\\workspace" },
+  ]);
+  expect(await screen.findByRole("button", { name: "进入目录 new-folder" })).toBeInTheDocument();
+});
+
 test("desktop bot manager edits alias and blocks main destructive actions", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();
@@ -357,10 +386,9 @@ test("desktop bot manager edits alias and blocks main destructive actions", asyn
   expect(removeSpy).not.toHaveBeenCalled();
 });
 
-test("desktop bot manager requires confirmation before deleting managed bot", async () => {
+test("desktop bot manager deletes managed bot with history option", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();
-  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
   const removeSpy = vi.spyOn(client, "removeBot");
 
   render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
@@ -368,9 +396,25 @@ test("desktop bot manager requires confirmation before deleting managed bot", as
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.click(screen.getByRole("button", { name: /review/ }));
   await user.click(screen.getByRole("button", { name: "删除 review" }));
+  await user.click(screen.getByLabelText("同时删除历史记录（包含所有子 agents）"));
+  await user.click(screen.getByRole("button", { name: "删除" }));
 
-  expect(confirmSpy).toHaveBeenCalledWith("确定删除智能体 review 吗？");
-  expect(removeSpy).toHaveBeenCalledWith("review");
+  expect(removeSpy).toHaveBeenCalledWith("review", { deleteHistory: true });
+});
+
+test("desktop bot manager deletes managed bot without history by default", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+  const removeSpy = vi.spyOn(client, "removeBot");
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: /review/ }));
+  await user.click(screen.getByRole("button", { name: "删除 review" }));
+  await user.click(screen.getByRole("button", { name: "删除" }));
+
+  expect(removeSpy).toHaveBeenCalledWith("review", { deleteHistory: false });
 });
 
 test("desktop bot manager exposes cluster templates in config tab", async () => {
@@ -523,7 +567,6 @@ test("desktop bot manager bulk stops online managed bots and skips main", async 
 test("desktop bot manager confirms bulk delete and skips main", async () => {
   const user = userEvent.setup();
   const client = new FleetConsoleClient();
-  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 
   render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
 
@@ -531,10 +574,11 @@ test("desktop bot manager confirms bulk delete and skips main", async () => {
   await user.click(screen.getByLabelText("选择 main"));
   await user.click(screen.getByLabelText("选择 duplicate-a"));
   await user.click(screen.getByRole("button", { name: "批量删除" }));
+  await user.click(screen.getByLabelText("同时删除历史记录（包含所有子 agents）"));
+  await user.click(screen.getByRole("button", { name: "删除" }));
 
-  expect(confirmSpy).toHaveBeenCalledWith("确定删除 1 个智能体吗？将跳过 1 个不可删除项。");
   await waitFor(() => {
-    expect(client.removeBotCalls).toEqual(["duplicate-a"]);
+    expect(client.removeBotCalls).toEqual([{ botAlias: "duplicate-a", deleteHistory: true }]);
   });
   expect(screen.getByText("已删除 1 个，跳过 1 个")).toBeInTheDocument();
 });

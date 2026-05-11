@@ -147,6 +147,7 @@ from .api_service import (
     rename_path,
     move_path,
     remove_managed_bot,
+    remove_managed_bot_with_history,
     reject_assistant_proposal,
     reset_user_session,
     reset_cli_params,
@@ -2128,7 +2129,8 @@ class WebApiServer:
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": await remove_managed_bot(self.manager, alias)})
+        delete_history = str(request.query.get("delete_history", "")).strip().lower() in {"1", "true", "yes", "on"}
+        return _json({"ok": True, "data": await remove_managed_bot_with_history(self.manager, alias, delete_history=delete_history)})
 
     async def admin_start_bot(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

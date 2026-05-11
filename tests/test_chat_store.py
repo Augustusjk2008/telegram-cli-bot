@@ -294,6 +294,83 @@ def test_rename_bot_identity_merges_old_history_into_new_bot_id(monkeypatch, tmp
     assert row == (9, "team1", 1)
 
 
+def test_delete_bot_history_removes_all_agents_for_bot_id_but_keeps_other_bots(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    main_handle = store.begin_turn(
+        bot_id=11,
+        bot_alias="review",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="主 agent 问题",
+        native_provider="codex",
+        agent_id="main",
+    )
+    store.complete_turn(main_handle, content="主 agent 回答", completion_state="completed")
+    child_handle = store.begin_turn(
+        bot_id=11,
+        bot_alias="review",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="子 agent 问题",
+        native_provider="codex",
+        agent_id="reviewer",
+    )
+    store.complete_turn(child_handle, content="子 agent 回答", completion_state="completed")
+    other_handle = store.begin_turn(
+        bot_id=22,
+        bot_alias="duplicate-a",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="其他 bot 问题",
+        native_provider="codex",
+        agent_id="main",
+    )
+    store.complete_turn(other_handle, content="其他 bot 回答", completion_state="completed")
+
+    deleted = store.delete_bot_history(bot_id=11)
+
+    assert deleted == 2
+    assert store.list_active_history(
+        bot_id=11,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        agent_id="main",
+        limit=10,
+    ) == []
+    assert store.list_active_history(
+        bot_id=11,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        agent_id="reviewer",
+        limit=10,
+    ) == []
+    assert [item["content"] for item in store.list_active_history(
+        bot_id=22,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        agent_id="main",
+        limit=10,
+    )] == ["其他 bot 问题", "其他 bot 回答"]
+
+
 def test_legacy_project_store_is_migrated_to_home_store_on_first_read(monkeypatch, tmp_path: Path):
     original_home = tmp_path / "home"
     original_home.mkdir()

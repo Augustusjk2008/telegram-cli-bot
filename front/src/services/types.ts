@@ -286,6 +286,10 @@ export type UpdateBotWorkdirOptions = {
   forceReset?: boolean;
 };
 
+export type RemoveBotOptions = {
+  deleteHistory?: boolean;
+};
+
 export class WebApiClientError extends Error {
   status?: number;
   code?: string;

@@ -622,6 +622,61 @@ function BulkSummaryPanel({
   );
 }
 
+function DeleteBotDialog({
+  title,
+  description,
+  deleteHistory,
+  busy,
+  onDeleteHistoryChange,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description?: string;
+  deleteHistory: boolean;
+  busy: boolean;
+  onDeleteHistoryChange: (value: boolean) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
+        <h2 className="text-base font-semibold">{title}</h2>
+        <p className="mt-2 text-sm text-[var(--muted)]">{description || "可只删智能体，或连历史记录一起删。"}</p>
+        <label className="mt-4 flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={deleteHistory}
+            onChange={(event) => onDeleteHistoryChange(event.target.checked)}
+            disabled={busy}
+            className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
+          />
+          <span>同时删除历史记录（包含所有子 agents）</span>
+        </label>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+          >
+            {busy ? "删除中..." : "删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DesktopBotManagerScreen({
   client = new MockWebBotClient(),
   currentAlias,
@@ -639,6 +694,9 @@ export function DesktopBotManagerScreen({
   const [dirty, setDirty] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkActionResult | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
+  const [pendingDeleteAlias, setPendingDeleteAlias] = useState("");
+  const [pendingBulkDeleteCount, setPendingBulkDeleteCount] = useState(0);
+  const [deleteHistory, setDeleteHistory] = useState(false);
   const layoutRef = useRef<HTMLDivElement>(null);
 
   const visibleBots = useMemo(() => getVisibleManagedBots({
@@ -704,6 +762,70 @@ export function DesktopBotManagerScreen({
 
   function selectVisibleBots() {
     setSelectedAliases(new Set(visibleBots.map((bot) => bot.alias)));
+  }
+
+  function openDeleteDialog(alias: string) {
+    setPendingDeleteAlias(alias);
+    setPendingBulkDeleteCount(0);
+    setDeleteHistory(false);
+  }
+
+  function openBulkDeleteDialog(count: number) {
+    setPendingDeleteAlias("");
+    setPendingBulkDeleteCount(count);
+    setDeleteHistory(false);
+  }
+
+  async function confirmDelete() {
+    if (!pendingDeleteAlias) {
+      return;
+    }
+    const bot = manager.bots.find((item) => item.alias === pendingDeleteAlias);
+    if (!bot) {
+      setPendingDeleteAlias("");
+      setDeleteHistory(false);
+      return;
+    }
+    const removed = await manager.deleteBot(bot, { deleteHistory });
+    if (removed) {
+      setPendingDeleteAlias("");
+      setPendingBulkDeleteCount(0);
+      setDeleteHistory(false);
+    }
+  }
+
+  async function confirmBulkDelete() {
+    const plan = buildBulkActionPlan("delete", selectedBots);
+    if (plan.targets.length === 0 && plan.skipped.length === 0) {
+      setPendingBulkDeleteCount(0);
+      setDeleteHistory(false);
+      return;
+    }
+
+    const result: BulkActionResult = {
+      action: "delete",
+      succeeded: [],
+      failed: [],
+      skipped: plan.skipped,
+    };
+
+    for (const bot of plan.targets) {
+      try {
+        await manager.client.removeBot(bot.alias, { deleteHistory });
+        result.succeeded.push(bot.alias);
+      } catch (error) {
+        result.failed.push({
+          alias: bot.alias,
+          message: error instanceof Error ? error.message : "删除失败",
+        });
+      }
+    }
+
+    setBulkResult(result);
+    clearSelection();
+    setPendingBulkDeleteCount(0);
+    setDeleteHistory(false);
+    await manager.loadBots();
   }
 
   function handleTableKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -779,10 +901,8 @@ export function DesktopBotManagerScreen({
     }
 
     if (plan.destructive) {
-      const confirmed = window.confirm(`确定删除 ${plan.targets.length} 个智能体吗？将跳过 ${plan.skipped.length} 个不可删除项。`);
-      if (!confirmed) {
-        return;
-      }
+      openBulkDeleteDialog(plan.targets.length);
+      return;
     }
 
     const result: BulkActionResult = {
@@ -1232,7 +1352,7 @@ export function DesktopBotManagerScreen({
                       <button
                         type="button"
                         aria-label={`删除 ${focusedBot.alias}`}
-                        onClick={() => void manager.deleteBot(focusedBot)}
+                        onClick={() => openDeleteDialog(focusedBot.alias)}
                         disabled={manager.savingAction !== ""}
                         className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
                       >
@@ -1266,6 +1386,24 @@ export function DesktopBotManagerScreen({
             ))}
           </div>
         </footer>
+      ) : null}
+      {pendingDeleteAlias || pendingBulkDeleteCount > 0 ? (
+        <DeleteBotDialog
+          title={pendingDeleteAlias ? `删除智能体 ${pendingDeleteAlias}` : `批量删除 ${pendingBulkDeleteCount} 个智能体`}
+          description={pendingDeleteAlias ? undefined : "可只删智能体，或连历史记录一起删。主 bot 等不可删除项会自动跳过。"}
+          deleteHistory={deleteHistory}
+          busy={pendingDeleteAlias ? manager.savingAction === `${pendingDeleteAlias}:delete` : false}
+          onDeleteHistoryChange={setDeleteHistory}
+          onCancel={() => {
+            if (pendingDeleteAlias && manager.savingAction === `${pendingDeleteAlias}:delete`) {
+              return;
+            }
+            setPendingDeleteAlias("");
+            setPendingBulkDeleteCount(0);
+            setDeleteHistory(false);
+          }}
+          onConfirm={() => void (pendingDeleteAlias ? confirmDelete() : confirmBulkDelete())}
+        />
       ) : null}
     </main>
   );

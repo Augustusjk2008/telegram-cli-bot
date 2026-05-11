@@ -2052,6 +2052,45 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("removeBot can request history deletion", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            removed: true,
+            alias: "team2",
+            history_deleted: true,
+            history_deleted_count: 3,
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    await client.removeBot("team2", { deleteHistory: true });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/team2?delete_history=true",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
   test("restartService posts to admin restart endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

@@ -1502,6 +1502,17 @@ class ChatStore:
         with conn:
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
 
+    def delete_bot_history(self, *, bot_id: int) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        with conn:
+            result = conn.execute(
+                "DELETE FROM conversations WHERE bot_id = ?",
+                (bot_id,),
+            )
+            return int(result.rowcount or 0)
+
     def get_message_trace(self, message_id: str) -> dict[str, Any]:
         conn = self._connect(create=False)
         if conn is None:

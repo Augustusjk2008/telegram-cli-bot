@@ -20,11 +20,65 @@ type Props = {
   canManage?: boolean;
 };
 
+function DeleteBotDialog({
+  botAlias,
+  deleteHistory,
+  busy,
+  onDeleteHistoryChange,
+  onCancel,
+  onConfirm,
+}: {
+  botAlias: string;
+  deleteHistory: boolean;
+  busy: boolean;
+  onDeleteHistoryChange: (value: boolean) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
+        <h2 className="text-base font-semibold">删除智能体 {botAlias}</h2>
+        <label className="mt-4 flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={deleteHistory}
+            onChange={(event) => onDeleteHistoryChange(event.target.checked)}
+            disabled={busy}
+            className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
+          />
+          <span>同时删除历史记录（包含所有子 agents）</span>
+        </label>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+          >
+            {busy ? "删除中..." : "删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange, canManage = true }: Props) {
   const [createDraft, setCreateDraft] = useState<CreateDraft>(EMPTY_CREATE_DRAFT);
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
+  const [pendingDeleteAlias, setPendingDeleteAlias] = useState("");
+  const [deleteHistory, setDeleteHistory] = useState(false);
   const {
     bots,
     avatarAssets,
@@ -58,6 +112,23 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
         delete next[bot.alias];
         return next;
       });
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDeleteAlias) {
+      return;
+    }
+    const bot = bots.find((item) => item.alias === pendingDeleteAlias);
+    if (!bot) {
+      setPendingDeleteAlias("");
+      setDeleteHistory(false);
+      return;
+    }
+    const removed = await deleteBot(bot, { deleteHistory });
+    if (removed) {
+      setPendingDeleteAlias("");
+      setDeleteHistory(false);
     }
   }
 
@@ -256,7 +327,10 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                       <button
                         type="button"
                         aria-label={`删除 ${bot.alias}`}
-                        onClick={() => void deleteBot(bot)}
+                        onClick={() => {
+                          setPendingDeleteAlias(bot.alias);
+                          setDeleteHistory(false);
+                        }}
                         disabled={savingAction !== ""}
                         className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
                       >
@@ -299,6 +373,22 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           initialPath={createDraft.workingDir}
           onPick={(workingDir) => setCreateDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
+        />
+      ) : null}
+      {pendingDeleteAlias ? (
+        <DeleteBotDialog
+          botAlias={pendingDeleteAlias}
+          deleteHistory={deleteHistory}
+          busy={savingAction === `${pendingDeleteAlias}:delete`}
+          onDeleteHistoryChange={setDeleteHistory}
+          onCancel={() => {
+            if (savingAction === `${pendingDeleteAlias}:delete`) {
+              return;
+            }
+            setPendingDeleteAlias("");
+            setDeleteHistory(false);
+          }}
+          onConfirm={() => void confirmDelete()}
         />
       ) : null}
     </main>

@@ -6,6 +6,7 @@ import type {
   BotSummary,
   CliType,
   CreateBotInput,
+  RemoveBotOptions,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -164,11 +165,8 @@ export function useBotManager({
     }
   }
 
-  async function deleteBot(bot: BotSummary) {
+  async function deleteBot(bot: BotSummary, options: RemoveBotOptions = {}) {
     if (isMainBot(bot)) {
-      return false;
-    }
-    if (!window.confirm(`确定删除智能体 ${bot.alias} 吗？`)) {
       return false;
     }
 
@@ -176,8 +174,8 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      await client.removeBot(bot.alias);
-      setNotice(`已删除 ${bot.alias}`);
+      await client.removeBot(bot.alias, options);
+      setNotice(options.deleteHistory ? `已删除 ${bot.alias} 和历史记录` : `已删除 ${bot.alias}`);
       await loadBots();
       return true;
     } catch (err) {

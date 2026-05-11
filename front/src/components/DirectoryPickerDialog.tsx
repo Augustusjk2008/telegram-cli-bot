@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, FolderOpen, House } from "lucide-react";
+import { ChevronLeft, FolderOpen, FolderPlus, House } from "lucide-react";
 import type { DirectoryListing } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { normalizePathInput } from "../utils/pathInput";
@@ -31,6 +31,7 @@ export function DirectoryPickerDialog({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [newFolderName, setNewFolderName] = useState("");
   const currentPathRef = useRef("");
   const homePathRef = useRef("");
   const originPathRef = useRef("");
@@ -74,6 +75,25 @@ export function DirectoryPickerDialog({
   async function loadCurrentDirectory() {
     const listing = await client.listFiles(botAlias);
     applyListing(listing);
+  }
+
+  async function handleCreateDirectory() {
+    const name = newFolderName.trim();
+    if (!name) {
+      setError("文件夹名称不能为空");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await client.createDirectory(botAlias, name, currentPathRef.current || currentPath);
+      setNewFolderName("");
+      await loadCurrentDirectory();
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "新建文件夹失败"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function navigate(path: string, fallback: string) {
@@ -202,6 +222,15 @@ export function DirectoryPickerDialog({
           </button>
           <button
             type="button"
+            onClick={() => void handleCreateDirectory()}
+            disabled={busy || loading || isVirtualRoot}
+            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+          >
+            <FolderPlus className="h-4 w-4" />
+            新增文件夹
+          </button>
+          <button
+            type="button"
             onClick={() => void closeDialog(normalizePathInput(currentPath))}
             disabled={busy || loading || !currentPath || isVirtualRoot}
             className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
@@ -214,6 +243,32 @@ export function DirectoryPickerDialog({
           <p className="text-xs text-[var(--muted)]">当前目录</p>
           <p className="mt-1 break-all text-sm text-[var(--text)]">{currentPath || "加载中..."}</p>
           {isVirtualRoot ? <p className="mt-2 text-xs text-[var(--muted)]">请先选择一个具体盘符。</p> : null}
+          {!isVirtualRoot ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input
+                aria-label="新文件夹名称"
+                value={newFolderName}
+                onChange={(event) => setNewFolderName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleCreateDirectory();
+                  }
+                }}
+                disabled={busy || loading}
+                className="min-w-[220px] flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm disabled:opacity-60"
+                placeholder="输入新文件夹名"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreateDirectory()}
+                disabled={busy || loading || !newFolderName.trim()}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                创建
+              </button>
+            </div>
+          ) : null}
           {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
         </div>
 
