@@ -36,7 +36,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "ask_agent",
-            "description": "异步启动个 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
+            "description": "异步启动个 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。timeout_seconds 是软期限，超时不强行中断子 agent；poll_agent_tasks 会返回 deadline_exceeded。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
             "inputSchema": {
                 "type": "object",
                 "required": ["agent_id", "message"],

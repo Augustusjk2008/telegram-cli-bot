@@ -17,6 +17,7 @@ type Props = {
   clusterMode?: boolean;
   disabled?: boolean;
   compact?: boolean;
+  pulse?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
 };
@@ -59,12 +60,13 @@ export function ChatComposer({
   clusterMode = false,
   disabled,
   compact = false,
+  pulse = false,
   uploadingAttachments = false,
   placeholder = "输入消息",
 }: Props) {
   const shellClassName = compact
-    ? "border-t border-[var(--border)] bg-[var(--surface-strong)] px-2 py-2"
-    : "border-t border-[var(--border)] bg-[var(--surface-strong)] px-3 py-3";
+    ? "chat-composer-delight border-t border-[var(--border)] bg-[var(--surface-strong)] px-2 py-2"
+    : "chat-composer-delight border-t border-[var(--border)] bg-[var(--surface-strong)] px-3 py-3";
   const formClassName = compact ? "flex items-end gap-2" : "flex items-end gap-2";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
@@ -108,7 +110,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className={shellClassName}>
+    <div data-testid="chat-composer-root" data-pulse={pulse ? "true" : "false"} className={shellClassName}>
       {attachments.length > 0 || uploadingAttachments ? (
         <div className="mb-2 flex flex-wrap items-center gap-2">
           {attachments.map((attachment) => (

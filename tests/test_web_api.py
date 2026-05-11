@@ -485,6 +485,8 @@ def test_cluster_prompt_includes_run_id():
     assert "调用 ask_agent 时带 run_id" in prompt
     assert "用户显式提及的子 agent: tester" in prompt
     assert "ask_agent 会异步启动任务并返回 task_id" in prompt
+    assert "timeout_seconds 是软期限" in prompt
+    assert "deadline_exceeded" in prompt
     assert "poll_agent_tasks" in prompt
     assert "同一轮对话内多轮指挥集群" in prompt
     assert "wait_seconds" in prompt
@@ -643,6 +645,52 @@ async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: Multi
 
     release.set()
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_cluster_ask_agent_soft_timeout_keeps_running_until_completion(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=1)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+    request = api_service._CLUSTER_RUNTIME.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = api_service._CLUSTER_RUNTIME.create_agent_task(run.run_id, request)
+    task.timeout_seconds = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_run_cli_chat(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return {"output": "late done"}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+
+    background_task = asyncio.create_task(api_service._run_cluster_agent_task(web_manager, run.run_id, task.task_id))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(0.05)
+
+    running_status = api_service._CLUSTER_RUNTIME.build_task_status(run.run_id, [task.task_id], include_output=True)
+    running_task = running_status["tasks"][0]
+    assert running_task["status"] == "running"
+    assert running_task["deadline_exceeded"] is True
+    assert running_status["pending_count"] == 1
+
+    release.set()
+    await asyncio.wait_for(background_task, timeout=1)
+
+    completed_status = api_service._CLUSTER_RUNTIME.build_task_status(run.run_id, [task.task_id], include_output=True)
+    completed_task = completed_status["tasks"][0]
+    assert completed_task["status"] == "completed"
+    assert completed_task["output"] == "late done"
+    assert completed_task["deadline_exceeded"] is False
 
 
 @pytest.mark.asyncio

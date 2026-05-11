@@ -2209,16 +2209,13 @@ async def _run_cluster_agent_task(
                     return
                 live_task = _CLUSTER_RUNTIME.mark_agent_task_running(run_id, task_id)
                 cli_params_override = build_cluster_cli_params_override(live_run.profile, live_task.model_tier)
-                result = await asyncio.wait_for(
-                    run_cli_chat(
-                        manager,
-                        live_run.bot_alias,
-                        live_run.user_id,
-                        live_task.message,
-                        agent_id=live_task.agent_id,
-                        cli_params_override=cli_params_override,
-                    ),
-                    timeout=live_task.timeout_seconds,
+                result = await run_cli_chat(
+                    manager,
+                    live_run.bot_alias,
+                    live_run.user_id,
+                    live_task.message,
+                    agent_id=live_task.agent_id,
+                    cli_params_override=cli_params_override,
                 )
                 error = _cluster_agent_result_error(result)
                 if error:
@@ -2243,6 +2240,7 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "
         "需要委派时，调用 MCP 工具 ask_agent。\n"
         f"当前集群 run_id: {run_id or '无'}。调用 ask_agent 时带 run_id。\n"
         "ask_agent 会异步启动任务并返回 task_id，不会自动等子 agent 完成。\n"
+        "ask_agent 的 timeout_seconds 是软期限；超时不强行中断子 agent，poll_agent_tasks 会通过 deadline_exceeded 告知主 agent。\n"
         "你可在同一轮对话内多轮指挥集群：连续 ask_agent 并发启动多个任务，调用 poll_agent_tasks 查看结果，再按结果追加新任务或汇总。\n"
         "如果需要等待结果，调用 poll_agent_tasks 时传 wait_seconds；如果用户只要求启动或你判断可后台运行，可先结束并说明任务仍在运行。\n"
         "最终回答前自行选择：等待并汇总已完成任务，或明确说明哪些任务仍在后台运行。\n"

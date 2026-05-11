@@ -320,6 +320,7 @@ test("shows a user message after sending text", async () => {
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "修一下这个 bug");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
+  expect(screen.getByTestId("chat-composer-root")).toHaveAttribute("data-pulse", "true");
   expect(await screen.findByText("修一下这个 bug")).toBeInTheDocument();
   expect(screen.queryByText("用时 3 秒")).not.toBeInTheDocument();
 });
@@ -1229,6 +1230,110 @@ test("cluster mode shows child agent mention chips", async () => {
 
   expect(await screen.findByRole("button", { name: "@reviewer 代码审查" })).toBeInTheDocument();
   expect(await screen.findByRole("combobox", { name: "当前 agent" })).toHaveValue("main");
+});
+
+test("chat action bar toggles cluster mode without resetting config", async () => {
+  const cluster = {
+    enabled: false,
+    writePolicy: "main_only" as const,
+    conflictPolicy: "warn_only" as const,
+    maxParallelAgents: 4,
+    defaultTimeoutSeconds: 900,
+    modelTiers: { low: "gpt-5.4-mini", medium: "gpt-5.4", high: "gpt-5.5" },
+  };
+  let savedCluster = cluster;
+  const updateClusterConfig = vi.fn(async (_botAlias: string, input) => ({
+    cluster: savedCluster = { ...savedCluster, ...input, modelTiers: { ...savedCluster.modelTiers, ...input.modelTiers } },
+    status: {
+      enabled: Boolean(input.enabled),
+      modelTiers: { ...savedCluster.modelTiers, ...input.modelTiers },
+      mcp: {
+        serverName: "tcb-cluster",
+        activeCliType: "codex",
+        runtime: { state: "runtime_ready" as const, message: "运行态可用" },
+        codex: { state: "runtime_ready" as const, message: "运行态可用" },
+        claude: { state: "not_checked" as const, message: "未使用" },
+      },
+      agents: [],
+    },
+  }));
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "cli",
+      isProcessing: false,
+      cluster,
+    }),
+    updateClusterConfig,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const toggle = await screen.findByRole("button", { name: "开启集群模式" });
+  expect(toggle).toHaveTextContent("集群关");
+
+  await userEvent.click(toggle);
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenCalledWith("main", {
+    enabled: true,
+    writePolicy: "main_only",
+    conflictPolicy: "warn_only",
+    maxParallelAgents: 4,
+    defaultTimeoutSeconds: 900,
+    modelTiers: { low: "gpt-5.4-mini", medium: "gpt-5.4", high: "gpt-5.5" },
+  }));
+  const closeToggle = await screen.findByRole("button", { name: "关闭集群模式" });
+  expect(closeToggle).toHaveTextContent("集群开");
+
+  await userEvent.click(closeToggle);
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenLastCalledWith("main", {
+    enabled: false,
+    writePolicy: "main_only",
+    conflictPolicy: "warn_only",
+    maxParallelAgents: 4,
+    defaultTimeoutSeconds: 900,
+    modelTiers: { low: "gpt-5.4-mini", medium: "gpt-5.4", high: "gpt-5.5" },
+  }));
+  expect(await screen.findByRole("button", { name: "开启集群模式" })).toHaveTextContent("集群关");
+});
+
+test("chat message motion keeps assistant text and trace controls accessible", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-trace-1",
+        role: "assistant",
+        text: "完成",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          traceCount: 2,
+          toolCallCount: 0,
+          processCount: 2,
+          trace: [
+            { kind: "commentary", summary: "读取文件", rawType: "commentary" },
+            { kind: "commentary", summary: "运行测试", rawType: "commentary" },
+          ],
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} allowTrace />);
+
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  const toggle = await screen.findByRole("button", { name: "展开过程详情" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  await userEvent.click(toggle);
+  await screen.findByText("读取文件");
+  const traceRows = screen.getAllByText(/读取文件|运行测试/).map((item) => item.textContent);
+  expect(traceRows).toEqual(["读取文件", "运行测试"]);
+  expect(screen.getByRole("button", { name: "收起过程详情" })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("cluster mode keeps a previously active child agent as read-only", async () => {

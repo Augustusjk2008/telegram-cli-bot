@@ -1,5 +1,7 @@
 import { memo, useEffect, useMemo } from "react";
 import { ChevronDown, ChevronRight, ListTree, LoaderCircle } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { delightMotion, delightMotionStagger, premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import type { ChatTraceEvent } from "../services/types";
 import { groupChatTraceEntries } from "../utils/chatTraceGrouping";
 import { ChatToolTraceCard } from "./ChatToolTraceCard";
@@ -46,6 +48,7 @@ function ChatTracePanelInner({
   loadError = "",
   onLoadTrace,
 }: Props) {
+  const reduceMotion = useReducedMotion();
   const events = trace || [];
   const summary = useMemo(() => ({
     traceCount: typeof traceCount === "number" ? traceCount : events.length,
@@ -90,69 +93,85 @@ function ChatTracePanelInner({
           {summary.toolCallCount > 0 ? ` · ${summary.toolCallCount} 次工具` : ""}
         </span>
       </button>
-      {expanded ? (
-        <div className="mt-3 space-y-3">
-          {isLoading && events.length === 0 ? (
-            <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-              <span>正在加载过程详情...</span>
-            </div>
-          ) : null}
-          {!isLoading && loadError && events.length === 0 ? (
-            <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
-              <div>{loadError}</div>
-              {onLoadTrace ? (
-                <button
-                  type="button"
-                  onClick={onLoadTrace}
-                  className="mt-2 inline-flex rounded-full border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
-                >
-                  重试
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {groupedEntries.map((entry, index) => {
-            if (entry.kind === "tool_group") {
-              return (
-                <div
-                  key={`tool-group-${entry.call?.callId || entry.results[0]?.callId || `orphan-${index}`}`}
-                  data-trace-seq={index}
-                >
-                  <ChatToolTraceCard entry={entry} />
-                </div>
-              );
-            }
-
-            const event = entry.event;
-            const isGenericEvent = isGenericProcessEvent(event);
-            return (
-              <div
-                key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
-                data-trace-seq={index}
-                className={isGenericEvent
-                  ? "rounded-2xl border border-violet-200 bg-violet-50/80 px-3 py-2"
-                  : "rounded-2xl border border-slate-200 bg-white px-3 py-2"}
-              >
-                <div
-                  className={isGenericEvent
-                    ? "text-[11px] font-medium uppercase tracking-[0.12em] text-violet-600"
-                    : "text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500"}
-                >
-                  {describeProcessEvent(event)}
-                </div>
-                <div
-                  className={isGenericEvent
-                    ? "mt-1 whitespace-pre-wrap break-all text-sm text-violet-900"
-                    : "mt-1 whitespace-pre-wrap break-all text-sm text-slate-800"}
-                >
-                  {event.summary || "无摘要"}
-                </div>
+      <AnimatePresence initial={false}>
+        {expanded ? (
+          <motion.div
+            className="mt-3 space-y-3 overflow-hidden"
+            {...resolveMotionProps(premiumMotion.tracePanel, reduceMotion)}
+          >
+            {isLoading && events.length === 0 ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+                <span>正在加载过程详情...</span>
               </div>
-            );
-          })}
-        </div>
-      ) : null}
+            ) : null}
+            {!isLoading && loadError && events.length === 0 ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+                <div>{loadError}</div>
+                {onLoadTrace ? (
+                  <button
+                    type="button"
+                    onClick={onLoadTrace}
+                    className="mt-2 inline-flex rounded-full border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                  >
+                    重试
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {groupedEntries.map((entry, index) => {
+              const animateIndex = Math.min(index, delightMotionStagger.maxAnimatedItems - 1);
+              const traceItemMotion = resolveMotionProps({
+                ...delightMotion.traceItem,
+                transition: {
+                  ...delightMotion.traceItem.transition,
+                  delay: index < delightMotionStagger.maxAnimatedItems ? animateIndex * delightMotionStagger.itemDelaySeconds : 0,
+                },
+              }, reduceMotion);
+
+              if (entry.kind === "tool_group") {
+                return (
+                  <motion.div
+                    key={`tool-group-${entry.call?.callId || entry.results[0]?.callId || `orphan-${index}`}`}
+                    data-trace-seq={index}
+                    {...traceItemMotion}
+                  >
+                    <ChatToolTraceCard entry={entry} />
+                  </motion.div>
+                );
+              }
+
+              const event = entry.event;
+              const isGenericEvent = isGenericProcessEvent(event);
+              return (
+                <motion.div
+                  key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
+                  data-trace-seq={index}
+                  className={isGenericEvent
+                    ? "rounded-2xl border border-violet-200 bg-violet-50/80 px-3 py-2"
+                    : "rounded-2xl border border-slate-200 bg-white px-3 py-2"}
+                  {...traceItemMotion}
+                >
+                  <div
+                    className={isGenericEvent
+                      ? "text-[11px] font-medium uppercase tracking-[0.12em] text-violet-600"
+                      : "text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500"}
+                  >
+                    {describeProcessEvent(event)}
+                  </div>
+                  <div
+                    className={isGenericEvent
+                      ? "mt-1 whitespace-pre-wrap break-all text-sm text-violet-900"
+                      : "mt-1 whitespace-pre-wrap break-all text-sm text-slate-800"}
+                  >
+                    {event.summary || "无摘要"}
+                  </div>
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </section>
   );
 }

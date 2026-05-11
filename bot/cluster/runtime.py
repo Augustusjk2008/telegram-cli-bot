@@ -207,12 +207,26 @@ class ClusterRuntime:
         )
         return task
 
+    def _task_deadline_exceeded(self, task: ClusterAgentTask) -> bool:
+        if task.status != "running" or not task.started_at:
+            return False
+        if task.timeout_seconds <= 0:
+            return True
+        try:
+            started_at = datetime.fromisoformat(task.started_at)
+        except ValueError:
+            return False
+        elapsed_seconds = (datetime.now().astimezone() - started_at).total_seconds()
+        return elapsed_seconds >= task.timeout_seconds
+
     def _serialize_task(self, task: ClusterAgentTask, *, include_output: bool) -> dict[str, Any]:
         item = {
             "task_id": task.task_id,
             "agent_id": task.agent_id,
             "status": task.status,
             "model_tier": task.model_tier,
+            "timeout_seconds": task.timeout_seconds,
+            "deadline_exceeded": self._task_deadline_exceeded(task),
             "allow_write": task.allow_write,
             "created_at": task.created_at,
             "started_at": task.started_at,

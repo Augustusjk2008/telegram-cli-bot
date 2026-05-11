@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { History, LoaderCircle, Maximize2, Minimize2, Paperclip, Plus, Square, Trash2 } from "lucide-react";
+import { History, LoaderCircle, Maximize2, Minimize2, Network, Paperclip, Plus, Square, Trash2 } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { AgentSwitcher } from "../components/AgentSwitcher";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
@@ -40,6 +41,7 @@ import {
   dispatchAssistantProposalPatchCompleted,
   isAssistantProposalPatchRequestedEvent,
 } from "../utils/assistantProposalPatchEvents";
+import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import {
   getFilePreviewStatusText,
@@ -628,6 +630,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onLoadTrace,
   onToggleTracePanel,
 }: ChatMessageRowProps) {
+  const reduceMotion = useReducedMotion();
+
   if (item.role === "system") {
     return (
       <div className="flex justify-center">
@@ -656,7 +660,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
   );
 
   return (
-    <div className={isUser ? "flex justify-end" : "flex justify-start"}>
+    <motion.div
+      className={isUser ? "flex justify-end" : "flex justify-start"}
+      {...resolveMotionProps(delightMotion.messagePop, reduceMotion)}
+    >
       <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
         <ChatMessageMeta
           name={messageName}
@@ -665,13 +672,15 @@ const ChatMessageRow = memo(function ChatMessageRow({
           avatar={inlineAvatar}
         />
         <div
-          className={
+          data-streaming={item.state === "streaming" ? "true" : "false"}
+          className={[
+            "chat-message-bubble-delight",
             isUser
               ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
               : item.state === "error"
                 ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
-                : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]"
-          }
+                : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]",
+          ].join(" ")}
         >
           {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
             <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
@@ -748,7 +757,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           />
         ) : null}
       </div>
-    </div>
+    </motion.div>
   );
 });
 
@@ -803,6 +812,8 @@ export function ChatScreen({
   const [clusterRunId, setClusterRunId] = useState("");
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
+  const [clusterSaving, setClusterSaving] = useState(false);
+  const [composerPulseKey, setComposerPulseKey] = useState(0);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
@@ -1944,12 +1955,46 @@ export function ChatScreen({
       return;
     }
     const clusterSend = clusterMode || mentions.length > 0;
+    setComposerPulseKey((value) => value + 1);
     await sendMessageInternal(text, {
       attachments: pendingAttachments,
       clearPendingAttachments: true,
       sendOptions: clusterSend ? { cluster: true, mentions } : undefined,
     });
   }, [botOverview?.cluster?.enabled, pendingAttachments, sendMessageInternal]);
+
+  async function handleToggleClusterMode() {
+    if (!botOverview?.cluster || clusterSaving) {
+      return;
+    }
+
+    const current = botOverview.cluster;
+    const nextEnabled = !current.enabled;
+    setClusterSaving(true);
+    setError("");
+    try {
+      const result = await client.updateClusterConfig(botAlias, {
+        enabled: nextEnabled,
+        writePolicy: current.writePolicy,
+        conflictPolicy: current.conflictPolicy,
+        maxParallelAgents: current.maxParallelAgents,
+        defaultTimeoutSeconds: current.defaultTimeoutSeconds,
+        modelTiers: { ...current.modelTiers },
+      });
+      setBotOverview((prev) => prev ? { ...prev, cluster: result.cluster } : prev);
+      if (!nextEnabled) {
+        stopClusterTaskPoll();
+        setClusterRunId("");
+        setClusterTaskStatus(null);
+        setClusterTaskError("");
+        clusterRunIdRef.current = "";
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "集群模式切换失败");
+    } finally {
+      setClusterSaving(false);
+    }
+  }
 
   useEffect(() => {
     const handleAssistantProposalPatchRequested = (event: Event) => {
@@ -2051,6 +2096,7 @@ export function ChatScreen({
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
+  const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant";
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive && !readOnly;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
@@ -2116,6 +2162,25 @@ export function ChatScreen({
                 onSelect={handleSelectAgent}
               />
             ) : null}
+            {showClusterToggle ? (
+              <button
+                type="button"
+                aria-pressed={clusterMode}
+                aria-label={clusterMode ? "关闭集群模式" : "开启集群模式"}
+                onClick={() => void handleToggleClusterMode()}
+                disabled={loading || isStreaming || clusterSaving}
+                className={clusterMode
+                  ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                  : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60"}
+              >
+                {clusterSaving ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Network className="h-4 w-4" />
+                )}
+                {clusterSaving ? "保存中" : (clusterMode ? "集群开" : "集群关")}
+              </button>
+            ) : null}
             {embedded && onToggleFocus ? (
               <button
                 type="button"
@@ -2158,7 +2223,10 @@ export function ChatScreen({
         </section>
       ) : null}
       {showAssistantRuntimeBanner ? (
-        <section className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+        <section
+          data-workbench-status="active"
+          className="chat-runtime-banner border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900"
+        >
           <div className="flex items-center gap-2 text-sm font-medium">
             <LoaderCircle className="h-4 w-4 animate-spin" />
             <span>{assistantRuntimeHeadline}</span>
@@ -2258,10 +2326,12 @@ export function ChatScreen({
       ) : null}
       {!readOnly && !activeClusterChildReadOnly ? (
         <ChatComposer
+          key={`composer-${composerPulseKey}`}
           onSend={handleSend}
           onAttachFiles={handleAttachFiles}
           onRemoveAttachment={handleRemoveAttachment}
           attachments={pendingAttachments}
+          pulse={composerPulseKey > 0}
           agents={clusterAgents}
           clusterMode={clusterMode}
           disabled={isStreaming || loading}

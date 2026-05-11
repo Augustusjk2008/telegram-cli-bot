@@ -73,7 +73,7 @@ export function WorkbenchStatusBar({
   return (
     <footer
       data-testid="desktop-workbench-statusbar"
-      className="flex items-center justify-between gap-2 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-2 py-1 text-xs text-[var(--text)]"
+      className="desktop-workbench-statusbar flex items-center justify-between gap-2 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-2 py-1 text-xs text-[var(--text)]"
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="truncate font-mono">{activeFilePath || "未打开文件"}</span>
@@ -89,7 +89,12 @@ export function WorkbenchStatusBar({
           <span className="max-w-[24rem] truncate font-mono">下次重建: {terminalStatus.nextRebuildCwd}</span>
         ) : null}
         {branchName ? <span className="font-mono">{branchName}</span> : null}
-        <span>{chatLabel(chatStatus)}</span>
+        <span
+          data-workbench-status={chatStatus.processing ? "active" : chatStatus.state}
+          data-status-comet={chatStatus.processing ? "true" : "false"}
+        >
+          {chatLabel(chatStatus)}
+        </span>
         <span>{restoreLabel(restoreState)}</span>
         <span>{viewModeLabel(viewMode)}</span>
       </div>

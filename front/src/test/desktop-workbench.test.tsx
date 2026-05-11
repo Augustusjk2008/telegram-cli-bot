@@ -62,6 +62,73 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
 });
 
+test("desktop command palette stays keyboard accessible with premium motion", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+  expect(await screen.findByRole("dialog", { name: "快速打开" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "快速打开" })).not.toBeInTheDocument();
+  });
+});
+
+test("desktop command palette keeps animated results clickable", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const openSpy = vi.spyOn(client, "quickOpenWorkspace").mockResolvedValue({
+    items: [
+      { path: "src/main.tsx", score: 10 },
+      { path: "src/App.tsx", score: 8 },
+    ],
+  });
+  vi.spyOn(client, "readFileFull").mockImplementation(async (_botAlias, filename) => ({
+    content: `content:${filename}`,
+    mode: "cat",
+    fileSizeBytes: 12,
+    isFullContent: true,
+  }));
+  vi.spyOn(client, "revealFileTreePath").mockResolvedValue({
+    rootPath: "/workspace",
+    highlightPath: "src/main.tsx",
+    expandedPaths: [],
+    branches: {},
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+  await user.type(await screen.findByLabelText("快速打开文件"), "main");
+
+  const firstResult = await screen.findByRole("button", { name: "打开 src/main.tsx" });
+  expect(firstResult).toHaveAttribute("data-first-match", "true");
+  await waitFor(() => expect(openSpy).toHaveBeenCalledWith("main", "main", 50));
+
+  await user.click(firstResult);
+  expect(await screen.findByRole("tab", { name: "main.tsx" })).toBeInTheDocument();
+});
+
 test("desktop workbench persists and restores the selected tree path", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

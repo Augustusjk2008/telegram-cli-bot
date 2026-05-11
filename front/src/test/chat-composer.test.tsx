@@ -111,3 +111,23 @@ test("typing at in cluster mode opens agent picker", async () => {
 
   expect(input).toHaveValue("@reviewer ");
 });
+
+test("composer exposes pulse state without changing send semantics", async () => {
+  const user = userEvent.setup();
+  const onSend = vi.fn();
+
+  render(
+    <ChatComposer
+      onSend={onSend}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      pulse
+    />,
+  );
+
+  expect(screen.getByTestId("chat-composer-root")).toHaveAttribute("data-pulse", "true");
+  await user.type(screen.getByRole("textbox"), "hello");
+  await user.keyboard("{Shift>}{Enter}{/Shift}");
+  expect(onSend).toHaveBeenCalledWith("hello", []);
+});
