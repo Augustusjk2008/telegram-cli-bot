@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { FilePlus, FolderPlus, RefreshCw, Upload } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
 import type { GitTreeDecorationKind } from "../services/types";
@@ -1368,8 +1369,9 @@ export function FileTreePane({
         ) : null}
       </div>
 
-      {contextMenu ? (
-        <>
+      {contextMenu && typeof document !== "undefined"
+        ? createPortal(
+          <>
           <div
             className="fixed inset-0 z-20"
             onClick={closeContextMenu}
@@ -1489,8 +1491,10 @@ export function FileTreePane({
               删除
             </button>
           </div>
-        </>
-      ) : null}
+          </>,
+          document.body,
+        )
+        : null}
 
       {!structureOnly && dragDepth > 0 ? (
         <div

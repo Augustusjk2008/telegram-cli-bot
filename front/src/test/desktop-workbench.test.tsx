@@ -232,6 +232,28 @@ test("desktop titlebar layout controls toggle visible panes", async () => {
   });
 });
 
+test("desktop workbench marks pane resizing while dragging separators", async () => {
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const root = await screen.findByTestId("desktop-workbench-root");
+  const separator = screen.getByRole("separator", { name: "调整文件区宽度" });
+
+  expect(root).toHaveAttribute("data-resizing", "false");
+  fireEvent.pointerDown(separator, { pointerId: 1, clientX: 320 });
+  expect(root).toHaveAttribute("data-resizing", "true");
+  fireEvent.pointerUp(window);
+  expect(root).toHaveAttribute("data-resizing", "false");
+});
+
 test("desktop workbench shows the status bar and uses the left rail to switch sidebar content", async () => {
   const user = userEvent.setup();
   const onOpenBotManager = vi.fn();

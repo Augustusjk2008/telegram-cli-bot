@@ -2,9 +2,11 @@ type PaneResizerProps = {
   ariaLabel: string;
   axis: "x" | "y";
   onResizeDelta: (deltaPx: number) => void;
+  onResizeStart?: () => void;
+  onResizeEnd?: () => void;
 };
 
-export function PaneResizer({ ariaLabel, axis, onResizeDelta }: PaneResizerProps) {
+export function PaneResizer({ ariaLabel, axis, onResizeDelta, onResizeStart, onResizeEnd }: PaneResizerProps) {
   return (
     <div
       role="separator"
@@ -17,6 +19,7 @@ export function PaneResizer({ ariaLabel, axis, onResizeDelta }: PaneResizerProps
       }
       onPointerDown={(event) => {
         const start = axis === "x" ? event.clientX : event.clientY;
+        onResizeStart?.();
 
         const handleMove = (moveEvent: PointerEvent) => {
           const current = axis === "x" ? moveEvent.clientX : moveEvent.clientY;
@@ -27,6 +30,7 @@ export function PaneResizer({ ariaLabel, axis, onResizeDelta }: PaneResizerProps
           window.removeEventListener("pointermove", handleMove);
           window.removeEventListener("pointerup", handleUp);
           window.removeEventListener("pointercancel", handleUp);
+          onResizeEnd?.();
         };
 
         window.addEventListener("pointermove", handleMove);

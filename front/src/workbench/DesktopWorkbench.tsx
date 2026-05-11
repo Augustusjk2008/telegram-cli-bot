@@ -164,6 +164,7 @@ export function DesktopWorkbench({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
+  const [isResizingPane, setIsResizingPane] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<DesktopWorkspaceView>("editor");
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
   const [pendingTerminalOverride, setPendingTerminalOverride] = useState<TerminalOverrideState | null>(null);
@@ -809,6 +810,7 @@ export function DesktopWorkbench({
       data-restore-state={session.restoreState}
       data-has-focus={focusedPane ? "true" : "false"}
       data-focused-pane={focusedPane || "none"}
+      data-resizing={isResizingPane ? "true" : "false"}
       className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto]"
     >
       {focusedPane ? (
@@ -880,6 +882,8 @@ export function DesktopWorkbench({
           <PaneResizer
             ariaLabel="调整文件区宽度"
             axis="x"
+            onResizeStart={() => setIsResizingPane(true)}
+            onResizeEnd={() => setIsResizingPane(false)}
             onResizeDelta={(deltaPx) =>
               resizePane("sidebarWidthPx", layoutState.sidebarWidthPx + deltaPx, {
                 containerWidthPx: layoutBounds.columnsWidthPx,
@@ -958,6 +962,8 @@ export function DesktopWorkbench({
               <PaneResizer
                 ariaLabel="调整编辑器高度"
                 axis="y"
+                onResizeStart={() => setIsResizingPane(true)}
+                onResizeEnd={() => setIsResizingPane(false)}
                 onResizeDelta={(deltaPx) =>
                   resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
                     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -1007,6 +1013,8 @@ export function DesktopWorkbench({
             <PaneResizer
               ariaLabel="调整聊天区宽度"
               axis="x"
+              onResizeStart={() => setIsResizingPane(true)}
+              onResizeEnd={() => setIsResizingPane(false)}
               onResizeDelta={(deltaPx) =>
                 resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
                   containerWidthPx: layoutBounds.columnsWidthPx,
