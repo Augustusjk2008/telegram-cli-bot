@@ -6450,11 +6450,75 @@ def test_get_history_hydrates_missing_tool_trace_from_native_transcript(
     ]
     assert trace["trace"][1]["summary"] == "Get-ChildItem -Force"
 
+def test_get_history_hydrates_cancelled_tool_trace_from_native_transcript(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    store = ChatStore(tmp_path)
+    service = ChatHistoryService(store)
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="我先检查目录结构。")
+    store.append_trace_event(handle.turn_id, kind="cancelled", summary="用户终止输出")
+    service.complete_turn(
+        handle,
+        content="已终止，未返回可显示内容",
+        completion_state="cancelled",
+        native_session_id="thread-1",
+        error_code="cancelled",
+        error_message="已终止，未返回可显示内容",
+    )
+
+    transcript = tmp_path / "codex-trace-recovery-cancelled.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-04-14T00:32:53.427Z","type":"turn_context","payload":{"turn_id":"turn-1"}}',
+                '{"timestamp":"2026-04-14T00:32:53.430Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"列出当前目录"}]}}',
+                '{"timestamp":"2026-04-14T00:35:09.178Z","type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}',
+                '{"timestamp":"2026-04-14T00:35:09.200Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}',
+                '{"timestamp":"2026-04-14T00:35:09.240Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "bot.web.native_history_builder.locate_codex_transcript",
+        lambda session_id: LocatedTranscript(
+            provider="codex",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint=str(tmp_path),
+        ),
+    )
+
+    data = get_history(web_manager, "main", 1001, limit=10)
+    trace = get_history_trace(web_manager, "main", 1001, handle.assistant_message_id)
+
+    assert data["items"][1]["meta"]["trace_count"] == 3
+    assert data["items"][1]["meta"]["tool_call_count"] == 1
+    assert [item["kind"] for item in trace["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+    assert trace["trace"][1]["summary"] == "Get-ChildItem -Force"
+
 def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     process = MagicMock()
     process.poll.return_value = None
-    process.terminate = MagicMock()
 
     with session._lock:
         session.process = process
@@ -6465,13 +6529,14 @@ def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_
         session.running_started_at = "2026-04-14T10:00:00"
         session.running_updated_at = "2026-04-14T10:00:03"
 
-    result = kill_user_process(web_manager, "main", 1001)
+    with patch("bot.web.api_service._terminate_process_sync") as terminate_process:
+        result = kill_user_process(web_manager, "main", 1001)
 
     assert result["killed"] is True
     assert session.stop_requested is True
     assert session.is_processing is True
     assert session.running_preview_text == "处理中预览"
-    process.terminate.assert_called_once()
+    terminate_process.assert_called_once_with(process)
 
 def test_codex_status_event_skips_json_meta_preview():
     event = _build_stream_status_event(
@@ -7319,16 +7384,17 @@ def test_kill_user_process_preserves_local_streaming_row(
 
     process = MagicMock()
     process.poll.return_value = None
-    process.terminate = MagicMock()
     with session._lock:
         session.process = process
         session.is_processing = True
         session.stop_requested = False
 
-    result = kill_user_process(web_manager, "main", 1001)
+    with patch("bot.web.api_service._terminate_process_sync") as terminate_process:
+        result = kill_user_process(web_manager, "main", 1001)
     history = get_history(web_manager, "main", 1001, limit=10)
 
     assert result["killed"] is True
+    terminate_process.assert_called_once_with(process)
     assert history["items"][-1]["content"] == "处理中预览"
     assert history["items"][-1]["state"] == "streaming"
 

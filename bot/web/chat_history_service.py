@@ -88,7 +88,7 @@ class ChatHistoryService:
             return False
         if str(context.get("role") or "") != "assistant":
             return False
-        if str(context.get("completion_state") or "") != "completed":
+        if str(context.get("completion_state") or "") not in {"completed", "cancelled"}:
             return False
         provider = normalize_cli_type(str(context.get("native_provider") or ""))
         if provider not in {"codex", "claude"}:

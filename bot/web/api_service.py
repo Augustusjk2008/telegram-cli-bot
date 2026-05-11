@@ -2089,7 +2089,7 @@ def kill_user_process(manager: MultiBotManager, alias: str, user_id: int) -> dic
 
     try:
         if process.poll() is None:
-            process.terminate()
+            _terminate_process_sync(process)
             return {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
         return {"killed": False, "message": msg("kill", "already_done")}
     except Exception as exc:
