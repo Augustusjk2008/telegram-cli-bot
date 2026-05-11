@@ -644,7 +644,7 @@ def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[d
 def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     bot_id = resolve_session_bot_id(manager, alias)
-    active_cluster_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
+    active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
     return {
         "bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session),
         "session": build_session_snapshot(profile, session),
@@ -2079,19 +2079,80 @@ def reset_user_session(manager: MultiBotManager, alias: str, user_id: int) -> di
     return {"reset": removed}
 
 
+def _is_session_processing(session: UserSession) -> bool:
+    with session._lock:
+        return bool(session.is_processing)
+
+
+def _find_active_cluster_run_for_session(alias: str, user_id: int, session: UserSession) -> Any | None:
+    for _ in range(100):
+        active_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
+        if active_run is None:
+            return None
+        status = _CLUSTER_RUNTIME.build_task_status(active_run.run_id, include_output=False)
+        if int(status.get("pending_count") or 0) > 0 or _is_session_processing(session):
+            return active_run
+        _CLUSTER_RUNTIME.finish_run(active_run.run_id, "completed")
+    return _CLUSTER_RUNTIME.find_active_run(alias, user_id)
+
+
+def _finish_stale_cluster_run_if_idle(alias: str, user_id: int) -> str | None:
+    active_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
+    if active_run is None:
+        return None
+    status = _CLUSTER_RUNTIME.build_task_status(active_run.run_id, include_output=False)
+    if int(status.get("pending_count") or 0) > 0:
+        return None
+    _CLUSTER_RUNTIME.finish_run(active_run.run_id, "completed")
+    return active_run.run_id
+
+
 def kill_user_process(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     with session._lock:
-        if not session.is_processing or session.process is None:
-            return {"killed": False, "message": msg("kill", "no_task")}
+        is_processing = bool(session.is_processing)
         process = session.process
-        session.stop_requested = True
+        if not is_processing:
+            return {"killed": False, "message": msg("kill", "no_task")}
+        if process is None:
+            session.stop_requested = False
+            session.is_processing = False
+            session.process = None
+            session.running_user_text = None
+            session.running_preview_text = ""
+            session.running_started_at = None
+            session.running_updated_at = None
+            stale_cleared = True
+        else:
+            stale_cleared = False
+            session.stop_requested = True
+
+    if stale_cleared:
+        _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
+        session.persist()
+        result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
+        if cluster_run_id := _finish_stale_cluster_run_if_idle(alias, user_id):
+            result["cluster_run_finished"] = cluster_run_id
+        return result
 
     try:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             _terminate_process_sync(process)
             return {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
-        return {"killed": False, "message": msg("kill", "already_done")}
+        with session._lock:
+            session.process = None
+            session.stop_requested = False
+            session.is_processing = False
+            session.running_user_text = None
+            session.running_preview_text = ""
+            session.running_started_at = None
+            session.running_updated_at = None
+        _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
+        session.persist()
+        result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
+        if cluster_run_id := _finish_stale_cluster_run_if_idle(alias, user_id):
+            result["cluster_run_finished"] = cluster_run_id
+        return result
     except Exception as exc:
         _raise(500, "kill_failed", msg("kill", "error", error=str(exc)))
 
@@ -4759,7 +4820,7 @@ async def update_bot_avatar(
 def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
     items = []
     with sessions_lock:
-        for (bot_id, user_id), session in sessions.items():
+        for (bot_id, user_id, agent_id), session in sessions.items():
             if session.bot_alias != alias:
                 continue
             if not session.is_processing:
@@ -4768,6 +4829,7 @@ def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
                 {
                     "bot_id": bot_id,
                     "user_id": user_id,
+                    "agent_id": agent_id,
                     "working_dir": session.working_dir,
                     "message_count": session.message_count,
                 }

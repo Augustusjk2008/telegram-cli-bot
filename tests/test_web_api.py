@@ -56,6 +56,7 @@ from bot.web.api_service import (
     get_history_trace,
     get_session_for_alias,
     get_overview,
+    get_processing_sessions,
     resolve_session_bot_id,
     get_working_directory,
     kill_user_process,
@@ -818,6 +819,21 @@ def test_overview_includes_active_cluster_run_with_pending_child_task(web_manage
 
     api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
     assert get_overview(web_manager, "main", 8101)["active_cluster_run"] is None
+
+
+def test_overview_finishes_idle_cluster_run_without_pending_tasks(web_manager: MultiBotManager):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=9101, profile=profile)
+    )
+
+    overview = get_overview(web_manager, "main", 9101)
+
+    assert overview["active_cluster_run"] is None
+    assert api_service._CLUSTER_RUNTIME.get_run(run.run_id).status == "completed"
 
 
 def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: Path):
@@ -6537,6 +6553,103 @@ def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_
     assert session.is_processing is True
     assert session.running_preview_text == "处理中预览"
     terminate_process.assert_called_once_with(process)
+
+
+def test_kill_user_process_clears_stale_processing_without_process(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.session_epoch = 1
+    service = ChatHistoryService(ChatStore(tmp_path))
+    service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="继续",
+        native_provider="codex",
+    )
+
+    with session._lock:
+        session.process = None
+        session.is_processing = True
+        session.stop_requested = False
+
+    result = kill_user_process(web_manager, "main", 1001)
+    history = get_history(web_manager, "main", 1001, limit=10)
+
+    assert result["killed"] is False
+    assert result["stale_cleared"] is True
+    assert session.is_processing is False
+    assert history["items"][-1]["state"] == "error"
+    assert history["items"][-1]["meta"]["completion_state"] == "stale_stream_recovered"
+
+
+def test_kill_user_process_clears_stale_processing_for_exited_process(
+    web_manager: MultiBotManager,
+):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    process = MagicMock()
+    process.poll.return_value = 0
+
+    with session._lock:
+        session.process = process
+        session.is_processing = True
+        session.stop_requested = False
+
+    result = kill_user_process(web_manager, "main", 1001)
+
+    assert result["killed"] is False
+    assert result["stale_cleared"] is True
+    assert session.process is None
+    assert session.is_processing is False
+    assert session.stop_requested is False
+
+
+def test_kill_user_process_finishes_stale_cluster_run_without_pending_tasks(
+    web_manager: MultiBotManager,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    web_manager.main_profile.cluster = BotClusterConfig(enabled=True)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(
+            bot_alias="main",
+            user_id=1001,
+            profile=web_manager.main_profile,
+        )
+    )
+
+    with session._lock:
+        session.process = None
+        session.is_processing = True
+
+    result = kill_user_process(web_manager, "main", 1001)
+
+    assert result["stale_cleared"] is True
+    assert result["cluster_run_finished"] == run.run_id
+    assert api_service._CLUSTER_RUNTIME.get_run(run.run_id).status == "completed"
+    assert get_overview(web_manager, "main", 1001)["active_cluster_run"] is None
+
+
+def test_get_processing_sessions_handles_agent_scoped_sessions(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+
+    items = get_processing_sessions("main")
+
+    assert items == [
+        {
+            "bot_id": session.bot_id,
+            "user_id": 1001,
+            "agent_id": "main",
+            "working_dir": session.working_dir,
+            "message_count": session.message_count,
+        }
+    ]
 
 def test_codex_status_event_skips_json_meta_preview():
     event = _build_stream_status_event(
