@@ -235,6 +235,7 @@ test("renders git repo summary and changed files", async () => {
   expect(screen.getByText("当前分支")).toBeInTheDocument();
   expect(screen.getByText("tracked.txt")).toBeInTheDocument();
   expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
+  expect(screen.getByTestId("git-scroll-region")).toHaveClass("min-h-0", "min-w-0", "overflow-x-hidden", "overflow-y-auto");
 });
 
 test("shows init action when current directory is not a git repo", async () => {

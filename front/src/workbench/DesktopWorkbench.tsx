@@ -876,13 +876,13 @@ export function DesktopWorkbench({
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
                     key={activeSidebarView}
-                    className="min-h-0 min-w-0"
+                    className="flex min-h-0 min-w-0 flex-1 flex-col"
                     {...sidebarContentMotion}
                   >
                     {layoutState.sidebarView === "files" ? (
                       renderSidebarContent()
                     ) : (
-                      <div data-testid="desktop-sidebar-scroll" className="min-h-0 overflow-y-auto">
+                      <div data-testid="desktop-sidebar-scroll" className="h-full min-h-0 flex-1 overflow-y-auto">
                         {renderSidebarContent()}
                       </div>
                     )}

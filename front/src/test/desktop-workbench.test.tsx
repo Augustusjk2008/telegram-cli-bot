@@ -324,6 +324,27 @@ test("desktop sidebar view switch keeps selected pane accessible with motion", a
   expect(screen.getByRole("button", { name: "搜索" })).toHaveAttribute("data-active", "true");
 });
 
+test("desktop git sidebar keeps a bounded vertical scroll region", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "Git" }));
+
+  const scrollRegion = await screen.findByTestId("desktop-sidebar-scroll");
+  expect(scrollRegion).toHaveClass("h-full", "min-h-0", "flex-1", "overflow-y-auto");
+  expect(await screen.findByText("当前分支")).toBeInTheDocument();
+});
+
 test("embedded git opens changed file diffs as read-only editor tabs", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
