@@ -24,6 +24,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   const dirty = candidate.dirty === true;
   const savedContent = typeof candidate.savedContent === "string" ? candidate.savedContent : undefined;
   const draftContent = typeof candidate.draftContent === "string" ? candidate.draftContent : undefined;
+  const encoding = typeof candidate.encoding === "string" ? candidate.encoding : undefined;
   const contentPersistence = candidate.contentPersistence;
 
   let normalizedPersistence: PersistedWorkbenchTab["contentPersistence"] = "none";
@@ -42,6 +43,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
     path,
     dirty,
     lastModifiedNs: typeof candidate.lastModifiedNs === "string" ? candidate.lastModifiedNs : undefined,
+    encoding,
     savedContent: normalizedPersistence === "clean_snapshot" ? savedContent : undefined,
     draftContent: normalizedPersistence === "dirty_snapshot" ? draftContent : undefined,
     contentPersistence: normalizedPersistence,
@@ -59,6 +61,7 @@ export function selectTabsForPersistence(
     savedContent: string;
     draftContent?: string;
     lastModifiedNs?: string;
+    encoding?: string;
   }>,
 ): PersistedWorkbenchTab[] {
   const selected: PersistedWorkbenchTab[] = [];
@@ -75,6 +78,7 @@ export function selectTabsForPersistence(
       path: tab.path,
       dirty: tab.dirty,
       lastModifiedNs: tab.lastModifiedNs,
+      encoding: tab.encoding,
       savedContent: undefined,
       draftContent: undefined,
       contentPersistence: "none",

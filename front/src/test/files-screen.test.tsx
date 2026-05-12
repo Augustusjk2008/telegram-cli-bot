@@ -528,6 +528,44 @@ test("can load full file content from preview modal", async () => {
   expect(screen.getByText("已加载全文")).toBeInTheDocument();
 });
 
+test("passes detected file encoding when saving from editor", async () => {
+  vi.unstubAllGlobals();
+  const user = userEvent.setup();
+  const writeSpy = vi.fn(async () => ({
+    path: "notes.txt",
+    fileSizeBytes: 12,
+    lastModifiedNs: "1776420510390927701",
+    encoding: "gb18030",
+  }));
+  const client = createClient({
+    readFileFull: async () => ({
+      content: "旧内容",
+      mode: "cat",
+      fileSizeBytes: 8,
+      isFullContent: true,
+      lastModifiedNs: "1776420510390927700",
+      encoding: "gb18030",
+    }),
+    writeFile: writeSpy,
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "编辑 notes.txt" }));
+  const editor = await screen.findByRole("textbox", { name: "文件内容" });
+  await user.clear(editor);
+  await user.type(editor, "新内容");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(writeSpy).toHaveBeenCalledWith(
+    "main",
+    "notes.txt",
+    "新内容",
+    "1776420510390927700",
+    "gb18030",
+  );
+});
+
 test("shows a download-only warning for files larger than 1MB", async () => {
   const user = userEvent.setup();
   const client = createClient({

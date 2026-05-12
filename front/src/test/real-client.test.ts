@@ -2452,6 +2452,7 @@ describe("RealWebBotClient", () => {
             file_size_bytes: 123,
             is_full_content: true,
             last_modified_ns: "1776420510390927700",
+            encoding: "gb18030",
           },
         }),
       });
@@ -2475,6 +2476,7 @@ describe("RealWebBotClient", () => {
       fileSizeBytes: 123,
       isFullContent: true,
       lastModifiedNs: "1776420510390927700",
+      encoding: "gb18030",
     });
   });
 
@@ -2542,13 +2544,14 @@ describe("RealWebBotClient", () => {
             path: "README.md",
             file_size_bytes: 16,
             last_modified_ns: "1776420510390927700",
+            encoding: "gb18030",
           },
         }),
       });
 
     const client = new RealWebBotClient();
     await client.login("secret-token");
-    const result = await client.writeFile("main", "README.md", "updated content", "1776420510390927700");
+    const result = await client.writeFile("main", "README.md", "updated content", "1776420510390927700", "gb18030");
 
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/bots/main/files/write",
@@ -2562,6 +2565,7 @@ describe("RealWebBotClient", () => {
           path: "README.md",
           content: "updated content",
           expected_mtime_ns: "1776420510390927700",
+          encoding: "gb18030",
         }),
       }),
     );
@@ -2569,6 +2573,7 @@ describe("RealWebBotClient", () => {
       path: "README.md",
       fileSizeBytes: 16,
       lastModifiedNs: "1776420510390927700",
+      encoding: "gb18030",
     });
   });
 

@@ -29,6 +29,12 @@ def test_fixture_vcd_contains_expected_signals() -> None:
     assert "b1011 #" in text
 
 
+def test_vivado_waveform_manifest_version_is_0_2_0() -> None:
+    manifest = json.loads(Path("examples/plugins/vivado-waveform/plugin.json").read_text(encoding="utf-8"))
+
+    assert manifest["version"] == "0.2.0"
+
+
 def test_vcd_parser_scales_large_ps_traces_and_skips_zero_width_parameters(tmp_path: Path) -> None:
     lines = [
         "$timescale",

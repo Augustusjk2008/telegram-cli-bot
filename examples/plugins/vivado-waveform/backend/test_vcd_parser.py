@@ -43,6 +43,53 @@ class VcdParserTest(unittest.TestCase):
         labels = [track["label"] for track in parsed["tracks"]]
         self.assertEqual(labels, ["top.top_sig"])
 
+    def test_parses_timestamp_with_unit_suffix(self) -> None:
+        parsed = self._parse(
+            """
+            $timescale 1ns $end
+            $scope module top $end
+            $var wire 1 ! clk $end
+            $upscope $end
+            $enddefinitions $end
+            #0
+            0!
+            #50ns
+            1!
+            #100 ns
+            0!
+            """
+        )
+
+        self.assertEqual(parsed["endTime"], 100)
+        self.assertEqual(
+            parsed["tracks"][0]["segments"][:2],
+            [
+                {"start": 0, "end": 50, "value": "0"},
+                {"start": 50, "end": 100, "value": "1"},
+            ],
+        )
+
+    def test_preserves_multi_token_signal_references(self) -> None:
+        parsed = self._parse(
+            """
+            $timescale 1ns $end
+            $scope module top $end
+            $var wire 1 ! data [0] $end
+            $var wire 1 " data [1] $end
+            $upscope $end
+            $enddefinitions $end
+            #0
+            0!
+            1"
+            #10
+            1!
+            0"
+            """
+        )
+
+        labels = [track["label"] for track in parsed["tracks"]]
+        self.assertEqual(labels, ["top.data [0]", "top.data [1]"])
+
     def test_preserves_scalar_edges_without_sampling(self) -> None:
         changes = ["#0", "0!"]
         for step in range(1, 24):

@@ -69,6 +69,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [editorError, setEditorError] = useState("");
   const [editorStatusText, setEditorStatusText] = useState("");
   const [editorLastModifiedNs, setEditorLastModifiedNs] = useState<string | undefined>(undefined);
+  const [editorEncoding, setEditorEncoding] = useState<string | undefined>(undefined);
   const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
   const [pendingFileName, setPendingFileName] = useState("");
   const [createFileBusy, setCreateFileBusy] = useState(false);
@@ -227,6 +228,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     setEditorError("");
     setEditorStatusText("");
     setEditorLastModifiedNs(undefined);
+    setEditorEncoding(undefined);
   };
 
   const handleOpenEditor = async (name: string) => {
@@ -243,6 +245,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       setEditorContent(result.content || "");
       setSavedContent(result.content || "");
       setEditorLastModifiedNs(result.lastModifiedNs);
+      setEditorEncoding(result.encoding);
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取文件失败";
       setEditorError(message);
@@ -277,9 +280,10 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     setEditorSaving(true);
     setEditorError("");
     try {
-      const result = await client.writeFile(botAlias, editorPath, editorContent, editorLastModifiedNs);
+      const result = await client.writeFile(botAlias, editorPath, editorContent, editorLastModifiedNs, editorEncoding);
       setSavedContent(editorContent);
       setEditorLastModifiedNs(result.lastModifiedNs);
+      setEditorEncoding(result.encoding || editorEncoding);
       setEditorStatusText("已保存");
       if (previewName === editorPath) {
         setPreviewContent(editorContent || "文件为空");

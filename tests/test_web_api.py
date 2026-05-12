@@ -1781,12 +1781,28 @@ def test_read_file_content_returns_png_preview_payload(web_manager: MultiBotMana
     assert content["is_full_content"] is True
 
 def test_read_file_content_still_rejects_non_image_binary_as_text(web_manager: MultiBotManager, temp_dir: Path):
-    save_uploaded_file(web_manager, "main", 1001, "payload.bin", b"\xff\xfe\x00\x01")
+    save_uploaded_file(web_manager, "main", 1001, "payload.bin", b"\x00\x01\x02\x03\x04\x05\x06\x07")
 
     with pytest.raises(WebApiError) as exc_info:
         read_file_content(web_manager, "main", 1001, "payload.bin", mode="head", lines=80)
 
     assert exc_info.value.code == "unsupported_encoding"
+
+def test_read_file_content_supports_gb18030_text(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "gbk.txt", "中文内容\n第二行\n".encode("gb18030"))
+
+    content = read_file_content(web_manager, "main", 1001, "gbk.txt", mode="cat", lines=0)
+
+    assert content["content"] == "中文内容\n第二行\n"
+    assert content["encoding"] == "gb18030"
+
+def test_read_file_content_supports_utf16_bom_text(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "utf16.txt", "alpha\n中文\n".encode("utf-16"))
+
+    content = read_file_content(web_manager, "main", 1001, "utf16.txt", mode="cat", lines=0)
+
+    assert content["content"] == "alpha\n中文\n"
+    assert content["encoding"] == "utf-16"
 
 def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
@@ -1828,6 +1844,23 @@ def test_write_file_content_updates_text_and_returns_version(web_manager: MultiB
     assert result["last_modified_ns"] >= previous["last_modified_ns"]
     assert content["content"] == "line1\nline2\n"
     assert content["last_modified_ns"] == result["last_modified_ns"]
+
+def test_write_file_content_preserves_detected_gb18030_encoding(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(web_manager, "main", 1001, "gbk.txt", "旧内容\n".encode("gb18030"))
+    previous = read_file_content(web_manager, "main", 1001, "gbk.txt", mode="cat", lines=0)
+
+    result = write_file_content(
+        web_manager,
+        "main",
+        1001,
+        "gbk.txt",
+        "新内容\n",
+        expected_mtime_ns=previous["last_modified_ns"],
+        encoding=previous["encoding"],
+    )
+
+    assert result["encoding"] == "gb18030"
+    assert (temp_dir / "gbk.txt").read_bytes() == "新内容\n".encode("gb18030")
 
 def test_write_file_content_rejects_absolute_path_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1880,7 +1913,7 @@ def test_write_file_content_accepts_content_larger_than_previous_editor_limit(we
     assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == large_text
 
 def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager, temp_dir: Path):
-    binary_bytes = b"\xff\xfe\xfd\x00"
+    binary_bytes = b"\x00\x01\x02\x03\x04\x05\x06\x07"
     save_uploaded_file(web_manager, "main", 1001, "notes.bin", binary_bytes)
 
     with pytest.raises(WebApiError) as exc_info:

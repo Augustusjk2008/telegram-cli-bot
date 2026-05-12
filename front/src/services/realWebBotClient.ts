@@ -321,6 +321,7 @@ type RawFileReadResult = {
   file_size_bytes?: number;
   is_full_content?: boolean;
   last_modified_ns?: string | number;
+  encoding?: string;
   preview_kind?: "text" | "image";
   content_type?: string;
   content_base64?: string;
@@ -330,6 +331,7 @@ type RawFileWriteResult = {
   path: string;
   file_size_bytes: number;
   last_modified_ns: string | number;
+  encoding?: string;
 };
 
 type RawFileCreateResult = {
@@ -3026,6 +3028,7 @@ export class RealWebBotClient implements WebBotClient {
       fileSizeBytes: data.file_size_bytes,
       isFullContent: data.is_full_content,
       lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
+      encoding: data.encoding,
     };
     if (data.preview_kind) {
       result.previewKind = data.preview_kind;
@@ -3053,6 +3056,7 @@ export class RealWebBotClient implements WebBotClient {
       fileSizeBytes: data.file_size_bytes,
       isFullContent: data.is_full_content ?? true,
       lastModifiedNs: typeof data.last_modified_ns === "undefined" ? undefined : String(data.last_modified_ns),
+      encoding: data.encoding,
     };
     if (data.preview_kind) {
       result.previewKind = data.preview_kind;
@@ -3151,7 +3155,7 @@ export class RealWebBotClient implements WebBotClient {
     URL.revokeObjectURL(downloadUrl);
   }
 
-  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult> {
     const data = await this.requestJson<RawFileWriteResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/write`, {
       method: "POST",
       headers: {
@@ -3161,12 +3165,14 @@ export class RealWebBotClient implements WebBotClient {
         path,
         content,
         expected_mtime_ns: expectedMtimeNs,
+        encoding,
       }),
     });
     return {
       path: data.path,
       fileSizeBytes: data.file_size_bytes,
       lastModifiedNs: String(data.last_modified_ns),
+      encoding: data.encoding,
     };
   }
 

@@ -10,6 +10,7 @@ export type PersistedWorkbenchTab = {
   path: string;
   dirty: boolean;
   lastModifiedNs?: string;
+  encoding?: string;
   savedContent?: string;
   draftContent?: string;
   contentPersistence: PersistedTabContentPersistence;
@@ -163,6 +164,7 @@ export type EditorTab = {
   statusText: string;
   error: string;
   lastModifiedNs?: string;
+  encoding?: string;
   cold: boolean;
   missing: boolean;
   contentPersistence: PersistedTabContentPersistence;

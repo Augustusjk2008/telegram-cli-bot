@@ -509,6 +509,7 @@ export type FileReadResult = {
   fileSizeBytes?: number;
   isFullContent?: boolean;
   lastModifiedNs?: string;
+  encoding?: string;
   previewKind?: FilePreviewKind;
   contentType?: string;
   contentBase64?: string;
@@ -518,6 +519,7 @@ export type FileWriteResult = {
   path: string;
   fileSizeBytes: number;
   lastModifiedNs: string;
+  encoding?: string;
 };
 
 export type PluginViewRenderer = "waveform" | "table" | "tree" | "document" | "hex";

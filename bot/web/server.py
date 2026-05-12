@@ -1972,6 +1972,7 @@ class WebApiServer:
             body.get("path", ""),
             body.get("content", ""),
             expected_mtime_ns=body.get("expected_mtime_ns"),
+            encoding=body.get("encoding"),
         )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 

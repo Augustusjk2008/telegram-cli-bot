@@ -16,6 +16,7 @@ from bot.models import BotProfile, UserSession
 from bot.runtime_paths import get_chat_attachments_dir
 from bot.web import workspace_index_service
 from bot.web.api_common import _raise, get_profile_or_raise, get_session_for_alias
+from bot.web.text_encoding import UnsupportedTextEncoding, read_text_file, write_text_file
 
 _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
 _WINDOWS_DRIVES_DISPLAY_ROOT = "盘符列表"
@@ -262,21 +263,18 @@ def resolve_safe_write_path(base_dir: str, path: str) -> str:
     return resolved_path
 
 
-def ensure_editable_text_file(path: str) -> None:
+def ensure_editable_text_file(path: str, encoding: str | None = None) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            while handle.read(1024 * 1024):
-                pass
-    except UnicodeDecodeError:
+        return read_text_file(path, encoding).encoding
+    except UnsupportedTextEncoding:
         _raise(400, "not_text_file", "文件不是可编辑的文本文件")
 
 
-def write_text_file_atomically(path: str, content: str) -> None:
+def write_text_file_atomically(path: str, content: str, encoding: str | None = None) -> None:
     directory = os.path.dirname(path)
     temporary_path = os.path.join(directory, f".{os.path.basename(path)}.{uuid.uuid4().hex}.tmp")
     try:
-        with open(temporary_path, "w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
+        write_text_file(temporary_path, content, encoding)
         os.replace(temporary_path, path)
     finally:
         try:
@@ -720,6 +718,7 @@ def write_file_content(
     content: str,
     *,
     expected_mtime_ns: int | None = None,
+    encoding: str | None = None,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
@@ -732,11 +731,13 @@ def write_file_content(
     if expected_mtime_ns is not None and int(expected_mtime_ns) != current_mtime_ns:
         _raise(409, "file_version_conflict", "文件已被修改，请重新打开后再试")
 
-    ensure_editable_text_file(file_path)
+    detected_encoding = ensure_editable_text_file(file_path, encoding)
 
     try:
-        write_text_file_atomically(file_path, content)
+        write_text_file_atomically(file_path, content, detected_encoding)
         next_mtime_ns = ensure_file_version_advanced(file_path, current_mtime_ns)
+    except UnsupportedTextEncoding:
+        _raise(400, "unsupported_encoding", "文件不是文本文件或编码不支持")
     except Exception as exc:
         _raise(500, "write_file_failed", str(exc))
 
@@ -745,6 +746,7 @@ def write_file_content(
         "path": path,
         "file_size_bytes": os.path.getsize(file_path),
         "last_modified_ns": next_mtime_ns,
+        "encoding": detected_encoding,
     }
 
 
@@ -788,21 +790,15 @@ def read_file_content(
         return raster_preview
 
     try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            if mode == "head":
-                content_lines = []
-                truncated = False
-                for index, line in enumerate(handle):
-                    if index >= lines:
-                        truncated = True
-                        break
-                    content_lines.append(line.rstrip("\n"))
-                content = "\n".join(content_lines)
-                is_full_content = not truncated
-            else:
-                content = handle.read()
-                is_full_content = True
-    except UnicodeDecodeError:
+        decoded = read_text_file(file_path)
+        if mode == "head":
+            content_lines = decoded.text.splitlines()
+            content = "\n".join(content_lines[:lines])
+            is_full_content = len(content_lines) <= lines
+        else:
+            content = decoded.text
+            is_full_content = True
+    except UnsupportedTextEncoding:
         _raise(400, "unsupported_encoding", "文件不是文本文件或编码不支持")
     except Exception as exc:
         _raise(500, "read_file_failed", str(exc))
@@ -815,6 +811,7 @@ def read_file_content(
         "file_size_bytes": file_size,
         "is_full_content": is_full_content,
         "last_modified_ns": stat_file_version(file_path),
+        "encoding": decoded.encoding,
     }
 
 

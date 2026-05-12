@@ -35,6 +35,7 @@ function createTab(
     statusText: "",
     error: "",
     lastModifiedNs,
+    encoding: overrides?.encoding,
     cold: false,
     missing: false,
     kind: "file",
@@ -50,6 +51,7 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
       savedContent: tab.savedContent ?? "",
       dirty: true,
       contentPersistence: "dirty_snapshot",
+      encoding: tab.encoding,
     });
   }
 
@@ -57,12 +59,14 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
     const savedContent = tab.savedContent ?? "";
     return createTab(tab.path, savedContent, tab.lastModifiedNs, {
       contentPersistence: "clean_snapshot",
+      encoding: tab.encoding,
     });
   }
 
   return createTab(tab.path, "", tab.lastModifiedNs, {
     cold: true,
     contentPersistence: "none",
+    encoding: tab.encoding,
   });
 }
 
@@ -120,6 +124,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
       path: target.path,
       dirty: target.dirty,
       lastModifiedNs: target.lastModifiedNs,
+      encoding: target.encoding,
       savedContent: target.savedContent,
       draftContent: target.content,
       contentPersistence: target.dirty ? "dirty_snapshot" : "clean_snapshot",
@@ -163,6 +168,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
               error: "",
               statusText: "",
               lastModifiedNs: result.lastModifiedNs,
+              encoding: result.encoding,
               cold: false,
               missing: false,
               contentPersistence: "none",
@@ -364,7 +370,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
       : item));
 
     try {
-      const result = await client.writeFile(botAlias, target.path, target.content, target.lastModifiedNs);
+      const result = await client.writeFile(botAlias, target.path, target.content, target.lastModifiedNs, target.encoding);
       setTabs((current) => current.map((item) => item.path === target.path
         ? {
             ...item,
@@ -374,6 +380,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
             statusText: "已保存",
             error: "",
             lastModifiedNs: result.lastModifiedNs,
+            encoding: result.encoding || target.encoding,
             contentPersistence: "clean_snapshot",
             cold: false,
             missing: false,
@@ -509,6 +516,7 @@ export function useEditorTabs({ botAlias, client }: Props) {
         savedContent: tab.savedContent,
         draftContent: tab.content,
         lastModifiedNs: tab.lastModifiedNs,
+        encoding: tab.encoding,
       })).filter((tab) => tab.kind !== "git-diff" && tab.kind !== "plugin-view"),
     );
   }

@@ -20,6 +20,7 @@ UNIT_SECONDS = {
     "s": 1.0,
 }
 UNIT_ORDER = ("fs", "ps", "ns", "us", "ms", "s")
+TIMESTAMP_RE = re.compile(r"^#\s*(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>fs|ps|ns|us|ms|s)?\s*$")
 MAX_DISPLAY_TIME = 10_000
 MAX_CONTENT_WIDTH = 24_000
 DEFAULT_PIXELS_PER_TIME = 18
@@ -106,6 +107,19 @@ def _parse_timescale(value: str) -> tuple[float, str]:
     if not match:
         return 1.0, "ns"
     return float(match.group("amount")), match.group("unit")
+
+
+def _parse_timestamp(line: str, source_timescale_amount: float, source_timescale_unit: str) -> int:
+    match = TIMESTAMP_RE.match(line)
+    if not match:
+        raise ValueError(f"Invalid VCD timestamp: {line}")
+    amount = float(match.group("amount"))
+    unit = match.group("unit")
+    if unit is None:
+        return int(round(amount))
+    source_tick_seconds = source_timescale_amount * UNIT_SECONDS[source_timescale_unit]
+    raw_ticks = amount * UNIT_SECONDS[unit] / source_tick_seconds
+    return int(round(raw_ticks))
 
 
 def _choose_display_unit(duration_seconds: float, fallback_unit: str) -> str:
@@ -336,7 +350,12 @@ def build_vcd_index(path: Path) -> VcdIndex:
                 if width <= 0 or not _is_visible_scope(scope):
                     continue
                 id_code = parts[3]
-                name = parts[4]
+                name_parts = parts[4:]
+                if "$end" in name_parts:
+                    name_parts = name_parts[: name_parts.index("$end")]
+                name = " ".join(name_parts)
+                if not name:
+                    continue
                 label = ".".join([name_part for _, name_part in scope] + [name]) if scope else name
                 signals_by_code[id_code] = VcdSignal(
                     id_code=id_code,
@@ -348,7 +367,7 @@ def build_vcd_index(path: Path) -> VcdIndex:
                 changes.setdefault(id_code, _SeriesBuilder.create())
                 continue
             if line.startswith("#"):
-                current_time = int(line[1:] or 0)
+                current_time = _parse_timestamp(line, source_timescale_amount, source_timescale_unit)
                 continue
             if line[0] in {"b", "B"}:
                 parts = line[1:].split(maxsplit=1)

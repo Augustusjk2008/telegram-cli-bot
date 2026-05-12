@@ -3409,7 +3409,7 @@ export class MockWebBotClient implements WebBotClient {
     URL.revokeObjectURL(downloadUrl);
   }
 
-  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string): Promise<FileWriteResult> {
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult> {
     const browserPath = this.getBrowserPath(botAlias);
     const currentVersion = this.getFileVersion(botAlias, browserPath, path);
     if (expectedMtimeNs !== undefined && expectedMtimeNs !== String(currentVersion)) {
@@ -3433,6 +3433,7 @@ export class MockWebBotClient implements WebBotClient {
       path,
       fileSizeBytes: new TextEncoder().encode(content).length,
       lastModifiedNs: String(nextVersion),
+      encoding,
     };
   }
 
