@@ -14,4 +14,6 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/admin/register-codes", server.admin_register_code_create)
     app.router.add_patch("/api/admin/register-codes/{code_id}", server.admin_register_code_patch)
     app.router.add_delete("/api/admin/register-codes/{code_id}", server.admin_register_code_delete)
-
+    app.router.add_get("/api/admin/users", server.admin_users)
+    app.router.add_patch("/api/admin/users/{account_id}", server.admin_user_patch)
+    app.router.add_patch("/api/admin/users/{account_id}/permissions", server.admin_user_permissions_patch)

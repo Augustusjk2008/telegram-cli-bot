@@ -55,10 +55,11 @@ async def install_plugin(
     install_args = {}
     if source_path:
         install_args["source_path"] = source_path
+    force = bool(body.get("force") or body.get("overwrite"))
     if not plugin_id:
         plugin_id = None
     try:
-        return await manager.plugin_service.install_plugin(plugin_id, **install_args)
+        return await manager.plugin_service.install_plugin(plugin_id, force=force, **install_args)
     except KeyError as exc:
         _raise(404, "plugin_not_found", str(exc))
     except FileNotFoundError as exc:
@@ -86,6 +87,16 @@ async def update_plugin(
         _raise(404, "plugin_not_found", str(exc))
     except ValueError as exc:
         _raise(400, "invalid_plugin_request", str(exc))
+
+
+async def uninstall_plugin(manager: MultiBotManager, auth: AuthContext, plugin_id: str) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    try:
+        return await manager.plugin_service.uninstall_plugin(plugin_id)
+    except KeyError as exc:
+        _raise(404, "plugin_not_found", str(exc))
+    except OSError as exc:
+        _raise(500, "plugin_uninstall_failed", str(exc))
 
 
 def resolve_plugin_file_target(
@@ -256,4 +267,3 @@ def get_plugin_artifact(
         return manager.plugin_service.get_artifact(bot_alias=alias, artifact_id=artifact_id)
     except KeyError as exc:
         _raise(404, "plugin_artifact_not_found", str(exc))
-

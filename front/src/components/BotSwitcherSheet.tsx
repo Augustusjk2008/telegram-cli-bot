@@ -85,6 +85,9 @@ export function BotSwitcherSheet({
                     {isOffline ? (
                       <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
                     ) : null}
+                    {bot.canOperate === false ? (
+                      <span className="mt-1 text-xs text-[var(--muted)]">只读</span>
+                    ) : null}
                     {!isOffline ? <BotActivitySummary bot={bot} className="mt-1" /> : null}
                   </div>
                 </div>
@@ -109,7 +112,7 @@ export function BotSwitcherSheet({
                     : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
                 }`}
               >
-                邀请码管理
+                管理中心
               </button>
             </div>
           ) : null}

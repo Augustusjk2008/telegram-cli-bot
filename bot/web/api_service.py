@@ -181,6 +181,7 @@ from bot.web.plugin_api_service import (
     render_plugin_view,
     resolve_plugin_file_target,
     update_plugin,
+    uninstall_plugin,
 )
 from bot.web.terminal_actions import (
     TerminalActionConfigConflict,

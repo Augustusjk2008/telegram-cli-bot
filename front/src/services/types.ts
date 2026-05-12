@@ -44,6 +44,27 @@ export type RegisterCodeCreateResult = RegisterCodeItem & {
   code: string;
 };
 
+export type AdminUser = {
+  accountId: string;
+  username: string;
+  role: AccountRole | "member";
+  disabled: boolean;
+  createdAt: string;
+  allowedBots: string[];
+  ownedBots: string[];
+  ownedBotCount: number;
+  botCreateLimit: number;
+};
+
+export type AdminUserUpdateInput = {
+  disabled?: boolean;
+};
+
+export type UserBotPermissions = {
+  accountId: string;
+  allowedBots: string[];
+};
+
 export type BotSummary = {
   alias: string;
   cliType: CliType;
@@ -61,6 +82,11 @@ export type BotSummary = {
   botMode?: string;
   enabled?: boolean;
   isMain?: boolean;
+  canOperate?: boolean;
+  effectiveCapabilities?: Capability[];
+  ownerAccountId?: string;
+  ownerUsername?: string;
+  isOwnedByCurrentUser?: boolean;
   cluster?: BotClusterConfig;
 };
 
@@ -1364,6 +1390,21 @@ export type AppUpdateDownloadProgress = {
   totalBytes?: number;
   percent?: number;
   message?: string;
+};
+
+export type OfflineUpdatePackageItem = {
+  name: string;
+  path: string;
+  version: string;
+  packageKind: AppUpdatePackageKind;
+  sizeBytes: number;
+  valid: boolean;
+  error: string;
+};
+
+export type OfflineUpdatePackageList = {
+  artifactsDir: string;
+  items: OfflineUpdatePackageItem[];
 };
 
 export type AssistantProposalStatus = "proposed" | "approved" | "rejected" | "applied";

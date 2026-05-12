@@ -701,3 +701,41 @@ def test_updater_main_treats_matching_pending_version_as_success(monkeypatch, tm
     app_settings._save_settings(current_settings)
 
     assert updater.main(["apply-pending", "--repo-root", str(repo_root)]) == 0
+
+
+def test_list_offline_update_packages_reads_release_artifacts(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    artifacts_dir = repo_root / ".release-local" / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    package = artifacts_dir / "offline.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("bot/version.py", "APP_VERSION = '1.2.3'\n")
+
+    listing = updater.list_offline_update_packages(repo_root)
+
+    assert listing["artifacts_dir"] == str(artifacts_dir)
+    assert len(listing["items"]) == 1
+    item = listing["items"][0]
+    assert item["name"] == "offline.zip"
+    assert item["path"] == str(package)
+    assert item["size"] == package.stat().st_size
+    assert item["size_bytes"] == package.stat().st_size
+    assert item["package_kind"] == updater.detect_update_package_kind(repo_root)
+    assert item["valid"] is True
+    assert item["error"] == ""
+
+
+def test_prepare_offline_update_sets_pending_update(monkeypatch, tmp_path: Path):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    package = tmp_path / "offline.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("bot/version.py", "APP_VERSION = '1.2.3'\n")
+
+    status = updater.prepare_offline_update(repo_root, package, version="1.2.3", log_callback=lambda _line: None)
+
+    assert status["pending_update_version"] == "1.2.3"
+    assert status["pending_update_path"] == str(package)
+    assert status["pending_update_package_kind"] == updater.detect_update_package_kind(repo_root)

@@ -268,18 +268,36 @@ class PluginService:
         install_id: str | None = None,
         *,
         source_path: str | Path | None = None,
+        force: bool = False,
     ) -> dict[str, Any]:
         source_dir = self._resolve_install_source_dir(install_id, source_path=source_path)
         manifest = load_plugin_manifest(source_dir / "plugin.json")
         target_dir = self.plugins_root / source_dir.name
-        if target_dir.exists():
+        discovered = self.registry.discover()
+        existing_manifest = discovered.get(manifest.plugin_id)
+        existing_root = existing_manifest.root if existing_manifest else None
+        if (target_dir.exists() or existing_manifest is not None) and not force:
             raise FileExistsError(f"插件已安装: {source_dir.name}")
 
-        discovered = self.registry.discover()
-        if manifest.plugin_id in discovered:
-            raise ValueError(f"插件已存在: {manifest.plugin_id}")
-
         target_dir.parent.mkdir(parents=True, exist_ok=True)
+        backups: list[tuple[Path, Path]] = []
+        if force:
+            await self._invalidate_plugin(manifest.plugin_id, dispose_sessions=True)
+            seen_paths: set[Path] = set()
+            backup_root = self.plugins_root.parent / ".plugin-backups"
+            backup_root.mkdir(parents=True, exist_ok=True)
+            for path in (existing_root, target_dir):
+                current = Path(path) if path else None
+                if current is None or not current.exists() or current in seen_paths:
+                    continue
+                seen_paths.add(current)
+                backup_dir = backup_root / f"{current.name}.backup"
+                index = 0
+                while backup_dir.exists():
+                    index += 1
+                    backup_dir = backup_root / f"{current.name}.backup-{index}"
+                current.rename(backup_dir)
+                backups.append((current, backup_dir))
         try:
             shutil.copytree(
                 source_dir,
@@ -287,15 +305,30 @@ class PluginService:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
             self.registry.discover()
+            for _original, backup_dir in backups:
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
             return self._manifest_payload(self.registry.get_manifest(manifest.plugin_id))
         except Exception:
             if target_dir.exists():
                 shutil.rmtree(target_dir, ignore_errors=True)
+            for original, backup_dir in reversed(backups):
+                if backup_dir.exists() and not original.exists():
+                    backup_dir.rename(original)
             try:
                 self.registry.discover()
             except Exception:
                 pass
             raise
+
+    async def uninstall_plugin(self, plugin_id: str) -> dict[str, Any]:
+        self.registry.discover()
+        manifest = self.registry.get_manifest(plugin_id)
+        resolved_id = manifest.plugin_id
+        await self._invalidate_plugin(resolved_id, dispose_sessions=True)
+        shutil.rmtree(manifest.root)
+        self.registry.discover()
+        return {"id": resolved_id, "deleted": True}
 
     async def update_plugin(
         self,

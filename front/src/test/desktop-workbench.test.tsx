@@ -256,7 +256,6 @@ test("desktop workbench marks pane resizing while dragging separators", async ()
 
 test("desktop workbench shows the status bar and uses the left rail to switch sidebar content", async () => {
   const user = userEvent.setup();
-  const onOpenBotManager = vi.fn();
 
   render(
     <DesktopWorkbench
@@ -270,7 +269,6 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
       viewMode="desktop"
       onViewModeChange={() => {}}
       onOpenBotSwitcher={() => {}}
-      onOpenBotManager={onOpenBotManager}
     />,
   );
 
@@ -291,9 +289,9 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   expect(screen.getByRole("button", { name: "启动调试" })).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "设置" }));
-  expect(await screen.findByText("智能体配置已迁移")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "打开智能体管理" }));
-  expect(onOpenBotManager).toHaveBeenCalledTimes(1);
+  expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
+  expect(screen.queryByText("智能体配置已迁移")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开智能体管理" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "插件" }));
   expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();

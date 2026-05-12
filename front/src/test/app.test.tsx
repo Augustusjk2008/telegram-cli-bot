@@ -77,6 +77,29 @@ const SUPER_ADMIN_SESSION: SessionState = {
   ],
 };
 
+async function loginWithPasscode(user: ReturnType<typeof userEvent.setup>, passcode: string) {
+  await user.type(screen.getByLabelText("访问口令"), passcode);
+  await user.click(screen.getByRole("button", { name: "登录" }));
+}
+
+async function loginAsSuperAdmin(user: ReturnType<typeof userEvent.setup>) {
+  await loginWithPasscode(user, "127.0.0.1");
+}
+
+async function loginAsMember(user: ReturnType<typeof userEvent.setup>) {
+  await loginWithPasscode(user, "demo");
+}
+
+async function createManagedBot(user: ReturnType<typeof userEvent.setup>, alias: string) {
+  await user.clear(screen.getByLabelText("新智能体别名"));
+  await user.type(screen.getByLabelText("新智能体别名"), alias);
+  await user.clear(screen.getByLabelText("新智能体 CLI 路径"));
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  await user.clear(screen.getByLabelText("新智能体工作目录"));
+  await user.type(screen.getByLabelText("新智能体工作目录"), `C:\\workspace\\${alias}`);
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
+}
+
 test("shows bottom navigation after entering demo app shell", async () => {
   render(<App />);
   await userEvent.type(screen.getByLabelText("访问口令"), "123");
@@ -219,38 +242,75 @@ test("mobile bot switcher still uses bottom sheet", async () => {
   expect(screen.queryByTestId("desktop-bot-switcher-popover")).not.toBeInTheDocument();
 });
 
-test("super admin can open invite code management from bot switcher", async () => {
+test("super admin can open admin center from bot switcher", async () => {
   const user = userEvent.setup();
-  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({ ...SUPER_ADMIN_SESSION });
 
   render(<App />);
 
-  await user.type(screen.getByLabelText("访问口令"), "127.0.0.1");
-  await user.click(screen.getByRole("button", { name: "登录" }));
+  await loginAsSuperAdmin(user);
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "邀请码管理" }));
+  await user.click(await screen.findByRole("button", { name: "管理中心" }));
 
-  expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "管理中心" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "用户权限" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "邀请码" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "升级" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
 });
 
-test("super admin can open invite code management from desktop bot switcher", async () => {
+test("super admin can open admin center from desktop bot switcher", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();
-  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({ ...SUPER_ADMIN_SESSION });
 
   render(<App />);
 
-  await user.type(screen.getByLabelText("访问口令"), "127.0.0.1");
-  await user.click(screen.getByRole("button", { name: "登录" }));
+  await loginAsSuperAdmin(user);
   await screen.findByTestId("desktop-workbench-root");
 
   await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "邀请码" }));
+  await user.click(await screen.findByRole("button", { name: "管理中心" }));
 
-  expect(await screen.findByRole("heading", { name: "邀请码管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "管理中心" })).toBeInTheDocument();
+});
+
+test("member can enter ungranted bot in read-only mode and hits create quota copy", async () => {
+  const user = userEvent.setup();
+  const seedClient = new MockWebBotClient();
+  const baseBots = await seedClient.listBots();
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue(
+    baseBots.map((bot) => (bot.alias === "team2" ? { ...bot, canOperate: false } : bot)),
+  );
+
+  render(<App />);
+
+  await loginAsMember(user);
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+
+  expect((await screen.findAllByText("只读模式")).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: "发送" }).every((button) => button.hasAttribute("disabled"))).toBe(true);
+
+  await user.click(screen.getByRole("button", { name: "team2" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
+  await screen.findByRole("heading", { name: "智能体管理" });
+
+  await createManagedBot(user, "owned1");
+  await waitFor(() => {
+    expect(screen.getByLabelText("新智能体别名")).toHaveValue("");
+  });
+  expect(await screen.findByText("智能体已创建")).toBeInTheDocument();
+
+  await createManagedBot(user, "owned2");
+  await waitFor(() => {
+    expect(screen.getByLabelText("新智能体别名")).toHaveValue("");
+  });
+
+  await createManagedBot(user, "owned3");
+  expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
 
 test("main settings can switch and persist appearance preferences", async () => {
@@ -881,7 +941,7 @@ test("mobile app never exposes assistant ops navigation", async () => {
   expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
 });
 
-test("desktop settings route bot runtime config into manager", async () => {
+test("desktop settings hides migrated bot runtime section", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();
 
@@ -892,8 +952,7 @@ test("desktop settings route bot runtime config into manager", async () => {
   await screen.findByTestId("desktop-workbench-root");
 
   await user.click(screen.getByRole("button", { name: "设置" }));
-  expect(await screen.findByText("智能体配置已迁移")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "打开智能体管理" }));
-
-  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
+  expect(screen.queryByText("智能体配置已迁移")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开智能体管理" })).not.toBeInTheDocument();
 });

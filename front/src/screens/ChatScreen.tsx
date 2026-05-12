@@ -2088,17 +2088,18 @@ export function ChatScreen({
   }
 
   const killTaskActive = isStreaming || actionLoading === "kill";
-  const killTaskDisabled = !isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
+  const chatMutationsDisabled = readOnly || activeClusterChildReadOnly;
+  const killTaskDisabled = chatMutationsDisabled || !isStreaming || actionLoading === "kill";
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
   const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant";
   const showTopChrome = !embedded && !isImmersive;
-  const showActionBar = !isImmersive && !readOnly;
+  const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const modelOptions = cliParams?.schema.model?.enum ?? [];
   const selectedModel = toModelOptionValue(cliParams?.params.model, modelOptions);
@@ -2145,7 +2146,7 @@ export function ChatScreen({
               <select
                 aria-label="模型"
                 value={selectedModel}
-                disabled={modelSaving}
+                disabled={modelSaving || readOnly}
                 onChange={(event) => void handleModelChange(event.target.value)}
                 className="h-9 shrink-0 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
               >
@@ -2168,7 +2169,7 @@ export function ChatScreen({
                 aria-pressed={clusterMode}
                 aria-label={clusterMode ? "关闭集群模式" : "开启集群模式"}
                 onClick={() => void handleToggleClusterMode()}
-                disabled={loading || isStreaming || clusterSaving}
+                disabled={loading || isStreaming || clusterSaving || readOnly}
                 className={clusterMode
                   ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
                   : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60"}
@@ -2202,7 +2203,7 @@ export function ChatScreen({
             <button
               type="button"
               onClick={() => void handleNewConversation()}
-              disabled={conversationLoading || isStreaming || activeClusterChildReadOnly}
+              disabled={conversationLoading || isStreaming || chatMutationsDisabled}
               className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
             >
               <Plus className="h-4 w-4" />
@@ -2329,7 +2330,10 @@ export function ChatScreen({
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
-      {!readOnly && !activeClusterChildReadOnly ? (
+      <div className="border-t border-[var(--border)] bg-[var(--surface)]">
+        {chatMutationsDisabled ? (
+          <p className="px-4 pt-3 text-xs text-[var(--muted)]">只读模式</p>
+        ) : null}
         <ChatComposer
           key={`composer-${composerPulseKey}`}
           onSend={handleSend}
@@ -2339,12 +2343,12 @@ export function ChatScreen({
           pulse={composerPulseKey > 0}
           agents={clusterAgents}
           clusterMode={clusterMode}
-          disabled={isStreaming || loading}
+          disabled={chatMutationsDisabled || isStreaming || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
           placeholder={clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
         />
-      ) : null}
+      </div>
 
       {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog

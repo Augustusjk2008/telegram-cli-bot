@@ -108,6 +108,11 @@ export function useBotManager({
       await loadBots();
       return created;
     } catch (err) {
+      const clientError = asWebApiClientError(err);
+      if (clientError?.code === "bot_quota_exceeded") {
+        setError("普通用户最多只能创建 3 个 Bot");
+        return null;
+      }
       setError(getErrorMessage(err, "创建智能体失败"));
       return null;
     } finally {

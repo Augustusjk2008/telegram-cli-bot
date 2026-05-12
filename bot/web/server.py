@@ -43,6 +43,8 @@ from bot.updater import (
     check_for_updates,
     download_latest_update,
     get_update_status,
+    list_offline_update_packages,
+    prepare_offline_update,
     set_update_enabled,
 )
 from .auth_store import (
@@ -64,12 +66,14 @@ from .auth_store import (
     CAP_VIEW_FILE_TREE,
     CAP_VIEW_PLUGINS,
     CAP_WRITE_FILES,
+    GUEST_CAPABILITIES,
     LOCAL_ADMIN_CAPABILITIES,
     MEMBER_CAPABILITIES,
     ROLE_GUEST,
     WebAuthSession,
     WebAuthStore,
 )
+from .permission_store import BotPermissionStore
 from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, TerminalSessionManager
 from .tunnel_service import TunnelService
 from .routes import (
@@ -111,6 +115,7 @@ from .api_service import (
     get_plugin_view_window,
     invoke_plugin_action,
     install_plugin,
+    uninstall_plugin,
     get_directory_listing,
     get_file_metadata,
     get_history,
@@ -239,6 +244,7 @@ _WEB_AUTH_STORE = WebAuthStore(
     users_path=_REPO_ROOT / ".web_users.json",
     register_codes_path=_REPO_ROOT / ".web_register_codes.json",
 )
+_BOT_PERMISSION_STORE = BotPermissionStore(_REPO_ROOT / ".web_permissions.json")
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -348,6 +354,9 @@ def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, 
         "is_logged_in": True,
         "token_protected": bool(WEB_API_TOKEN),
         "allowed_user_ids": ALLOWED_USER_IDS,
+        "is_local_admin": auth.is_local_admin,
+        "allowed_bots": ["*"] if auth.is_local_admin else sorted(auth.allowed_bot_aliases),
+        "owned_bots": ["*"] if auth.is_local_admin else sorted(auth.owned_bot_aliases),
     }
     if token:
         payload["token"] = token
@@ -362,6 +371,9 @@ def _serialize_auth_session(session: WebAuthSession) -> dict[str, Any]:
         username=session.account.username,
         role=session.account.role,
         capabilities=set(session.capabilities),
+        allowed_bot_aliases=_BOT_PERMISSION_STORE.allowed_bots_for_account(session.account.account_id),
+        owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
+        is_local_admin=session.account.account_id == "local-admin",
     )
     return _serialize_auth_context(auth, token=session.token)
 
@@ -689,6 +701,9 @@ class WebApiServer:
             username=username,
             role="member",
             capabilities=set(MEMBER_CAPABILITIES),
+            allowed_bot_aliases=set(),
+            owned_bot_aliases=set(),
+            is_local_admin=True,
         )
 
     def _session_auth_context(self, session: WebAuthSession) -> AuthContext:
@@ -700,6 +715,9 @@ class WebApiServer:
             username=session.account.username,
             role=session.account.role,
             capabilities=set(session.capabilities),
+            allowed_bot_aliases=_BOT_PERMISSION_STORE.allowed_bots_for_account(session.account.account_id),
+            owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
+            is_local_admin=session.account.account_id == "local-admin",
         )
 
     def _local_admin_auth_context(self) -> AuthContext:
@@ -711,6 +729,9 @@ class WebApiServer:
             username="127.0.0.1",
             role="member",
             capabilities=set(LOCAL_ADMIN_CAPABILITIES),
+            allowed_bot_aliases=set(),
+            owned_bot_aliases=set(),
+            is_local_admin=True,
         )
 
     async def _parse_json(self, request: web.Request) -> dict[str, Any]:
@@ -729,6 +750,15 @@ class WebApiServer:
 
     async def _with_capability(self, request: web.Request, capability: str) -> AuthContext:
         auth = await self._with_auth(request)
+        raw_alias = request.match_info.get("alias")
+        alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
+        if alias:
+            auth = self._bot_auth(auth, alias)
+            request["auth"] = auth
+        if self._allows_readonly_bot_capability(request, capability, auth):
+            elevated = auth.with_capabilities({*auth.capabilities, capability})
+            request["auth"] = elevated
+            return elevated
         _require_capability(auth, capability)
         return auth
 
@@ -750,6 +780,57 @@ class WebApiServer:
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         return alias
+
+    def _normalize_bot_alias(self, alias: str) -> str:
+        return str(alias or "").strip().lower()
+
+    def _is_local_admin(self, auth: AuthContext) -> bool:
+        return auth.is_local_admin or auth.account_id == "local-admin"
+
+    def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
+        normalized_alias = self._normalize_bot_alias(alias)
+        return self._is_local_admin(auth) or _BOT_PERMISSION_STORE.can_operate_bot(auth.account_id, normalized_alias)
+
+    def _bot_auth(self, auth: AuthContext, alias: str) -> AuthContext:
+        if self._can_operate_bot(auth, alias):
+            return auth
+        return auth.with_capabilities(GUEST_CAPABILITIES)
+
+    def _allows_readonly_bot_capability(self, request: web.Request, capability: str, auth: AuthContext) -> bool:
+        if capability in auth.capabilities:
+            return True
+        raw_alias = request.match_info.get("alias")
+        alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
+        if not alias or self._can_operate_bot(auth, alias):
+            return False
+        method = request.method.upper()
+        path = request.path
+        if capability in {CAP_READ_FILE_CONTENT, CAP_VIEW_CHAT_TRACE} and method == "GET":
+            return True
+        if capability == CAP_GIT_OPS and method == "GET":
+            return True
+        if capability == CAP_VIEW_PLUGINS:
+            return path.endswith("/plugins/resolve-file-target")
+        if capability != CAP_RUN_PLUGINS:
+            return False
+        if method == "GET":
+            return True
+        if path.endswith("/render") or path.endswith("/open") or path.endswith("/window"):
+            return True
+        return method == "DELETE" and "/plugins/" in path and "/sessions/" in path
+
+    def _decorate_bot_for_auth(self, auth: AuthContext, item: dict[str, Any]) -> dict[str, Any]:
+        alias = self._normalize_bot_alias(str(item.get("alias") or ""))
+        effective = self._bot_auth(auth, alias)
+        return {
+            **item,
+            "can_operate": self._can_operate_bot(auth, alias),
+            "effective_capabilities": sorted(effective.capabilities),
+            "owner_account_id": _BOT_PERMISSION_STORE.bot_owner(alias),
+        }
+
+    def _decorate_bots_for_auth(self, auth: AuthContext, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [self._decorate_bot_for_auth(auth, item) for item in items]
 
     def _assistant_admin_action(self, request: web.Request) -> tuple[str, dict[str, str]] | None:
         method = request.method.upper()
@@ -1024,9 +1105,53 @@ class WebApiServer:
             raise _auth_error(exc) from exc
         return _json({"ok": True, "data": {"deleted": True}})
 
+    async def admin_users(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        permission_items = _BOT_PERMISSION_STORE.list_user_permissions()["items"]
+        permissions = {item["account_id"]: item for item in permission_items}
+        users = []
+        for user in _WEB_AUTH_STORE.list_members()["items"]:
+            account_id = user["account_id"]
+            users.append(
+                {
+                    **user,
+                    "allowed_bots": permissions.get(account_id, {}).get("allowed_bots", []),
+                    "owned_bots": sorted(_BOT_PERMISSION_STORE.owned_bot_aliases(account_id)),
+                    "owned_bot_count": _BOT_PERMISSION_STORE.count_owned_bots(account_id),
+                    "bot_create_limit": _BOT_PERMISSION_STORE.MEMBER_BOT_LIMIT,
+                }
+            )
+        return _json({"ok": True, "data": {"items": users}})
+
+    async def admin_user_patch(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        body = await self._parse_json(request)
+        try:
+            user = _WEB_AUTH_STORE.update_member(
+                request.match_info["account_id"],
+                disabled=body.get("disabled") if "disabled" in body else None,
+            )
+        except AuthStoreError as exc:
+            raise _auth_error(exc) from exc
+        return _json({"ok": True, "data": user})
+
+    async def admin_user_permissions_patch(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
+        body = await self._parse_json(request)
+        allowed_bots = body.get("allowed_bots")
+        if not isinstance(allowed_bots, list):
+            raise WebApiError(400, "invalid_allowed_bots", "allowed_bots 必须是数组")
+        known_aliases = {self.manager.main_profile.alias, *self.manager.managed_profiles.keys()}
+        normalized = [str(alias or "").strip().lower() for alias in allowed_bots]
+        unknown = sorted(alias for alias in normalized if alias and alias not in known_aliases)
+        if unknown:
+            raise WebApiError(400, "unknown_bot_alias", "包含不存在的 Bot", {"aliases": unknown})
+        data = _BOT_PERMISSION_STORE.set_allowed_bots(request.match_info["account_id"], normalized)
+        return _json({"ok": True, "data": data})
+
     async def get_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOTS)
-        return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
+        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, list_bots(self.manager, auth.user_id))})
 
     async def get_plugins(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
@@ -1048,11 +1173,19 @@ class WebApiServer:
         body = await self._parse_json(request)
         return _json({"ok": True, "data": await update_plugin(self.manager, auth, plugin_id, dict(body or {}))})
 
+    async def delete_plugin(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        return _json({"ok": True, "data": await uninstall_plugin(self.manager, auth, plugin_id)})
+
     async def get_bot_overview(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
+        base_auth = await self._with_auth(request)
         alias = self._manager_alias(request)
+        auth = self._bot_auth(base_auth, alias)
+        _require_capability(auth, CAP_VIEW_BOT_STATUS)
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": get_overview(self.manager, alias, auth.user_id, agent_id=agent_id)})
+        data = get_overview(self.manager, alias, auth.user_id, agent_id=agent_id)
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(base_auth, data["bot"])}})
 
     def _request_agent_id(self, request: web.Request, body: dict[str, Any] | None = None) -> str:
         value = request.query.get("agent_id") or request.query.get("agentId")
@@ -1843,10 +1976,13 @@ class WebApiServer:
         return _json({"ok": True, "data": get_git_identity_config(self.manager, alias, auth.user_id)})
 
     async def put_git_identity_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_auth(request)
+        base_auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         scope = str(body.get("scope") or "").strip().lower()
+        auth = base_auth if scope == "global" else self._bot_auth(base_auth, alias)
+        if scope != "global" and self._allows_readonly_bot_capability(request, CAP_GIT_OPS, auth):
+            auth = auth.with_capabilities({*auth.capabilities, CAP_GIT_OPS})
         _require_capability(auth, CAP_ADMIN_OPS if scope == "global" else CAP_GIT_OPS)
         data = update_git_identity_config(
             self.manager,
@@ -2125,7 +2261,7 @@ class WebApiServer:
 
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": list_bots(self.manager, auth.user_id)})
+        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, list_bots(self.manager, auth.user_id))})
     
     async def admin_processing(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -2133,8 +2269,12 @@ class WebApiServer:
         return _json({"ok": True, "data": get_processing_sessions(alias)})
 
     async def admin_add_bot(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
+        try:
+            _BOT_PERMISSION_STORE.assert_can_create_bot(auth.account_id, is_local_admin=self._is_local_admin(auth))
+        except ValueError as exc:
+            raise WebApiError(403, "bot_quota_exceeded", str(exc)) from exc
         data = await add_managed_bot(
             self.manager,
             alias=body.get("alias", ""),
@@ -2144,6 +2284,10 @@ class WebApiServer:
             working_dir=body.get("working_dir"),
             avatar_name=body.get("avatar_name"),
         )
+        alias = data["bot"]["alias"]
+        if not self._is_local_admin(auth):
+            _BOT_PERMISSION_STORE.set_bot_owner(alias, auth.account_id, grant_owner=True)
+        data = {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}
         return _json({"ok": True, "data": data})
 
     async def admin_list_avatar_assets(self, request: web.Request) -> web.Response:
@@ -2154,20 +2298,24 @@ class WebApiServer:
         await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         delete_history = str(request.query.get("delete_history", "")).strip().lower() in {"1", "true", "yes", "on"}
-        return _json({"ok": True, "data": await remove_managed_bot_with_history(self.manager, alias, delete_history=delete_history)})
+        data = await remove_managed_bot_with_history(self.manager, alias, delete_history=delete_history)
+        _BOT_PERMISSION_STORE.remove_bot_owner(alias)
+        return _json({"ok": True, "data": data})
 
     async def admin_start_bot(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": await start_managed_bot(self.manager, alias)})
+        data = await start_managed_bot(self.manager, alias)
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_stop_bot(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": await stop_managed_bot(self.manager, alias)})
+        data = await stop_managed_bot(self.manager, alias)
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_cli(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_cli(
@@ -2176,14 +2324,17 @@ class WebApiServer:
             cli_type=body.get("cli_type", ""),
             cli_path=body.get("cli_path", ""),
         )
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_rename_bot(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await rename_managed_bot(self.manager, alias, str(body.get("new_alias", "")))
-        return _json({"ok": True, "data": data})
+        renamed_alias = str(data.get("bot", {}).get("alias") or "").strip().lower()
+        if renamed_alias:
+            _BOT_PERMISSION_STORE.rename_bot(alias, renamed_alias)
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_workdir(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
@@ -2196,14 +2347,14 @@ class WebApiServer:
             auth.user_id,
             force_reset=bool(body.get("force_reset")),
         )
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_avatar(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_avatar(self.manager, alias, body.get("avatar_name"), auth.user_id)
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_get_git_proxy(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -2270,6 +2421,74 @@ class WebApiServer:
                 logger.info("更新下载 SSE 客户端在结束前断开")
         return response
 
+    async def admin_update_offline_packages(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": list_offline_update_packages(_REPO_ROOT)})
+
+    async def admin_update_offline_prepare(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        package_path = str(body.get("path") or body.get("package_path") or "").strip()
+        version = str(body.get("version") or "").strip()
+        if not package_path:
+            raise WebApiError(400, "missing_package_path", "离线包路径不能为空")
+        data = await asyncio.to_thread(prepare_offline_update, _REPO_ROOT, package_path, version=version)
+        return _json({"ok": True, "data": data})
+
+    async def admin_update_offline_prepare_stream(self, request: web.Request) -> web.StreamResponse:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        package_path = str(body.get("path") or body.get("package_path") or "").strip()
+        version = str(body.get("version") or "").strip()
+        if not package_path:
+            raise WebApiError(400, "missing_package_path", "离线包路径不能为空")
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def progress(line: str) -> None:
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"type": "progress", "phase": "log", "downloaded_bytes": 0, "message": line},
+            )
+
+        task = asyncio.create_task(
+            asyncio.to_thread(prepare_offline_update, _REPO_ROOT, package_path, version=version, log_callback=progress)
+        )
+        client_disconnected = False
+        try:
+            while not task.done() or not queue.empty():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                if client_disconnected:
+                    continue
+                try:
+                    await response.write(_format_sse("progress", event))
+                except _CLIENT_DISCONNECT_ERRORS:
+                    client_disconnected = True
+            data = await task
+            done = {"type": "done", "phase": "log", "downloaded_bytes": 0, "percent": 100, "status": data}
+            if not client_disconnected:
+                await response.write(_format_sse("done", done))
+                await response.write_eof()
+        except Exception as exc:
+            error = {"type": "error", "phase": "error", "downloaded_bytes": 0, "message": str(exc)}
+            if not client_disconnected:
+                await response.write(_format_sse("error", error))
+                await response.write_eof()
+        return response
+
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         self._schedule_restart_request()
@@ -2296,9 +2515,9 @@ class WebApiServer:
         return _json({"ok": True, "data": snapshot})
 
     async def admin_single_bot(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": {"bot": build_bot_summary(self.manager, alias)}})
+        return _json({"ok": True, "data": {"bot": self._decorate_bot_for_auth(auth, build_bot_summary(self.manager, alias))}})
 
     async def admin_assistant_proposals(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

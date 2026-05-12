@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .session_store.json
 .web_admin_settings.json
+.web_permissions.json
 .web_users.json
 .web_register_codes.json
 .web_auth_secret.json

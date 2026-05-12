@@ -9,6 +9,7 @@ import struct
 import subprocess
 import threading
 import time
+import zipfile
 import zlib
 from datetime import datetime, timedelta
 from itertools import chain, repeat
@@ -3385,6 +3386,9 @@ async def test_git_identity_route_requires_admin_for_global_scope(
     repo_dir.mkdir()
     _init_git_repo(repo_dir)
     web_manager.main_profile.working_dir = str(repo_dir)
+    from bot.web.permission_store import BotPermissionStore
+    permissions = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permissions.set_allowed_bots("member", ["main"])
 
     def member_without_admin(_self, _request):
         return AuthContext(
@@ -3397,6 +3401,7 @@ async def test_git_identity_route_requires_admin_for_global_scope(
         )
 
     monkeypatch.setattr("bot.web.server.WebApiServer._auth_context", member_without_admin)
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
@@ -7927,3 +7932,345 @@ async def test_web_server_stop_closes_debug_resources(web_manager: MultiBotManag
     server._debug_service.shutdown.assert_awaited_once()
     runner.cleanup.assert_awaited_once()
     server._tunnel_service.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_member_sees_all_bots_but_ungranted_bot_is_read_only(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    web_manager.managed_profiles["sub1"] = BotProfile(
+        alias="sub1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(tmp_path),
+        enabled=True,
+    )
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=codes_path,
+        secret_path=tmp_path / ".web_auth_secret.json",
+    )
+    session = store.register_member("alice", "pw-123", "INVITE-001")
+    permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
+    permissions.set_allowed_bots(session.account.account_id, ["main"])
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            headers = {"Authorization": f"Bearer {session.token}", "Host": "example.test"}
+            bots_response = await client.get("/api/bots", headers=headers)
+            bots_payload = await bots_response.json()
+            by_alias = {item["alias"]: item for item in bots_payload["data"]}
+            assert bots_response.status == 200
+            assert by_alias["main"]["can_operate"] is True
+            assert by_alias["sub1"]["can_operate"] is False
+
+            overview_response = await client.get("/api/bots/sub1", headers=headers)
+            overview_payload = await overview_response.json()
+            assert overview_response.status == 200
+            assert overview_payload["data"]["bot"]["can_operate"] is False
+
+            history_response = await client.get("/api/bots/sub1/history", headers=headers)
+            assert history_response.status == 200
+
+            blocked_response = await client.post(
+                "/api/bots/sub1/files/create",
+                headers=headers,
+                json={"filename": "notes.md", "content": ""},
+            )
+            blocked_payload = await blocked_response.json()
+            assert blocked_response.status == 403
+            assert blocked_payload["error"]["code"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_member_create_bot_quota_and_auto_grant(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=codes_path,
+        secret_path=tmp_path / ".web_auth_secret.json",
+    )
+    session = store.register_member("alice", "pw-123", "INVITE-001")
+    permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            headers = {"Authorization": f"Bearer {session.token}", "Host": "example.test"}
+            with patch("bot.manager.resolve_cli_executable", return_value="codex"), patch.object(
+                web_manager,
+                "_start_profile",
+                AsyncMock(return_value=None),
+            ):
+                for index in range(3):
+                    response = await client.post(
+                        "/api/admin/bots",
+                        headers=headers,
+                        json={
+                            "alias": f"owned{index + 1}",
+                            "bot_mode": "cli",
+                            "cli_type": "codex",
+                            "working_dir": str(tmp_path),
+                        },
+                    )
+                    payload = await response.json()
+                    assert response.status == 200
+                    assert payload["data"]["bot"]["can_operate"] is True
+
+                blocked_response = await client.post(
+                    "/api/admin/bots",
+                    headers=headers,
+                    json={
+                        "alias": "owned4",
+                        "bot_mode": "cli",
+                        "cli_type": "codex",
+                        "working_dir": str(tmp_path),
+                    },
+                )
+                blocked_payload = await blocked_response.json()
+
+    assert blocked_response.status == 403
+    assert blocked_payload["error"]["code"] == "bot_quota_exceeded"
+    assert permissions.allowed_bots_for_account(session.account.account_id) == {"owned1", "owned2", "owned3"}
+    assert permissions.owned_bot_aliases(session.account.account_id) == {"owned1", "owned2", "owned3"}
+
+
+@pytest.mark.asyncio
+async def test_local_admin_bypasses_bot_permissions_and_quota(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    web_manager.managed_profiles["sub1"] = BotProfile(
+        alias="sub1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(tmp_path),
+        enabled=True,
+    )
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", BotPermissionStore(tmp_path / ".web_permissions.json"))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get("/api/bots")
+            payload = await response.json()
+            assert response.status == 200
+            assert {item["alias"] for item in payload["data"]} == {"main", "sub1"}
+            assert all(item["can_operate"] is True for item in payload["data"])
+
+            with patch("bot.manager.resolve_cli_executable", return_value="codex"), patch.object(
+                web_manager,
+                "_start_profile",
+                AsyncMock(return_value=None),
+            ):
+                for index in range(4):
+                    create_response = await client.post(
+                        "/api/admin/bots",
+                        json={
+                            "alias": f"admin{index + 1}",
+                            "bot_mode": "cli",
+                            "cli_type": "codex",
+                            "working_dir": str(tmp_path),
+                        },
+                    )
+                    assert create_response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_local_admin_can_list_users_and_update_bot_permissions(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=codes_path,
+        secret_path=tmp_path / ".web_auth_secret.json",
+    )
+    session = store.register_member("alice", "pw-123", "INVITE-001")
+    permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
+    web_manager.managed_profiles["sub1"] = BotProfile(
+        alias="sub1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(tmp_path),
+        enabled=True,
+    )
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            users_response = await client.get("/api/admin/users")
+            users_payload = await users_response.json()
+            assert users_response.status == 200
+            assert users_payload["data"]["items"][0]["account_id"] == session.account.account_id
+            assert users_payload["data"]["items"][0]["allowed_bots"] == []
+            assert users_payload["data"]["items"][0]["owned_bot_count"] == 0
+            assert users_payload["data"]["items"][0]["bot_create_limit"] == 3
+
+            patch_response = await client.patch(
+                f"/api/admin/users/{session.account.account_id}/permissions",
+                json={"allowed_bots": ["main", "sub1"]},
+            )
+            patch_payload = await patch_response.json()
+            assert patch_response.status == 200
+            assert patch_payload["data"]["allowed_bots"] == ["main", "sub1"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_install_force_and_uninstall_routes(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    source_plugins_root = repo_root / "examples" / "plugins"
+    source_plugins_root.mkdir(parents=True)
+    source_dir = source_plugins_root / "demo-plugin"
+    source_dir.mkdir()
+    (source_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "id": "demo-plugin",
+                "name": "Demo",
+                "version": "1.0.0",
+                "description": "old",
+                "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                "views": [],
+                "fileHandlers": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    plugins_root = tmp_path / "plugins"
+    web_manager.plugin_service = PluginService(repo_root, plugins_root=plugins_root, source_plugins_root=source_plugins_root)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            first_install = await client.post("/api/plugins/install", json={"pluginId": "demo-plugin"})
+            assert first_install.status == 200
+
+            (source_dir / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "id": "demo-plugin",
+                        "name": "Demo",
+                        "version": "2.0.0",
+                        "description": "new",
+                        "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                        "views": [],
+                        "fileHandlers": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            force_install = await client.post("/api/plugins/install", json={"pluginId": "demo-plugin", "force": True})
+            force_payload = await force_install.json()
+            assert force_install.status == 200
+            assert force_payload["data"]["version"] == "2.0.0"
+
+            uninstall_response = await client.delete("/api/plugins/demo-plugin")
+            uninstall_payload = await uninstall_response.json()
+            assert uninstall_response.status == 200
+            assert uninstall_payload["data"] == {"id": "demo-plugin", "deleted": True}
+
+    await web_manager.plugin_service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_admin_update_offline_package_routes(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    package = tmp_path / "offline.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("bot/version.py", "APP_VERSION = '1.2.3'\n")
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    with patch(
+        "bot.web.server.list_offline_update_packages",
+        return_value={
+            "artifacts_dir": str(tmp_path),
+            "items": [{"name": package.name, "path": str(package), "valid": True, "size": package.stat().st_size, "error": ""}],
+        },
+    ), patch(
+        "bot.web.server.prepare_offline_update",
+        return_value={"pending_update_version": "1.2.3", "pending_update_path": str(package)},
+    ) as prepare_mock:
+        app = WebApiServer(web_manager)._build_app()
+        async with TestServer(app) as test_server:
+            async with TestClient(test_server) as client:
+                packages_response = await client.get("/api/admin/update/offline-packages")
+                packages_payload = await packages_response.json()
+                assert packages_response.status == 200
+                assert packages_payload["data"]["items"][0]["name"] == package.name
+
+                prepare_response = await client.post(
+                    "/api/admin/update/offline/prepare",
+                    json={"path": str(package), "version": "1.2.3"},
+                )
+                prepare_payload = await prepare_response.json()
+                assert prepare_response.status == 200
+                assert prepare_payload["data"]["pending_update_version"] == "1.2.3"
+                prepare_mock.assert_called()

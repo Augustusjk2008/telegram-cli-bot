@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, Copy, Globe, LogOut, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
@@ -9,7 +9,6 @@ import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
-  AppUpdateStatus,
   AvatarAsset,
   BotOverview,
   GitProxySettings,
@@ -62,7 +61,6 @@ type Props = {
   showBotRuntimeSettings?: boolean;
   onOpenBotManager?: () => void;
 };
-type BuildLogStatus = "idle" | "running" | "success" | "error";
 
 function isValidGitProxyAddress(value: string) {
   const address = value.trim();
@@ -86,13 +84,6 @@ function tunnelStatusText(status: TunnelSnapshot["status"]) {
   if (status === "starting") return "启动中";
   if (status === "error") return "异常";
   return "已停止";
-}
-
-function formatUpdatePackageKind(kind?: string) {
-  if (kind === "installer") return "安装版";
-  if (kind === "portable") return "绿色版";
-  if (kind === "linux") return "Linux";
-  return "未知";
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -140,7 +131,6 @@ export function SettingsScreen({
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [cliTypeDraft, setCliTypeDraft] = useState("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
@@ -156,16 +146,9 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
-  const [updateAction, setUpdateAction] = useState<"" | "toggle" | "download">("");
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
-  const [showUpdateLog, setShowUpdateLog] = useState(false);
-  const [updateLogLines, setUpdateLogLines] = useState<string[]>([]);
-  const [updateLogStatus, setUpdateLogStatus] = useState<BuildLogStatus>("idle");
-  const [updateLogSummary, setUpdateLogSummary] = useState("");
-  const updateLogViewportRef = useRef<HTMLDivElement | null>(null);
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
-  const isUpdateDownloading = updateAction === "download";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
 
@@ -178,14 +161,12 @@ export function SettingsScreen({
       client.getBotOverview(botAlias),
       client.getTunnelStatus(),
       isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
-      isMainBot ? client.getUpdateStatus() : Promise.resolve(null),
       client.listAvatarAssets(),
     ])
       .then(([
         overviewResult,
         tunnelResult,
         gitProxyResult,
-        updateResult,
         avatarAssetsResult,
       ]) => {
         if (cancelled) return;
@@ -199,7 +180,6 @@ export function SettingsScreen({
         const overviewData = overviewResult.value;
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
-        const updateData = updateResult.status === "fulfilled" ? updateResult.value : null;
         const avatarData = avatarAssetsResult.status === "fulfilled" && avatarAssetsResult.value.length > 0
           ? avatarAssetsResult.value
           : DEFAULT_AVATAR_ASSETS;
@@ -212,7 +192,6 @@ export function SettingsScreen({
         setTunnel(tunnelData);
         setGitProxySettings(gitProxyData);
         setGitProxyAddressDraft(gitProxyData?.address || (gitProxyData?.port ? `127.0.0.1:${gitProxyData.port}` : ""));
-        setUpdateStatus(updateData);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -233,27 +212,6 @@ export function SettingsScreen({
     setWorkdirDraft(normalizePathInput(prefilledWorkdir));
     setPendingWorkdirConflict(null);
   }, [prefilledWorkdir]);
-
-  useEffect(() => {
-    if (!showUpdateLog || !updateLogViewportRef.current) {
-      return;
-    }
-    updateLogViewportRef.current.scrollTop = updateLogViewportRef.current.scrollHeight;
-  }, [showUpdateLog, updateLogLines, updateLogSummary]);
-
-  useEffect(() => {
-    if (!isUpdateDownloading) {
-      return;
-    }
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-    };
-  }, [isUpdateDownloading]);
 
   const confirmKill = async () => {
     setActionLoading("kill");
@@ -376,53 +334,6 @@ export function SettingsScreen({
     }
   };
 
-  const saveUpdateToggle = async (enabled: boolean) => {
-    setUpdateAction("toggle");
-    setError("");
-    setNotice("");
-    try {
-      const nextStatus = await client.setUpdateEnabled(enabled);
-      setUpdateStatus(nextStatus);
-      setNotice(enabled ? "已启用自动下载更新" : "已关闭自动下载更新");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存更新设置失败");
-    } finally {
-      setUpdateAction("");
-    }
-  };
-
-  const downloadUpdate = async () => {
-    setUpdateAction("download");
-    setError("");
-    setNotice("");
-    setShowUpdateLog(true);
-    setUpdateLogLines([]);
-    setUpdateLogStatus("running");
-    setUpdateLogSummary("");
-    try {
-      const nextStatus = await client.downloadUpdateStream((event) => {
-        if (event.message) {
-          setUpdateLogLines((prev) => [...prev, event.message as string]);
-        }
-      });
-      setUpdateStatus(nextStatus);
-      setUpdateLogStatus("success");
-      setUpdateLogSummary(
-        nextStatus.pendingUpdateVersion
-          ? `更新 ${nextStatus.pendingUpdateVersion} 已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要在页面里重启程序。`
-          : "更新包已下载成功。实际解压和应用在 start.ps1 中进行。请关闭当前程序后重新运行 start.bat，不要在页面里重启程序。",
-      );
-      setNotice("更新包下载完成，请关闭当前程序后重新运行 start.bat");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "下载更新失败";
-      setUpdateLogStatus("error");
-      setUpdateLogSummary(message);
-      setError(message);
-    } finally {
-      setUpdateAction("");
-    }
-  };
-
   const handleThemeChange = (nextTheme: UiThemeName) => {
     if (nextTheme === themeName) {
       return;
@@ -481,14 +392,6 @@ export function SettingsScreen({
       setTunnelAction("");
     }
   };
-
-  const updateLogStatusText = updateLogStatus === "running"
-    ? "下载中"
-    : updateLogStatus === "success"
-      ? "下载成功"
-      : updateLogStatus === "error"
-        ? "下载失败"
-        : "等待开始";
 
   const copyTunnelUrl = async () => {
     if (!tunnel?.publicUrl) return;
@@ -779,98 +682,7 @@ export function SettingsScreen({
                 )}
               </div>
             </section>
-          ) : (
-            <section
-              aria-labelledby="bot-runtime-moved-title"
-              className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-3"
-            >
-              <div className="space-y-1">
-                <h2 id="bot-runtime-moved-title" className="text-base font-semibold text-[var(--text)]">智能体配置已迁移</h2>
-                <p className="text-sm text-[var(--muted)]">横屏版的 CLI、工作目录、子 agent 和 CLI 参数统一在智能体管理页维护。</p>
-              </div>
-              {onOpenBotManager ? (
-                <button
-                  type="button"
-                  onClick={onOpenBotManager}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                >
-                  打开智能体管理
-                </button>
-              ) : null}
-            </section>
-          )
-        ) : null}
-
-        {isMainBot ? (
-          <section
-            aria-labelledby="update-settings-title"
-            className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4"
-          >
-            <div className="space-y-1">
-              <h2 id="update-settings-title" className="text-base font-semibold text-[var(--text)]">版本更新</h2>
-              <p className="text-sm text-[var(--muted)]">下载后需关闭当前程序，再重新运行 `start.bat`。</p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
-              <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <span className="text-[var(--text)]">当前版本</span>
-                <span>{updateStatus?.currentVersion || "未知"}</span>
-              </p>
-              <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <span className="text-[var(--text)]">可用版本</span>
-                <span>{updateStatus?.latestVersion || "暂无"}</span>
-              </p>
-              <p className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <span className="text-[var(--text)]">当前包</span>
-                <span>{formatUpdatePackageKind(updateStatus?.currentPackageKind)}</span>
-              </p>
-            </div>
-
-            <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)]">
-              <span>自动下载更新</span>
-              <input
-                type="checkbox"
-                checked={Boolean(updateStatus?.updateEnabled)}
-                disabled={updateAction === "toggle"}
-                onChange={(event) => void saveUpdateToggle(event.target.checked)}
-                className="h-4 w-4"
-              />
-            </label>
-
-            <div className="space-y-2 text-xs text-[var(--muted)]">
-              <p>最近检查: {updateStatus?.lastCheckedAt || "未检查"}</p>
-              {updateStatus?.pendingUpdateVersion ? (
-                <p>
-                  待应用更新: {updateStatus.pendingUpdateVersion}
-                  {updateStatus.pendingUpdatePackageKind ? `（${formatUpdatePackageKind(updateStatus.pendingUpdatePackageKind)}）` : ""}，重启后生效
-                </p>
-              ) : null}
-              {updateStatus?.lastError ? (
-                <p className="text-red-700">最近错误: {updateStatus.lastError}</p>
-              ) : null}
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void downloadUpdate()}
-                disabled={updateAction !== "" || !updateStatus?.latestVersion}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                {updateAction === "download" ? "下载中..." : "下载更新"}
-              </button>
-              {updateStatus?.latestReleaseUrl ? (
-                <a
-                  href={updateStatus.latestReleaseUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                >
-                  查看发布说明
-                </a>
-              ) : null}
-            </div>
-          </section>
+          ) : null
         ) : null}
 
         {showWorkdirPicker && !workdirLocked ? (
@@ -1099,41 +911,6 @@ export function SettingsScreen({
         </div>
       ) : null}
 
-      {showUpdateLog ? (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true" aria-labelledby="update-log-title">
-          <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-2xl w-full shadow-[var(--shadow-card)] space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <h2 id="update-log-title" className="text-lg font-bold text-[var(--text)]">更新日志</h2>
-                <p className="text-sm text-[var(--muted)]">状态: {updateLogStatusText}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowUpdateLog(false)}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-              >
-                关闭
-              </button>
-            </div>
-
-            <div
-              ref={updateLogViewportRef}
-              className="h-72 overflow-y-auto rounded-xl bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all"
-            >
-              {updateLogLines.length > 0 ? updateLogLines.join("\n") : "等待更新输出..."}
-            </div>
-
-            {updateLogSummary ? (
-              <div className={updateLogStatus === "success"
-                ? "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-                : "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"}
-              >
-                {updateLogSummary}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
     </main>
   );
 }

@@ -291,6 +291,9 @@ export function DesktopBotSwitcherPopover({
                       {current ? (
                         <span className="rounded border border-[var(--accent)] px-1 text-[10px] text-[var(--accent)]">当前</span>
                       ) : null}
+                      {bot.canOperate === false ? (
+                        <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">只读</span>
+                      ) : null}
                     </span>
                     <span className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-[var(--muted)]">
                       <span className="shrink-0">{bot.botMode || "cli"} · {bot.cliType}</span>
@@ -398,7 +401,7 @@ export function DesktopBotSwitcherPopover({
                           )}
                         >
                           <ShieldCheck className="h-4 w-4" />
-                          邀请码
+                          管理中心
                         </button>
                       ) : null}
                     </div>

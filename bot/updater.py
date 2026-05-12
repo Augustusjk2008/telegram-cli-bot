@@ -189,6 +189,68 @@ def download_latest_update(
     return get_update_status(repo_root)
 
 
+def list_offline_update_packages(repo_root: Path | None = None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    artifacts_dir = root / ".release-local" / "artifacts"
+    items: list[dict[str, Any]] = []
+    if artifacts_dir.exists():
+        for path in sorted(artifacts_dir.iterdir(), key=lambda item: item.name.lower()):
+            if not path.is_file() or not (_is_zip_package(path) or _is_tar_gz_package(path)):
+                continue
+            error = ""
+            valid = True
+            try:
+                _validate_package_file(path)
+            except Exception as exc:
+                valid = False
+                error = str(exc)
+            items.append(
+                {
+                    "name": path.name,
+                    "path": str(path),
+                    "size": path.stat().st_size,
+                    "size_bytes": path.stat().st_size,
+                    "version": "",
+                    "package_kind": detect_update_package_kind(root),
+                    "valid": valid,
+                    "error": error,
+                }
+            )
+    return {"artifacts_dir": str(artifacts_dir), "items": items}
+
+
+def prepare_offline_update(
+    repo_root: Path | None,
+    package_path: Path | str,
+    *,
+    version: str = "",
+    log_callback: Any | None = None,
+) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    package = Path(package_path).expanduser()
+    if not package.is_absolute():
+        package = (root / package).resolve()
+    _emit_apply_log(log_callback, f"正在校验离线更新包: {package.name}")
+    if not package.exists():
+        raise RuntimeError(f"更新包不存在: {package}")
+    _validate_package_file(package)
+    package_kind = detect_update_package_kind(root)
+    settings = app_settings._load_settings()
+    settings["pending_update_version"] = (
+        _normalize_tag_name(version)
+        or _normalize_tag_name(settings.get("last_available_version"))
+        or "offline"
+    )
+    settings["pending_update_path"] = str(package)
+    settings["pending_update_notes"] = "离线更新包"
+    settings["pending_update_platform"] = _pending_update_platform(package_kind)
+    settings["pending_update_package_kind"] = package_kind
+    settings["update_last_error"] = ""
+    app_settings._save_settings(settings)
+    _emit_apply_log(log_callback, "离线更新包已设置为待应用。关闭当前程序后重新运行 start.bat 生效。")
+    return get_update_status(root)
+
+
 def _print_download_progress(progress: dict[str, Any]) -> None:
     message = str(progress.get("message") or "").strip()
     if message:

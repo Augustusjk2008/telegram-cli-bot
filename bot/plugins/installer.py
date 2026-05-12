@@ -16,6 +16,7 @@ async def _install_bundled_plugins_async(
     plugins_root: Path | str | None = None,
     source_plugins_root: Path | str | None = None,
     install_ids: Sequence[str] | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     service = PluginService(
         repo_root=repo_root,
@@ -50,10 +51,10 @@ async def _install_bundled_plugins_async(
         skipped: list[dict[str, str]] = []
         for item in selected:
             install_id = str(item["id"])
-            if bool(item.get("installed")):
+            if bool(item.get("installed")) and not force:
                 skipped.append({"id": install_id, "reason": "already_installed"})
                 continue
-            await service.install_plugin(install_id)
+            await service.install_plugin(install_id, force=force)
             installed.append(install_id)
 
         return {
@@ -72,6 +73,7 @@ def install_bundled_plugins(
     plugins_root: Path | str | None = None,
     source_plugins_root: Path | str | None = None,
     install_ids: Sequence[str] | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     return asyncio.run(
         _install_bundled_plugins_async(
@@ -79,6 +81,7 @@ def install_bundled_plugins(
             plugins_root=plugins_root,
             source_plugins_root=source_plugins_root,
             install_ids=install_ids,
+            force=force,
         )
     )
 
@@ -91,6 +94,7 @@ def _build_parser() -> argparse.ArgumentParser:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--all", action="store_true", help="安装全部示例插件")
     group.add_argument("--plugin", action="append", dest="plugins", default=None, help="安装指定插件，可重复传入")
+    parser.add_argument("--force", action="store_true", help="覆盖已安装插件")
     parser.add_argument("--json", action="store_true", help="输出 JSON 摘要")
     return parser
 
@@ -118,6 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         plugins_root=Path(args.plugins_root).resolve() if args.plugins_root else None,
         source_plugins_root=Path(args.source_plugins_root).resolve() if args.source_plugins_root else None,
         install_ids=install_ids,
+        force=bool(args.force),
     )
     if args.json:
         print(json.dumps(summary, ensure_ascii=False))

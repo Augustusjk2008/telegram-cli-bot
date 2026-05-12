@@ -250,6 +250,47 @@ class WebAuthStore:
     def can_bootstrap_without_auth(self) -> bool:
         return not self.has_member_accounts()
 
+    def list_members(self) -> dict[str, Any]:
+        with self._lock:
+            data = self._read_json(self.users_path)
+            items = [
+                {
+                    "account_id": str(item.get("account_id") or ""),
+                    "username": self._read_username_from_item(item),
+                    "role": str(item.get("role") or ROLE_MEMBER),
+                    "disabled": bool(item.get("disabled")),
+                    "created_at": str(item.get("created_at") or ""),
+                }
+                for item in self._items(data)
+                if str(item.get("role") or ROLE_MEMBER) == ROLE_MEMBER
+            ]
+        items.sort(key=lambda item: item["username"].casefold())
+        return {"items": items}
+
+    def update_member(self, account_id: str, *, disabled: bool | None = None) -> dict[str, Any]:
+        resolved_id = str(account_id or "").strip()
+        if not resolved_id:
+            self._raise(400, "invalid_account_id", "账号 ID 不能为空")
+        with self._lock:
+            data = self._read_json(self.users_path)
+            target = None
+            for item in self._items(data):
+                if str(item.get("account_id") or "").strip() == resolved_id:
+                    target = item
+                    break
+            if target is None:
+                self._raise(404, "account_not_found", "账号不存在")
+            if disabled is not None:
+                target["disabled"] = bool(disabled)
+            self._write_json(self.users_path, data)
+            return {
+                "account_id": str(target.get("account_id") or ""),
+                "username": self._read_username_from_item(target),
+                "role": str(target.get("role") or ROLE_MEMBER),
+                "disabled": bool(target.get("disabled")),
+                "created_at": str(target.get("created_at") or ""),
+            }
+
     def create_register_code(
         self,
         *,
@@ -289,6 +330,47 @@ class WebAuthStore:
             items = [self._serialize_register_code_item(item) for item in self._items(data)]
         items.sort(key=lambda item: (item["disabled"], item["created_at"]), reverse=True)
         return {"items": items}
+
+    def list_members(self) -> dict[str, Any]:
+        with self._lock:
+            data = self._read_json(self.users_path)
+            items = [
+                {
+                    "account_id": str(item.get("account_id") or ""),
+                    "username": self._read_username_from_item(item),
+                    "role": str(item.get("role") or ROLE_MEMBER),
+                    "disabled": bool(item.get("disabled")),
+                    "created_at": str(item.get("created_at") or ""),
+                }
+                for item in self._items(data)
+                if str(item.get("role") or ROLE_MEMBER) == ROLE_MEMBER
+            ]
+        items.sort(key=lambda item: item["username"].casefold())
+        return {"items": items}
+
+    def update_member(self, account_id: str, *, disabled: bool | None = None) -> dict[str, Any]:
+        resolved_id = str(account_id or "").strip()
+        if not resolved_id:
+            self._raise(400, "invalid_account_id", "账号 ID 不能为空")
+        with self._lock:
+            data = self._read_json(self.users_path)
+            target = None
+            for item in self._items(data):
+                if str(item.get("account_id") or "").strip() == resolved_id:
+                    target = item
+                    break
+            if target is None:
+                self._raise(404, "account_not_found", "账号不存在")
+            if disabled is not None:
+                target["disabled"] = bool(disabled)
+            self._write_json(self.users_path, data)
+            return {
+                "account_id": str(target.get("account_id") or ""),
+                "username": self._read_username_from_item(target),
+                "role": str(target.get("role") or ROLE_MEMBER),
+                "disabled": bool(target.get("disabled")),
+                "created_at": str(target.get("created_at") or ""),
+            }
 
     def update_register_code(
         self,

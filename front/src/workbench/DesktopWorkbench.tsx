@@ -81,6 +81,7 @@ type Props = {
   client?: WebBotClient;
   structureOnly?: boolean;
   chatReadOnly?: boolean;
+  botCanOperate?: boolean;
   allowTrace?: boolean;
   allowCodeJump?: boolean;
   themeName?: UiThemeName;
@@ -116,6 +117,7 @@ export function DesktopWorkbench({
   userAvatarName,
   structureOnly = false,
   chatReadOnly = false,
+  botCanOperate = true,
   allowTrace = true,
   allowCodeJump = true,
   themeName,
@@ -768,6 +770,7 @@ export function DesktopWorkbench({
         <PluginsScreen
           client={client}
           botAlias={botAlias}
+          canOperate={botCanOperate}
           embedded
           onApplyHostEffects={runPluginHostEffects}
           onOpenPluginView={openPluginViewTab}

@@ -47,3 +47,39 @@ def test_install_bundled_plugins_installs_missing_and_skips_existing(tmp_path: P
     assert summary["installed"] == ["fresh-plugin"]
     assert summary["skipped"] == [{"id": "existing-plugin", "reason": "already_installed"}]
     assert (plugins_root / "fresh-plugin" / "plugin.json").exists()
+
+
+def test_install_bundled_plugins_force_reinstalls_existing(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    source_plugins_root = repo_root / "examples" / "plugins"
+    plugins_root = tmp_path / "home" / ".tcb" / "plugins"
+    source_plugins_root.mkdir(parents=True)
+    plugins_root.mkdir(parents=True)
+    _write_minimal_plugin(source_plugins_root, "existing-plugin", name="Existing Plugin")
+    installed_dir = plugins_root / "existing-plugin"
+    installed_dir.mkdir()
+    (installed_dir / "plugin.json").write_text(
+        (
+            "{\n"
+            '  "schemaVersion": 1,\n'
+            '  "id": "existing-plugin",\n'
+            '  "name": "Existing Plugin",\n'
+            '  "version": "0.0.1",\n'
+            '  "description": "old",\n'
+            '  "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},\n'
+            '  "views": [{"id": "preview", "title": "预览", "renderer": "waveform"}]\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    summary = install_bundled_plugins(
+        repo_root=repo_root,
+        plugins_root=plugins_root,
+        source_plugins_root=source_plugins_root,
+        force=True,
+    )
+
+    assert summary["installed"] == ["existing-plugin"]
+    assert summary["skipped"] == []
+    assert '"version": "0.1.0"' in (installed_dir / "plugin.json").read_text(encoding="utf-8")

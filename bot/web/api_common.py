@@ -9,7 +9,7 @@ from bot.assistant.state import attach_assistant_persist_hook, restore_assistant
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.sessions import align_session_paths, get_or_create_session
-from bot.web.auth_store import MEMBER_CAPABILITIES
+from bot.web.auth_store import GUEST_CAPABILITIES, MEMBER_CAPABILITIES
 
 
 class WebApiError(Exception):
@@ -33,6 +33,22 @@ class AuthContext:
     username: str = "legacy"
     role: str = "member"
     capabilities: set[str] = field(default_factory=lambda: set(MEMBER_CAPABILITIES))
+    allowed_bot_aliases: set[str] = field(default_factory=set)
+    owned_bot_aliases: set[str] = field(default_factory=set)
+    is_local_admin: bool = False
+
+    def with_capabilities(self, capabilities: frozenset[str] | set[str]) -> "AuthContext":
+        return AuthContext(
+            user_id=self.user_id,
+            token_used=self.token_used,
+            account_id=self.account_id,
+            username=self.username,
+            role=self.role,
+            capabilities=set(capabilities),
+            allowed_bot_aliases=set(self.allowed_bot_aliases),
+            owned_bot_aliases=set(self.owned_bot_aliases),
+            is_local_admin=self.is_local_admin,
+        )
 
 
 def _raise(status: int, code: str, message: str, data: dict[str, Any] | None = None):
@@ -43,6 +59,10 @@ def _require_capability(auth: AuthContext, capability: str) -> None:
     if capability in auth.capabilities:
         return
     _raise(403, "forbidden", "当前账号无权限执行此操作")
+
+
+def bot_readonly_auth(auth: AuthContext) -> AuthContext:
+    return auth.with_capabilities(GUEST_CAPABILITIES)
 
 
 def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
@@ -107,4 +127,3 @@ def get_chat_session_for_alias(
         agent_id=agent.id,
     )
     return profile, agent, align_session_paths(session, profile.working_dir, profile.bot_mode)
-

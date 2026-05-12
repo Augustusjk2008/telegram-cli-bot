@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { HostEffect, PluginAction, PluginSummary, PluginUpdateInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { DirectoryPickerDialog } from "./DirectoryPickerDialog";
@@ -24,6 +24,7 @@ type Props = {
     input: Record<string, unknown>;
   }) => Promise<void> | void;
   onNotice?: (message: string) => void;
+  renderPluginActions?: (plugin: PluginSummary) => ReactNode;
 };
 
 function getPrimaryCatalogAction(plugin: PluginSummary): PluginAction | null {
@@ -86,6 +87,7 @@ export function PluginCatalog({
   onApplyHostEffects,
   onOpenPluginView,
   onNotice,
+  renderPluginActions,
 }: Props) {
   const [actionError, setActionError] = useState("");
   const [folderAction, setFolderAction] = useState<{ plugin: PluginSummary; action: PluginAction } | null>(null);
@@ -204,6 +206,7 @@ export function PluginCatalog({
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {renderPluginActions ? renderPluginActions(plugin) : null}
                     {onUpdatePlugin ? (
                       <button
                         type="button"

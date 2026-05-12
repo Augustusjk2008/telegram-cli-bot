@@ -3781,4 +3781,148 @@ describe("RealWebBotClient", () => {
     });
     expect(result.summary.p95ElapsedMs).toBe(1100);
   });
+
+  test("admin center user permission APIs map payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: [{
+              account_id: "member_1",
+              username: "alice",
+              role: "member",
+              disabled: false,
+              created_at: "2026-05-12T00:00:00Z",
+              allowed_bots: ["main"],
+              owned_bots: ["team1"],
+              owned_bot_count: 1,
+              bot_create_limit: 3,
+            }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            account_id: "member_1",
+            allowed_bots: ["main", "sub1"],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    const users = await client.listAdminUsers();
+    const updated = await client.updateUserBotPermissions("member_1", ["main", "sub1"]);
+
+    expect(users[0].allowedBots).toEqual(["main"]);
+    expect(users[0].ownedBotCount).toBe(1);
+    expect(users[0].botCreateLimit).toBe(3);
+    expect(updated.allowedBots).toEqual(["main", "sub1"]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/users/member_1/permissions",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+  });
+
+  test("plugin uninstall and force install call expected endpoints", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            id: "demo",
+            name: "Demo",
+            version: "2.0.0",
+            description: "demo plugin",
+            enabled: true,
+            views: [],
+            fileHandlers: [],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            id: "demo",
+            deleted: true,
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.installPlugin({ pluginId: "demo", force: true });
+    await client.uninstallPlugin("demo");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/plugins/install",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/plugins/demo",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  test("offline update APIs map payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            artifacts_dir: ".release-local/artifacts",
+            items: [{
+              name: "offline.zip",
+              path: "C:\\pkg\\offline.zip",
+              version: "1.2.3",
+              package_kind: "installer",
+              size_bytes: 10,
+              valid: true,
+              error: "",
+            }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            current_version: "1.0.0",
+            current_package_kind: "installer",
+            update_enabled: true,
+            update_channel: "release",
+            last_checked_at: "",
+            latest_version: "1.2.3",
+            latest_release_url: "",
+            latest_notes: "",
+            pending_update_version: "1.2.3",
+            pending_update_path: "C:\\pkg\\offline.zip",
+            pending_update_notes: "",
+            pending_update_platform: "windows-x64-installer",
+            pending_update_package_kind: "installer",
+            last_error: "",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    const packages = await client.listOfflineUpdatePackages();
+    const status = await client.prepareOfflineUpdate("C:\\pkg\\offline.zip", "1.2.3");
+
+    expect(packages.items[0].valid).toBe(true);
+    expect(packages.items[0].sizeBytes).toBe(10);
+    expect(status.pendingUpdateVersion).toBe("1.2.3");
+    expect(status.pendingUpdatePath).toBe("C:\\pkg\\offline.zip");
+  });
 });

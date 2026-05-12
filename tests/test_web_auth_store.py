@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from bot.web.auth_store import AuthStoreError, WebAuthStore
+from bot.web.permission_store import BotPermissionStore
 
 
 def test_register_member_consumes_register_code(tmp_path: Path):
@@ -78,3 +79,65 @@ def test_register_code_management_round_trip(tmp_path: Path):
 
     store.delete_register_code(created["code_id"])
     assert store.list_register_codes()["items"] == []
+
+
+def test_permission_store_bootstraps_empty_permissions(tmp_path: Path):
+    path = tmp_path / ".web_permissions.json"
+
+    store = BotPermissionStore(path)
+
+    assert path.exists()
+    assert store.list_user_permissions()["items"] == []
+    assert store.allowed_bots_for_account("member_1") == set()
+    assert store.can_operate_bot("member_1", "main") is False
+    assert store.owned_bot_aliases("member_1") == set()
+
+
+def test_permission_store_grants_allowed_bots(tmp_path: Path):
+    store = BotPermissionStore(tmp_path / ".web_permissions.json")
+
+    updated = store.set_allowed_bots("member_1", ["main", "team2"])
+
+    assert updated["account_id"] == "member_1"
+    assert updated["allowed_bots"] == ["main", "team2"]
+    assert store.can_operate_bot("member_1", "main") is True
+    assert store.can_operate_bot("member_1", "missing") is False
+
+
+def test_permission_store_tracks_bot_owners_and_quota(tmp_path: Path):
+    store = BotPermissionStore(tmp_path / ".web_permissions.json")
+
+    store.set_bot_owner("alpha", "member_1", grant_owner=True)
+    store.set_bot_owner("beta", "member_1", grant_owner=True)
+    store.set_bot_owner("gamma", "member_1", grant_owner=True)
+
+    assert store.owned_bot_aliases("member_1") == {"alpha", "beta", "gamma"}
+    assert store.count_owned_bots("member_1") == 3
+    assert store.allowed_bots_for_account("member_1") == {"alpha", "beta", "gamma"}
+    with pytest.raises(ValueError, match="最多只能创建 3 个 Bot"):
+        store.assert_can_create_bot("member_1", is_local_admin=False)
+    store.assert_can_create_bot("local-admin", is_local_admin=True)
+
+
+def test_auth_store_lists_and_disables_members(tmp_path: Path):
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(users_path=tmp_path / ".web_users.json", register_codes_path=codes_path)
+    session = store.register_member("alice", "pw-123", "INVITE-001")
+
+    users = store.list_members()["items"]
+    assert users == [
+        {
+            "account_id": session.account.account_id,
+            "username": "alice",
+            "role": "member",
+            "disabled": False,
+            "created_at": users[0]["created_at"],
+        }
+    ]
+
+    updated = store.update_member(session.account.account_id, disabled=True)
+    assert updated["disabled"] is True
+    with pytest.raises(AuthStoreError) as exc_info:
+        store.login_member("alice", "pw-123")
+    assert exc_info.value.code == "account_disabled"

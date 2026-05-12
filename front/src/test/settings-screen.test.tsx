@@ -3,35 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { AppUpdateStatus, DirectoryListing } from "../services/types";
-
-class StreamingUpdateClient extends MockWebBotClient {
-  releaseDownload: (() => void) | null = null;
-
-  async downloadUpdateStream(
-    onProgress: (event: { phase: string; downloadedBytes: number; totalBytes?: number; percent?: number; message?: string }) => void,
-  ): Promise<AppUpdateStatus> {
-    onProgress({
-      phase: "log",
-      downloadedBytes: 0,
-      message: "开始下载更新包",
-    });
-    onProgress({
-      phase: "log",
-      downloadedBytes: 0,
-      message: "已下载 50%",
-    });
-    await new Promise<void>((resolve) => {
-      this.releaseDownload = resolve;
-    });
-    onProgress({
-      phase: "log",
-      downloadedBytes: 0,
-      message: "下载完成",
-    });
-    return this.downloadUpdate();
-  }
-}
+import type { DirectoryListing } from "../services/types";
 
 class SettingsDirectoryPickerClient extends MockWebBotClient {
   browserPath = "C:\\workspace";
@@ -259,7 +231,7 @@ test("settings screen asks for confirmation before resetting the current workdir
   expect(await screen.findByText("工作目录已更新")).toBeInTheDocument();
 });
 
-test("main settings split update controls into separate card", async () => {
+test("settings screen no longer shows update controls", async () => {
   const client = new MockWebBotClient();
 
   render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
@@ -269,10 +241,8 @@ test("main settings split update controls into separate card", async () => {
   expect(within(opsRegion).getByLabelText("CLI 类型")).toBeInTheDocument();
   expect(within(opsRegion).getByLabelText("工作目录")).toBeInTheDocument();
   expect(within(opsRegion).queryByRole("heading", { name: "版本更新" })).not.toBeInTheDocument();
-  const updateRegion = screen.getByRole("region", { name: "版本更新" });
-  expect(within(updateRegion).getByText("当前版本")).toBeInTheDocument();
-  expect(within(updateRegion).getByText("自动下载更新")).toBeInTheDocument();
-  expect(screen.getAllByRole("heading", { name: "版本更新" })).toHaveLength(1);
+  expect(screen.queryByRole("region", { name: "版本更新" })).not.toBeInTheDocument();
+  expect(screen.queryByText("自动下载更新")).not.toBeInTheDocument();
 });
 
 test("main settings saves Git proxy address and port shortcut", async () => {
@@ -302,9 +272,7 @@ test("main settings saves Git proxy address and port shortcut", async () => {
   expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
 });
 
-test("desktop settings show migration notice instead of bot runtime forms", async () => {
-  const user = userEvent.setup();
-  const onOpenBotManager = vi.fn();
+test("desktop settings hides migrated bot runtime section", async () => {
   const client = new MockWebBotClient();
 
   render(
@@ -313,54 +281,13 @@ test("desktop settings show migration notice instead of bot runtime forms", asyn
       client={client}
       onLogout={() => undefined}
       showBotRuntimeSettings={false}
-      onOpenBotManager={onOpenBotManager}
     />,
   );
 
-  expect(await screen.findByText("智能体配置已迁移")).toBeInTheDocument();
+  await screen.findByRole("heading", { name: "我的头像" });
+  expect(screen.queryByText("智能体配置已迁移")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("工作目录")).not.toBeInTheDocument();
   expect(screen.queryByText("子 agent")).not.toBeInTheDocument();
   expect(screen.queryByText("CLI 参数")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "打开智能体管理" }));
-  expect(onOpenBotManager).toHaveBeenCalledTimes(1);
-});
-
-test("main settings show update log modal and restart guidance after download", async () => {
-  const user = userEvent.setup();
-  const client = new StreamingUpdateClient();
-
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-
-  await user.click(await screen.findByRole("button", { name: "下载更新" }));
-
-  const dialog = await screen.findByRole("dialog", { name: "更新日志" });
-  expect(dialog).toBeInTheDocument();
-  expect(dialog).toHaveTextContent("开始下载更新包");
-  expect(dialog).toHaveTextContent("已下载 50%");
-  expect(screen.queryByText("下载进行中，请不要刷新或离开当前页面。")).not.toBeInTheDocument();
-
-  const beforeUnloadEvent = new Event("beforeunload", { cancelable: true }) as Event & { returnValue?: unknown };
-  Object.defineProperty(beforeUnloadEvent, "returnValue", {
-    configurable: true,
-    enumerable: true,
-    writable: true,
-    value: undefined,
-  });
-  window.dispatchEvent(beforeUnloadEvent);
-
-  expect(beforeUnloadEvent.defaultPrevented).toBe(true);
-  expect(beforeUnloadEvent.returnValue).toBe("");
-
-  client.releaseDownload?.();
-
-  await waitFor(() => {
-    expect(dialog).toHaveTextContent(/重新运行 start\.bat/);
-    expect(dialog).toHaveTextContent(/不要在页面里重启程序/);
-  });
-  await waitFor(() => {
-    expect(screen.getByText(/待应用更新: .*（安装版）/)).toBeInTheDocument();
-  });
-  await waitFor(() => {
-    expect(screen.getByRole("dialog", { name: "更新日志" })).toBeInTheDocument();
-  });
+  expect(screen.queryByRole("button", { name: "打开智能体管理" })).not.toBeInTheDocument();
 });

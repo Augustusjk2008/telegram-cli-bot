@@ -1385,8 +1385,9 @@ test("cluster mode keeps a previously active child agent as read-only", async ()
   expect(screen.queryByText("main-history")).not.toBeInTheDocument();
   expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
   expect(await screen.findByRole("combobox", { name: "当前 agent" })).toHaveValue("reviewer");
-  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  expect(screen.getByText("只读模式")).toBeInTheDocument();
   expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("reviewer");
 });
 
@@ -1443,8 +1444,9 @@ test("cluster mode can switch to a child agent for read-only history", async () 
     expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
   });
   expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
-  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  expect(screen.getByText("只读模式")).toBeInTheDocument();
 });
 
 test("chat screen switches agent and scopes history requests", async () => {

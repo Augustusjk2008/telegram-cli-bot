@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -11,7 +11,7 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
 
   render(<PluginsScreen client={client} botAlias="main" />);
 
-  expect(await screen.findByText("Vivado Waveform")).toBeInTheDocument();
+  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
   expect(screen.queryByLabelText("默认页大小")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "禁用 Vivado Waveform" }));
@@ -59,7 +59,7 @@ test("plugins screen opens folder picker before installing plugin", async () => 
 
   render(<PluginsScreen client={client} botAlias="main" />);
 
-  await screen.findByText("Vivado Waveform");
+  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "安装插件" }));
   expect(await screen.findByRole("dialog", { name: "选择含 plugin.json 的插件根目录" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "使用当前目录" }));
@@ -69,4 +69,22 @@ test("plugins screen opens folder picker before installing plugin", async () => 
       sourcePath: expect.any(String),
     });
   });
+});
+
+test("plugins screen can force reinstall and uninstall plugins", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  render(<PluginsScreen botAlias="main" client={client} />);
+
+  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
+  const pluginRow = screen.getByText("vivado-waveform").closest("div");
+  expect(pluginRow).not.toBeNull();
+
+  await user.click(within(pluginRow as HTMLElement).getByRole("button", { name: "覆盖安装" }));
+  expect(await screen.findByText(/插件已覆盖安装/)).toBeInTheDocument();
+
+  await user.click(within(pluginRow as HTMLElement).getByRole("button", { name: "卸载" }));
+  await user.click(await screen.findByRole("button", { name: "确认卸载" }));
+  expect(await screen.findByText(/插件已卸载/)).toBeInTheDocument();
 });

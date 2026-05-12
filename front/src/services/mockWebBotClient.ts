@@ -1,9 +1,12 @@
 import { WebApiClientError } from "./types";
 import type {
+  AdminUser,
+  AdminUserUpdateInput,
   AssistantAdminAuditItem,
   AssistantAdminAuditResult,
   Capability,
   AppUpdateDownloadProgress,
+  AppUpdatePackageKind,
   AppUpdateStatus,
   AssistantCronJob,
   AssistantCronRun,
@@ -86,6 +89,7 @@ import type {
   FileRenameResult,
   HostEffect,
   InstallablePluginSummary,
+  OfflineUpdatePackageList,
   PluginAction,
   PluginActionInvokeInput,
   PluginActionResult,
@@ -109,6 +113,7 @@ import type {
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
+  UserBotPermissions,
   WorkspaceDefinitionResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
@@ -138,6 +143,7 @@ import { APP_VERSION } from "../theme";
 
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
+const MEMBER_BOT_LIMIT = 3;
 const MEMBER_CAPABILITIES: Capability[] = [
   "view_bots",
   "view_bot_status",
@@ -1282,6 +1288,52 @@ export class MockWebBotClient implements WebBotClient {
       usage: [{ usedAt: "2026-04-22T02:00:00Z", usedBy: "alice" }],
     },
   ];
+  private adminUsers = new Map<string, Omit<AdminUser, "ownedBots" | "ownedBotCount">>([
+    ["demo", {
+      accountId: "demo",
+      username: "demo",
+      role: "member",
+      disabled: false,
+      createdAt: "2026-05-01T09:00:00+08:00",
+      allowedBots: ["main", "team2"],
+      botCreateLimit: MEMBER_BOT_LIMIT,
+    }],
+    ["alice", {
+      accountId: "alice",
+      username: "alice",
+      role: "member",
+      disabled: false,
+      createdAt: "2026-05-02T09:00:00+08:00",
+      allowedBots: ["main"],
+      botCreateLimit: MEMBER_BOT_LIMIT,
+    }],
+  ]);
+  private botOwners = new Map<string, string>([
+    ["team2", "demo"],
+  ]);
+  private offlineUpdatePackages: OfflineUpdatePackageList = {
+    artifactsDir: ".release-local/artifacts",
+    items: [
+      {
+        name: "cli-bridge-1.2.3-installer.zip",
+        path: ".release-local/artifacts/cli-bridge-1.2.3-installer.zip",
+        version: "1.2.3",
+        packageKind: "installer",
+        sizeBytes: 2_048,
+        valid: true,
+        error: "",
+      },
+      {
+        name: "broken-package.zip",
+        path: ".release-local/artifacts/broken-package.zip",
+        version: "",
+        packageKind: "unknown",
+        sizeBytes: 512,
+        valid: false,
+        error: "包校验失败",
+      },
+    ],
+  };
   private session: SessionState = {
     currentBotAlias: "main",
     currentPath: "/",
@@ -1313,6 +1365,94 @@ export class MockWebBotClient implements WebBotClient {
     }
   }
 
+  private currentAccountId() {
+    return String(this.session.accountId || this.session.username || "").trim();
+  }
+
+  private isLocalAdminSession() {
+    return this.session.username.trim() === "127.0.0.1" || this.session.capabilities.includes("manage_register_codes");
+  }
+
+  private ensureAdminUser(accountId: string, username = accountId) {
+    const normalizedId = accountId.trim();
+    if (!normalizedId || this.adminUsers.has(normalizedId) || this.isLocalAdminSession()) {
+      return;
+    }
+    this.adminUsers.set(normalizedId, {
+      accountId: normalizedId,
+      username: username.trim() || normalizedId,
+      role: "member",
+      disabled: false,
+      createdAt: new Date().toISOString(),
+      allowedBots: Array.from(this.bots.keys()),
+      botCreateLimit: MEMBER_BOT_LIMIT,
+    });
+  }
+
+  private normalizeAllowedBots(allowedBots: string[]) {
+    return Array.from(new Set(
+      allowedBots
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )).sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true, sensitivity: "base" }));
+  }
+
+  private getAllowedBotsForAccount(accountId: string) {
+    const user = this.adminUsers.get(accountId);
+    return user ? [...user.allowedBots] : [];
+  }
+
+  private setAllowedBotsForAccount(accountId: string, allowedBots: string[]) {
+    const user = this.adminUsers.get(accountId);
+    if (!user) {
+      return [];
+    }
+    const nextAllowedBots = this.normalizeAllowedBots(allowedBots);
+    this.adminUsers.set(accountId, {
+      ...user,
+      allowedBots: nextAllowedBots,
+    });
+    return nextAllowedBots;
+  }
+
+  private getOwnedBotsForAccount(accountId: string) {
+    return Array.from(this.botOwners.entries())
+      .filter(([, ownerAccountId]) => ownerAccountId === accountId)
+      .map(([alias]) => alias)
+      .sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true, sensitivity: "base" }));
+  }
+
+  private canOperateBot(alias: string) {
+    if (this.isLocalAdminSession()) {
+      return true;
+    }
+    if (this.session.role !== "member") {
+      return false;
+    }
+    return this.getAllowedBotsForAccount(this.currentAccountId()).includes(alias);
+  }
+
+  private effectiveCapabilitiesForBot(alias: string) {
+    if (this.canOperateBot(alias)) {
+      return [...this.session.capabilities];
+    }
+    return [...GUEST_CAPABILITIES];
+  }
+
+  private buildAdminUser(accountId: string): AdminUser | null {
+    const current = this.adminUsers.get(accountId);
+    if (!current) {
+      return null;
+    }
+    const ownedBots = this.getOwnedBotsForAccount(accountId);
+    return {
+      ...current,
+      allowedBots: [...current.allowedBots],
+      ownedBots,
+      ownedBotCount: ownedBots.length,
+    };
+  }
+
   private getBotSummary(botAlias: string): BotSummary {
     const fallback = this.bots.get("main") || Array.from(this.bots.values())[0];
     const base = this.bots.get(botAlias) || fallback;
@@ -1337,6 +1477,7 @@ export class MockWebBotClient implements WebBotClient {
     const busyAgentIds = base.busyAgentIds || [];
     const busyAgentNames = base.busyAgentNames || [];
     const busyAgentCount = base.busyAgentCount ?? busyAgentIds.length;
+    const ownerAccountId = this.botOwners.get(base.alias) || base.ownerAccountId || "";
     return {
       ...base,
       serviceStatus,
@@ -1345,6 +1486,11 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentNames,
       busyAgentCount,
       workingDir,
+      canOperate: typeof base.canOperate === "boolean" ? base.canOperate : this.canOperateBot(base.alias),
+      effectiveCapabilities: base.effectiveCapabilities || this.effectiveCapabilitiesForBot(base.alias),
+      ownerAccountId,
+      ownerUsername: base.ownerUsername || this.adminUsers.get(ownerAccountId)?.username || "",
+      isOwnedByCurrentUser: ownerAccountId !== "" && ownerAccountId === this.currentAccountId(),
       cluster: base.cluster
         ? { ...base.cluster, modelTiers: { ...base.cluster.modelTiers } }
         : { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
@@ -2031,6 +2177,7 @@ export class MockWebBotClient implements WebBotClient {
       role: "member",
       capabilities: resolveMemberCapabilities(username),
     };
+    this.ensureAdminUser(this.currentAccountId(), username);
     return { ...this.session };
   }
 
@@ -2046,6 +2193,7 @@ export class MockWebBotClient implements WebBotClient {
       role: "member",
       capabilities: resolveMemberCapabilities(input.username),
     };
+    this.ensureAdminUser(this.currentAccountId(), input.username);
     return { ...this.session };
   }
 
@@ -2065,6 +2213,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async restoreSession(): Promise<SessionState> {
+    this.ensureAdminUser(this.currentAccountId(), this.session.username);
     return { ...this.session };
   }
 
@@ -2128,6 +2277,45 @@ export class MockWebBotClient implements WebBotClient {
     this.registerCodes = this.registerCodes.filter((item) => item.codeId !== codeId);
   }
 
+  async listAdminUsers(): Promise<AdminUser[]> {
+    if (!this.isLocalAdminSession()) {
+      throw new WebApiClientError("无权查看用户权限", { status: 403, code: "forbidden" });
+    }
+    return Array.from(this.adminUsers.keys())
+      .sort((left, right) => left.localeCompare(right))
+      .map((accountId) => this.buildAdminUser(accountId));
+  }
+
+  async updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser> {
+    if (!this.isLocalAdminSession()) {
+      throw new WebApiClientError("无权修改用户", { status: 403, code: "forbidden" });
+    }
+    const current = this.adminUsers.get(accountId);
+    if (!current) {
+      throw new WebApiClientError("用户不存在", { status: 404, code: "user_not_found" });
+    }
+    this.adminUsers.set(accountId, {
+      ...current,
+      disabled: typeof input.disabled === "boolean" ? input.disabled : current.disabled,
+    });
+    return this.buildAdminUser(accountId);
+  }
+
+  async updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions> {
+    if (!this.isLocalAdminSession()) {
+      throw new WebApiClientError("无权修改权限", { status: 403, code: "forbidden" });
+    }
+    if (!this.adminUsers.has(accountId)) {
+      throw new WebApiClientError("用户不存在", { status: 404, code: "user_not_found" });
+    }
+    const normalized = this.normalizeAllowedBots(allowedBots);
+    this.setAllowedBotsForAccount(accountId, normalized);
+    return {
+      accountId,
+      allowedBots: [...normalized],
+    };
+  }
+
   async listBots(): Promise<BotSummary[]> {
     return Array.from(this.bots.values()).map((item) => this.getBotSummary(item.alias));
   }
@@ -2140,9 +2328,10 @@ export class MockWebBotClient implements WebBotClient {
     return this.installablePlugins.map((plugin) => this.cloneInstallablePlugin(plugin));
   }
 
-  async installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary> {
+  async installPlugin(input: string | { pluginId?: string; sourcePath?: string; force?: boolean }): Promise<PluginSummary> {
     const pluginId = typeof input === "string" ? input : (input.pluginId || "").trim();
     const sourcePath = typeof input === "string" ? "" : (input.sourcePath || "").trim();
+    const force = typeof input === "string" ? false : Boolean(input.force);
     const sourceTail = sourcePath ? this.getPathTail(sourcePath) : "";
     const index = this.installablePlugins.findIndex((plugin) =>
       plugin.id === pluginId
@@ -2153,22 +2342,46 @@ export class MockWebBotClient implements WebBotClient {
     let installed: PluginSummary;
     if (index >= 0) {
       const current = this.installablePlugins[index];
-      if (current.installed) {
+      if (current.installed && !force) {
         throw new WebApiClientError("插件已安装", { status: 409, code: "plugin_already_installed" });
       }
       installed = this.buildInstalledPluginFromInstallable({ ...current, installed: true });
       this.installablePlugins[index] = { ...current, installed: true };
+    } else if (pluginId && force) {
+      const existing = this.plugins.find((plugin) => plugin.id === pluginId);
+      if (!existing) {
+        throw new WebApiClientError("插件不存在", { status: 404, code: "plugin_not_found" });
+      }
+      installed = this.clonePluginSummary(existing);
     } else if (sourcePath) {
       installed = this.buildInstalledPluginFromSourcePath(sourcePath);
     } else {
       throw new WebApiClientError("插件不存在", { status: 404, code: "plugin_not_found" });
     }
 
-    if (this.plugins.some((plugin) => plugin.id === installed.id)) {
+    const existingIndex = this.plugins.findIndex((plugin) => plugin.id === installed.id);
+    if (existingIndex >= 0 && !force) {
       throw new WebApiClientError("插件已安装", { status: 409, code: "plugin_already_installed" });
     }
-    this.plugins = [...this.plugins, installed];
+    if (existingIndex >= 0) {
+      this.plugins = this.plugins.map((plugin, itemIndex) => (itemIndex === existingIndex ? installed : plugin));
+    } else {
+      this.plugins = [...this.plugins, installed];
+    }
     return this.clonePluginSummary(installed);
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    const existing = this.plugins.find((plugin) => plugin.id === pluginId);
+    if (!existing) {
+      throw new WebApiClientError("插件不存在", { status: 404, code: "plugin_not_found" });
+    }
+    this.plugins = this.plugins.filter((plugin) => plugin.id !== pluginId);
+    this.installablePlugins = this.installablePlugins.map((plugin) => (
+      plugin.id === pluginId || plugin.pluginId === pluginId
+        ? { ...plugin, installed: false }
+        : plugin
+    ));
   }
 
   async updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary> {
@@ -3809,6 +4022,65 @@ export class MockWebBotClient implements WebBotClient {
     return this.downloadUpdate();
   }
 
+  async listOfflineUpdatePackages(): Promise<OfflineUpdatePackageList> {
+    return {
+      artifactsDir: this.offlineUpdatePackages.artifactsDir,
+      items: this.offlineUpdatePackages.items.map((item) => ({ ...item })),
+    };
+  }
+
+  async prepareOfflineUpdate(path: string, version = ""): Promise<AppUpdateStatus> {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) {
+      throw new WebApiClientError("离线包路径不能为空", { status: 400, code: "offline_package_path_required" });
+    }
+    const selected = this.offlineUpdatePackages.items.find((item) => item.path === normalizedPath);
+    if (!selected) {
+      throw new WebApiClientError("离线包不存在", { status: 404, code: "offline_package_not_found" });
+    }
+    if (!selected.valid) {
+      throw new WebApiClientError(selected.error || "离线包校验失败", { status: 400, code: "offline_package_invalid" });
+    }
+    this.updateStatus = {
+      ...this.updateStatus,
+      pendingUpdateVersion: version || selected.version || this.updateStatus.latestVersion || APP_VERSION,
+      pendingUpdatePath: selected.path,
+      pendingUpdateNotes: `已选择离线包 ${selected.name}`,
+      pendingUpdatePlatform: selected.packageKind === "portable"
+        ? "windows-x64-portable"
+        : selected.packageKind === "linux"
+          ? "linux-x64"
+          : "windows-x64-installer",
+      pendingUpdatePackageKind: selected.packageKind,
+      lastError: "",
+    };
+    return { ...this.updateStatus };
+  }
+
+  async prepareOfflineUpdateStream(
+    path: string,
+    version: string | undefined,
+    onProgress: (event: AppUpdateDownloadProgress) => void,
+  ): Promise<AppUpdateStatus> {
+    const normalizedPath = path.trim();
+    const selected = this.offlineUpdatePackages.items.find((item) => item.path === normalizedPath);
+    onProgress({ phase: "log", downloadedBytes: 0, message: `已选择包: ${normalizedPath}` });
+    onProgress({ phase: "log", downloadedBytes: 0, message: "校验中" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    if (!selected) {
+      onProgress({ phase: "log", downloadedBytes: 0, message: "失败原因: 离线包不存在" });
+      throw new WebApiClientError("离线包不存在", { status: 404, code: "offline_package_not_found" });
+    }
+    if (!selected.valid) {
+      const reason = selected.error || "离线包校验失败";
+      onProgress({ phase: "log", downloadedBytes: 0, message: `失败原因: ${reason}` });
+      throw new WebApiClientError(reason, { status: 400, code: "offline_package_invalid" });
+    }
+    const status = await this.prepareOfflineUpdate(normalizedPath, version);
+    onProgress({ phase: "log", downloadedBytes: 0, message: "已设置待应用" });
+    return status;
+  }
+
   async getGitOverview(botAlias: string): Promise<GitOverview> {
     const workingDir = this.workdirOverrides.get(botAlias) || this.getBotSummary(botAlias).workingDir;
     const overview = this.gitOverviews.get(botAlias);
@@ -4866,6 +5138,20 @@ export class MockWebBotClient implements WebBotClient {
 
   async addBot(input: CreateBotInput): Promise<BotSummary> {
     const alias = input.alias.trim().toLowerCase();
+    if (!alias) {
+      throw new WebApiClientError("Bot 别名不能为空", { status: 400, code: "bot_alias_required" });
+    }
+    if (this.bots.has(alias)) {
+      throw new WebApiClientError("Bot 已存在", { status: 409, code: "bot_already_exists" });
+    }
+    const accountId = this.currentAccountId();
+    if (!this.isLocalAdminSession()) {
+      const ownedBots = this.getOwnedBotsForAccount(accountId);
+      const limit = this.adminUsers.get(accountId)?.botCreateLimit || MEMBER_BOT_LIMIT;
+      if (ownedBots.length >= limit) {
+        throw new WebApiClientError("普通用户最多只能创建 3 个 Bot", { status: 403, code: "bot_quota_exceeded" });
+      }
+    }
     const bot: BotSummary = {
       alias,
       cliType: input.cliType,
@@ -4885,6 +5171,10 @@ export class MockWebBotClient implements WebBotClient {
       cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
     };
     this.bots.set(alias, bot);
+    if (!this.isLocalAdminSession()) {
+      this.botOwners.set(alias, accountId);
+      this.setAllowedBotsForAccount(accountId, [...this.getAllowedBotsForAccount(accountId), alias]);
+    }
     this.currentPaths.set(alias, bot.workingDir);
     this.workdirOverrides.set(alias, bot.workingDir);
     if (bot.botMode === "assistant" && !this.assistantCronJobs.has(alias)) {
@@ -4897,11 +5187,30 @@ export class MockWebBotClient implements WebBotClient {
   async renameBot(botAlias: string, newAlias: string): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
     const alias = newAlias.trim().toLowerCase();
+    if (!alias) {
+      throw new WebApiClientError("Bot 别名不能为空", { status: 400, code: "bot_alias_required" });
+    }
+    if (alias !== botAlias && this.bots.has(alias)) {
+      throw new WebApiClientError("Bot 已存在", { status: 409, code: "bot_already_exists" });
+    }
     this.bots.delete(botAlias);
     this.bots.set(alias, {
       ...current,
       alias,
     });
+    if (this.botOwners.has(botAlias)) {
+      const owner = this.botOwners.get(botAlias) || "";
+      this.botOwners.delete(botAlias);
+      this.botOwners.set(alias, owner);
+    }
+    for (const [accountId, user] of Array.from(this.adminUsers.entries())) {
+      const nextAllowedBots = user.allowedBots.map((item) => (item === botAlias ? alias : item));
+      if (nextAllowedBots.some((item, index) => nextAllowedBots.indexOf(item) !== index)) {
+        this.setAllowedBotsForAccount(accountId, nextAllowedBots.filter((item, index) => nextAllowedBots.indexOf(item) === index));
+      } else if (nextAllowedBots.join("\u0000") !== user.allowedBots.join("\u0000")) {
+        this.setAllowedBotsForAccount(accountId, nextAllowedBots);
+      }
+    }
     this.moveKey(this.currentPaths, botAlias, alias);
     this.moveKey(this.workdirOverrides, botAlias, alias);
     this.moveKey(this.agentsByBot, botAlias, alias);
@@ -4958,6 +5267,11 @@ export class MockWebBotClient implements WebBotClient {
       return;
     }
     this.bots.delete(botAlias);
+    this.botOwners.delete(botAlias);
+    for (const accountId of Array.from(this.adminUsers.keys())) {
+      const filtered = this.getAllowedBotsForAccount(accountId).filter((item) => item !== botAlias);
+      this.setAllowedBotsForAccount(accountId, filtered);
+    }
     this.currentPaths.delete(botAlias);
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);

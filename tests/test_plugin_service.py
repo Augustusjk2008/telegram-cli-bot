@@ -949,3 +949,86 @@ async def test_snapshot_render_view_limits_concurrent_runtime_calls(tmp_path: Pa
     )
 
     assert peak == 1
+
+
+@pytest.mark.asyncio
+async def test_install_plugin_force_overwrites_existing_plugin(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    source_root = repo_root / "examples" / "plugins"
+    plugins_root = tmp_path / "plugins"
+    source = source_root / "demo-plugin"
+    source.mkdir(parents=True)
+    (source / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "id": "demo-plugin",
+                "name": "Demo",
+                "version": "1.0.0",
+                "description": "old",
+                "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                "views": [],
+                "fileHandlers": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    try:
+        await service.install_plugin("demo-plugin")
+        (source / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "id": "demo-plugin",
+                    "name": "Demo",
+                    "version": "2.0.0",
+                    "description": "new",
+                    "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                    "views": [],
+                    "fileHandlers": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        updated = await service.install_plugin("demo-plugin", force=True)
+
+        assert updated["version"] == "2.0.0"
+        assert service.registry.get_manifest("demo-plugin").version == "2.0.0"
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_uninstall_plugin_removes_plugin_and_clears_registry(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    source = repo_root / "examples" / "plugins" / "demo-plugin"
+    source.mkdir(parents=True)
+    (source / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "id": "demo-plugin",
+                "name": "Demo",
+                "version": "1.0.0",
+                "description": "demo",
+                "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio"},
+                "views": [],
+                "fileHandlers": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    plugins_root = tmp_path / "plugins"
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    try:
+        await service.install_plugin("demo-plugin")
+
+        result = await service.uninstall_plugin("demo-plugin")
+
+        assert result == {"id": "demo-plugin", "deleted": True}
+        assert not (plugins_root / "demo-plugin").exists()
+        assert "demo-plugin" not in {item["id"] for item in service.list_plugins()}
+    finally:
+        await service.shutdown()

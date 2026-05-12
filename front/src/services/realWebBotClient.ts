@@ -1,5 +1,7 @@
 import { WebApiClientError } from "./types";
 import type {
+  AdminUser,
+  AdminUserUpdateInput,
   AccountRole,
   AppUpdateDownloadProgress,
   AppUpdatePackageKind,
@@ -104,6 +106,7 @@ import type {
   PluginActionInvokeInput,
   PluginActionResult,
   InstallablePluginSummary,
+  OfflineUpdatePackageList,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
   PluginRenderResult,
@@ -122,6 +125,7 @@ import type {
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
+  UserBotPermissions,
   WorkspaceDefinitionResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
@@ -164,6 +168,16 @@ type RawBotSummary = {
   bot_mode?: string;
   enabled?: boolean;
   is_main?: boolean;
+  can_operate?: boolean;
+  canOperate?: boolean;
+  effective_capabilities?: Capability[];
+  effectiveCapabilities?: Capability[];
+  owner_account_id?: string;
+  ownerAccountId?: string;
+  owner_username?: string;
+  ownerUsername?: string;
+  is_owned_by_current_user?: boolean;
+  isOwnedByCurrentUser?: boolean;
   cluster?: Record<string, unknown>;
 };
 
@@ -430,6 +444,33 @@ type RawRegisterCodeItem = {
 
 type RawRegisterCodeCreateResult = RawRegisterCodeItem & {
   code: string;
+};
+
+type RawAdminUser = {
+  account_id?: string;
+  username?: string;
+  role?: string;
+  disabled?: boolean;
+  created_at?: string;
+  allowed_bots?: string[];
+  owned_bots?: string[];
+  owned_bot_count?: number;
+  bot_create_limit?: number;
+};
+
+type RawOfflineUpdatePackageItem = {
+  name?: string;
+  path?: string;
+  version?: string;
+  package_kind?: AppUpdatePackageKind;
+  size_bytes?: number;
+  valid?: boolean;
+  error?: string;
+};
+
+type RawOfflineUpdatePackageList = {
+  artifacts_dir?: string;
+  items?: RawOfflineUpdatePackageItem[];
 };
 
 type RawCliParamsPayload = {
@@ -984,6 +1025,21 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   }
   if (typeof raw.is_main === "boolean") {
     summary.isMain = raw.is_main;
+  }
+  if (typeof raw.can_operate === "boolean" || typeof raw.canOperate === "boolean") {
+    summary.canOperate = raw.can_operate ?? raw.canOperate;
+  }
+  if (Array.isArray(raw.effective_capabilities) || Array.isArray(raw.effectiveCapabilities)) {
+    summary.effectiveCapabilities = (raw.effective_capabilities ?? raw.effectiveCapabilities ?? []).map((item) => item as Capability);
+  }
+  if (raw.owner_account_id || raw.ownerAccountId) {
+    summary.ownerAccountId = String(raw.owner_account_id ?? raw.ownerAccountId ?? "");
+  }
+  if (raw.owner_username || raw.ownerUsername) {
+    summary.ownerUsername = String(raw.owner_username ?? raw.ownerUsername ?? "");
+  }
+  if (typeof raw.is_owned_by_current_user === "boolean" || typeof raw.isOwnedByCurrentUser === "boolean") {
+    summary.isOwnedByCurrentUser = raw.is_owned_by_current_user ?? raw.isOwnedByCurrentUser;
   }
   return summary;
 }
@@ -1571,6 +1627,44 @@ function mapRegisterCodeCreateResult(raw: RawRegisterCodeCreateResult): Register
   return {
     ...mapRegisterCodeItem(raw),
     code: raw.code || "",
+  };
+}
+
+function mapAdminUser(raw: RawAdminUser): AdminUser {
+  return {
+    accountId: String(raw.account_id || ""),
+    username: String(raw.username || ""),
+    role: (raw.role as AdminUser["role"]) || "member",
+    disabled: Boolean(raw.disabled),
+    createdAt: String(raw.created_at || ""),
+    allowedBots: Array.isArray(raw.allowed_bots) ? raw.allowed_bots.map((item) => String(item)) : [],
+    ownedBots: Array.isArray(raw.owned_bots) ? raw.owned_bots.map((item) => String(item)) : [],
+    ownedBotCount: Number(raw.owned_bot_count || 0),
+    botCreateLimit: Number(raw.bot_create_limit || 0),
+  };
+}
+
+function mapUserBotPermissions(raw: { account_id?: string; allowed_bots?: string[] }): UserBotPermissions {
+  return {
+    accountId: String(raw.account_id || ""),
+    allowedBots: Array.isArray(raw.allowed_bots) ? raw.allowed_bots.map((item) => String(item)) : [],
+  };
+}
+
+function mapOfflineUpdatePackageList(raw: RawOfflineUpdatePackageList): OfflineUpdatePackageList {
+  return {
+    artifactsDir: String(raw.artifacts_dir || ""),
+    items: Array.isArray(raw.items)
+      ? raw.items.map((item) => ({
+          name: String(item.name || ""),
+          path: String(item.path || ""),
+          version: String(item.version || ""),
+          packageKind: (item.package_kind || "") as AppUpdatePackageKind,
+          sizeBytes: Number(item.size_bytes || 0),
+          valid: item.valid !== false,
+          error: String(item.error || ""),
+        }))
+      : [],
   };
 }
 
@@ -2299,6 +2393,78 @@ export class RealWebBotClient implements WebBotClient {
     return payload.data;
   }
 
+  private async requestUpdateStatusStream(
+    path: string,
+    body: Record<string, unknown>,
+    onProgress: (event: AppUpdateDownloadProgress) => void,
+    fallbackMessage: string,
+  ): Promise<AppUpdateStatus> {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: this.headers({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok || !response.body) {
+      let message = fallbackMessage;
+      try {
+        const payload = (await response.json()) as JsonEnvelope<unknown>;
+        message = payload.error?.message || message;
+      } catch {
+        // ignore parse failures
+      }
+      throw new Error(message);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalStatus: AppUpdateStatus | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        const block = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+
+        const event = parseSseBlock(block);
+        if (!event) {
+          separatorIndex = buffer.indexOf("\n\n");
+          continue;
+        }
+
+        if (event.type === "progress") {
+          onProgress(mapAppUpdateDownloadProgress(event));
+        } else if (event.type === "log" && event.text) {
+          onProgress({
+            phase: "log",
+            downloadedBytes: 0,
+            message: event.text,
+          });
+        } else if (event.type === "done" && event.status) {
+          finalStatus = mapAppUpdateStatus(event.status);
+        } else if (event.type === "error") {
+          throw new Error(event.message || fallbackMessage);
+        }
+
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+    }
+
+    if (!finalStatus) {
+      throw new Error(`${fallbackMessage}，连接已中断`);
+    }
+    return finalStatus;
+  }
+
   async getPublicHostInfo(): Promise<PublicHostInfo> {
     const response = await fetch("/api/health", {
       cache: "no-store",
@@ -2409,6 +2575,40 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
+  async listAdminUsers(): Promise<AdminUser[]> {
+    const data = await this.requestJson<{ items: RawAdminUser[] }>("/api/admin/users");
+    return Array.isArray(data.items) ? data.items.map((item) => mapAdminUser(item)) : [];
+  }
+
+  async updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser> {
+    const data = await this.requestJson<RawAdminUser>(`/api/admin/users/${encodeURIComponent(accountId)}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
+      }),
+    });
+    return mapAdminUser(data);
+  }
+
+  async updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions> {
+    const data = await this.requestJson<{ account_id?: string; allowed_bots?: string[] }>(
+      `/api/admin/users/${encodeURIComponent(accountId)}/permissions`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          allowed_bots: allowedBots,
+        }),
+      },
+    );
+    return mapUserBotPermissions(data);
+  }
+
   async listBots(): Promise<BotSummary[]> {
     const data = await this.requestJson<RawBotSummary[]>("/api/bots");
     return data.map((item) => mapBotSummary(item, Boolean(item.is_processing)));
@@ -2424,7 +2624,7 @@ export class RealWebBotClient implements WebBotClient {
     return Array.isArray(data) ? data : [];
   }
 
-  async installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary> {
+  async installPlugin(input: string | { pluginId?: string; sourcePath?: string; force?: boolean }): Promise<PluginSummary> {
     const body = typeof input === "string" ? { pluginId: input } : input;
     return this.requestJson<PluginSummary>("/api/plugins/install", {
       method: "POST",
@@ -2432,6 +2632,12 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
+    });
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    await this.requestJson(`/api/plugins/${encodeURIComponent(pluginId)}`, {
+      method: "DELETE",
     });
   }
 
@@ -3492,64 +3698,47 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus> {
-    const response = await fetch("/api/admin/update/download/stream", {
+    return this.requestUpdateStatusStream(
+      "/api/admin/update/download/stream",
+      {},
+      onProgress,
+      "下载更新失败",
+    );
+  }
+
+  async listOfflineUpdatePackages(): Promise<OfflineUpdatePackageList> {
+    const data = await this.requestJson<RawOfflineUpdatePackageList>("/api/admin/update/offline/packages");
+    return mapOfflineUpdatePackageList(data);
+  }
+
+  async prepareOfflineUpdate(path: string, version = ""): Promise<AppUpdateStatus> {
+    const data = await this.requestJson<RawAppUpdateStatus>("/api/admin/update/offline/prepare", {
       method: "POST",
-      headers: this.headers({
+      headers: {
         "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        path,
+        ...(version ? { version } : {}),
       }),
-      body: JSON.stringify({}),
     });
+    return mapAppUpdateStatus(data);
+  }
 
-    if (!response.ok || !response.body) {
-      let message = "下载更新失败";
-      try {
-        const payload = (await response.json()) as JsonEnvelope<unknown>;
-        message = payload.error?.message || message;
-      } catch {
-        // ignore parse failures
-      }
-      throw new Error(message);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalStatus: AppUpdateStatus | null = null;
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
-
-        const event = parseSseBlock(block);
-        if (!event) {
-          separatorIndex = buffer.indexOf("\n\n");
-          continue;
-        }
-
-        if (event.type === "progress") {
-          onProgress(mapAppUpdateDownloadProgress(event));
-        } else if (event.type === "done" && event.status) {
-          finalStatus = mapAppUpdateStatus(event.status);
-        } else if (event.type === "error") {
-          throw new Error(event.message || "下载更新失败");
-        }
-
-        separatorIndex = buffer.indexOf("\n\n");
-      }
-    }
-
-    if (!finalStatus) {
-      throw new Error("更新下载已中断");
-    }
-    return finalStatus;
+  async prepareOfflineUpdateStream(
+    path: string,
+    version: string | undefined,
+    onProgress: (event: AppUpdateDownloadProgress) => void,
+  ): Promise<AppUpdateStatus> {
+    return this.requestUpdateStatusStream(
+      "/api/admin/update/offline/prepare/stream",
+      {
+        path,
+        ...(version ? { version } : {}),
+      },
+      onProgress,
+      "设置离线更新失败",
+    );
   }
 
   async getGitOverview(botAlias: string): Promise<GitOverview> {

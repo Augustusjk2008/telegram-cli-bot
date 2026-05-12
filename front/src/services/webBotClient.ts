@@ -1,4 +1,6 @@
 import type {
+  AdminUser,
+  AdminUserUpdateInput,
   BotOverview,
   BotSummary,
   AgentInput,
@@ -49,6 +51,7 @@ import type {
   AvatarAsset,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
+  OfflineUpdatePackageList,
   GitActionResult,
   GitBlamePayload,
   GitBranchList,
@@ -94,6 +97,7 @@ import type {
   TerminalActionsEditableConfig,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
+  UserBotPermissions,
   WorkspaceDefinitionResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
@@ -111,10 +115,14 @@ export interface WebBotClient {
   createRegisterCode(maxUses?: number): Promise<RegisterCodeCreateResult>;
   updateRegisterCode(codeId: string, input: { maxUsesDelta?: number; disabled?: boolean }): Promise<RegisterCodeItem>;
   deleteRegisterCode(codeId: string): Promise<void>;
+  listAdminUsers(): Promise<AdminUser[]>;
+  updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser>;
+  updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
-  installPlugin(input: string | { pluginId?: string; sourcePath?: string }): Promise<PluginSummary>;
+  installPlugin(input: string | { pluginId?: string; sourcePath?: string; force?: boolean }): Promise<PluginSummary>;
+  uninstallPlugin(pluginId: string): Promise<void>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   listAgents(botAlias: string): Promise<AgentListResult>;
   createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult>;
@@ -204,6 +212,13 @@ export interface WebBotClient {
   checkForUpdate(): Promise<AppUpdateStatus>;
   downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus>;
   downloadUpdate(): Promise<AppUpdateStatus>;
+  listOfflineUpdatePackages(): Promise<OfflineUpdatePackageList>;
+  prepareOfflineUpdate(path: string, version?: string): Promise<AppUpdateStatus>;
+  prepareOfflineUpdateStream(
+    path: string,
+    version: string | undefined,
+    onProgress: (event: AppUpdateDownloadProgress) => void,
+  ): Promise<AppUpdateStatus>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
   getGitTreeStatus(botAlias: string): Promise<GitTreeStatus>;
   initGitRepository(botAlias: string): Promise<GitOverview>;
