@@ -8,9 +8,10 @@ type Props = {
   height: number;
   startTime: number;
   endTime: number;
+  formatValue?: (track: WaveformTrack, value: string) => string;
 };
 
-export function WaveformCanvas({ track, width, height, startTime, endTime }: Props) {
+export function WaveformCanvas({ track, width, height, startTime, endTime, formatValue }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -70,10 +71,10 @@ export function WaveformCanvas({ track, width, height, startTime, endTime }: Pro
       context.lineTo(endX, bottom);
       context.stroke();
       if (endX - startX >= 40) {
-        context.fillText(segment.value, startX + 8, middle + 4);
+        context.fillText(formatValue ? formatValue(track, segment.value) : segment.value, startX + 8, middle + 4);
       }
     }
-  }, [endTime, height, startTime, track, width]);
+  }, [endTime, formatValue, height, startTime, track, width]);
 
   return <canvas ref={canvasRef} width={width} height={height} className="block bg-[var(--surface-strong)]" />;
 }

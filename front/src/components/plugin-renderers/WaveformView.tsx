@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { WebBotClient } from "../../services/webBotClient";
 import type {
   WaveformBusStyle,
@@ -10,6 +10,12 @@ import type {
 } from "../../services/types";
 import { WaveformCanvas } from "./waveform/WaveformCanvas";
 import { getDenseSegmentLayout } from "./waveform/denseSegmentLayout";
+import {
+  DEFAULT_WAVEFORM_RADIX,
+  WAVEFORM_RADIX_OPTIONS,
+  formatWaveformValue,
+  type WaveformRadix,
+} from "./waveform/radix";
 import { useWaveformViewport } from "./waveform/useWaveformViewport";
 
 type Props = {
@@ -281,12 +287,14 @@ function BusTrackSvg({
   endTime,
   width,
   display,
+  formatValue,
 }: {
   track: WaveformTrack;
   startTime: number;
   endTime: number;
   width: number;
   display: ResolvedWaveformDisplay;
+  formatValue: (track: WaveformTrack, value: string) => string;
 }) {
   const levels = busLevels(display);
   const denseLayout = getDenseSegmentLayout(display.trackHeight);
@@ -361,7 +369,7 @@ function BusTrackSvg({
             <line x1={lineStart} y1={levels.top} x2={lineEnd} y2={levels.top} stroke="currentColor" strokeWidth="2" />
             <line x1={lineStart} y1={levels.bottom} x2={lineEnd} y2={levels.bottom} stroke="currentColor" strokeWidth="2" />
             <text x={segment.startX + segmentWidth / 2} y={levels.middle + 4} textAnchor="middle" fontSize="11" className="fill-current">
-              {segment.value}
+              {formatValue(track, segment.value)}
             </text>
           </g>
         );
@@ -424,19 +432,44 @@ function WaveformTrackRow({
   endTime,
   width,
   display,
+  radix,
+  onRadixChange,
+  formatValue,
 }: {
   track: WaveformTrack;
   startTime: number;
   endTime: number;
   width: number;
   display: ResolvedWaveformDisplay;
+  radix: WaveformRadix;
+  onRadixChange: (signalId: string, radix: WaveformRadix) => void;
+  formatValue: (track: WaveformTrack, value: string) => string;
 }) {
   const useCanvas = track.width > 1 && track.segments.length > 400;
   return (
     <>
-      <div className="sticky left-0 z-10 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-        <div className="text-sm font-medium text-[var(--text)]">{track.label}</div>
-        <div className="mt-1 text-xs text-[var(--muted)]">{track.width} bit</div>
+      <div className="sticky left-0 z-10 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2">
+        <div className="min-w-0 truncate text-sm font-medium leading-4 text-[var(--text)]">{track.label}</div>
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-xs leading-4 text-[var(--muted)]">
+          <span>{track.width} bit</span>
+          {track.width > 1 ? (
+            <label className="inline-flex items-center gap-1">
+              <span className="sr-only">{track.label} 显示进制</span>
+              <select
+                aria-label={`${track.label} 显示进制`}
+                value={radix}
+                onChange={(event) => onRadixChange(track.signalId, event.currentTarget.value as WaveformRadix)}
+                className="h-6 max-w-full rounded-md border border-[var(--border)] bg-[var(--surface-strong)] px-2 text-xs text-[var(--text)]"
+              >
+                {WAVEFORM_RADIX_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
       </div>
       <div className="border-b border-[var(--border)]">
         {useCanvas ? (
@@ -446,9 +479,17 @@ function WaveformTrackRow({
             height={display.trackHeight}
             startTime={startTime}
             endTime={endTime}
+            formatValue={formatValue}
           />
         ) : track.width > 1 ? (
-          <BusTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} display={display} />
+          <BusTrackSvg
+            track={track}
+            startTime={startTime}
+            endTime={endTime}
+            width={width}
+            display={display}
+            formatValue={formatValue}
+          />
         ) : (
           <DigitalTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} display={display} />
         )}
@@ -468,6 +509,15 @@ export function WaveformView({
 }: Props) {
   const display = resolveDisplay(summary.display);
   const [zoomIndex, setZoomIndex] = useState(() => initialZoomIndex(display));
+  const [radixBySignalId, setRadixBySignalId] = useState<Record<string, WaveformRadix>>({});
+  const handleRadixChange = useCallback((signalId: string, radix: WaveformRadix) => {
+    setRadixBySignalId((current) => ({ ...current, [signalId]: radix }));
+  }, []);
+  const formatTrackValue = useCallback(
+    (track: WaveformTrack, value: string) =>
+      formatWaveformValue(value, track.width, radixBySignalId[track.signalId] || DEFAULT_WAVEFORM_RADIX),
+    [radixBySignalId],
+  );
   const safeZoomIndex = Math.min(display.zoomLevels.length - 1, Math.max(0, zoomIndex));
   const zoom = display.zoomLevels[safeZoomIndex] || display.defaultZoom;
   const width = getContentWidth(summary, zoom, display);
@@ -572,6 +622,9 @@ export function WaveformView({
                   endTime={summary.endTime}
                   width={width}
                   display={display}
+                  radix={radixBySignalId[track.signalId] || DEFAULT_WAVEFORM_RADIX}
+                  onRadixChange={handleRadixChange}
+                  formatValue={formatTrackValue}
                 />
               ))}
             </div>

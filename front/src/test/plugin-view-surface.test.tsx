@@ -441,6 +441,137 @@ test("plugin view surface renders dense LOD segments as activity bands with labe
   });
 });
 
+test("plugin view surface lets each multi-bit waveform choose display radix", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "vivado-waveform",
+        viewId: "waveform",
+        title: "radix.vcd",
+        renderer: "waveform",
+        mode: "snapshot",
+        payload: {
+          path: "waves/radix.vcd",
+          timescale: "1ns",
+          startTime: 0,
+          endTime: 40,
+          display: {
+            defaultZoom: 1,
+            zoomLevels: [1],
+            showTimeAxis: true,
+            busStyle: "cross",
+            labelWidth: 220,
+            minWaveWidth: 500,
+            pixelsPerTime: 10,
+            axisHeight: 42,
+            trackHeight: 64,
+          },
+          tracks: [
+            {
+              signalId: "clk",
+              label: "tb.clk",
+              width: 1,
+              segments: [{ start: 0, end: 40, value: "1" }],
+            },
+            {
+              signalId: "counter",
+              label: "tb.counter",
+              width: 4,
+              segments: [
+                { start: 0, end: 20, value: "0111" },
+                { start: 20, end: 40, value: "1111" },
+              ],
+            },
+            {
+              signalId: "state",
+              label: "tb.state",
+              width: 8,
+              segments: [{ start: 0, end: 40, value: "11111110" }],
+            },
+          ],
+        },
+      }}
+    />,
+  );
+
+  expect(screen.queryByLabelText("tb.clk 显示进制")).toBeNull();
+  expect(screen.getByLabelText("tb.counter 显示进制")).toHaveValue("binary");
+  expect(screen.getByText("0111")).toBeInTheDocument();
+  expect(screen.getByText("1111")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("tb.counter 显示进制"), "unsigned-decimal");
+  expect(screen.getByText("7")).toBeInTheDocument();
+  expect(screen.getByText("15")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("tb.counter 显示进制"), "signed-decimal");
+  expect(screen.getByText("-1")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("tb.counter 显示进制"), "unsigned-hex");
+  expect(screen.getByText("0xf")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("tb.counter 显示进制"), "signed-hex");
+  expect(screen.getByText("-0x1")).toBeInTheDocument();
+
+  expect(screen.getByText("11111110")).toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("tb.state 显示进制"), "signed-decimal");
+  expect(screen.getByText("-2")).toBeInTheDocument();
+  expect(screen.getByLabelText("tb.counter 显示进制")).toHaveValue("signed-hex");
+});
+
+test("plugin view surface keeps x and z bus values readable when radix is numeric", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "vivado-waveform",
+        viewId: "waveform",
+        title: "unknown.vcd",
+        renderer: "waveform",
+        mode: "snapshot",
+        payload: {
+          path: "waves/unknown.vcd",
+          timescale: "1ns",
+          startTime: 0,
+          endTime: 40,
+          display: {
+            defaultZoom: 1,
+            zoomLevels: [1],
+            showTimeAxis: true,
+            busStyle: "cross",
+            labelWidth: 220,
+            minWaveWidth: 500,
+            pixelsPerTime: 10,
+            axisHeight: 42,
+            trackHeight: 64,
+          },
+          tracks: [
+            {
+              signalId: "data",
+              label: "tb.data",
+              width: 4,
+              segments: [
+                { start: 0, end: 20, value: "10xz" },
+                { start: 20, end: 40, value: "z1" },
+              ],
+            },
+          ],
+        },
+      }}
+    />,
+  );
+
+  await user.selectOptions(screen.getByLabelText("tb.data 显示进制"), "unsigned-decimal");
+  expect(screen.getByText("10xz")).toBeInTheDocument();
+  expect(screen.getByText("00z1")).toBeInTheDocument();
+});
+
 test("plugin view surface renders table snapshot views", () => {
   const client = new MockWebBotClient();
   render(
