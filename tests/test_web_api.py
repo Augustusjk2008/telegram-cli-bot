@@ -92,6 +92,7 @@ from bot.web.git_service import (
     drop_git_stash,
     get_git_blame,
     get_git_diff,
+    get_git_identity_config,
     get_git_overview,
     get_git_tree_status,
     init_git_repository,
@@ -99,6 +100,7 @@ from bot.web.git_service import (
     list_git_stashes,
     stage_git_paths,
     switch_git_branch,
+    update_git_identity_config,
 )
 from bot.web.native_history_locator import LocatedTranscript
 from bot.assistant.proposals import create_proposal
@@ -2456,6 +2458,66 @@ def test_git_stash_and_blame_reject_unsafe_inputs(web_manager: MultiBotManager, 
         get_git_blame(web_manager, "main", 1001, "../tracked.txt")
     assert blame_error.value.code == "unsafe_git_path"
 
+def test_git_identity_config_reads_and_updates_global_and_local(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = temp_dir / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    global_config = update_git_identity_config(
+        web_manager,
+        "main",
+        1001,
+        scope="global",
+        name="Global User",
+        email="global@example.com",
+    )
+    local_config = update_git_identity_config(
+        web_manager,
+        "main",
+        1001,
+        scope="local",
+        name="Local User",
+        email="local@example.com",
+    )
+    listed = get_git_identity_config(web_manager, "main", 1001)
+
+    assert global_config["global"] == {"name": "Global User", "email": "global@example.com"}
+    assert local_config["local"] == {"name": "Local User", "email": "local@example.com"}
+    assert listed["repo_found"] is True
+    assert listed["global"]["email"] == "global@example.com"
+    assert listed["local"]["email"] == "local@example.com"
+
+def test_git_identity_config_rejects_local_outside_repo(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "plain"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+
+    identity = get_git_identity_config(web_manager, "main", 1001)
+    assert identity["repo_found"] is False
+    assert identity["local"] == {"name": "", "email": ""}
+
+    with pytest.raises(WebApiError) as error:
+        update_git_identity_config(
+            web_manager,
+            "main",
+            1001,
+            scope="local",
+            name="Local User",
+            email="local@example.com",
+        )
+    assert error.value.code == "not_git_repo"
+
 def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     settings_file = temp_dir / ".web_admin_settings.json"
     monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
@@ -3293,8 +3355,65 @@ async def test_git_workflow_routes_return_branches_stashes_and_blame(
             blame_payload = await blame_resp.json()
             assert blame_payload["data"]["lines"][0]["summary"] == "init"
 
+            identity_resp = await client.get("/api/bots/main/git/identity")
+            assert identity_resp.status == 200
+            identity_payload = await identity_resp.json()
+            assert identity_payload["data"]["local"]["email"] == "web-bot@example.com"
+
+            update_identity_resp = await client.put(
+                "/api/bots/main/git/identity",
+                json={"scope": "local", "name": "Route User", "email": "route@example.com"},
+            )
+            assert update_identity_resp.status == 200
+            update_identity_payload = await update_identity_resp.json()
+            assert update_identity_payload["data"]["local"] == {"name": "Route User", "email": "route@example.com"}
+
             drop_resp = await client.post("/api/bots/main/git/stashes/drop", json={"ref": "stash@{0}"})
             assert drop_resp.status == 200
+
+@pytest.mark.asyncio
+async def test_git_identity_route_requires_admin_for_global_scope(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    def member_without_admin(_self, _request):
+        return AuthContext(
+            user_id=1001,
+            token_used=True,
+            account_id="member",
+            username="member",
+            role="member",
+            capabilities={"git_ops"},
+        )
+
+    monkeypatch.setattr("bot.web.server.WebApiServer._auth_context", member_without_admin)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            local_resp = await client.put(
+                "/api/bots/main/git/identity",
+                json={"scope": "local", "name": "Local User", "email": "local@example.com"},
+            )
+            global_resp = await client.put(
+                "/api/bots/main/git/identity",
+                json={"scope": "global", "name": "Global User", "email": "global@example.com"},
+            )
+            global_payload = await global_resp.json()
+
+    assert local_resp.status == 200
+    assert global_resp.status == 403
+    assert global_payload["error"]["code"] == "forbidden"
 
 @pytest.mark.asyncio
 async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
@@ -5397,6 +5516,24 @@ async def test_run_cli_chat_suggests_new_conversation_for_codex_resume_payload_t
     assert session.codex_session_id == "thread-stuck"
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_includes_error_detail_in_terminal_trace(web_manager: MultiBotManager):
+    fake_process = MagicMock()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("status_code=500, upstream error: do request failed", None, 1),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    trace = get_history_trace(web_manager, "main", 1001, data["message"]["id"])["trace"]
+    assert trace[-1]["kind"] == "error"
+    assert trace[-1]["summary"] == "命令退出码 1\nstatus_code=500, upstream error: do request failed"
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: MultiBotManager):
     fake_process = MagicMock()
 
@@ -5477,6 +5614,44 @@ async def test_communicate_codex_process_prefers_error_event_text_over_preview()
     output, thread_id, returncode = await api_service._communicate_codex_process(FakeProcess())
 
     assert output == "status_code=500, upstream error: do request failed"
+    assert thread_id == "thread-stuck"
+    assert returncode == 1
+
+@pytest.mark.asyncio
+async def test_communicate_codex_process_prefers_plain_error_output_over_preview():
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-stuck"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"我先检查一下。"}}\n',
+                "Traceback: upstream request failed\n",
+            ]
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.returncode = 1
+            self.terminate = MagicMock()
+            self.kill = MagicMock(side_effect=self._kill)
+
+        def _kill(self):
+            self.returncode = -9
+
+        def poll(self):
+            return self.returncode if not self.stdout._lines else None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    output, thread_id, returncode = await api_service._communicate_codex_process(FakeProcess())
+
+    assert output == "Traceback: upstream request failed"
     assert thread_id == "thread-stuck"
     assert returncode == 1
 

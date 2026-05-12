@@ -64,6 +64,24 @@ def _normalize_stash_ref(ref: str) -> str:
     return value
 
 
+def _normalize_identity_scope(scope: str) -> str:
+    value = (scope or "").strip().lower()
+    if value not in {"global", "local"}:
+        _raise(400, "invalid_git_identity_scope", "Git 用户配置范围不合法")
+    return value
+
+
+def _normalize_git_identity_value(value: Any, *, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        _raise(400, f"empty_git_{field}", "Git 用户名和邮箱不能为空")
+    if len(text) > 200 or "\x00" in text or "\n" in text or "\r" in text:
+        _raise(400, f"invalid_git_{field}", "Git 用户名或邮箱不合法")
+    if field == "email" and ("@" not in text or any(ch.isspace() for ch in text)):
+        _raise(400, "invalid_git_email", "Git 邮箱不合法")
+    return text
+
+
 def _build_git_command(args: list[str]) -> list[str]:
     # H:/ 等非系统盘上的 fsmonitor 可能让 status/diff 长时间卡住，Web Git 统一禁用。
     return ["git", "-c", "core.fsmonitor=false", *get_git_proxy_config_args(), *args]
@@ -407,6 +425,59 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
         "changed_files": changed_files,
         "recent_commits": _list_recent_commits(repo_root),
     }
+
+
+def _read_git_config_value(cwd: str, scope: str, key: str) -> str:
+    result = _run_git(cwd, ["config", f"--{scope}", "--get", key], check=False)
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+
+def _git_identity_for_scope(cwd: str, scope: str) -> dict[str, str]:
+    return {
+        "name": _read_git_config_value(cwd, scope, "user.name"),
+        "email": _read_git_config_value(cwd, scope, "user.email"),
+    }
+
+
+def get_git_identity_config(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    working_dir = _get_git_working_dir(manager, alias)
+    repo_root = _resolve_repo_root(working_dir)
+    return {
+        "repo_found": bool(repo_root),
+        "repo_path": repo_root or "",
+        "global": _git_identity_for_scope(working_dir, "global"),
+        "local": _git_identity_for_scope(repo_root, "local") if repo_root else {"name": "", "email": ""},
+    }
+
+
+def update_git_identity_config(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    scope: str,
+    name: Any,
+    email: Any,
+) -> dict[str, Any]:
+    working_dir = _get_git_working_dir(manager, alias)
+    repo_root = _resolve_repo_root(working_dir)
+    normalized_scope = _normalize_identity_scope(scope)
+    if normalized_scope == "local" and not repo_root:
+        _raise(409, "not_git_repo", "当前目录不在 Git 仓库中")
+
+    normalized_name = _normalize_git_identity_value(name, field="name")
+    normalized_email = _normalize_git_identity_value(email, field="email")
+    cwd = repo_root if normalized_scope == "local" and repo_root else working_dir
+
+    try:
+        _run_git(cwd, ["config", f"--{normalized_scope}", "user.name", normalized_name])
+        _run_git(cwd, ["config", f"--{normalized_scope}", "user.email", normalized_email])
+    except GitCommandError as exc:
+        _raise(400, "git_identity_update_failed", str(exc))
+
+    return get_git_identity_config(manager, alias, user_id)
 
 
 def get_git_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

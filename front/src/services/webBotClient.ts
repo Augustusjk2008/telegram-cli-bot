@@ -53,6 +53,8 @@ import type {
   GitBlamePayload,
   GitBranchList,
   GitDiffPayload,
+  GitIdentityConfig,
+  GitIdentityScope,
   GitProxySettings,
   GitOverview,
   GitStashList,
@@ -223,6 +225,8 @@ export interface WebBotClient {
   applyGitStash(botAlias: string, ref: string): Promise<GitActionResult>;
   dropGitStash(botAlias: string, ref: string): Promise<GitActionResult>;
   getGitBlame(botAlias: string, path: string): Promise<GitBlamePayload>;
+  getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig>;
+  updateGitIdentityConfig(botAlias: string, input: { scope: GitIdentityScope; name: string; email: string }): Promise<GitIdentityConfig>;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;

@@ -79,8 +79,8 @@ export function MobileShell({
           <div className="inline-flex rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
             {([
               ["auto", "自动"],
-              ["mobile", "手机版"],
-              ["desktop", "桌面版"],
+              ["mobile", "竖屏版"],
+              ["desktop", "横屏版"],
             ] as const).map(([nextMode, label]) => (
               <button
                 key={nextMode}

@@ -2643,6 +2643,37 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
     return False
 
 
+def _extract_plain_error_output(raw_output: str) -> Optional[str]:
+    parts: list[str] = []
+    for line in str(raw_output or "").splitlines():
+        stripped = strip_ansi_escape(line).strip()
+        if not stripped:
+            continue
+        try:
+            json.loads(stripped)
+        except json.JSONDecodeError:
+            parts.append(stripped)
+    text = "\n".join(part for part in parts if part).strip()
+    return text or None
+
+
+def _extract_codex_error_detail(raw_output: str) -> Optional[str]:
+    return extract_codex_error_output(raw_output) or _extract_plain_error_output(raw_output)
+
+
+def _extract_claude_error_detail(raw_output: str) -> Optional[str]:
+    error_parts: list[str] = []
+    for line in str(raw_output or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_claude_stream_json_line(stripped)
+        if parsed["error_text"]:
+            error_parts.append(parsed["error_text"])
+    text = "\n".join(part for part in error_parts if part).strip()
+    return text or _extract_plain_error_output(raw_output)
+
+
 def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
     preview_text = ""
     current_delta = ""
@@ -2963,6 +2994,7 @@ def _build_terminal_trace(
     live_trace: list[dict[str, Any]],
     stop_requested: bool,
     returncode: int,
+    error_detail: str = "",
 ) -> list[dict[str, Any]]:
     trace = _merge_trace_events(live_trace)
     if stop_requested:
@@ -2971,9 +3003,13 @@ def _build_terminal_trace(
             [{"kind": "cancelled", "source": "runtime", "summary": "用户终止输出"}],
         )
     if isinstance(returncode, int) and returncode not in (0,):
+        summary = f"命令退出码 {returncode}"
+        detail = str(error_detail or "").strip()
+        if detail:
+            summary = f"{summary}\n{detail[-2000:]}"
         return _merge_trace_events(
             trace,
-            [{"kind": "error", "source": "runtime", "summary": f"命令退出码 {returncode}"}],
+            [{"kind": "error", "source": "runtime", "summary": summary}],
         )
     return trace
 
@@ -3240,7 +3276,7 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
 
     raw_output = "".join(chunks)
     final_text, parsed_thread_id = parse_codex_json_output(raw_output)
-    error_text = extract_codex_error_output(raw_output) if returncode != 0 else None
+    error_text = _extract_codex_error_detail(raw_output) if returncode != 0 else None
     final_text = error_text or candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
     if not final_text:
         final_text = msg("chat", "no_output")
@@ -3635,19 +3671,27 @@ async def _stream_cli_chat(
             assistant_stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
 
             raw_output = preview_state.raw_output_for_parse()
+            error_detail = ""
             if cli_type == "codex":
                 response, parsed_thread_id = parse_codex_json_output(raw_output)
                 thread_id = thread_id or parsed_thread_id
                 response = codex_done_candidate or _extract_final_codex_completed_message(raw_output) or response
                 if returncode != 0:
-                    response = extract_codex_error_output(raw_output) or response
+                    error_detail = _extract_codex_error_detail(raw_output) or ""
+                    response = error_detail or response
             elif cli_type == "claude":
                 if claude_collector is not None:
                     response = claude_collector.final_text or ""
+                    raw_output = claude_collector.raw_output
                 else:
                     response, _ = parse_claude_stream_json_output(raw_output)
+                if returncode != 0:
+                    error_detail = _extract_claude_error_detail(raw_output) or ""
+                    response = error_detail or response
             else:
                 response = raw_output.strip()
+                if returncode != 0:
+                    error_detail = response
 
             response = response or msg("chat", "no_output")
             should_force_error_output = False
@@ -3707,6 +3751,7 @@ async def _stream_cli_chat(
                 live_trace=live_trace_events,
                 stop_requested=stop_requested,
                 returncode=returncode,
+                error_detail=response if completion_state == "error" else error_detail,
             )
             persistence_buffer.flush()
             for trace_event in final_trace[len(live_trace_events):]:
@@ -3728,7 +3773,7 @@ async def _stream_cli_chat(
             fallback_output = (
                 response
                 if completion_state == "completed" or should_force_error_output
-                else (latest_preview_text or response)
+                else (response or latest_preview_text)
             )
             done_message = service.complete_turn(
                 turn_handle,
@@ -4016,12 +4061,14 @@ async def run_cli_chat(
                 returncode=returncode,
                 response_text=response,
             )
+            error_detail = response if completion_state == "error" else ""
             with session._lock:
                 stop_requested = bool(session.stop_requested)
             terminal_trace = _build_terminal_trace(
                 live_trace=[],
                 stop_requested=stop_requested,
                 returncode=returncode,
+                error_detail=error_detail,
             )
             for trace_event in terminal_trace:
                 service.append_trace_event(turn_handle, trace_event)

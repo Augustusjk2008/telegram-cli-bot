@@ -202,6 +202,7 @@ from .git_service import (
     fetch_git_remote,
     get_git_blame,
     get_git_diff,
+    get_git_identity_config,
     get_git_overview,
     get_git_tree_status,
     init_git_repository,
@@ -214,6 +215,7 @@ from .git_service import (
     stash_git_changes,
     switch_git_branch,
     unstage_git_paths,
+    update_git_identity_config,
 )
 from .workspace_search_service import (
     build_file_outline,
@@ -594,7 +596,7 @@ async def cors_middleware(request: web.Request, handler):
         response.headers["Access-Control-Allow-Origin"] = "*"
 
     response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Credentials"] = "true"
     if request.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
@@ -1834,6 +1836,27 @@ class WebApiServer:
         alias = self._manager_alias(request)
         path = request.query.get("path", "")
         return _json({"ok": True, "data": get_git_blame(self.manager, alias, auth.user_id, path)})
+
+    async def get_git_identity_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_git_identity_config(self.manager, alias, auth.user_id)})
+
+    async def put_git_identity_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        scope = str(body.get("scope") or "").strip().lower()
+        _require_capability(auth, CAP_ADMIN_OPS if scope == "global" else CAP_GIT_OPS)
+        data = update_git_identity_config(
+            self.manager,
+            alias,
+            auth.user_id,
+            scope=scope,
+            name=body.get("name", ""),
+            email=body.get("email", ""),
+        )
+        return _json({"ok": True, "data": data})
 
     async def post_git_init(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)

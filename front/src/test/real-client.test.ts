@@ -3199,6 +3199,70 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("git identity config maps payload and saves scoped identity", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { user_id: 1001 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            repo_found: true,
+            repo_path: "C:\\workspace\\repo",
+            global: { name: "Global User", email: "global@example.com" },
+            local: { name: "Local User", email: "local@example.com" },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            repo_found: true,
+            repo_path: "C:\\workspace\\repo",
+            global: { name: "Global User", email: "global@example.com" },
+            local: { name: "Saved User", email: "saved@example.com" },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const config = await client.getGitIdentityConfig("main");
+    const saved = await client.updateGitIdentityConfig("main", {
+      scope: "local",
+      name: "Saved User",
+      email: "saved@example.com",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/git/identity",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer secret-token" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main/git/identity",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          scope: "local",
+          name: "Saved User",
+          email: "saved@example.com",
+        }),
+      }),
+    );
+    expect(config.global.email).toBe("global@example.com");
+    expect(config.local.name).toBe("Local User");
+    expect(saved.local.email).toBe("saved@example.com");
+  });
+
   test("initGitRepository posts to the init endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce({

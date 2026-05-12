@@ -1320,6 +1320,20 @@ export type GitBlamePayload = {
   lines: GitBlameLine[];
 };
 
+export type GitIdentityScope = "global" | "local";
+
+export type GitIdentity = {
+  name: string;
+  email: string;
+};
+
+export type GitIdentityConfig = {
+  repoFound: boolean;
+  repoPath: string;
+  global: GitIdentity;
+  local: GitIdentity;
+};
+
 export type GitProxySettings = {
   address: string;
   port: string;

@@ -76,6 +76,8 @@ import type {
   GitBlamePayload,
   GitBranchList,
   GitDiffPayload,
+  GitIdentityConfig,
+  GitIdentityScope,
   GitProxySettings,
   GitOverview,
   GitStashList,
@@ -1059,6 +1061,7 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   ]);
+  private gitIdentityConfigs = new Map<string, GitIdentityConfig>();
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -4096,6 +4099,35 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  async getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig> {
+    const overview = await this.getGitOverview(botAlias);
+    const cached = this.gitIdentityConfigs.get(botAlias);
+    return cached
+      ? { ...cached, repoFound: overview.repoFound, repoPath: overview.repoPath }
+      : {
+        repoFound: overview.repoFound,
+        repoPath: overview.repoPath,
+        global: { name: "", email: "" },
+        local: { name: "", email: "" },
+      };
+  }
+
+  async updateGitIdentityConfig(
+    botAlias: string,
+    input: { scope: GitIdentityScope; name: string; email: string },
+  ): Promise<GitIdentityConfig> {
+    const current = await this.getGitIdentityConfig(botAlias);
+    const next = {
+      ...current,
+      [input.scope]: {
+        name: input.name.trim(),
+        email: input.email.trim(),
+      },
+    };
+    this.gitIdentityConfigs.set(botAlias, next);
+    return next;
+  }
+
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
     const next = {
@@ -4876,6 +4908,7 @@ export class MockWebBotClient implements WebBotClient {
     this.moveAgentScopedKeys(this.conversationsByBot, botAlias, alias);
     this.moveAgentScopedKeys(this.activeConversationByBot, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
+    this.moveKey(this.gitIdentityConfigs, botAlias, alias);
     this.moveKey(this.assistantCronJobs, botAlias, alias);
     this.moveKey(this.assistantProposals, botAlias, alias);
     this.moveKey(this.assistantMemories, botAlias, alias);
@@ -4928,6 +4961,7 @@ export class MockWebBotClient implements WebBotClient {
     this.currentPaths.delete(botAlias);
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);
+    this.gitIdentityConfigs.delete(botAlias);
     this.assistantCronJobs.delete(botAlias);
     this.assistantProposals.delete(botAlias);
     this.assistantMemories.delete(botAlias);

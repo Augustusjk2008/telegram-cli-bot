@@ -41,6 +41,8 @@ import type {
   GitBranchList,
   GitCommitSummary,
   GitDiffPayload,
+  GitIdentityConfig,
+  GitIdentityScope,
   GitProxySettings,
   GitOverview,
   GitStashList,
@@ -541,6 +543,18 @@ type RawGitBlameLine = {
 type RawGitBlamePayload = {
   path?: string;
   lines?: RawGitBlameLine[];
+};
+
+type RawGitIdentity = {
+  name?: string;
+  email?: string;
+};
+
+type RawGitIdentityConfig = {
+  repo_found?: boolean;
+  repo_path?: string;
+  global?: RawGitIdentity;
+  local?: RawGitIdentity;
 };
 
 type RawGitProxySettings = {
@@ -1657,6 +1671,21 @@ function mapGitBlamePayload(raw: RawGitBlamePayload): GitBlamePayload {
       summary: item.summary || "",
       content: item.content || "",
     })),
+  };
+}
+
+function mapGitIdentityConfig(raw: RawGitIdentityConfig): GitIdentityConfig {
+  return {
+    repoFound: Boolean(raw.repo_found),
+    repoPath: raw.repo_path || "",
+    global: {
+      name: raw.global?.name || "",
+      email: raw.global?.email || "",
+    },
+    local: {
+      name: raw.local?.name || "",
+      email: raw.local?.email || "",
+    },
   };
 }
 
@@ -3693,6 +3722,29 @@ export class RealWebBotClient implements WebBotClient {
     const params = new URLSearchParams({ path });
     const data = await this.requestJson<RawGitBlamePayload>(`/api/bots/${encodeURIComponent(botAlias)}/git/blame?${params.toString()}`);
     return mapGitBlamePayload(data);
+  }
+
+  async getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig> {
+    const data = await this.requestJson<RawGitIdentityConfig>(`/api/bots/${encodeURIComponent(botAlias)}/git/identity`);
+    return mapGitIdentityConfig(data);
+  }
+
+  async updateGitIdentityConfig(
+    botAlias: string,
+    input: { scope: GitIdentityScope; name: string; email: string },
+  ): Promise<GitIdentityConfig> {
+    const data = await this.requestJson<RawGitIdentityConfig>(`/api/bots/${encodeURIComponent(botAlias)}/git/identity`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        scope: input.scope,
+        name: input.name,
+        email: input.email,
+      }),
+    });
+    return mapGitIdentityConfig(data);
   }
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {

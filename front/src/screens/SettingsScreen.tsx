@@ -786,7 +786,7 @@ export function SettingsScreen({
             >
               <div className="space-y-1">
                 <h2 id="bot-runtime-moved-title" className="text-base font-semibold text-[var(--text)]">智能体配置已迁移</h2>
-                <p className="text-sm text-[var(--muted)]">桌面版的 CLI、工作目录、子 agent 和 CLI 参数统一在智能体管理页维护。</p>
+                <p className="text-sm text-[var(--muted)]">横屏版的 CLI、工作目录、子 agent 和 CLI 参数统一在智能体管理页维护。</p>
               </div>
               {onOpenBotManager ? (
                 <button

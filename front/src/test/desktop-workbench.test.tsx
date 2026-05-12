@@ -58,7 +58,7 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(screen.getByTestId("desktop-pane-files")).toHaveAttribute("data-collapsed", "true");
   expect(localStorage.getItem("web-workbench-pane-state")).toContain("\"sidebarCollapsed\":true");
 
-  await user.click(screen.getByRole("button", { name: "手机版" }));
+  await user.click(screen.getByRole("button", { name: "竖屏版" }));
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
 });
 

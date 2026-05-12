@@ -15,13 +15,22 @@ import {
   Minus,
   Plus,
   RefreshCw,
+  Save,
   SendHorizontal,
   Trash2,
   UploadCloud,
+  UserRound,
 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { GitBlamePayload, GitBranchList, GitOverview, GitStashList } from "../services/types";
+import type {
+  GitBlamePayload,
+  GitBranchList,
+  GitIdentityConfig,
+  GitIdentityScope,
+  GitOverview,
+  GitStashList,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -71,6 +80,10 @@ function buttonClass(kind: "plain" | "primary" = "plain") {
   );
 }
 
+function identityForScope(config: GitIdentityConfig | null, scope: GitIdentityScope) {
+  return scope === "local" ? config?.local : config?.global;
+}
+
 export function GitScreen({
   botAlias,
   botAvatarName,
@@ -95,6 +108,11 @@ export function GitScreen({
   const [blameLoadingPath, setBlameLoadingPath] = useState("");
   const [changesCollapsed, setChangesCollapsed] = useState(false);
   const [commitsCollapsed, setCommitsCollapsed] = useState(false);
+  const [identityConfig, setIdentityConfig] = useState<GitIdentityConfig | null>(null);
+  const [identityScope, setIdentityScope] = useState<GitIdentityScope>("global");
+  const [identityName, setIdentityName] = useState("");
+  const [identityEmail, setIdentityEmail] = useState("");
+  const [identityLoading, setIdentityLoading] = useState(false);
   const groups = useMemo(() => groupedFiles(overview), [overview]);
   const changeGroups = useMemo(
     () => ([
@@ -128,6 +146,7 @@ export function GitScreen({
 
   useEffect(() => {
     void loadOverview();
+    void loadIdentityConfig("global");
   }, [botAlias, client]);
 
   useEffect(() => {
@@ -141,6 +160,34 @@ export function GitScreen({
       setBlame(null);
     }
   }, [botAlias, client, overview?.repoFound]);
+
+  function applyIdentityDraft(config: GitIdentityConfig, scope: GitIdentityScope) {
+    const nextScope = scope === "local" && !config.repoFound ? "global" : scope;
+    const identity = identityForScope(config, nextScope);
+    setIdentityScope(nextScope);
+    setIdentityName(identity?.name || "");
+    setIdentityEmail(identity?.email || "");
+  }
+
+  async function loadIdentityConfig(preferredScope = identityScope) {
+    setIdentityLoading(true);
+    try {
+      const next = await client.getGitIdentityConfig(botAlias);
+      setIdentityConfig(next);
+      applyIdentityDraft(next, preferredScope);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载 Git 用户失败");
+    } finally {
+      setIdentityLoading(false);
+    }
+  }
+
+  function selectIdentityScope(scope: GitIdentityScope) {
+    setIdentityScope(scope);
+    const identity = identityForScope(identityConfig, scope);
+    setIdentityName(identity?.name || "");
+    setIdentityEmail(identity?.email || "");
+  }
 
   async function runAction(
     key: string,
@@ -264,6 +311,32 @@ export function GitScreen({
     }
     setNotice("");
     await onOpenDiff(path, staged);
+  }
+
+  async function saveGitIdentity() {
+    const name = identityName.trim();
+    const email = identityEmail.trim();
+    if (!name || !email) {
+      setError("Git 用户名和邮箱不能为空");
+      return;
+    }
+    if (identityScope === "local" && !identityConfig?.repoFound) {
+      setError("当前目录不在 Git 仓库中，无法保存局部配置");
+      return;
+    }
+    setActionLoading("git-identity");
+    setError("");
+    setNotice("");
+    try {
+      const next = await client.updateGitIdentityConfig(botAlias, { scope: identityScope, name, email });
+      setIdentityConfig(next);
+      applyIdentityDraft(next, identityScope);
+      setNotice(identityScope === "local" ? "当前仓库 Git 用户已保存" : "全局 Git 用户已保存");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存 Git 用户失败");
+    } finally {
+      setActionLoading("");
+    }
   }
 
   return (
@@ -777,6 +850,87 @@ export function GitScreen({
                 </div>
               </aside>
             </div>
+          ) : null}
+
+          {!loading ? (
+            <aside
+              data-testid="git-identity-panel"
+              className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <UserRound className="h-4 w-4 text-[var(--accent)]" />
+                    <h2 className="text-sm font-semibold">Git 用户</h2>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-[var(--muted)]">
+                    {identityScope === "local" ? identityConfig?.repoPath || "当前仓库" : "全局配置"}
+                  </p>
+                </div>
+                <button type="button" onClick={() => void loadIdentityConfig(identityScope)} className={buttonClass()}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  刷新
+                </button>
+              </div>
+
+              {identityLoading ? <p className="text-xs text-[var(--muted)]">加载 Git 用户...</p> : null}
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => selectIdentityScope("global")}
+                  className={clsx(buttonClass(identityScope === "global" ? "primary" : "plain"), "min-w-20")}
+                >
+                  全局
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectIdentityScope("local")}
+                  disabled={!identityConfig?.repoFound}
+                  className={clsx(buttonClass(identityScope === "local" ? "primary" : "plain"), "min-w-24")}
+                >
+                  当前仓库
+                </button>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[var(--muted)]">用户名</span>
+                  <input
+                    aria-label="Git 用户名"
+                    value={identityName}
+                    onChange={(event) => setIdentityName(event.target.value)}
+                    placeholder="Your Name"
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[var(--muted)]">邮箱</span>
+                  <input
+                    aria-label="Git 邮箱"
+                    value={identityEmail}
+                    onChange={(event) => setIdentityEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-[var(--muted)]">
+                  {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void saveGitIdentity()}
+                  disabled={actionLoading !== "" || identityLoading || !identityName.trim() || !identityEmail.trim()}
+                  className={buttonClass("primary")}
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
+                </button>
+              </div>
+            </aside>
           ) : null}
         </div>
       </section>

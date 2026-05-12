@@ -19,10 +19,10 @@ type Props = {
 
 function viewModeLabel(viewMode: ViewMode) {
   if (viewMode === "desktop") {
-    return "桌面版";
+    return "横屏版";
   }
   if (viewMode === "mobile") {
-    return "手机版";
+    return "竖屏版";
   }
   return "自动";
 }

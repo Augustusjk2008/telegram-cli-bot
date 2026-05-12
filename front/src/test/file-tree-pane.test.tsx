@@ -248,6 +248,36 @@ test("desktop file tree context menu stays at the pointer position under pane fo
   });
 });
 
+test("desktop file tree create-file dialog is portaled outside the workbench pane", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+
+  const { container } = render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "新建文件" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "新建文件" });
+  expect(container).not.toContainElement(dialog);
+  expect(document.body).toContainElement(dialog);
+});
+
 test("file context menu copies a sibling file", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

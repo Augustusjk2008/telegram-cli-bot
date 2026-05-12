@@ -13,6 +13,8 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/git/stashes/apply", server.post_git_stash_apply)
     app.router.add_post("/api/bots/{alias}/git/stashes/drop", server.post_git_stash_drop)
     app.router.add_get("/api/bots/{alias}/git/blame", server.get_git_blame_view)
+    app.router.add_get("/api/bots/{alias}/git/identity", server.get_git_identity_view)
+    app.router.add_put("/api/bots/{alias}/git/identity", server.put_git_identity_view)
     app.router.add_post("/api/bots/{alias}/git/init", server.post_git_init)
     app.router.add_get("/api/bots/{alias}/git/diff", server.get_git_diff_view)
     app.router.add_post("/api/bots/{alias}/git/stage", server.post_git_stage)
@@ -27,4 +29,3 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/git/stash/pop", server.post_git_stash_pop)
     app.router.add_get("/api/admin/git-proxy", server.admin_get_git_proxy)
     app.router.add_patch("/api/admin/git-proxy", server.admin_patch_git_proxy)
-

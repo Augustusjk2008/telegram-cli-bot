@@ -124,7 +124,7 @@ test("mobile shell exposes a layout toggle that can switch into desktop mode", a
   await user.click(screen.getByRole("button", { name: "登录" }));
 
   expect(await screen.findByRole("button", { name: "文件" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "桌面版" }));
+  await user.click(screen.getByRole("button", { name: "横屏版" }));
 
   expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
 });

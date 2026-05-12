@@ -11,6 +11,7 @@ import type {
   CliParamsPayload,
   DirectoryListing,
   GitActionResult,
+  GitIdentityConfig,
   GitOverview,
   SessionState,
   TunnelSnapshot,
@@ -116,6 +117,18 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     restartService: async () => undefined,
     getGitProxySettings: async () => ({ address: "", port: "" }),
     updateGitProxySettings: async () => ({ address: "", port: "" }),
+    getGitIdentityConfig: async (): Promise<GitIdentityConfig> => ({
+      repoFound: true,
+      repoPath: "C:\\workspace\\repo",
+      global: { name: "Global User", email: "global@example.com" },
+      local: { name: "", email: "" },
+    }),
+    updateGitIdentityConfig: async (_botAlias, input): Promise<GitIdentityConfig> => ({
+      repoFound: true,
+      repoPath: "C:\\workspace\\repo",
+      global: input.scope === "global" ? { name: input.name, email: input.email } : { name: "Global User", email: "global@example.com" },
+      local: input.scope === "local" ? { name: input.name, email: input.email } : { name: "", email: "" },
+    }),
     updateBotWorkdir: async () => ({
       alias: "main",
       cliType: "codex",
@@ -263,6 +276,79 @@ test("shows init action when current directory is not a git repo", async () => {
   expect(await screen.findByText("当前目录不在 Git 仓库中")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "初始化 Git 仓库" }));
   expect(await screen.findByText("当前分支")).toBeInTheDocument();
+});
+
+test("git screen saves global and local author identity", async () => {
+  const user = userEvent.setup();
+  const updateGitIdentityConfig = vi.fn(async (_botAlias, input) => ({
+    repoFound: true,
+    repoPath: "C:\\workspace\\repo",
+    global: input.scope === "global" ? { name: input.name, email: input.email } : { name: "Global User", email: "global@example.com" },
+    local: input.scope === "local" ? { name: input.name, email: input.email } : { name: "", email: "" },
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ updateGitIdentityConfig })}
+    />,
+  );
+
+  await screen.findByTestId("git-identity-panel");
+  const nameInput = screen.getByLabelText("Git 用户名");
+  const emailInput = screen.getByLabelText("Git 邮箱");
+  expect(nameInput).toHaveValue("Global User");
+  expect(emailInput).toHaveValue("global@example.com");
+
+  await user.clear(nameInput);
+  await user.type(nameInput, "Local User");
+  await user.clear(emailInput);
+  await user.type(emailInput, "local@example.com");
+  await user.click(screen.getByRole("button", { name: "当前仓库" }));
+  expect(nameInput).toHaveValue("");
+
+  await user.type(nameInput, "Local User");
+  await user.type(emailInput, "local@example.com");
+  await user.click(screen.getByRole("button", { name: "保存 Git 用户" }));
+
+  expect(updateGitIdentityConfig).toHaveBeenCalledWith("main", {
+    scope: "local",
+    name: "Local User",
+    email: "local@example.com",
+  });
+  expect(await screen.findByText("当前仓库 Git 用户已保存")).toBeInTheDocument();
+});
+
+test("git identity panel disables local scope outside a repository", async () => {
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview: async (): Promise<GitOverview> => ({
+          repoFound: false,
+          canInit: true,
+          workingDir: "C:\\workspace\\plain",
+          repoPath: "",
+          repoName: "",
+          currentBranch: "",
+          isClean: true,
+          aheadCount: 0,
+          behindCount: 0,
+          changedFiles: [],
+          recentCommits: [],
+        }),
+        getGitIdentityConfig: async (): Promise<GitIdentityConfig> => ({
+          repoFound: false,
+          repoPath: "",
+          global: { name: "", email: "" },
+          local: { name: "", email: "" },
+        }),
+      })}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "当前仓库" })).toBeDisabled();
+  expect(screen.getByText("当前目录无仓库，仅可保存全局配置")).toBeInTheDocument();
 });
 
 test("stages all unstaged and untracked files from the commit panel", async () => {
