@@ -151,12 +151,13 @@ def download_latest_update(
     repo_root: Path | None = None,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
+    effective_progress_callback = progress_callback or _print_download_progress
     settings = app_settings._load_settings()
     settings["last_checked_at"] = _now_iso()
     settings["update_last_error"] = ""
-    _emit_download_log(progress_callback, "正在检查最新版本信息")
+    _emit_download_log(effective_progress_callback, "正在检查最新版本信息")
     package_kind = detect_update_package_kind(repo_root)
-    _emit_download_log(progress_callback, f"当前安装类型: {_format_update_package_kind(package_kind)}")
+    _emit_download_log(effective_progress_callback, f"当前安装类型: {_format_update_package_kind(package_kind)}")
 
     try:
         release = _fetch_latest_release()
@@ -165,17 +166,14 @@ def download_latest_update(
         settings["last_available_notes"] = str(release.get("body") or "")
 
         asset = _select_release_asset(release.get("assets", []), package_kind)
-        cache_root = _prepare_update_cache_dir(repo_root, progress_callback=progress_callback)
+        cache_root = _prepare_update_cache_dir(repo_root, progress_callback=effective_progress_callback)
         target_path = cache_root / asset["name"]
-        _emit_download_log(progress_callback, f"找到更新包: {asset['name']}")
-        if progress_callback is None:
-            _download_file(asset["browser_download_url"], target_path)
-        else:
-            _download_file(
-                asset["browser_download_url"],
-                target_path,
-                progress_callback=progress_callback,
-            )
+        _emit_download_log(effective_progress_callback, f"找到更新包: {asset['name']}")
+        _download_file(
+            asset["browser_download_url"],
+            target_path,
+            progress_callback=effective_progress_callback,
+        )
     except Exception as exc:
         settings["update_last_error"] = str(exc)
         app_settings._save_settings(settings)
@@ -187,8 +185,14 @@ def download_latest_update(
     settings["pending_update_platform"] = _pending_update_platform(package_kind)
     settings["pending_update_package_kind"] = package_kind
     app_settings._save_settings(settings)
-    _emit_download_log(progress_callback, f"更新包已保存到: {target_path}")
+    _emit_download_log(effective_progress_callback, f"更新包已保存到: {target_path}")
     return get_update_status(repo_root)
+
+
+def _print_download_progress(progress: dict[str, Any]) -> None:
+    message = str(progress.get("message") or "").strip()
+    if message:
+        print(f"[更新] {message}", flush=True)
 
 
 def _emit_apply_log(log_callback: Any | None, message: str) -> None:

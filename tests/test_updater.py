@@ -141,7 +141,7 @@ def test_download_latest_update_marks_pending_bundle(monkeypatch, tmp_path: Path
     )
     downloaded: dict[str, object] = {}
 
-    def fake_download(url, target):
+    def fake_download(url, target, progress_callback=None):
         downloaded["url"] = url
         downloaded["target"] = target
         target.write_bytes(b"zip-bytes")
@@ -246,6 +246,60 @@ def test_download_latest_update_forwards_progress_callback(monkeypatch, tmp_path
     assert "更新包已保存到:" in str(progress_events[-1]["message"])
 
 
+def test_download_latest_update_prints_progress_without_callback(monkeypatch, tmp_path: Path, capsys):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: True)
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda repo_root=None: "portable")
+    monkeypatch.setattr(
+        updater,
+        "_fetch_latest_release",
+        lambda: {
+            "tag_name": "v1.0.1",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.0.1",
+            "body": "Bugfixes",
+            "assets": [
+                {
+                    "name": "cli-bridge-windows-x64.zip",
+                    "browser_download_url": "https://example.invalid/cli-bridge-windows-x64.zip",
+                }
+            ],
+        },
+    )
+
+    def fake_download(url, target, progress_callback=None):
+        assert progress_callback is not None
+        progress_callback(
+            {
+                "phase": "log",
+                "downloaded_bytes": 0,
+                "total_bytes": 1024,
+                "percent": 0,
+                "message": "开始下载更新包: cli-bridge-windows-x64.zip",
+            }
+        )
+        target.write_bytes(b"zip-bytes")
+        progress_callback(
+            {
+                "phase": "log",
+                "downloaded_bytes": 1024,
+                "total_bytes": 1024,
+                "percent": 100,
+                "message": "已下载 1024 / 1024 bytes (100%)",
+            }
+        )
+
+    monkeypatch.setattr(updater, "_download_file", fake_download)
+
+    status = updater.download_latest_update(repo_root=tmp_path)
+
+    output = capsys.readouterr().out
+    assert status["pending_update_version"] == "1.0.1"
+    assert "开始下载更新包: cli-bridge-windows-x64.zip" in output
+    assert "100%" in output
+
+
 def test_download_latest_update_replaces_unusable_repo_cache_path(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     blocked_cache_path = tmp_path / ".updates"
@@ -266,7 +320,7 @@ def test_download_latest_update_replaces_unusable_repo_cache_path(monkeypatch, t
     )
     downloaded: dict[str, object] = {}
 
-    def fake_download(url, target):
+    def fake_download(url, target, progress_callback=None):
         downloaded["url"] = url
         downloaded["target"] = target
         target.write_bytes(b"zip-bytes")
