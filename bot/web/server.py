@@ -2428,7 +2428,8 @@ class WebApiServer:
 
     async def admin_update_offline_packages(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": list_offline_update_packages(_REPO_ROOT)})
+        data = await asyncio.to_thread(list_offline_update_packages, _REPO_ROOT)
+        return _json({"ok": True, "data": data})
 
     async def admin_update_offline_prepare(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

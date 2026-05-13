@@ -725,6 +725,27 @@ def test_list_offline_update_packages_reads_release_artifacts(tmp_path: Path):
     assert item["error"] == ""
 
 
+def test_list_offline_update_packages_does_not_validate_archive_contents(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    artifacts_dir = repo_root / ".release-local" / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    package = artifacts_dir / "offline.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("bot/version.py", "APP_VERSION = '1.2.3'\n")
+
+    monkeypatch.setattr(
+        updater,
+        "_validate_package_file",
+        lambda _path: (_ for _ in ()).throw(AssertionError("listing should not validate archive contents")),
+    )
+
+    listing = updater.list_offline_update_packages(repo_root)
+
+    assert listing["items"][0]["name"] == "offline.zip"
+    assert listing["items"][0]["valid"] is True
+    assert listing["items"][0]["error"] == ""
+
+
 def test_prepare_offline_update_sets_pending_update(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)

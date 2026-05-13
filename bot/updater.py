@@ -192,28 +192,23 @@ def download_latest_update(
 def list_offline_update_packages(repo_root: Path | None = None) -> dict[str, Any]:
     root = Path(repo_root or Path.cwd()).resolve()
     artifacts_dir = root / ".release-local" / "artifacts"
+    package_kind = detect_update_package_kind(root)
     items: list[dict[str, Any]] = []
     if artifacts_dir.exists():
         for path in sorted(artifacts_dir.iterdir(), key=lambda item: item.name.lower()):
             if not path.is_file() or not (_is_zip_package(path) or _is_tar_gz_package(path)):
                 continue
-            error = ""
-            valid = True
-            try:
-                _validate_package_file(path)
-            except Exception as exc:
-                valid = False
-                error = str(exc)
+            size = path.stat().st_size
             items.append(
                 {
                     "name": path.name,
                     "path": str(path),
-                    "size": path.stat().st_size,
-                    "size_bytes": path.stat().st_size,
+                    "size": size,
+                    "size_bytes": size,
                     "version": "",
-                    "package_kind": detect_update_package_kind(root),
-                    "valid": valid,
-                    "error": error,
+                    "package_kind": package_kind,
+                    "valid": True,
+                    "error": "",
                 }
             )
     return {"artifacts_dir": str(artifacts_dir), "items": items}

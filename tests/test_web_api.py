@@ -8254,7 +8254,10 @@ async def test_admin_update_offline_package_routes(
             "artifacts_dir": str(tmp_path),
             "items": [{"name": package.name, "path": str(package), "valid": True, "size": package.stat().st_size, "error": ""}],
         },
-    ), patch(
+    ) as list_packages_mock, patch(
+        "bot.web.server.asyncio.to_thread",
+        new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+    ) as to_thread_mock, patch(
         "bot.web.server.prepare_offline_update",
         return_value={"pending_update_version": "1.2.3", "pending_update_path": str(package)},
     ) as prepare_mock:
@@ -8265,6 +8268,7 @@ async def test_admin_update_offline_package_routes(
                 packages_payload = await packages_response.json()
                 assert packages_response.status == 200
                 assert packages_payload["data"]["items"][0]["name"] == package.name
+                to_thread_mock.assert_any_call(list_packages_mock, ANY)
 
                 prepare_response = await client.post(
                     "/api/admin/update/offline/prepare",
