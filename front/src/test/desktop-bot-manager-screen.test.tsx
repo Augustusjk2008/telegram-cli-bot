@@ -420,6 +420,7 @@ test("desktop bot manager deletes managed bot without history by default", async
 test("desktop bot manager exposes cluster templates in config tab", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();
+  const updateClusterConfig = vi.spyOn(client, "updateClusterConfig");
 
   render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
 
@@ -427,6 +428,15 @@ test("desktop bot manager exposes cluster templates in config tab", async () => 
   await user.click(screen.getByRole("button", { name: "聚焦 main" }));
   await user.click(screen.getByRole("button", { name: "配置" }));
 
+  const parallelSelect = await screen.findByLabelText("并发子 agent 数");
+  await user.selectOptions(parallelSelect, "4");
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenCalledWith("main", expect.objectContaining({
+    maxParallelAgents: 4,
+    writePolicy: "selected_agents",
+    conflictPolicy: "snapshot_diff",
+    defaultTimeoutSeconds: 600,
+  })));
   expect(await screen.findByText("集群模板")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "预览 全量测试集群" })).toBeInTheDocument();
 });

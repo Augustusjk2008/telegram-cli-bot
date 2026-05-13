@@ -26,6 +26,7 @@ import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
+  BotClusterConfig,
   BotSummary,
   CliType,
   CliParamsPayload,
@@ -70,6 +71,14 @@ const RESIZER_WIDTH = 8;
 const INSPECTOR_MIN_WIDTH = 320;
 const INSPECTOR_MAX_WIDTH = 720;
 const INSPECTOR_DEFAULT_WIDTH = 400;
+const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
+  enabled: false,
+  writePolicy: "selected_agents",
+  conflictPolicy: "snapshot_diff",
+  maxParallelAgents: 2,
+  defaultTimeoutSeconds: 600,
+  modelTiers: { low: "", medium: "", high: "" },
+};
 
 const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
   { id: "all", label: "全部" },
@@ -109,6 +118,17 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
 
 function draftEquals(left: EditDraft, right: EditDraft) {
   return JSON.stringify(normalizeEditDraft(left)) === JSON.stringify(normalizeEditDraft(right));
+}
+
+function clusterConfigFromBot(bot: BotSummary): BotClusterConfig {
+  return {
+    ...DEFAULT_CLUSTER_CONFIG,
+    ...(bot.cluster || {}),
+    modelTiers: {
+      ...DEFAULT_CLUSTER_CONFIG.modelTiers,
+      ...(bot.cluster?.modelTiers || {}),
+    },
+  };
 }
 
 function createDraftEquals(left: CreateDraft, right: CreateDraft) {
@@ -341,6 +361,7 @@ function EditPanel({
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null);
+  const [clusterConfig, setClusterConfig] = useState<BotClusterConfig>(() => clusterConfigFromBot(bot));
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
@@ -349,6 +370,7 @@ function EditPanel({
 
   useEffect(() => {
     setDraft(draftFromBot(bot));
+    setClusterConfig(clusterConfigFromBot(bot));
     setPendingWorkdirConflict(null);
   }, [bot]);
 
@@ -396,14 +418,27 @@ function EditPanel({
     }
   }
 
-  async function saveCluster(next: ClusterStatus) {
+  async function saveCluster(patch: Partial<BotClusterConfig>) {
+    const next: BotClusterConfig = {
+      ...clusterConfig,
+      ...patch,
+      modelTiers: {
+        ...clusterConfig.modelTiers,
+        ...(patch.modelTiers || {}),
+      },
+    };
     setClusterSaving(true);
     setClusterError("");
     try {
       const result = await manager.client.updateClusterConfig(bot.alias, {
         enabled: next.enabled,
+        writePolicy: next.writePolicy,
+        conflictPolicy: next.conflictPolicy,
+        maxParallelAgents: next.maxParallelAgents,
+        defaultTimeoutSeconds: next.defaultTimeoutSeconds,
         modelTiers: next.modelTiers,
       });
+      setClusterConfig(result.cluster);
       setClusterStatus(result.status);
     } catch (err) {
       setClusterError(err instanceof Error ? err.message : "保存集群配置失败");
@@ -540,11 +575,11 @@ function EditPanel({
             <label className="inline-flex items-center gap-2 text-sm font-medium">
               <input
                 type="checkbox"
-                checked={Boolean(clusterStatus?.enabled)}
+                checked={Boolean(clusterConfig.enabled)}
                 disabled={!canManage || clusterSaving || !clusterStatus}
                 onChange={(event) => {
                   if (!clusterStatus) return;
-                  void saveCluster({ ...clusterStatus, enabled: event.target.checked });
+                  void saveCluster({ enabled: event.target.checked });
                 }}
               />
               启用集群模式
@@ -553,11 +588,32 @@ function EditPanel({
           </div>
           {clusterError ? <div className="text-sm text-red-700">{clusterError}</div> : null}
           {clusterStatus ? (
+            <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+              <h2 className="text-base font-semibold text-[var(--text)]">集群运行参数</h2>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium text-[var(--text)]">并发子 agent 数</span>
+                  <select
+                    aria-label="并发子 agent 数"
+                    value={clusterConfig.maxParallelAgents}
+                    disabled={!canManage || clusterSaving}
+                    onChange={(event) => void saveCluster({ maxParallelAgents: Number(event.target.value) })}
+                    className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                      <option key={count} value={count}>{count}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </section>
+          ) : null}
+          {clusterStatus ? (
             <ClusterModelTiersPanel
-              value={clusterStatus.modelTiers}
+              value={clusterConfig.modelTiers}
               modelOptions={cliParams?.schema.model?.enum ?? []}
               disabled={!canManage || clusterSaving}
-              onChange={(modelTiers) => void saveCluster({ ...clusterStatus, modelTiers })}
+              onChange={(modelTiers) => void saveCluster({ modelTiers })}
             />
           ) : null}
           <ClusterTemplatePanel
