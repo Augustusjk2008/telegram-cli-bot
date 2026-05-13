@@ -46,8 +46,8 @@ test("plugins screen uses flat workbench sections like git", async () => {
   expect(screen.getByTestId("plugins-scroll-region")).toHaveClass("bg-[var(--workbench-titlebar-bg)]", "py-0.5");
   expect(screen.getByTestId("plugins-catalog")).toHaveClass("bg-[var(--workbench-panel-bg)]");
   expect(screen.getByTestId("plugins-overview-header")).toHaveClass(
-    "border-[color-mix(in_srgb,var(--accent)_18%,var(--border))]",
-    "bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface-strong))]",
+    "border-[var(--border)]",
+    "bg-[var(--surface-strong)]",
   );
   expectNoStructuralCard(screen.getByTestId("plugins-overview-panel"));
   expectNoStructuralCard(screen.getByTestId("plugin-catalog-item-vivado-waveform"));

@@ -90,7 +90,7 @@ function sectionStackClass(extra = "") {
 
 function sectionHeaderClass(extra = "") {
   return clsx(
-    "flex items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--accent)_18%,var(--border))] bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface-strong))] px-3 py-1.5",
+    "flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-1.5",
     extra,
   );
 }
