@@ -45,7 +45,6 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div>
             <h2 className="text-base font-semibold text-[var(--text)]">公告</h2>
-            <p className="text-xs text-[var(--muted)]">最新内容会在登录后提醒</p>
           </div>
           <button
             type="button"
