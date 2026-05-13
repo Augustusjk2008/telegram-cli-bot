@@ -40,7 +40,7 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="公告"
-        className="grid max-h-[88dvh] w-full grid-rows-[auto_minmax(0,1fr)_auto] rounded-t-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl sm:max-h-[80vh] sm:w-[min(720px,calc(100vw-32px))] sm:rounded-lg"
+        className="grid max-h-[88dvh] w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-t-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl sm:max-h-[80vh] sm:w-[min(720px,calc(100vw-32px))] sm:rounded-lg"
       >
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <div>

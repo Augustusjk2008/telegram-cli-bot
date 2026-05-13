@@ -27,6 +27,8 @@ test("announcement dialog renders timeline and closes", () => {
 
   render(<AnnouncementDialog open items={[item]} latestId={item.id} onClose={onClose} />);
 
+  const dialog = screen.getByRole("dialog", { name: "公告" });
+  expect(dialog).toHaveClass("overflow-hidden");
   expect(screen.getByText("公告中心")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
 
