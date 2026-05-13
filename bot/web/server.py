@@ -47,6 +47,7 @@ from bot.updater import (
     prepare_offline_update,
     set_update_enabled,
 )
+from .announcement_store import AnnouncementStore
 from .auth_store import (
     AuthStoreError,
     CAP_ADMIN_OPS,
@@ -78,6 +79,7 @@ from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, Term
 from .tunnel_service import TunnelService
 from .routes import (
     admin_routes,
+    announcement_routes,
     assistant_routes,
     auth_routes,
     chat_routes,
@@ -245,6 +247,7 @@ _WEB_AUTH_STORE = WebAuthStore(
     register_codes_path=_REPO_ROOT / ".web_register_codes.json",
 )
 _BOT_PERMISSION_STORE = BotPermissionStore(_REPO_ROOT / ".web_permissions.json")
+_ANNOUNCEMENT_STORE = AnnouncementStore(_REPO_ROOT / ".web_announcements.json")
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -642,6 +645,7 @@ class WebApiServer:
         self._debug_service = DebugService(manager)
         self._debug_sockets: set[web.WebSocketResponse] = set()
         self._debug_tasks: set[asyncio.Task[Any]] = set()
+        self.announcement_store = _ANNOUNCEMENT_STORE
         self._tunnel_service = tunnel_service or TunnelService(
             host=self._host,
             port=self._port,
@@ -1107,18 +1111,19 @@ class WebApiServer:
 
     async def admin_users(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
-        permission_items = _BOT_PERMISSION_STORE.list_user_permissions()["items"]
+        permission_items = _BOT_PERMISSION_STORE.list_user_permission_summaries()["items"]
         permissions = {item["account_id"]: item for item in permission_items}
         users = []
         for user in _WEB_AUTH_STORE.list_members()["items"]:
             account_id = user["account_id"]
+            permission = permissions.get(account_id, {})
             users.append(
                 {
                     **user,
-                    "allowed_bots": permissions.get(account_id, {}).get("allowed_bots", []),
-                    "owned_bots": sorted(_BOT_PERMISSION_STORE.owned_bot_aliases(account_id)),
-                    "owned_bot_count": _BOT_PERMISSION_STORE.count_owned_bots(account_id),
-                    "bot_create_limit": _BOT_PERMISSION_STORE.MEMBER_BOT_LIMIT,
+                    "allowed_bots": permission.get("allowed_bots", []),
+                    "owned_bots": permission.get("owned_bots", []),
+                    "owned_bot_count": permission.get("owned_bot_count", 0),
+                    "bot_create_limit": permission.get("bot_create_limit", _BOT_PERMISSION_STORE.MEMBER_BOT_LIMIT),
                 }
             )
         return _json({"ok": True, "data": {"items": users}})
@@ -3262,6 +3267,7 @@ class WebApiServer:
         app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=0)
         for module in (
             auth_routes,
+            announcement_routes,
             cluster_routes,
             chat_routes,
             terminal_routes,

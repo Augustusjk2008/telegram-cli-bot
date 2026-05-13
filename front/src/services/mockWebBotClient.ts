@@ -2,6 +2,8 @@ import { WebApiClientError } from "./types";
 import type {
   AdminUser,
   AdminUserUpdateInput,
+  AnnouncementItem,
+  AnnouncementListResult,
   AssistantAdminAuditItem,
   AssistantAdminAuditResult,
   Capability,
@@ -1288,6 +1290,22 @@ export class MockWebBotClient implements WebBotClient {
       usage: [{ usedAt: "2026-04-22T02:00:00Z", usedBy: "alice" }],
     },
   ];
+  private announcements: AnnouncementItem[] = [
+    {
+      id: "ann-2026-05-13-demo",
+      publishedAt: "2026-05-13T09:00:00+08:00",
+      publisher: "CLI Bridge",
+      title: "公告中心",
+      category: "feature",
+      severity: "info",
+      summary: "公告会在新内容发布后自动提醒。",
+      sections: [
+        { label: "新增", items: ["登录后自动弹出", "右上角可再次打开"] },
+        { label: "操作", items: ["看完后点关闭即可"] },
+      ],
+    },
+  ];
+  private announcementReads = new Map<string, string>();
   private adminUsers = new Map<string, Omit<AdminUser, "ownedBots" | "ownedBotCount">>([
     ["demo", {
       accountId: "demo",
@@ -1450,6 +1468,34 @@ export class MockWebBotClient implements WebBotClient {
       allowedBots: [...current.allowedBots],
       ownedBots,
       ownedBotCount: ownedBots.length,
+    };
+  }
+
+  private sortedAnnouncements() {
+    return [...this.announcements].sort((left, right) => (
+      `${right.publishedAt}|${right.id}`.localeCompare(`${left.publishedAt}|${left.id}`)
+    ));
+  }
+
+  private cloneAnnouncement(item: AnnouncementItem): AnnouncementItem {
+    return {
+      ...item,
+      sections: item.sections.map((section) => ({
+        label: section.label,
+        items: [...section.items],
+      })),
+    };
+  }
+
+  private buildAnnouncementList(): AnnouncementListResult {
+    const items = this.sortedAnnouncements();
+    const latestId = items[0]?.id || "";
+    const lastSeenId = this.announcementReads.get(this.currentAccountId()) || "";
+    return {
+      items: items.map((item) => this.cloneAnnouncement(item)),
+      latestId,
+      lastSeenId,
+      hasUnseen: Boolean(latestId && latestId !== lastSeenId),
     };
   }
 
@@ -2229,6 +2275,39 @@ export class MockWebBotClient implements WebBotClient {
       role: "guest",
       capabilities: [],
     };
+  }
+
+  async listAnnouncements(): Promise<AnnouncementListResult> {
+    return this.buildAnnouncementList();
+  }
+
+  async markAnnouncementsSeen(latestId: string): Promise<AnnouncementListResult> {
+    if (latestId && !this.announcements.some((item) => item.id === latestId)) {
+      throw new WebApiClientError("公告不存在", { status: 400, code: "invalid_announcement" });
+    }
+    this.announcementReads.set(this.currentAccountId(), latestId);
+    return this.buildAnnouncementList();
+  }
+
+  async upsertAnnouncement(input: AnnouncementItem): Promise<AnnouncementItem> {
+    if (!this.isLocalAdminSession()) {
+      throw new WebApiClientError("无权发布公告", { status: 403, code: "forbidden" });
+    }
+    const normalized = this.cloneAnnouncement(input);
+    this.announcements = [
+      normalized,
+      ...this.announcements.filter((item) => item.id !== normalized.id),
+    ];
+    return this.cloneAnnouncement(normalized);
+  }
+
+  async deleteAnnouncement(id: string): Promise<{ deleted: boolean }> {
+    if (!this.isLocalAdminSession()) {
+      throw new WebApiClientError("无权删除公告", { status: 403, code: "forbidden" });
+    }
+    const before = this.announcements.length;
+    this.announcements = this.announcements.filter((item) => item.id !== id);
+    return { deleted: this.announcements.length !== before };
   }
 
   async listRegisterCodes(): Promise<RegisterCodeItem[]> {

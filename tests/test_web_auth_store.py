@@ -119,6 +119,64 @@ def test_permission_store_tracks_bot_owners_and_quota(tmp_path: Path):
     store.assert_can_create_bot("local-admin", is_local_admin=True)
 
 
+def test_permission_store_lists_user_summaries_with_single_read(tmp_path: Path, monkeypatch):
+    store = BotPermissionStore(tmp_path / ".web_permissions.json")
+    store.set_allowed_bots("member_1", ["main", "team"])
+    store.set_allowed_bots("member_2", ["main"])
+    store.set_bot_owner("alpha", "member_1", grant_owner=False)
+    store.set_bot_owner("beta", "member_1", grant_owner=False)
+    store.set_bot_owner("gamma", "member_2", grant_owner=False)
+    read_count = 0
+    original_read = store._read
+
+    def counted_read():
+        nonlocal read_count
+        read_count += 1
+        return original_read()
+
+    monkeypatch.setattr(store, "_read", counted_read)
+
+    result = store.list_user_permission_summaries()
+
+    assert read_count == 1
+    assert result["items"] == [
+        {
+            "account_id": "member_1",
+            "allowed_bots": ["main", "team"],
+            "owned_bots": ["alpha", "beta"],
+            "owned_bot_count": 2,
+            "bot_create_limit": 3,
+            "updated_at": "",
+        },
+        {
+            "account_id": "member_2",
+            "allowed_bots": ["main"],
+            "owned_bots": ["gamma"],
+            "owned_bot_count": 1,
+            "bot_create_limit": 3,
+            "updated_at": "",
+        },
+    ]
+
+
+def test_permission_store_summary_includes_owner_without_user_grants(tmp_path: Path):
+    store = BotPermissionStore(tmp_path / ".web_permissions.json")
+    store.set_bot_owner("alpha", "member_1", grant_owner=False)
+
+    result = store.list_user_permission_summaries()
+
+    assert result["items"] == [
+        {
+            "account_id": "member_1",
+            "allowed_bots": [],
+            "owned_bots": ["alpha"],
+            "owned_bot_count": 1,
+            "bot_create_limit": 3,
+            "updated_at": "",
+        }
+    ]
+
+
 def test_auth_store_lists_and_disables_members(tmp_path: Path):
     codes_path = tmp_path / ".web_register_codes.json"
     codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")

@@ -114,6 +114,18 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(localStorage.getItem("web-api-token")).toBeNull();
 });
 
+test("opens announcements after login when unseen exists", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("dialog", { name: "公告" })).toBeInTheDocument();
+  expect(screen.getByText("公告中心")).toBeInTheDocument();
+});
+
 test("guest login trims member-only navigation", async () => {
   const user = userEvent.setup();
 

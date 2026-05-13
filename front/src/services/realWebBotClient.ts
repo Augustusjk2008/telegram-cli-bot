@@ -3,6 +3,10 @@ import type {
   AdminUser,
   AdminUserUpdateInput,
   AccountRole,
+  AnnouncementCategory,
+  AnnouncementItem,
+  AnnouncementListResult,
+  AnnouncementSeverity,
   AppUpdateDownloadProgress,
   AppUpdatePackageKind,
   AppUpdateStatus,
@@ -456,6 +460,33 @@ type RawAdminUser = {
   owned_bots?: string[];
   owned_bot_count?: number;
   bot_create_limit?: number;
+};
+
+type RawAnnouncementSection = {
+  label?: string;
+  items?: unknown[];
+};
+
+type RawAnnouncementItem = {
+  id?: string;
+  published_at?: string;
+  publishedAt?: string;
+  publisher?: string;
+  title?: string;
+  category?: string;
+  severity?: string;
+  summary?: string;
+  sections?: RawAnnouncementSection[];
+};
+
+type RawAnnouncementListResult = {
+  items?: RawAnnouncementItem[];
+  latest_id?: string;
+  latestId?: string;
+  last_seen_id?: string;
+  lastSeenId?: string;
+  has_unseen?: boolean;
+  hasUnseen?: boolean;
 };
 
 type RawOfflineUpdatePackageItem = {
@@ -1644,6 +1675,63 @@ function mapAdminUser(raw: RawAdminUser): AdminUser {
   };
 }
 
+function mapAnnouncementCategory(value: unknown): AnnouncementCategory {
+  const normalized = String(value || "notice");
+  return ["release", "feature", "fix", "maintenance", "notice"].includes(normalized)
+    ? normalized as AnnouncementCategory
+    : "notice";
+}
+
+function mapAnnouncementSeverity(value: unknown): AnnouncementSeverity {
+  const normalized = String(value || "info");
+  return ["info", "success", "warning", "danger"].includes(normalized)
+    ? normalized as AnnouncementSeverity
+    : "info";
+}
+
+function mapAnnouncementItem(raw: RawAnnouncementItem): AnnouncementItem {
+  return {
+    id: String(raw.id || ""),
+    publishedAt: String(raw.published_at || raw.publishedAt || ""),
+    publisher: String(raw.publisher || ""),
+    title: String(raw.title || ""),
+    category: mapAnnouncementCategory(raw.category),
+    severity: mapAnnouncementSeverity(raw.severity),
+    summary: String(raw.summary || ""),
+    sections: Array.isArray(raw.sections)
+      ? raw.sections.map((section) => ({
+          label: String(section.label || ""),
+          items: Array.isArray(section.items) ? section.items.map((item) => String(item)) : [],
+        })).filter((section) => section.label || section.items.length > 0)
+      : [],
+  };
+}
+
+function mapAnnouncementList(raw: RawAnnouncementListResult): AnnouncementListResult {
+  return {
+    items: Array.isArray(raw.items) ? raw.items.map((item) => mapAnnouncementItem(item)) : [],
+    latestId: String(raw.latest_id || raw.latestId || ""),
+    lastSeenId: String(raw.last_seen_id || raw.lastSeenId || ""),
+    hasUnseen: Boolean(raw.has_unseen ?? raw.hasUnseen),
+  };
+}
+
+function mapAnnouncementInput(input: AnnouncementItem): Record<string, unknown> {
+  return {
+    id: input.id,
+    published_at: input.publishedAt,
+    publisher: input.publisher,
+    title: input.title,
+    category: input.category,
+    severity: input.severity,
+    summary: input.summary,
+    sections: input.sections.map((section) => ({
+      label: section.label,
+      items: [...section.items],
+    })),
+  };
+}
+
 function mapUserBotPermissions(raw: { account_id?: string; allowed_bots?: string[] }): UserBotPermissions {
   return {
     accountId: String(raw.account_id || ""),
@@ -2537,6 +2625,40 @@ export class RealWebBotClient implements WebBotClient {
     } finally {
       this.token = "";
     }
+  }
+
+  async listAnnouncements(): Promise<AnnouncementListResult> {
+    const data = await this.requestJson<RawAnnouncementListResult>("/api/announcements");
+    return mapAnnouncementList(data);
+  }
+
+  async markAnnouncementsSeen(latestId: string): Promise<AnnouncementListResult> {
+    const data = await this.requestJson<RawAnnouncementListResult>("/api/announcements/seen", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ latest_id: latestId }),
+    });
+    return mapAnnouncementList(data);
+  }
+
+  async upsertAnnouncement(input: AnnouncementItem): Promise<AnnouncementItem> {
+    const data = await this.requestJson<RawAnnouncementItem>("/api/admin/announcements", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(mapAnnouncementInput(input)),
+    });
+    return mapAnnouncementItem(data);
+  }
+
+  async deleteAnnouncement(id: string): Promise<{ deleted: boolean }> {
+    const data = await this.requestJson<{ deleted?: boolean }>(`/api/admin/announcements/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    return { deleted: Boolean(data.deleted) };
   }
 
   async listRegisterCodes(): Promise<RegisterCodeItem[]> {

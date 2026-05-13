@@ -25,6 +25,7 @@ type Props = {
   activeScreen: ReactNode;
   viewMode: ViewMode;
   hasUnreadOtherBots?: boolean;
+  announcementAction?: ReactNode;
   onOpenBotSwitcher: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onTabChange: (tab: AppTab) => void;
@@ -38,6 +39,7 @@ export function MobileShell({
   activeScreen,
   viewMode,
   hasUnreadOtherBots = false,
+  announcementAction,
   onOpenBotSwitcher,
   onViewModeChange,
   onTabChange,
@@ -76,26 +78,29 @@ export function MobileShell({
             <Menu className="w-5 h-5" />
             <span className="font-semibold">{currentBot}</span>
           </button>
-          <div className="inline-flex rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
-            {([
-              ["auto", "自动"],
-              ["mobile", "竖屏版"],
-              ["desktop", "横屏版"],
-            ] as const).map(([nextMode, label]) => (
-              <button
-                key={nextMode}
-                type="button"
-                onClick={() => onViewModeChange(nextMode)}
-                className={clsx(
-                  "rounded-lg px-2 py-1 text-xs transition-colors",
-                  viewMode === nextMode
-                    ? "bg-[var(--accent)] text-white"
-                    : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
-                )}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            {announcementAction}
+            <div className="inline-flex rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
+              {([
+                ["auto", "自动"],
+                ["mobile", "竖屏版"],
+                ["desktop", "横屏版"],
+              ] as const).map(([nextMode, label]) => (
+                <button
+                  key={nextMode}
+                  type="button"
+                  onClick={() => onViewModeChange(nextMode)}
+                  className={clsx(
+                    "rounded-lg px-2 py-1 text-xs transition-colors",
+                    viewMode === nextMode
+                      ? "bg-[var(--accent)] text-white"
+                      : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
       ) : null}

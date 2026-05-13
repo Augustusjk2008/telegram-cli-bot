@@ -84,6 +84,44 @@ class BotPermissionStore:
         items.sort(key=lambda item: item["account_id"])
         return {"items": items}
 
+    def list_user_permission_summaries(self) -> dict[str, Any]:
+        with self._lock:
+            data = self._read()
+            bots = self._bots(data)
+            owned_by_account: dict[str, list[str]] = {}
+            for alias, item in bots.items():
+                if not isinstance(item, dict):
+                    continue
+                owner = str(item.get("owner_account_id") or "").strip()
+                normalized_alias = self._normalize_alias(alias)
+                if not owner or not normalized_alias:
+                    continue
+                owned_by_account.setdefault(owner, []).append(normalized_alias)
+
+            users = self._users(data)
+            account_ids = sorted(set(users) | set(owned_by_account))
+            items = []
+            for account_id in account_ids:
+                raw_item = users.get(account_id)
+                item = raw_item if isinstance(raw_item, dict) else {}
+                owned_bots = sorted(set(owned_by_account.get(account_id, [])))
+                items.append(
+                    {
+                        "account_id": account_id,
+                        "allowed_bots": sorted(
+                            normalized
+                            for alias in item.get("allowed_bots", [])
+                            if (normalized := self._normalize_alias(alias))
+                        ),
+                        "owned_bots": owned_bots,
+                        "owned_bot_count": len(owned_bots),
+                        "bot_create_limit": self.MEMBER_BOT_LIMIT,
+                        "updated_at": str(item.get("updated_at") or ""),
+                    }
+                )
+        items.sort(key=lambda item: item["account_id"])
+        return {"items": items}
+
     def set_bot_owner(self, alias: str, account_id: str, *, grant_owner: bool = True) -> dict[str, Any]:
         normalized_alias = self._normalize_alias(alias)
         account_key = str(account_id or "").strip()

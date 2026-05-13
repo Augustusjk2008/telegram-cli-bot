@@ -44,6 +44,32 @@ export type RegisterCodeCreateResult = RegisterCodeItem & {
   code: string;
 };
 
+export type AnnouncementSeverity = "info" | "success" | "warning" | "danger";
+export type AnnouncementCategory = "release" | "feature" | "fix" | "maintenance" | "notice";
+
+export type AnnouncementSection = {
+  label: string;
+  items: string[];
+};
+
+export type AnnouncementItem = {
+  id: string;
+  publishedAt: string;
+  publisher: string;
+  title: string;
+  category: AnnouncementCategory;
+  severity: AnnouncementSeverity;
+  summary: string;
+  sections: AnnouncementSection[];
+};
+
+export type AnnouncementListResult = {
+  items: AnnouncementItem[];
+  latestId: string;
+  lastSeenId: string;
+  hasUnseen: boolean;
+};
+
 export type AdminUser = {
   accountId: string;
   username: string;

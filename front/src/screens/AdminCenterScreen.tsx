@@ -3,6 +3,7 @@ import { ArrowLeft, RefreshCw, Save } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
+  AnnouncementItem,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   BotSummary,
@@ -15,9 +16,26 @@ import type { WebBotClient } from "../services/webBotClient";
 type Props = {
   client?: WebBotClient;
   onClose: () => void;
+  initialBots?: BotSummary[];
+  onBotsChange?: (bots: BotSummary[]) => void;
 };
 
-type AdminCenterTab = "users" | "invites" | "updates";
+type AdminCenterTab = "users" | "invites" | "updates" | "announcements";
+
+const DEFAULT_ANNOUNCEMENT_DRAFT: AnnouncementItem = {
+  id: "ann-2026-05-13-admin-center",
+  publishedAt: "2026-05-13T09:00:00+08:00",
+  publisher: "CLI Bridge",
+  title: "管理中心更新",
+  category: "feature",
+  severity: "info",
+  summary: "管理中心权限、插件和更新能力已合并。",
+  sections: [
+    { label: "新增", items: ["新增权限管理入口"] },
+    { label: "影响", items: ["所有用户登录后会看到新公告"] },
+    { label: "操作", items: ["点关闭后不再重复弹出"] },
+  ],
+};
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -33,13 +51,25 @@ function formatPackageKind(kind?: string) {
 export function AdminCenterScreen({
   client = new MockWebBotClient(),
   onClose,
+  initialBots = [],
+  onBotsChange,
 }: Props) {
   const [activeTab, setActiveTab] = useState<AdminCenterTab>("users");
   const [users, setUsers] = useState<AdminUser[]>([]);
-  const [bots, setBots] = useState<BotSummary[]>([]);
+  const [bots, setBots] = useState<BotSummary[]>(initialBots);
   const [registerCodes, setRegisterCodes] = useState<RegisterCodeItem[]>([]);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [offlinePackages, setOfflinePackages] = useState<OfflineUpdatePackageList | null>(null);
+  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
+  const [announcementDraft, setAnnouncementDraft] = useState<AnnouncementItem>(DEFAULT_ANNOUNCEMENT_DRAFT);
+  const [announcementSaving, setAnnouncementSaving] = useState(false);
+  const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
+  const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
+    users: false,
+    invites: false,
+    updates: false,
+    announcements: false,
+  });
   const [manualPackagePath, setManualPackagePath] = useState("");
   const [registerCodeDraftUses, setRegisterCodeDraftUses] = useState("1");
   const [createdRegisterCode, setCreatedRegisterCode] = useState<RegisterCodeCreateResult | null>(null);
@@ -54,7 +84,7 @@ export function AdminCenterScreen({
 
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
 
-  async function loadAll(nextNotice = "", refresh = false) {
+  async function loadUsers(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
     } else {
@@ -65,50 +95,130 @@ export function AdminCenterScreen({
       setNotice("");
     }
     try {
-      const [usersData, botsData, codesData, updateData, packageData] = await Promise.all([
-        client.listAdminUsers(),
-        client.listBots(),
-        client.listRegisterCodes(),
-        client.getUpdateStatus(),
-        client.listOfflineUpdatePackages(),
+      const usersPromise = client.listAdminUsers();
+      const botsPromise = bots.length > 0 ? Promise.resolve(bots) : client.listBots();
+      const [usersData, botsData] = await Promise.all([
+        usersPromise,
+        botsPromise,
       ]);
       setUsers(usersData);
       setBots(botsData);
-      setRegisterCodes(codesData);
-      setUpdateStatus(updateData);
-      setOfflinePackages(packageData);
+      onBotsChange?.(botsData);
+      setLoadedTabs((prev) => ({ ...prev, users: true }));
       if (nextNotice) {
         setNotice(nextNotice);
       }
     } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载管理中心失败"));
+      setError(getErrorMessage(nextError, "加载用户权限失败"));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }
 
+  async function loadInvites(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const codesData = await client.listRegisterCodes();
+      setRegisterCodes(codesData);
+      setLoadedTabs((prev) => ({ ...prev, invites: true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载邀请码失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  async function loadUpdates(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const [updateData, packageData] = await Promise.all([
+        client.getUpdateStatus(),
+        client.listOfflineUpdatePackages(),
+      ]);
+      setUpdateStatus(updateData);
+      setOfflinePackages(packageData);
+      setLoadedTabs((prev) => ({ ...prev, updates: true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载升级信息失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  async function loadAnnouncements(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const data = await client.listAnnouncements();
+      setAnnouncements(data.items);
+      setLoadedTabs((prev) => ({ ...prev, announcements: true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载公告失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  async function refreshActiveTab(nextNotice = "", refresh = false) {
+    if (activeTab === "users") {
+      await loadUsers(nextNotice, refresh);
+    } else if (activeTab === "invites") {
+      await loadInvites(nextNotice, refresh);
+    } else if (activeTab === "updates") {
+      await loadUpdates(nextNotice, refresh);
+    } else {
+      await loadAnnouncements(nextNotice, refresh);
+    }
+  }
+
   useEffect(() => {
-    void loadAll();
-  }, [client]);
+    if (loadedTabs[activeTab]) {
+      return;
+    }
+    void refreshActiveTab();
+  }, [activeTab, client, loadedTabs]);
 
   const appendUpdateLog = (message?: string) => {
     if (!message) {
       return;
     }
     setUpdateLogLines((prev) => [...prev, message]);
-  };
-
-  const reloadRegisterCodes = async (nextNotice = "") => {
-    try {
-      const items = await client.listRegisterCodes();
-      setRegisterCodes(items);
-      if (nextNotice) {
-        setNotice(nextNotice);
-      }
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载邀请码失败"));
-    }
   };
 
   const updateUserBotGrant = async (user: AdminUser, alias: string, enabled: boolean) => {
@@ -157,7 +267,7 @@ export function AdminCenterScreen({
       const created = await client.createRegisterCode(maxUses);
       setCreatedRegisterCode(created);
       setRegisterCodeDraftUses("1");
-      await reloadRegisterCodes("邀请码已生成");
+      await loadInvites("邀请码已生成", true);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "生成邀请码失败"));
     } finally {
@@ -175,7 +285,7 @@ export function AdminCenterScreen({
     setNotice("");
     try {
       await client.updateRegisterCode(codeId, input);
-      await reloadRegisterCodes(successNotice);
+      await loadInvites(successNotice, true);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "更新邀请码失败"));
     } finally {
@@ -189,7 +299,7 @@ export function AdminCenterScreen({
     setNotice("");
     try {
       await client.deleteRegisterCode(codeId);
-      await reloadRegisterCodes("邀请码已删除");
+      await loadInvites("邀请码已删除", true);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "删除邀请码失败"));
     } finally {
@@ -280,6 +390,52 @@ export function AdminCenterScreen({
     }
   };
 
+  const updateAnnouncementDraft = <K extends keyof AnnouncementItem>(key: K, value: AnnouncementItem[K]) => {
+    setAnnouncementDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateAnnouncementSection = (index: number, key: "label" | "items", value: string) => {
+    setAnnouncementDraft((prev) => ({
+      ...prev,
+      sections: prev.sections.map((section, sectionIndex) => {
+        if (sectionIndex !== index) {
+          return section;
+        }
+        return key === "label"
+          ? { ...section, label: value }
+          : { ...section, items: value.split("\n").map((item) => item.trim()).filter(Boolean) };
+      }),
+    }));
+  };
+
+  const saveAnnouncement = async () => {
+    setAnnouncementSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await client.upsertAnnouncement(announcementDraft);
+      await loadAnnouncements("公告已发布", true);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "发布公告失败"));
+    } finally {
+      setAnnouncementSaving(false);
+    }
+  };
+
+  const removeAnnouncement = async (id: string) => {
+    setAnnouncementDeletingId(id);
+    setError("");
+    setNotice("");
+    try {
+      await client.deleteAnnouncement(id);
+      await loadAnnouncements("公告已删除", true);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "删除公告失败"));
+    } finally {
+      setAnnouncementDeletingId("");
+    }
+  };
+
   return (
     <main className="min-h-[100dvh] bg-[var(--bg)]">
       <div className="mx-auto flex min-h-[100dvh] max-w-6xl flex-col p-4">
@@ -299,7 +455,7 @@ export function AdminCenterScreen({
         </header>
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          {(["users", "invites", "updates"] as AdminCenterTab[]).map((tab) => (
+          {(["users", "invites", "updates", "announcements"] as AdminCenterTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -310,12 +466,12 @@ export function AdminCenterScreen({
                 ? "rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-white"
                 : "rounded-md border border-[var(--border)] px-3 py-2 text-sm"}
             >
-              {tab === "users" ? "用户权限" : tab === "invites" ? "邀请码" : "升级"}
+              {tab === "users" ? "用户权限" : tab === "invites" ? "邀请码" : tab === "updates" ? "升级" : "公告"}
             </button>
           ))}
           <button
             type="button"
-            onClick={() => void loadAll("", true)}
+            onClick={() => void refreshActiveTab("", true)}
             disabled={loading || refreshing}
             className="ml-auto inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
           >
@@ -501,6 +657,151 @@ export function AdminCenterScreen({
                 </article>
               )) : (
                 <p className="text-sm text-[var(--muted)]">暂无邀请码</p>
+              )}
+            </section>
+          </div>
+        ) : null}
+
+        {!loading && activeTab === "announcements" ? (
+          <div className="space-y-4">
+            <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">发布公告</h2>
+                <p className="text-sm text-[var(--muted)]">发布新 id 后，用户下次登录会自动看到。</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">公告 ID</span>
+                  <input
+                    aria-label="公告 ID"
+                    value={announcementDraft.id}
+                    onChange={(event) => updateAnnouncementDraft("id", event.target.value)}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">发布时间</span>
+                  <input
+                    aria-label="公告发布时间"
+                    value={announcementDraft.publishedAt}
+                    onChange={(event) => updateAnnouncementDraft("publishedAt", event.target.value)}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">发布者</span>
+                  <input
+                    aria-label="公告发布者"
+                    value={announcementDraft.publisher}
+                    onChange={(event) => updateAnnouncementDraft("publisher", event.target.value)}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">标题</span>
+                  <input
+                    aria-label="公告标题"
+                    value={announcementDraft.title}
+                    onChange={(event) => updateAnnouncementDraft("title", event.target.value)}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">分类</span>
+                  <select
+                    aria-label="公告分类"
+                    value={announcementDraft.category}
+                    onChange={(event) => updateAnnouncementDraft("category", event.target.value as AnnouncementItem["category"])}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    {["release", "feature", "fix", "maintenance", "notice"].map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">级别</span>
+                  <select
+                    aria-label="公告级别"
+                    value={announcementDraft.severity}
+                    onChange={(event) => updateAnnouncementDraft("severity", event.target.value as AnnouncementItem["severity"])}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    {["info", "success", "warning", "danger"].map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="space-y-1">
+                <span className="text-sm text-[var(--text)]">摘要</span>
+                <textarea
+                  aria-label="公告摘要"
+                  value={announcementDraft.summary}
+                  onChange={(event) => updateAnnouncementDraft("summary", event.target.value)}
+                  rows={2}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+              </label>
+
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                {announcementDraft.sections.map((section, index) => (
+                  <div key={index} className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                    <input
+                      aria-label={`公告段落 ${index + 1} 标题`}
+                      value={section.label}
+                      onChange={(event) => updateAnnouncementSection(index, "label", event.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                    />
+                    <textarea
+                      aria-label={`公告段落 ${index + 1} 条目`}
+                      value={section.items.join("\n")}
+                      onChange={(event) => updateAnnouncementSection(index, "items", event.target.value)}
+                      rows={4}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void saveAnnouncement()}
+                disabled={announcementSaving}
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {announcementSaving ? "发布中..." : "发布公告"}
+              </button>
+            </section>
+
+            <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold text-[var(--text)]">公告列表</h2>
+                <span className="text-xs text-[var(--muted)]">共 {announcements.length} 条</span>
+              </div>
+              {announcements.length ? announcements.map((item) => (
+                <article key={item.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-medium text-[var(--text)]">{item.title}</p>
+                      <p className="break-all text-xs text-[var(--muted)]">{item.id}</p>
+                      <p className="text-sm text-[var(--muted)]">{item.summary}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void removeAnnouncement(item.id)}
+                      disabled={announcementDeletingId === item.id}
+                      className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                    >
+                      {announcementDeletingId === item.id ? "删除中..." : "删除"}
+                    </button>
+                  </div>
+                </article>
+              )) : (
+                <p className="text-sm text-[var(--muted)]">暂无公告</p>
               )}
             </section>
           </div>

@@ -99,6 +99,7 @@ type Props = {
   canViewAssistantOps?: boolean;
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
+  announcementAction?: ReactNode;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
   onUnreadResult?: (botAlias: string) => void;
@@ -135,6 +136,7 @@ export function DesktopWorkbench({
   canViewAssistantOps = false,
   viewMode = "desktop",
   hasUnreadOtherBots = false,
+  announcementAction,
   chatPaneContent,
   chatStatus: externalChatStatus,
   onUnreadResult,
@@ -837,6 +839,7 @@ export function DesktopWorkbench({
         branchName={gitBranchName}
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
+        announcementAction={announcementAction}
         sidebarVisible={!layoutState.sidebarCollapsed}
         terminalVisible={!structureOnly && !layoutState.terminalCollapsed}
         chatVisible={!layoutState.chatCollapsed}

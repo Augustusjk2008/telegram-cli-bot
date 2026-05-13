@@ -62,6 +62,22 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
 });
 
+test("desktop workbench exposes announcement action", () => {
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="desktop"
+      announcementAction={<button type="button" aria-label="公告">公告</button>}
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(screen.getByLabelText("公告")).toBeInTheDocument();
+});
+
 test("desktop command palette stays keyboard accessible with premium motion", async () => {
   const user = userEvent.setup();
 

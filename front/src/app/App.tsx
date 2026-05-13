@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
 import {
@@ -21,9 +21,11 @@ import {
 } from "./botActivity";
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { DesktopBotSwitcherPopover } from "../components/DesktopBotSwitcherPopover";
+import { AnnouncementButton } from "../components/AnnouncementButton";
+import { AnnouncementDialog } from "../components/AnnouncementDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import type { BotStatus, BotSummary, PublicHostInfo, SessionState } from "../services/types";
+import type { AnnouncementListResult, BotStatus, BotSummary, PublicHostInfo, SessionState } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -68,6 +70,12 @@ const LEGACY_TOKEN_STORAGE_KEY = "web-api-token";
 const BOT_STORAGE_KEY = "web-current-bot";
 const UNREAD_STORAGE_KEY = "web-unread-bots";
 const MAX_CACHED_CHAT_SCREENS = 3;
+const EMPTY_ANNOUNCEMENT_STATE: AnnouncementListResult = {
+  items: [],
+  latestId: "",
+  lastSeenId: "",
+  hasUnseen: false,
+};
 const TerminalScreen = lazy(() =>
   import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
 );
@@ -255,6 +263,9 @@ export function App() {
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
+  const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
+  const [announcementOpen, setAnnouncementOpen] = useState(false);
+  const announcementAutoOpenedRef = useRef(false);
   const isLoggedIn = Boolean(session?.isLoggedIn);
   const chatReadOnly = !hasCapability(session, "chat_send");
   const allowTrace = hasCapability(session, "view_chat_trace");
@@ -334,6 +345,36 @@ export function App() {
     setShowSwitcher(false);
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
+  }
+
+  async function refreshAnnouncements(nextClient = client, autoOpen = false) {
+    try {
+      const result = await nextClient.listAnnouncements();
+      setAnnouncementState(result);
+      if (autoOpen && !announcementAutoOpenedRef.current && result.hasUnseen && result.items.length > 0) {
+        announcementAutoOpenedRef.current = true;
+        setAnnouncementOpen(true);
+      }
+    } catch {
+      setAnnouncementState(EMPTY_ANNOUNCEMENT_STATE);
+    }
+  }
+
+  async function handleCloseAnnouncements(latestId: string) {
+    setAnnouncementOpen(false);
+    if (!latestId) {
+      return;
+    }
+    try {
+      const result = await client.markAnnouncementsSeen(latestId);
+      setAnnouncementState(result);
+    } catch {
+      setAnnouncementState((current) => ({
+        ...current,
+        hasUnseen: false,
+        lastSeenId: latestId,
+      }));
+    }
   }
 
   useEffect(() => {
@@ -501,6 +542,7 @@ export function App() {
         setDesktopChatStatusByBot({});
         setLoginError("");
         setIsTerminalImmersive(false);
+        void refreshAnnouncements(nextClient, true);
       })
       .catch(() => {
         if (storedToken) {
@@ -529,6 +571,7 @@ export function App() {
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
+      void refreshAnnouncements(nextClient, true);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "登录失败");
     } finally {
@@ -552,6 +595,7 @@ export function App() {
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
+      void refreshAnnouncements(nextClient, true);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "注册失败");
     } finally {
@@ -575,6 +619,7 @@ export function App() {
       setMountedChatBots(restoredAlias ? [restoredAlias] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
+      void refreshAnnouncements(nextClient, true);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "进入失败");
     } finally {
@@ -601,6 +646,9 @@ export function App() {
     setLoginError("");
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
+    setAnnouncementState(EMPTY_ANNOUNCEMENT_STATE);
+    setAnnouncementOpen(false);
+    announcementAutoOpenedRef.current = false;
   }
 
   function handleThemeChange(nextTheme: UiThemeName) {
@@ -650,6 +698,24 @@ export function App() {
     setBotActivityOverrides((prev) => updateBotAgentActivityOverrides(prev, alias, activity));
   }
 
+  const announcementButton = (
+    <AnnouncementButton
+      hasUnseen={announcementState.hasUnseen}
+      onClick={() => {
+        void refreshAnnouncements(client, false);
+        setAnnouncementOpen(true);
+      }}
+    />
+  );
+  const announcementDialog = (
+    <AnnouncementDialog
+      open={announcementOpen}
+      items={announcementState.items}
+      latestId={announcementState.latestId}
+      onClose={handleCloseAnnouncements}
+    />
+  );
+
   if (!isLoggedIn) {
     return (
       <LoginScreen
@@ -665,26 +731,39 @@ export function App() {
 
   if (showAdminCenter && canManageRegisterCodes) {
     return (
-      <AdminCenterScreen
-        client={client}
-        onClose={() => setShowAdminCenter(false)}
-      />
+      <>
+        <AdminCenterScreen
+          client={client}
+          onClose={() => setShowAdminCenter(false)}
+          initialBots={bots}
+          onBotsChange={setBots}
+        />
+        {announcementDialog}
+      </>
     );
   }
 
   if (showBotManager || !currentBot) {
     if (effectiveLayoutMode === "desktop") {
       return (
-        <DesktopBotManagerScreen
-          client={client}
-          currentAlias={currentBot}
-          onSelect={handleSelectBot}
-          onBotsChange={setBots}
-          canManage={canManageBots}
-        />
+        <>
+          <DesktopBotManagerScreen
+            client={client}
+            currentAlias={currentBot}
+            onSelect={handleSelectBot}
+            onBotsChange={setBots}
+            canManage={canManageBots}
+          />
+          {announcementDialog}
+        </>
       );
     }
-    return <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} canManage={canManageBots} />;
+    return (
+      <>
+        <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} canManage={canManageBots} />
+        {announcementDialog}
+      </>
+    );
   }
 
   const hideOuterChrome = (currentTab === "chat" && isChatImmersive)
@@ -844,7 +923,6 @@ export function App() {
       />
     )
   ) : null;
-
   if (effectiveLayoutMode === "desktop") {
     return (
       <>
@@ -875,6 +953,7 @@ export function App() {
             canViewAssistantOps={canViewAssistantOps}
             viewMode={viewMode}
             hasUnreadOtherBots={hasUnreadOtherBots}
+            announcementAction={announcementButton}
             chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
             chatPaneContent={({ requestPreview }) => (
               <div className="h-full">
@@ -930,6 +1009,7 @@ export function App() {
           />
         </PersistentTerminalProvider>
         {switcher}
+        {announcementDialog}
       </>
     );
   }
@@ -945,6 +1025,7 @@ export function App() {
           activeScreen={activeScreen}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
+          announcementAction={announcementButton}
           onOpenBotSwitcher={() => {
             void openBotSwitcher();
           }}
@@ -961,6 +1042,7 @@ export function App() {
         />
       </PersistentTerminalProvider>
       {switcher}
+      {announcementDialog}
     </>
   );
 }

@@ -1,5 +1,6 @@
 import { clsx } from "clsx";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import type { ReactNode } from "react";
 import {
   PanelBottom,
   PanelBottomDashed,
@@ -19,6 +20,7 @@ type Props = {
   viewMode: ViewMode;
   branchName?: string;
   hasUnreadOtherBots?: boolean;
+  announcementAction?: ReactNode;
   sidebarVisible: boolean;
   terminalVisible: boolean;
   chatVisible: boolean;
@@ -36,6 +38,7 @@ export function WorkbenchHeader({
   viewMode,
   branchName = "",
   hasUnreadOtherBots = false,
+  announcementAction,
   sidebarVisible,
   terminalVisible,
   chatVisible,
@@ -118,6 +121,9 @@ export function WorkbenchHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {announcementAction ? (
+          <div className="flex items-center">{announcementAction}</div>
+        ) : null}
         {layoutControls.length > 0 ? (
           <div
             aria-label="布局开关"
