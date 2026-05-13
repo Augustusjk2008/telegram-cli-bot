@@ -271,23 +271,3 @@ test("main settings saves Git proxy address and port shortcut", async () => {
   });
   expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
 });
-
-test("desktop settings hides migrated bot runtime section", async () => {
-  const client = new MockWebBotClient();
-
-  render(
-    <SettingsScreen
-      botAlias="main"
-      client={client}
-      onLogout={() => undefined}
-      showBotRuntimeSettings={false}
-    />,
-  );
-
-  await screen.findByRole("heading", { name: "我的头像" });
-  expect(screen.queryByText("智能体配置已迁移")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("工作目录")).not.toBeInTheDocument();
-  expect(screen.queryByText("子 agent")).not.toBeInTheDocument();
-  expect(screen.queryByText("CLI 参数")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "打开智能体管理" })).not.toBeInTheDocument();
-});

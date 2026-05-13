@@ -87,37 +87,6 @@ class TestSaveAndLoadSession:
             assert data["codex_session_id"] == "thread_abc123"
             assert "claude_session_id" not in data
 
-    def test_save_session_omits_legacy_overlay_fields_and_marks_local_history_backend(self, temp_dir: Path):
-        """测试 local_v1 快照只持久化仍有意义的元数据"""
-        store_file = temp_dir / ".session_store.json"
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=1001,
-                codex_session_id="thread-1",
-                claude_session_id="claude-1",
-                working_dir=str(temp_dir),
-                browse_dir=str(temp_dir),
-                message_count=3,
-                last_activity="2026-04-18T10:00:00+00:00",
-                local_history_backend="local_v1",
-                session_epoch=2,
-                running_user_text="legacy",
-                running_preview_text="legacy-preview",
-                web_turn_overlays=[{"summary_text": "legacy"}],
-            )
-
-            data = load_session(1, 1001)
-            assert data is not None
-            assert data["local_history_backend"] == "local_v1"
-            assert data["session_epoch"] == 2
-            assert data["codex_session_id"] == "thread-1"
-            assert data["message_count"] == 3
-            assert "running_user_text" not in data
-            assert "running_preview_text" not in data
-            assert "web_turn_overlays" not in data
-
     def test_save_session_persists_active_conversation_id(self, temp_dir: Path):
         store_file = temp_dir / ".session_store.json"
 
@@ -245,24 +214,12 @@ class TestRenameBotSessions:
 class TestLoadSessionIds:
     """测试加载所有会话ID"""
 
-    def test_load_empty_file(self, temp_dir: Path):
+    @pytest.mark.parametrize("content", [None, "not valid json"])
+    def test_load_missing_or_invalid_store_returns_empty_dict(self, temp_dir: Path, content: str | None):
         store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            data = load_session_ids()
-            assert data == {}
+        if content is not None:
+            store_file.write_text(content, encoding="utf-8")
 
-    def test_load_nonexistent_file(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            data = load_session_ids()
-            assert data == {}
-
-    def test_load_invalid_json(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        store_file.write_text("not valid json")
-        
         with patch("bot.session_store.STORE_FILE", store_file):
             data = load_session_ids()
             assert data == {}

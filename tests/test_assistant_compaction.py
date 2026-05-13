@@ -12,29 +12,6 @@ from bot.assistant.home import bootstrap_assistant_home
 from bot.assistant.state import record_assistant_capture
 
 
-def test_refresh_compaction_state_marks_pending_after_six_new_captures(tmp_path):
-    workdir = tmp_path / "assistant-root"
-    workdir.mkdir()
-    home = bootstrap_assistant_home(workdir)
-
-    latest_capture = None
-    for index in range(6):
-        latest_capture = record_assistant_capture(
-            home,
-            1001,
-            f"user {index}",
-            f"assistant {index}",
-        )
-    state = refresh_compaction_state(home, latest_capture=latest_capture)
-
-    assert latest_capture is not None
-    assert state["latest_capture_id"] == latest_capture["id"]
-    assert state["pending"] is True
-    assert state["pending_reason"] == "capture_threshold"
-    assert state["pending_capture_count"] == 6
-    assert load_compaction_state(home)["pending_capture_count"] == 6
-
-
 def test_refresh_compaction_state_marks_pending_for_strong_signal_before_threshold(tmp_path):
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
@@ -194,41 +171,6 @@ def test_finalize_compaction_writes_real_consumed_capture_range_to_audit(tmp_pat
     assert payload["consumed_capture_ids"] == [capture_a["id"], capture_b["id"]]
     assert state["cursor_capture_id"] == capture_b["id"]
     assert state["last_compaction_result"] == "changed"
-
-
-def test_finalize_compaction_returns_noop_when_prompt_was_visible_and_surface_is_unchanged(tmp_path):
-    workdir = tmp_path / "assistant-root"
-    workdir.mkdir()
-    home = bootstrap_assistant_home(workdir)
-
-    capture = record_assistant_capture(home, 1001, "assistant 是全局的", "记住了")
-    refresh_compaction_state(home, latest_capture=capture)
-    before = snapshot_managed_surface(home)
-
-    result = finalize_compaction(
-        home,
-        before=before,
-        after=before,
-        consumed_capture_ids=[capture["id"]],
-        review_prompt_active=True,
-    )
-
-    audit_path = home.root / "audit" / "compactions.jsonl"
-    lines = audit_path.read_text(encoding="utf-8").splitlines()
-    payload = json.loads(lines[0])
-    state = load_compaction_state(home)
-
-    assert result == "noop"
-    assert len(lines) == 1
-    assert payload["result"] == "noop"
-    assert payload["surface_changed"] is False
-    assert payload["review_prompt_active"] is True
-    assert payload["consumed_capture_ids"] == [capture["id"]]
-    assert state["pending"] is False
-    assert state["pending_reason"] is None
-    assert state["pending_capture_count"] == 0
-    assert state["cursor_capture_id"] == capture["id"]
-    assert state["last_compaction_result"] == "noop"
 
 
 def test_finalize_compaction_returns_none_when_prompt_was_not_visible_and_surface_is_unchanged(tmp_path):

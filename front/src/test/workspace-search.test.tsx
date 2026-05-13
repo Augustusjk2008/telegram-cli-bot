@@ -97,7 +97,7 @@ test("outline pane follows active editor file", async () => {
       { name: "run", kind: "function", line: 2 },
     ],
   });
-  vi.spyOn(client, "readFileFull").mockResolvedValue({
+  const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue({
     content: "class App:\n    def run(self):\n        pass\n",
     mode: "cat",
     fileSizeBytes: 42,
@@ -110,6 +110,8 @@ test("outline pane follows active editor file", async () => {
   fireEvent.keyDown(window, { key: "p", ctrlKey: true });
   await user.type(await screen.findByLabelText("快速打开文件"), "app");
   await user.click(await screen.findByRole("button", { name: "打开 src/app.py" }));
+  await waitFor(() => expect(readFileFull).toHaveBeenCalledWith("main", "src/app.py"));
+  expect(await screen.findByRole("tab", { name: "app.py" })).toBeInTheDocument();
   await user.click(await screen.findByRole("button", { name: "大纲" }));
 
   expect(await screen.findByRole("button", { name: "run function 第 2 行" })).toBeInTheDocument();

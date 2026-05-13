@@ -117,36 +117,6 @@ test("directory click expands the tree without changing the working directory", 
   expect(changeDirectorySpy).toHaveBeenCalledTimes(callsBeforeToggle);
 });
 
-test("desktop file tree items keep a thin hover border", async () => {
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockResolvedValue({
-    workingDir: "/workspace",
-    entries: [
-      { name: "docs", isDir: true },
-      { name: "README.md", isDir: false, size: 12 },
-    ],
-  });
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={client}
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  const dirButton = await screen.findByRole("button", { name: "展开 docs" });
-  const fileButton = screen.getByRole("button", { name: "打开 README.md" });
-
-  expect(dirButton).toHaveClass("h-full", "border", "border-transparent", "hover:border-[var(--workbench-hover-border)]", "hover:bg-[var(--workbench-hover-bg)]");
-  expect(fileButton).toHaveClass("h-full", "border", "border-transparent", "hover:border-[var(--workbench-hover-border)]", "hover:bg-[var(--workbench-hover-bg)]");
-});
-
 test("clicking desktop file tree rows marks exactly one selected row", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

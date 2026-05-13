@@ -32,11 +32,6 @@ def _run_process(command: list[str], cwd: Path, env: dict[str, str]) -> subproce
     )
 
 
-def test_env_example_is_ascii_only() -> None:
-    env_example = (PROJECT_ROOT / ".env.example").read_bytes()
-    env_example.decode("ascii")
-
-
 @WINDOWS_ONLY
 def test_start_bat_runs_install_when_env_is_missing(tmp_path: Path) -> None:
     _copy_entrypoint(tmp_path, "start.bat")

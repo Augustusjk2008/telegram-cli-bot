@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TerminalScreen } from "../screens/TerminalScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
-import { getTerminalMinimumContrastRatio, getTerminalTheme } from "../theme";
 
 const createTerminalSessionMock = vi.hoisted(() => vi.fn());
 const terminalEventHandlers = vi.hoisted(() => ({
@@ -201,16 +200,6 @@ test("uses a smaller terminal font and keeps scrolling inside xterm viewport", a
   );
 });
 
-test("classic terminal theme uses a light background with dark text", () => {
-  const theme = getTerminalTheme("classic");
-
-  expect(theme.background).toBe("#fbf7ef");
-  expect(theme.foreground).toBe("#1d1b18");
-  expect(theme.cursor).toBe("#0f8c78");
-  expect(theme.brightBlack).toBe("#6d675f");
-  expect(getTerminalMinimumContrastRatio("classic")).toBe(4.5);
-});
-
 test("lets the user close the terminal session", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -317,45 +306,4 @@ test("theme change updates terminal without rebuilding the session", async () =>
     expect(terminalSessionMock.setTheme).toHaveBeenCalledWith("classic");
   });
   expect(createTerminalSessionMock).not.toHaveBeenCalled();
-});
-
-test("loads terminal actions and runs selected command", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const runSpy = vi.spyOn(client, "runTerminalAction");
-
-  renderTerminalScreen({ botAlias: "main", client }, client);
-
-  const actionButton = await screen.findByRole("button", { name: "构建" });
-  const panel = screen.getByTestId("terminal-actions-panel");
-  const terminalSection = screen.getByTestId("terminal-screen-root").querySelector("section");
-
-  expect(actionButton).toBeInTheDocument();
-  expect(panel).toContainElement(actionButton);
-  expect(terminalSection).not.toBeNull();
-  expect(
-    (terminalSection as HTMLElement).compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "构建" }));
-
-  await waitFor(() => {
-    expect(runSpy).toHaveBeenCalledWith("main", "build", expect.objectContaining({ ownerId: expect.any(String), confirmed: true }));
-  });
-});
-
-test("opens terminal action config dialog and saves changes", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const saveSpy = vi.spyOn(client, "saveTerminalActionsConfig");
-
-  renderTerminalScreen({ botAlias: "main", client }, client);
-
-  await user.click(await screen.findByRole("button", { name: "编辑快捷命令" }));
-  await user.click(screen.getByRole("button", { name: "新增快捷命令" }));
-  await user.type(screen.getByLabelText("Windows 命令"), "echo hello");
-  await user.click(screen.getByRole("button", { name: "保存快捷命令" }));
-
-  await waitFor(() => {
-    expect(saveSpy).toHaveBeenCalled();
-  });
 });

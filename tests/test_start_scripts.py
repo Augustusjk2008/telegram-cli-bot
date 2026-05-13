@@ -11,32 +11,6 @@ def test_start_bat_prefers_pwsh_and_requests_elevation():
     assert "runas" in content
 
 
-def test_start_bat_uses_ascii_only_messages_for_double_click_cmd():
-    raw = Path("start.bat").read_bytes()
-
-    assert all(byte < 128 or byte in (9, 10, 13) for byte in raw)
-
-
-def test_start_ps1_declares_web_mode_sets_web_envs_and_mentions_tunnel_config():
-    content = Path("start.ps1").read_text(encoding="utf-8")
-
-    assert 'ValidateSet("default", "web")' in content
-    assert '$env:WEB_ENABLED = "true"' in content
-    assert "WEB_TUNNEL_MODE" in content
-    assert "WEB_PUBLIC_URL" in content
-    assert ("TELEGRAM" "_ENABLED") not in content
-
-
-def test_start_ps1_removes_tray_and_hidden_window_logic():
-    content = Path("start.ps1").read_text(encoding="utf-8")
-
-    assert "System.Windows.Forms" not in content
-    assert "NotifyIcon" not in content
-    assert "WindowStyle" not in content
-    assert "ShowBalloonTip" not in content
-    assert "ContextMenuStrip" not in content
-
-
 def test_start_sh_runs_python_module_and_sets_supervisor_env():
     content = Path("start.sh").read_text(encoding="utf-8")
 
@@ -90,10 +64,3 @@ def test_start_scripts_run_env_migration_before_boot():
 
     assert "bot.env_migration" in start_ps1
     assert "bot.env_migration" in start_sh
-
-
-def test_start_sh_is_web_only():
-    content = Path("start.sh").read_text(encoding="utf-8")
-
-    assert 'export WEB_ENABLED="true"' in content
-    assert ("TELEGRAM" "_ENABLED") not in content

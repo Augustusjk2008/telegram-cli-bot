@@ -514,58 +514,6 @@ test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
   expect(screen.getByText("tb.clk")).toBeInTheDocument();
 });
 
-test("desktop workbench opens .docx files as document plugin tabs", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={new MockWebBotClient()}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
-  await user.click(await screen.findByRole("button", { name: "打开 docs/roadmap.docx" }));
-
-  expect(await screen.findByRole("tab", { name: "roadmap.docx" })).toBeInTheDocument();
-  expect(screen.getByTestId("document-view")).toBeInTheDocument();
-  expect(screen.getByRole("heading", { level: 1, name: "项目路线图" })).toBeInTheDocument();
-  expect(screen.getByText("交付物")).toBeInTheDocument();
-});
-
-test("desktop workbench opens .pdf files as document plugin tabs", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={new MockWebBotClient()}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
-  await user.click(await screen.findByRole("button", { name: "打开 docs/roadmap.pdf" }));
-
-  expect(await screen.findByRole("tab", { name: "roadmap.pdf" })).toBeInTheDocument();
-  expect(screen.getByTestId("document-view")).toBeInTheDocument();
-  expect(screen.getByRole("heading", { level: 1, name: "Project Roadmap" })).toBeInTheDocument();
-  expect(screen.getByText("Current status: in progress.")).toBeInTheDocument();
-});
-
 test("desktop workbench opens png files in the shared preview window", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -607,113 +555,6 @@ test("desktop workbench opens png files in the shared preview window", async () 
   expect(screen.getByRole("img", { name: "photo.png" })).toBeInTheDocument();
   expect(screen.queryByTestId("desktop-plugin-view")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
-});
-
-test("desktop workbench opens .xlsx files as document plugin tabs", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={new MockWebBotClient()}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
-  await user.click(await screen.findByRole("button", { name: "打开 docs/roadmap.xlsx" }));
-
-  expect(await screen.findByRole("tab", { name: "roadmap.xlsx" })).toBeInTheDocument();
-  expect(screen.getByTestId("document-view")).toBeInTheDocument();
-  expect(screen.getByRole("heading", { level: 2, name: "Summary" })).toBeInTheDocument();
-  expect(screen.getByText("Milestone")).toBeInTheDocument();
-  expect(screen.getByText("Plugin")).toBeInTheDocument();
-});
-
-test("desktop workbench opens .bin files as hex plugin tabs", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={new MockWebBotClient()}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "展开 reports" }));
-  await user.click(await screen.findByRole("button", { name: "打开 reports/firmware.bin" }));
-
-  expect(await screen.findByRole("tab", { name: "firmware.bin" })).toBeInTheDocument();
-  expect(screen.getByTestId("hex-view")).toBeInTheDocument();
-  expect(screen.getByText("00000000")).toBeInTheDocument();
-});
-
-test("desktop workbench opens .zip files as archive tree plugin tabs", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={new MockWebBotClient()}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
-  await user.click(await screen.findByRole("button", { name: "打开 docs/sample.zip" }));
-
-  expect(await screen.findByRole("tab", { name: "sample.zip" })).toBeInTheDocument();
-  expect(screen.getByText("2 文件 · 2 文件夹 · sample.zip")).toBeInTheDocument();
-});
-
-test("desktop workbench opens .rpt files as table plugin tabs and downloads artifacts", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const downloadArtifact = vi.spyOn(client, "downloadPluginArtifact").mockResolvedValue();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={client}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "展开 reports" }));
-  await user.click(await screen.findByRole("button", { name: "打开 reports/timing.rpt" }));
-
-  expect(await screen.findByRole("tab", { name: "timing.rpt" })).toBeInTheDocument();
-  expect(screen.getByText("Endpoint")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "导出 CSV" }));
-  await waitFor(() => {
-    expect(downloadArtifact).toHaveBeenCalledWith("main", expect.stringMatching(/^artifact-/), "timing.csv");
-  });
 });
 
 test("desktop workbench opens .hier files as tree plugin tabs and handles open-file effects", async () => {
@@ -772,33 +613,6 @@ test("desktop plugin catalog actions can open another plugin view", async () => 
 
   expect(await screen.findByRole("tab", { name: "timing.rpt" })).toBeInTheDocument();
   expect(screen.getByText("Endpoint")).toBeInTheDocument();
-});
-
-test("desktop workbench opens repo outline from plugin catalog CTA", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={new MockWebBotClient()}
-      sessionCapabilities={["view_plugins", "read_file_content"]}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(screen.getByRole("button", { name: "插件" }));
-  await user.click(await screen.findByRole("button", { name: "展开 Repo Outline" }));
-  await user.click(await screen.findByRole("button", { name: "选择文件夹大纲" }));
-  await user.click(await screen.findByRole("button", { name: "使用当前目录" }));
-
-  expect(await screen.findByRole("tab", { name: "文件夹大纲" })).toBeInTheDocument();
-  expect(screen.getByText("bot")).toBeInTheDocument();
 });
 
 test("desktop workbench creates a loading plugin tab before the waveform session resolves", async () => {

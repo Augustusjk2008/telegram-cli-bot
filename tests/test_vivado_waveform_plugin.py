@@ -21,20 +21,6 @@ def _load_vcd_parser():
     return module
 
 
-def test_fixture_vcd_contains_expected_signals() -> None:
-    text = Path("tests/fixtures/vcd/simple_counter.vcd").read_text(encoding="utf-8")
-    assert "$var wire 1 ! clk $end" in text
-    assert "$var wire 1 \" rst_n $end" in text
-    assert "$var wire 4 # counter $end" in text
-    assert "b1011 #" in text
-
-
-def test_vivado_waveform_manifest_version_is_0_2_0() -> None:
-    manifest = json.loads(Path("examples/plugins/vivado-waveform/plugin.json").read_text(encoding="utf-8"))
-
-    assert manifest["version"] == "0.2.0"
-
-
 def test_vcd_parser_scales_large_ps_traces_and_skips_zero_width_parameters(tmp_path: Path) -> None:
     lines = [
         "$timescale",

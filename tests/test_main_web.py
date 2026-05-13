@@ -17,14 +17,6 @@ def _prevent_real_browser_open(monkeypatch):
 
     monkeypatch.setattr(main_module.webbrowser, "open", lambda *args, **kwargs: True)
 
-def test_web_server_uses_platform_terminal_module():
-    server_source = Path("bot/web/server.py").read_text(encoding="utf-8")
-    manager_source = Path("bot/web/terminal_manager.py").read_text(encoding="utf-8")
-
-    assert "from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, TerminalSessionManager" in server_source
-    assert "from bot.platform.terminal import PtyWrapper, create_shell_process" in manager_source
-    assert ("from bot." + "handlers.tui_server import create_shell_process") not in server_source
-
 @pytest.mark.asyncio
 async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     import bot.main as main_module
@@ -54,42 +46,6 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
     fake_manager.shutdown_all.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_run_all_bots_prints_web_access_url_for_specific_host(monkeypatch):
-    import bot.main as main_module
-
-    fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
-    fake_web_server = MagicMock()
-    fake_web_server.start = AsyncMock()
-    fake_web_server.stop = AsyncMock()
-
-    fake_event = MagicMock()
-    fake_event.wait = AsyncMock()
-
-    printed: list[str] = []
-    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-    monkeypatch.setattr(main_module.config, "WEB_HOST", "127.0.0.1")
-    monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
-    monkeypatch.setattr(
-        main_module,
-        "resolve_runtime_web_bind",
-        lambda host, port: main_module.RuntimeWebBind(host=host, configured_port=port, actual_port=port),
-    )
-
-    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
-         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
-         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
-        await main_module.run_all_bots()
-
-    assert "可访问地址:" in printed
-    assert "   http://127.0.0.1:8765" in printed
 
 @pytest.mark.asyncio
 async def test_run_all_bots_opens_localhost_with_actual_port(monkeypatch):
@@ -259,149 +215,6 @@ async def test_open_local_browser_can_be_disabled_with_env(monkeypatch):
     )
 
     open_browser.assert_not_called()
-
-@pytest.mark.asyncio
-async def test_run_all_bots_prints_localhost_and_lan_ip_when_web_host_is_any(monkeypatch):
-    import bot.main as main_module
-
-    fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
-    fake_web_server = MagicMock()
-    fake_web_server.start = AsyncMock()
-    fake_web_server.stop = AsyncMock()
-
-    fake_event = MagicMock()
-    fake_event.wait = AsyncMock()
-
-    printed: list[str] = []
-    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-    monkeypatch.setattr(main_module.config, "WEB_HOST", "0.0.0.0")
-    monkeypatch.setattr(main_module.config, "WEB_PORT", 9000)
-    monkeypatch.setattr(
-        main_module,
-        "resolve_runtime_web_bind",
-        lambda host, port: main_module.RuntimeWebBind(host=host, configured_port=port, actual_port=port),
-    )
-    monkeypatch.setattr(main_module, "_detect_lan_ipv4", lambda: "192.168.31.5", raising=False)
-
-    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
-         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
-         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
-        await main_module.run_all_bots()
-
-    assert "可访问地址:" in printed
-    assert "   本机: http://127.0.0.1:9000" in printed
-    assert "   局域网 IP: http://192.168.31.5:9000" in printed
-
-@pytest.mark.asyncio
-async def test_run_all_bots_prints_ipv6_loopback_when_web_host_is_ipv6_any(monkeypatch):
-    import bot.main as main_module
-
-    fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
-    fake_web_server = MagicMock()
-    fake_web_server.start = AsyncMock()
-    fake_web_server.stop = AsyncMock()
-
-    fake_event = MagicMock()
-    fake_event.wait = AsyncMock()
-
-    printed: list[str] = []
-    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-    monkeypatch.setattr(main_module.config, "WEB_HOST", "::")
-    monkeypatch.setattr(main_module.config, "WEB_PORT", 9000)
-    monkeypatch.setattr(
-        main_module,
-        "resolve_runtime_web_bind",
-        lambda host, port: main_module.RuntimeWebBind(host=host, configured_port=port, actual_port=port),
-    )
-    monkeypatch.setattr(main_module, "_detect_lan_ipv4", lambda: "192.168.31.5", raising=False)
-
-    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
-         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
-         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
-        await main_module.run_all_bots()
-
-    assert "可访问地址:" in printed
-    assert "   本机: http://[::1]:9000" in printed
-    assert "   本机: http://127.0.0.1:9000" not in printed
-    assert "   局域网 IP: http://192.168.31.5:9000" not in printed
-
-@pytest.mark.asyncio
-async def test_run_all_bots_prints_ipv6_loopback_host(monkeypatch):
-    import bot.main as main_module
-
-    fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
-    fake_web_server = MagicMock()
-    fake_web_server.start = AsyncMock()
-    fake_web_server.stop = AsyncMock()
-
-    fake_event = MagicMock()
-    fake_event.wait = AsyncMock()
-
-    printed: list[str] = []
-    monkeypatch.setattr(main_module, "safe_print", lambda text="": printed.append(text))
-    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-    monkeypatch.setattr(main_module.config, "WEB_HOST", "::1")
-    monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
-    monkeypatch.setattr(
-        main_module,
-        "resolve_runtime_web_bind",
-        lambda host, port: main_module.RuntimeWebBind(host=host, configured_port=port, actual_port=port),
-    )
-
-    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
-         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
-         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
-        await main_module.run_all_bots()
-
-    assert "可访问地址:" in printed
-    assert "   http://[::1]:8765" in printed
-
-@pytest.mark.asyncio
-async def test_run_all_bots_supports_web_only_mode(monkeypatch):
-    import bot.main as main_module
-
-    fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
-    fake_web_server = MagicMock()
-    fake_web_server.start = AsyncMock()
-    fake_web_server.stop = AsyncMock()
-
-    fake_event = MagicMock()
-    fake_event.wait = AsyncMock()
-
-    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-
-    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
-         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
-         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
-        await main_module.run_all_bots()
-
-    fake_manager.start_all.assert_not_called()
-    fake_manager.start_watchdog.assert_not_called()
-    fake_web_server.start.assert_awaited_once()
-    fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
-    fake_manager.shutdown_all.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch):

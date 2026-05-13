@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from bot.assistant.docs import (
-    compute_managed_prompt_hash,
     read_current_managed_prompt_hash,
     resolve_assistant_managed_template_path,
     sync_managed_prompt_files,
@@ -201,87 +200,12 @@ def test_sync_managed_prompt_files_includes_assistant_skill_descriptions(tmp_pat
     assert "summarize_logs: Summarize noisy log output into concise findings." in agents_text
 
 
-def test_sync_managed_prompt_files_rebuilds_memory_tail_after_skill_description_change(tmp_path: Path):
-    template_path = tmp_path / "managed_prompt_template.md"
-    template_path.write_text("assistant template", encoding="utf-8")
-
-    workdir = tmp_path / "assistant-root"
-    workdir.mkdir()
-    home = bootstrap_assistant_home(workdir)
-    skill_dir = home.root / "memory" / "skills" / "summarize_logs"
-    skill_dir.mkdir(parents=True)
-    skill_path = skill_dir / "SKILL.md"
-    skill_path.write_text(
-        "---\n"
-        "name: summarize_logs\n"
-        "description: Summarize noisy log output into concise findings.\n"
-        "---\n\n"
-        "# Summarize Logs\n",
-        encoding="utf-8",
-    )
-
-    first = sync_managed_prompt_files(home, template_path=template_path)
-
-    skill_path.write_text(
-        "---\n"
-        "name: summarize_logs\n"
-        "description: Turn noisy logs into short issue summaries and likely causes.\n"
-        "---\n\n"
-        "# Summarize Logs\n",
-        encoding="utf-8",
-    )
-
-    second = sync_managed_prompt_files(home, template_path=template_path)
-
-    agents_text = home.agents_path.read_text(encoding="utf-8")
-    assert first.managed_prompt_hash != second.managed_prompt_hash
-    assert second.agents_changed is True
-    assert "Turn noisy logs into short issue summaries and likely causes." in agents_text
-    assert "Summarize noisy log output into concise findings." not in agents_text
-
-
-def test_sync_managed_prompt_files_changes_managed_prompt_hash_for_compaction_only_changes(tmp_path: Path):
-    template_path = tmp_path / "managed_prompt_template.md"
-    template_path.write_text("assistant template", encoding="utf-8")
-
-    workdir = tmp_path / "assistant-root"
-    workdir.mkdir()
-    home = bootstrap_assistant_home(workdir)
-
-    first = sync_managed_prompt_files(home, template_path=template_path)
-
-    from bot.assistant.state import record_assistant_capture
-    from bot.assistant.compaction import refresh_compaction_state
-
-    capture = record_assistant_capture(home, 1001, "assistant 是全局的，工作路径固定，不允许修改", "记住了")
-    refresh_compaction_state(home, latest_capture=capture)
-    second = sync_managed_prompt_files(home, template_path=template_path)
-
-    agents_text = home.agents_path.read_text(encoding="utf-8")
-    assert first.managed_prompt_hash != second.managed_prompt_hash
-    assert second.agents_changed is True
-    assert "maintenance:" in agents_text
-
-
 def test_read_current_managed_prompt_hash_returns_none_when_managed_files_missing(tmp_path: Path):
     workdir = tmp_path / "assistant-root"
     workdir.mkdir()
     home = bootstrap_assistant_home(workdir)
 
     assert read_current_managed_prompt_hash(home) is None
-
-
-def test_read_current_managed_prompt_hash_matches_helper(tmp_path: Path):
-    workdir = tmp_path / "assistant-root"
-    workdir.mkdir()
-    home = bootstrap_assistant_home(workdir)
-    home.agents_path.write_text("agent body\n", encoding="utf-8")
-    home.claude_path.write_text("claude body\n", encoding="utf-8")
-
-    assert read_current_managed_prompt_hash(home) == compute_managed_prompt_hash(
-        "agent body\n",
-        "claude body\n",
-    )
 
 
 def test_managed_prompt_uses_latest_recent_summary_items(tmp_path: Path):

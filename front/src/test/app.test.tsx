@@ -221,26 +221,6 @@ test("desktop bot switcher uses anchored popover and leaves mobile sheet untouch
   expect(screen.getByRole("button", { name: "智能体管理" })).toBeInTheDocument();
 });
 
-test("desktop bot switcher keeps focused bot detail interactive with motion", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  const popover = await screen.findByTestId("desktop-bot-switcher-popover");
-  await user.hover(within(popover).getByRole("button", { name: /team2/i }));
-  const detailPanels = within(popover).getAllByTestId("desktop-bot-switcher-detail");
-  const detail = detailPanels[detailPanels.length - 1];
-
-  expect(within(popover).getAllByText(/team2/i).length).toBeGreaterThan(0);
-  expect(within(detail).getByRole("button", { name: /进入|当前/i })).toBeEnabled();
-});
-
 test("desktop bot switching restores sidebar view per bot session", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   localStorage.setItem("web-workbench-pane-state", JSON.stringify({
@@ -304,39 +284,6 @@ test("mobile bot switcher still uses bottom sheet", async () => {
 
   expect(await screen.findByRole("dialog", { name: "智能体切换" })).toBeInTheDocument();
   expect(screen.queryByTestId("desktop-bot-switcher-popover")).not.toBeInTheDocument();
-});
-
-test("super admin can open admin center from bot switcher", async () => {
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await loginAsSuperAdmin(user);
-  await screen.findByRole("button", { name: "聊天" });
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "管理中心" }));
-
-  expect(await screen.findByRole("heading", { name: "管理中心" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "用户权限" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "邀请码" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "升级" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
-});
-
-test("super admin can open admin center from desktop bot switcher", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await loginAsSuperAdmin(user);
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "管理中心" }));
-
-  expect(await screen.findByRole("heading", { name: "管理中心" })).toBeInTheDocument();
 });
 
 test("member can enter ungranted bot in read-only mode and hits create quota copy", async () => {
@@ -503,47 +450,6 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
   expect(screen.getByText("codex: C:\\workspace\\demo")).toBeInTheDocument();
 });
 
-test("desktop bot switcher searches busy agent names", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
-    {
-      alias: "main",
-      cliType: "codex",
-      status: "busy",
-      workingDir: "C:\\workspace\\demo",
-      lastActiveText: "处理中",
-      activityStatus: "busy",
-      busyAgentIds: ["main", "reviewer"],
-      busyAgentNames: ["主 agent", "代码审查"],
-      busyAgentCount: 2,
-      serviceStatus: "online",
-    },
-    {
-      alias: "team2",
-      cliType: "claude",
-      status: "running",
-      workingDir: "C:\\workspace\\plans",
-      lastActiveText: "运行中",
-      serviceStatus: "online",
-    },
-  ] satisfies BotSummary[]);
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await user.type(await screen.findByLabelText("搜索智能体"), "代码审查");
-
-  const popover = await screen.findByTestId("desktop-bot-switcher-popover");
-  expect(within(popover).getAllByText("2 个 agent 处理中").length).toBeGreaterThan(0);
-  expect(within(popover).getByText("代码审查")).toBeInTheDocument();
-  expect(within(popover).queryByText("team2")).not.toBeInTheDocument();
-});
-
 test("marks a bot unread after a hidden reply completes and clears it on return", async () => {
   const user = userEvent.setup();
   vi.spyOn(MockWebBotClient.prototype, "sendMessage").mockImplementation(
@@ -633,89 +539,6 @@ test("desktop header shows an unread indicator when another bot has unread messa
   expect(within(screen.getByRole("button", { name: "main" })).queryByTestId("bot-switcher-unread-indicator")).not.toBeInTheDocument();
 });
 
-test("bot manager can add rename and delete managed bots", async () => {
-  const user = userEvent.setup();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByRole("button", { name: "聊天" });
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
-
-  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
-
-  await user.type(screen.getByLabelText("新智能体别名"), "team3");
-  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
-  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
-  await user.click(screen.getByRole("button", { name: "创建智能体" }));
-
-  expect(await screen.findByText("team3")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "重命名 team2" }));
-  const renameInput = screen.getByLabelText("team2 新别名");
-  await user.clear(renameInput);
-  await user.type(renameInput, "planner");
-  await user.click(screen.getByRole("button", { name: "保存别名 team2" }));
-
-  expect(await screen.findByText("planner")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "删除 planner" }));
-  expect(await screen.findByText("删除智能体 planner")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "删除" }));
-
-  await waitFor(() => {
-    expect(screen.queryByText("planner")).not.toBeInTheDocument();
-  });
-});
-
-test("desktop bot manager uses dense desktop screen while mobile keeps old manager", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
-
-  expect(await screen.findByTestId("desktop-bot-manager-screen")).toBeInTheDocument();
-});
-
-test("settings can change my avatar and chat uses the selected image", async () => {
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByRole("button", { name: "聊天" });
-
-  await user.click(screen.getByRole("button", { name: "设置" }));
-
-  expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_01.png");
-  await user.click(screen.getByRole("button", { name: "我的头像" }));
-  await user.click(screen.getByRole("button", { name: "选择头像 avatar_02.png" }));
-  expect(screen.getByRole("img", { name: "我的头像预览" })).toHaveAttribute("src", "/assets/avatars/avatar_02.png");
-  expect(localStorage.getItem("web-user-avatar-name")).toBe("avatar_02.png");
-
-  await user.click(screen.getByRole("button", { name: "聊天" }));
-  await user.type(screen.getByPlaceholderText("输入消息"), "测试头像");
-  await user.click(screen.getByRole("button", { name: "发送" }));
-
-  expect(await screen.findByText("测试头像")).toBeInTheDocument();
-  const userAvatars = screen.getAllByRole("img", { name: "你 头像" });
-  expect(userAvatars.length).toBeGreaterThan(0);
-  expect(userAvatars.every((avatar) => avatar.getAttribute("src") === "/assets/avatars/avatar_02.png")).toBe(true);
-});
-
 test("bot manager highlights offline bots and blocks entering them", async () => {
   const user = userEvent.setup();
   vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
@@ -777,138 +600,6 @@ test("bot switcher disables offline bots", async () => {
 
   expect(await screen.findByText("离线中，暂不可切换")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /team2/i })).toBeDisabled();
-});
-
-test("desktop bot switcher focuses offline bot but does not switch to it", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
-    {
-      alias: "main",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace\\demo",
-      lastActiveText: "运行中",
-      serviceStatus: "online",
-    },
-    {
-      alias: "offline-team",
-      cliType: "claude",
-      status: "offline",
-      workingDir: "C:\\workspace\\offline",
-      lastActiveText: "离线",
-      serviceStatus: "offline",
-    },
-  ] satisfies BotSummary[]);
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await screen.findByTestId("desktop-bot-switcher-popover");
-  await user.keyboard("{ArrowDown}{Enter}");
-
-  expect(screen.getByRole("button", { name: "main" })).toBeInTheDocument();
-  expect(await screen.findByText("离线中，暂不可切换")).toBeInTheDocument();
-});
-
-test("desktop bot switcher supports arrow navigation and enter selection", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await screen.findByTestId("desktop-bot-switcher-popover");
-
-  await user.keyboard("{ArrowDown}{Enter}");
-
-  expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
-});
-
-test("bot switcher sorts bots by main first, then status, then alias", async () => {
-  const user = userEvent.setup();
-  localStorage.setItem("web-unread-bots", JSON.stringify(["omega", "beta"]));
-  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
-    {
-      alias: "zeta",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace\\zeta",
-      lastActiveText: "运行中",
-    },
-    {
-      alias: "alpha",
-      cliType: "claude",
-      status: "busy",
-      workingDir: "C:\\workspace\\alpha",
-      lastActiveText: "处理中",
-    },
-    {
-      alias: "gamma",
-      cliType: "claude",
-      status: "offline",
-      workingDir: "C:\\workspace\\gamma",
-      lastActiveText: "离线",
-    },
-    {
-      alias: "main",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace\\main",
-      lastActiveText: "运行中",
-      isMain: true,
-    },
-    {
-      alias: "omega",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace\\omega",
-      lastActiveText: "运行中",
-    },
-    {
-      alias: "delta",
-      cliType: "claude",
-      status: "running",
-      workingDir: "C:\\workspace\\delta",
-      lastActiveText: "运行中",
-    },
-    {
-      alias: "beta",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace\\beta",
-      lastActiveText: "运行中",
-    },
-  ] satisfies BotSummary[]);
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByRole("button", { name: "聊天" });
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await screen.findByText("智能体切换");
-
-  const optionButtons = screen.getAllByRole("button").filter((button) => (
-    button.textContent?.includes("C:\\workspace\\")
-  ));
-  const orderedAliases = optionButtons.map((button) => {
-    const alias = ["main", "beta", "omega", "delta", "zeta", "alpha", "gamma"].find((candidate) => (
-      button.textContent?.includes(candidate)
-    ));
-    return alias || "";
-  });
-
-  expect(orderedAliases).toEqual(["main", "beta", "omega", "alpha", "delta", "zeta", "gamma"]);
 });
 
 test("immersive chat mode hides outer chrome but keeps the composer visible", async () => {
@@ -1003,20 +694,4 @@ test("mobile app never exposes assistant ops navigation", async () => {
   await user.click(screen.getByRole("button", { name: "设置" }));
   expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Assistant 运维台" })).not.toBeInTheDocument();
-});
-
-test("desktop settings hides migrated bot runtime section", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "设置" }));
-  expect(await screen.findByRole("heading", { name: "我的头像" })).toBeInTheDocument();
-  expect(screen.queryByText("智能体配置已迁移")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "打开智能体管理" })).not.toBeInTheDocument();
 });

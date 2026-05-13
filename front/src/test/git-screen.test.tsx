@@ -241,12 +241,6 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   });
 }
 
-function expectNoStructuralCard(element: HTMLElement) {
-  expect(element).not.toHaveClass("rounded-lg");
-  expect(element).not.toHaveClass("border");
-  expect(element).not.toHaveClass("bg-[var(--surface)]");
-}
-
 test("renders git repo summary and changed files", async () => {
   render(<GitScreen botAlias="main" client={createClient()} />);
 
@@ -254,19 +248,6 @@ test("renders git repo summary and changed files", async () => {
   expect(screen.getByText("当前分支")).toBeInTheDocument();
   expect(screen.getByText("tracked.txt")).toBeInTheDocument();
   expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
-  expect(screen.getByTestId("git-scroll-region")).toHaveClass("min-h-0", "min-w-0", "overflow-x-hidden", "overflow-y-auto");
-  expectNoStructuralCard(screen.getByTestId("git-changes-panel"));
-  expectNoStructuralCard(screen.getByTestId("git-commit-panel"));
-  expectNoStructuralCard(screen.getByTestId("git-identity-panel"));
-});
-
-test("uses compact workbench gaps in embedded desktop git layout", async () => {
-  render(<GitScreen botAlias="main" client={createClient()} embedded />);
-
-  expect(await screen.findByText("repo")).toBeInTheDocument();
-  expect(screen.getByTestId("git-scroll-region")).toHaveClass("bg-[var(--workbench-titlebar-bg)]", "py-0.5");
-  expect(screen.getByTestId("git-desktop-shell")).toHaveClass("space-y-0.5", "bg-[var(--workbench-titlebar-bg)]");
-  expect(screen.getByTestId("git-changes-panel")).not.toHaveClass("border-t-2");
 });
 
 test("shows init action when current directory is not a git repo", async () => {

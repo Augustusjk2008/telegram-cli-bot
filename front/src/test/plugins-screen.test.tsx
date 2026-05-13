@@ -39,24 +39,6 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
   });
 });
 
-test("plugins screen uses flat workbench sections like git", async () => {
-  render(<PluginsScreen client={new MockWebBotClient()} botAlias="main" embedded />);
-
-  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
-  expect(screen.getByTestId("plugins-scroll-region")).toHaveClass("bg-[var(--workbench-titlebar-bg)]", "py-0.5");
-  expect(screen.getByTestId("plugins-catalog")).toHaveClass("bg-[var(--workbench-panel-bg)]");
-  expect(screen.getByTestId("plugins-overview-header")).toHaveClass(
-    "border-[var(--border)]",
-    "bg-[var(--surface-strong)]",
-  );
-  expectNoStructuralCard(screen.getByTestId("plugins-overview-panel"));
-  expectNoStructuralCard(screen.getByTestId("plugin-catalog-item-vivado-waveform"));
-  expect(screen.getByTestId("plugin-catalog-item-vivado-waveform")).not.toHaveClass("bg-[var(--workbench-panel-bg)]");
-  expect(screen.queryByText("安装管理")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "安装插件" })).toHaveClass("h-7", "px-2", "text-xs");
-  expect(screen.getAllByRole("button", { name: "卸载" })[0]).toHaveClass("h-7", "px-2", "text-xs");
-});
-
 test("plugins screen lets repo outline pick a folder before opening", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

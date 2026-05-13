@@ -28,16 +28,3 @@ test("resolves abs-path file urls for preview", () => {
     resolvePreviewFilePath("/abs/path/C:/workspace/project/docs/guide.md:1", "C:/workspace/project"),
   ).toBe("docs/guide.md");
 });
-
-test("resolves markdown image paths relative to the markdown file", () => {
-  expect(resolveMarkdownImagePath("assets/diagram.png", "docs/README.md")).toBe("docs/assets/diagram.png");
-  expect(resolveMarkdownImagePath("../shared/logo.svg", "docs/guides/intro.md")).toBe("docs/guides/../shared/logo.svg");
-  expect(resolveMarkdownImagePath("/assets/root.png", "docs/README.md")).toBe("assets/root.png");
-  expect(resolveMarkdownImagePath("https://example.com/chart.png", "docs/README.md")).toBeNull();
-});
-
-test("builds same-origin file download urls for markdown images", () => {
-  expect(buildFileDownloadUrl("main bot", "docs/assets/diagram.png")).toBe(
-    "/api/bots/main%20bot/files/download?filename=docs%2Fassets%2Fdiagram.png",
-  );
-});

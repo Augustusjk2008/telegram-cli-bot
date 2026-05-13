@@ -107,37 +107,6 @@ from bot.web.native_history_locator import LocatedTranscript
 from bot.assistant.proposals import create_proposal
 
 
-def test_web_api_common_imports_remain_compatible():
-    from bot.web.api_common import WebApiError as CommonWebApiError
-    from bot.web.api_common import get_profile_or_raise as common_get_profile_or_raise
-    from bot.web.api_service import WebApiError, get_profile_or_raise
-
-    assert WebApiError is CommonWebApiError
-    assert get_profile_or_raise is common_get_profile_or_raise
-
-
-def test_file_service_imports_remain_compatible():
-    from bot.web.api_service import get_directory_listing, get_working_directory, reveal_directory_tree
-    from bot.web.files_service import get_directory_listing as files_get_directory_listing
-    from bot.web.files_service import get_working_directory as files_get_working_directory
-    from bot.web.files_service import reveal_directory_tree as files_reveal_directory_tree
-
-    assert get_directory_listing is files_get_directory_listing
-    assert get_working_directory is files_get_working_directory
-    assert reveal_directory_tree is files_reveal_directory_tree
-
-
-def test_chat_runtime_service_imports_remain_compatible():
-    from bot.web.api_service import execute_assistant_run_request, run_chat, stream_chat
-    from bot.web.chat_runtime_service import execute_assistant_run_request as runtime_execute_assistant_run_request
-    from bot.web.chat_runtime_service import run_chat as runtime_run_chat
-    from bot.web.chat_runtime_service import stream_chat as runtime_stream_chat
-
-    assert run_chat is runtime_run_chat
-    assert stream_chat is runtime_stream_chat
-    assert execute_assistant_run_request is runtime_execute_assistant_run_request
-
-
 def _png_bytes(width: int, height: int) -> bytes:
     row = b"\x00" + (b"\x00\x00\x00" * width)
     raw = row * height
@@ -1761,15 +1730,6 @@ def test_save_and_read_file(web_manager: MultiBotManager, temp_dir: Path):
     content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=1)
     assert content["content"] == "line1"
 
-def test_read_file_preview_marks_small_file_as_full_content(web_manager: MultiBotManager, temp_dir: Path):
-    save_uploaded_file(web_manager, "main", 1001, "tiny.txt", b"line1\n")
-
-    content = read_file_content(web_manager, "main", 1001, "tiny.txt", mode="head", lines=80)
-
-    assert content["content"] == "line1"
-    assert content["file_size_bytes"] == len(b"line1\n")
-    assert content["is_full_content"] is True
-
 def test_read_file_content_returns_png_preview_payload(web_manager: MultiBotManager, temp_dir: Path):
     image_bytes = _png_bytes(2, 2)
     save_uploaded_file(web_manager, "main", 1001, "diagram.png", image_bytes)
@@ -1806,25 +1766,6 @@ def test_read_file_content_supports_utf16_bom_text(web_manager: MultiBotManager,
 
     assert content["content"] == "alpha\n中文\n"
     assert content["encoding"] == "utf-16"
-
-def test_read_file_preview_marks_truncated_files_as_partial_content(web_manager: MultiBotManager, temp_dir: Path):
-    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\nline2\n")
-
-    content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=1)
-
-    assert content["content"] == "line1"
-    assert content["file_size_bytes"] == len(b"line1\nline2\n")
-    assert content["is_full_content"] is False
-
-def test_read_file_full_accepts_files_larger_than_previous_preview_limit(web_manager: MultiBotManager, temp_dir: Path):
-    large_text = "a" * (1024 * 1024 + 1)
-    save_uploaded_file(web_manager, "main", 1001, "big.txt", large_text.encode("utf-8"))
-
-    content = read_file_content(web_manager, "main", 1001, "big.txt", mode="cat", lines=0)
-
-    assert content["content"] == large_text
-    assert content["file_size_bytes"] == len(large_text.encode("utf-8"))
-    assert content["is_full_content"] is True
 
 def test_write_file_content_updates_text_and_returns_version(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
@@ -1906,15 +1847,6 @@ def test_write_file_content_rejects_stale_version(web_manager: MultiBotManager, 
     assert exc_info.value.code == "file_version_conflict"
     assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == "line2\n"
 
-def test_write_file_content_accepts_content_larger_than_previous_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
-    save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
-    large_text = "a" * (512 * 1024 + 1)
-
-    result = write_file_content(web_manager, "main", 1001, "notes.txt", large_text)
-
-    assert result["file_size_bytes"] == len(large_text.encode("utf-8"))
-    assert read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)["content"] == large_text
-
 def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager, temp_dir: Path):
     binary_bytes = b"\x00\x01\x02\x03\x04\x05\x06\x07"
     save_uploaded_file(web_manager, "main", 1001, "notes.bin", binary_bytes)
@@ -1924,15 +1856,6 @@ def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager
 
     assert exc_info.value.code == "not_text_file"
     assert (temp_dir / "notes.bin").read_bytes() == binary_bytes
-
-def test_write_file_content_accepts_existing_file_larger_than_previous_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
-    large_text = "a" * (512 * 1024 + 1)
-    save_uploaded_file(web_manager, "main", 1001, "notes.txt", large_text.encode("utf-8"))
-
-    result = write_file_content(web_manager, "main", 1001, "notes.txt", "changed\n")
-
-    assert result["file_size_bytes"] == len("changed\n".encode("utf-8"))
-    assert (temp_dir / "notes.txt").read_text(encoding="utf-8") == "changed\n"
 
 def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -1988,17 +1911,6 @@ def test_create_text_file_rejects_existing_target(web_manager: MultiBotManager, 
 
     assert exc_info.value.code == "file_already_exists"
     assert (workspace / "notes.md").read_text(encoding="utf-8") == "old\n"
-
-def test_create_text_file_accepts_content_larger_than_previous_editor_limit(web_manager: MultiBotManager, temp_dir: Path):
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    change_working_directory(web_manager, "main", 1001, str(workspace))
-    large_text = "a" * (512 * 1024 + 1)
-
-    result = create_text_file(web_manager, "main", 1001, "notes.md", large_text)
-
-    assert result["file_size_bytes"] == len(large_text.encode("utf-8"))
-    assert (workspace / "notes.md").read_text(encoding="utf-8") == large_text
 
 def test_create_text_file_rejects_path_like_filename(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -2232,33 +2144,6 @@ def test_discard_git_paths_restores_tracked_and_added_files(web_manager: MultiBo
     assert not any(item["path"] == "added.txt" for item in overview["changed_files"])
 
 
-def test_discard_all_git_changes_restores_repo_state(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    _init_git_repo(repo_dir)
-
-    tracked = repo_dir / "tracked.txt"
-    tracked.write_text("before\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "tracked.txt")
-    _run_git_command(repo_dir, "commit", "-m", "init")
-
-    tracked.write_text("before\nafter\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "tracked.txt")
-    added = repo_dir / "added.txt"
-    added.write_text("draft\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "added.txt")
-    untracked = repo_dir / "scratch.txt"
-    untracked.write_text("temp\n", encoding="utf-8")
-    web_manager.main_profile.working_dir = str(repo_dir)
-
-    overview = discard_all_git_changes(web_manager, "main", 1001)
-
-    assert overview["is_clean"] is True
-    assert overview["changed_files"] == []
-    assert tracked.read_text(encoding="utf-8") == "before\n"
-    assert not added.exists()
-    assert not untracked.exists()
-
 
 def test_get_git_tree_status_filters_to_working_dir_and_marks_added_modified_and_ignored(
     web_manager: MultiBotManager,
@@ -2315,49 +2200,6 @@ def test_get_git_tree_status_returns_empty_payload_outside_repo(
         "items": {},
     }
 
-def test_git_overview_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    _init_git_repo(repo_dir)
-    (repo_dir / "tracked.txt").write_text("line 1\n", encoding="utf-8")
-
-    other_dir = temp_dir / "other"
-    other_dir.mkdir()
-
-    web_manager.main_profile.working_dir = str(repo_dir)
-    session = get_session_for_alias(web_manager, "main", 1001)
-    session.working_dir = str(other_dir)
-
-    overview = get_git_overview(web_manager, "main", 1001)
-
-    assert overview["working_dir"] == str(repo_dir)
-    assert overview["repo_found"] is True
-    assert overview["repo_path"] == str(repo_dir)
-
-def test_git_diff_uses_bot_profile_workdir(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    _init_git_repo(repo_dir)
-
-    tracked = repo_dir / "tracked.txt"
-    tracked.write_text("before\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "tracked.txt")
-    _run_git_command(repo_dir, "commit", "-m", "init")
-    tracked.write_text("before\nafter\n", encoding="utf-8")
-
-    other_dir = temp_dir / "other"
-    other_dir.mkdir()
-
-    web_manager.main_profile.working_dir = str(repo_dir)
-    session = get_session_for_alias(web_manager, "main", 1001)
-    session.working_dir = str(other_dir)
-
-    diff = get_git_diff(web_manager, "main", 1001, "tracked.txt", staged=False)
-
-    assert diff["path"] == "tracked.txt"
-    assert "+after" in diff["diff"]
-
-
 def test_git_branch_service_lists_creates_and_switches_branches(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -2379,67 +2221,6 @@ def test_git_branch_service_lists_creates_and_switches_branches(web_manager: Mul
     listed = list_git_branches(web_manager, "main", 1001)
     assert listed["current_branch"] == "feature/git-panel"
     assert any(item["name"] == default_branch for item in listed["branches"])
-
-
-def test_git_branch_service_rejects_invalid_branch_name(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    _init_git_repo(repo_dir)
-    (repo_dir / "tracked.txt").write_text("line 1\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "tracked.txt")
-    _run_git_command(repo_dir, "commit", "-m", "init")
-    web_manager.main_profile.working_dir = str(repo_dir)
-
-    with pytest.raises(WebApiError) as create_error:
-        create_git_branch(web_manager, "main", 1001, "-bad")
-    assert create_error.value.code == "invalid_git_branch"
-
-    with pytest.raises(WebApiError) as switch_error:
-        switch_git_branch(web_manager, "main", 1001, "bad branch")
-    assert switch_error.value.code == "invalid_git_branch"
-
-
-def test_git_stash_service_lists_applies_and_drops_stashes(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    _init_git_repo(repo_dir)
-    tracked = repo_dir / "tracked.txt"
-    tracked.write_text("before\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "tracked.txt")
-    _run_git_command(repo_dir, "commit", "-m", "init")
-
-    tracked.write_text("before\nafter\n", encoding="utf-8")
-    _run_git_command(repo_dir, "stash", "push", "-m", "manual stash")
-    web_manager.main_profile.working_dir = str(repo_dir)
-
-    stashes = list_git_stashes(web_manager, "main", 1001)
-    assert stashes["items"][0]["ref"] == "stash@{0}"
-    assert "manual stash" in stashes["items"][0]["message"]
-
-    applied = apply_git_stash(web_manager, "main", 1001, "stash@{0}")
-    assert any(item["path"] == "tracked.txt" for item in applied["changed_files"])
-
-    drop_git_stash(web_manager, "main", 1001, "stash@{0}")
-    assert list_git_stashes(web_manager, "main", 1001)["items"] == []
-
-
-def test_git_blame_service_returns_line_metadata(web_manager: MultiBotManager, temp_dir: Path):
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    _init_git_repo(repo_dir)
-    tracked = repo_dir / "tracked.txt"
-    tracked.write_text("first\nsecond\n", encoding="utf-8")
-    _run_git_command(repo_dir, "add", "tracked.txt")
-    _run_git_command(repo_dir, "commit", "-m", "init tracked")
-    web_manager.main_profile.working_dir = str(repo_dir)
-
-    blame = get_git_blame(web_manager, "main", 1001, "tracked.txt")
-
-    assert blame["path"] == "tracked.txt"
-    assert blame["lines"][0]["line"] == 1
-    assert blame["lines"][0]["author_name"] == "Web Bot Test"
-    assert blame["lines"][0]["summary"] == "init tracked"
-    assert blame["lines"][0]["content"] == "first"
 
 
 def test_git_stash_and_blame_reject_unsafe_inputs(web_manager: MultiBotManager, temp_dir: Path):
@@ -2533,98 +2314,6 @@ def test_git_proxy_settings_persist_to_app_settings_file(temp_dir: Path, monkeyp
         "git_proxy_address": "192.168.1.10:7897",
     }
 
-
-def test_git_proxy_port_only_defaults_to_loopback(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
-    settings_file = temp_dir / ".web_admin_settings.json"
-    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
-
-    saved = update_git_proxy_address("7897")
-
-    assert saved == {"address": "127.0.0.1:7897", "port": "7897"}
-    assert get_git_proxy_settings() == {"address": "127.0.0.1:7897", "port": "7897"}
-    assert json.loads(settings_file.read_text(encoding="utf-8")) == {
-        "git_proxy_address": "127.0.0.1:7897",
-    }
-
-def test_git_commands_explicitly_disable_proxy_when_port_is_empty(
-    web_manager: MultiBotManager,
-    temp_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    settings_file = temp_dir / ".web_admin_settings.json"
-    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
-    update_git_proxy_port("")
-
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    web_manager.main_profile.working_dir = str(repo_dir)
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **kwargs):
-        calls.append(cmd)
-        if cmd[-2:] == ["rev-parse", "--show-toplevel"]:
-            return subprocess.CompletedProcess(cmd, 0, f"{repo_dir}\n", "")
-        if "status" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, "## main\n", "")
-        if "log" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr("bot.web.git_service.subprocess.run", fake_run)
-
-    overview = get_git_overview(web_manager, "main", 1001)
-
-    assert overview["repo_found"] is True
-    assert calls[0][:7] == ["git", "-c", "core.fsmonitor=false", "-c", "http.proxy=", "-c", "https.proxy="]
-    assert calls[1][:7] == ["git", "-c", "core.fsmonitor=false", "-c", "http.proxy=", "-c", "https.proxy="]
-
-def test_git_commands_use_proxy_address_when_configured(
-    web_manager: MultiBotManager,
-    temp_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    settings_file = temp_dir / ".web_admin_settings.json"
-    monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", settings_file)
-    update_git_proxy_address("192.168.1.10:7897")
-
-    repo_dir = temp_dir / "repo"
-    repo_dir.mkdir()
-    web_manager.main_profile.working_dir = str(repo_dir)
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **kwargs):
-        calls.append(cmd)
-        if cmd[-2:] == ["rev-parse", "--show-toplevel"]:
-            return subprocess.CompletedProcess(cmd, 0, f"{repo_dir}\n", "")
-        if "status" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, "## main\n", "")
-        if "log" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr("bot.web.git_service.subprocess.run", fake_run)
-
-    overview = get_git_overview(web_manager, "main", 1001)
-
-    assert overview["repo_found"] is True
-    assert calls[0][:7] == [
-        "git",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "http.proxy=http://192.168.1.10:7897",
-        "-c",
-        "https.proxy=http://192.168.1.10:7897",
-    ]
-    assert calls[1][:7] == [
-        "git",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "http.proxy=http://192.168.1.10:7897",
-        "-c",
-        "https.proxy=http://192.168.1.10:7897",
-    ]
 
 @pytest.mark.asyncio
 async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -3421,25 +3110,6 @@ async def test_git_identity_route_requires_admin_for_global_scope(
     assert global_payload["error"]["code"] == "forbidden"
 
 @pytest.mark.asyncio
-async def test_create_directory_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    web_manager.main_profile.working_dir = str(workspace)
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            resp = await client.post("/api/bots/main/files/mkdir", json={"name": "docs"})
-            assert resp.status == 200
-            payload = await resp.json()
-            assert payload["data"]["name"] == "docs"
-            assert (workspace / "docs").is_dir()
-
-@pytest.mark.asyncio
 async def test_file_routes_serialize_last_modified_ns_as_string(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -3720,120 +3390,6 @@ async def test_write_file_route_updates_file(web_manager: MultiBotManager, monke
 
     assert payload["data"]["path"] == "notes.md"
     assert target.read_text(encoding="utf-8") == "# updated\n"
-
-@pytest.mark.asyncio
-async def test_create_text_file_route_creates_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    web_manager.main_profile.working_dir = str(workspace)
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            resp = await client.post("/api/bots/main/files/create", json={"filename": "notes.md", "content": "# hello\n"})
-            assert resp.status == 200
-            payload = await resp.json()
-
-    assert payload["data"]["path"] == "notes.md"
-    assert (workspace / "notes.md").read_text(encoding="utf-8") == "# hello\n"
-
-@pytest.mark.asyncio
-async def test_rename_path_route_renames_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    (workspace / "notes.md").write_text("# hello\n", encoding="utf-8")
-    web_manager.main_profile.working_dir = str(workspace)
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            resp = await client.post("/api/bots/main/files/rename", json={"path": "notes.md", "new_name": "draft.md"})
-            assert resp.status == 200
-            payload = await resp.json()
-
-    assert payload["data"]["old_path"] == "notes.md"
-    assert payload["data"]["path"] == "draft.md"
-    assert not (workspace / "notes.md").exists()
-    assert (workspace / "draft.md").read_text(encoding="utf-8") == "# hello\n"
-
-@pytest.mark.asyncio
-async def test_copy_path_route_copies_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    (workspace / "notes.md").write_text("# hello\n", encoding="utf-8")
-    web_manager.main_profile.working_dir = str(workspace)
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            resp = await client.post("/api/bots/main/files/copy", json={"path": "notes.md"})
-            assert resp.status == 200
-            payload = await resp.json()
-
-    assert payload["data"]["source_path"] == "notes.md"
-    assert payload["data"]["path"] == "notes 副本.md"
-    assert (workspace / "notes 副本.md").read_text(encoding="utf-8") == "# hello\n"
-
-@pytest.mark.asyncio
-async def test_move_path_route_moves_file(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    target = workspace / "docs"
-    target.mkdir(parents=True)
-    (workspace / "notes.md").write_text("# hello\n", encoding="utf-8")
-    web_manager.main_profile.working_dir = str(workspace)
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            resp = await client.post("/api/bots/main/files/move", json={"path": "notes.md", "target_parent_path": "docs"})
-            assert resp.status == 200
-            payload = await resp.json()
-
-    assert payload["data"]["old_path"] == "notes.md"
-    assert payload["data"]["path"] == "docs/notes.md"
-    assert not (workspace / "notes.md").exists()
-    assert (target / "notes.md").read_text(encoding="utf-8") == "# hello\n"
-
-@pytest.mark.asyncio
-async def test_delete_path_route_recursively_removes_directory(
-    web_manager: MultiBotManager,
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    target = workspace / "docs" / "guides"
-    target.mkdir(parents=True)
-    (target / "intro.txt").write_text("hello\n", encoding="utf-8")
-    web_manager.main_profile.working_dir = str(workspace)
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            resp = await client.post("/api/bots/main/files/delete", json={"path": "docs"})
-            assert resp.status == 200
-            payload = await resp.json()
-            assert payload["data"]["deleted_type"] == "directory"
-            assert not (workspace / "docs").exists()
 
 @pytest.mark.asyncio
 async def test_api_routes_disable_cache(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):

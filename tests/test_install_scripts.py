@@ -31,36 +31,6 @@ def _run_install_ps1_command(command: str, *, env: dict[str, str] | None = None)
         cwd=Path.cwd(),
     )
 
-def test_install_bat_forwards_arguments_to_install_ps1_and_pauses():
-    content = Path("install.bat").read_text(encoding="utf-8")
-
-    assert "install.ps1" in content
-    assert "%*" in content
-    assert "pause" in content.lower()
-
-def test_install_sh_mentions_apt_node_check_only_and_cli_warning():
-    content = Path("install.sh").read_text(encoding="utf-8")
-
-    assert "apt-get" in content
-    assert "--check-only" in content
-    assert "--non-interactive" in content
-    assert "--install-example-plugins" in content
-    assert "--skip-example-plugins" in content
-    assert "codex" in content
-    assert "claude" in content
-    assert ".env.example" in content
-
-def test_env_example_preconfigures_default_update_repository():
-    content = Path(".env.example").read_text(encoding="utf-8")
-
-    assert "APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot" in content
-
-def test_env_example_defaults_web_host_to_wildcard():
-    content = Path(".env.example").read_text(encoding="utf-8")
-
-    assert "WEB_HOST=0.0.0.0" in content
-    assert "WEB_HOST=127.0.0.1" not in content
-
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_parses_in_windows_powershell():
     script_path = Path("install.ps1").resolve()

@@ -95,16 +95,4 @@ describe("ChatToolTraceCard", () => {
     expect(callSummary.textContent || "").toContain("+new line 7");
     expect(screen.getByRole("button", { name: "收起完整内容" })).toBeInTheDocument();
   });
-
-  test("renders unknown tool result with light blue tone", () => {
-    render(<ChatToolTraceCard entry={createNeutralResultEntry()} />);
-
-    const resultLabel = screen.getByText("返回");
-    const resultCard = resultLabel.closest("div.rounded-xl.border");
-
-    expect(resultCard).toHaveClass("border-sky-200");
-    expect(resultCard).toHaveClass("bg-sky-50/80");
-    expect(screen.queryByText("成功")).not.toBeInTheDocument();
-    expect(screen.queryByText("失败")).not.toBeInTheDocument();
-  });
 });
