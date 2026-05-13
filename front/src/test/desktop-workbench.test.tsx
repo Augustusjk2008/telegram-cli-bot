@@ -206,6 +206,101 @@ test("desktop workbench persists and restores the selected tree path", async () 
   });
 });
 
+test("desktop workbench restores sidebar view from bot session instead of global pane state", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 12 }],
+  });
+
+  localStorage.setItem("web-workbench-pane-state", JSON.stringify({
+    sidebarView: "git",
+    sidebarCollapsed: false,
+    terminalCollapsed: false,
+    chatCollapsed: false,
+    sidebarWidthPx: 320,
+    chatWidthPx: 384,
+    editorHeightPx: 420,
+  }));
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", "/workspace"), JSON.stringify({
+    version: 1,
+    botAlias: "main",
+    workspaceRoot: "/workspace",
+    sidebarView: "files",
+    expandedPaths: [],
+    selectedTreePath: "",
+    activeTabPath: "",
+    tabs: [],
+    focusedPane: null,
+  }));
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.queryByTestId("git-scroll-region")).not.toBeInTheDocument();
+});
+
+test("desktop workbench falls back to files when the next bot workspace has no saved session", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 12 }],
+  });
+
+  localStorage.setItem("web-workbench-pane-state", JSON.stringify({
+    sidebarView: "git",
+    sidebarCollapsed: false,
+    terminalCollapsed: false,
+    chatCollapsed: false,
+    sidebarWidthPx: 320,
+    chatWidthPx: 384,
+    editorHeightPx: 420,
+  }));
+
+  const view = render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.queryByTestId("git-scroll-region")).not.toBeInTheDocument();
+
+  view.rerender(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench
+        authToken="123"
+        botAlias="team2"
+        client={client}
+        viewMode="desktop"
+        onViewModeChange={() => {}}
+        onOpenBotSwitcher={() => {}}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.queryByTestId("git-scroll-region")).not.toBeInTheDocument();
+});
+
 test("desktop titlebar layout controls toggle visible panes", async () => {
   const user = userEvent.setup();
 

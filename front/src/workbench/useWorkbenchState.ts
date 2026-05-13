@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   clampPaneState,
   DEFAULT_DESKTOP_PANE_STATE,
-  isDesktopSidebarView,
   type DesktopPaneState,
   type DesktopSidebarView,
 } from "./workbenchTypes";
@@ -19,10 +18,6 @@ function normalizeStoredPaneState(raw: unknown): DesktopPaneState {
   }
 
   const candidate = raw as Record<string, unknown>;
-  const sidebarView = isDesktopSidebarView(candidate.sidebarView)
-    ? candidate.sidebarView
-    : DEFAULT_DESKTOP_PANE_STATE.sidebarView;
-
   return {
     sidebarCollapsed: typeof candidate.sidebarCollapsed === "boolean"
       ? candidate.sidebarCollapsed
@@ -35,7 +30,7 @@ function normalizeStoredPaneState(raw: unknown): DesktopPaneState {
     chatCollapsed: typeof candidate.chatCollapsed === "boolean"
       ? candidate.chatCollapsed
       : DEFAULT_DESKTOP_PANE_STATE.chatCollapsed,
-    sidebarView,
+    sidebarView: DEFAULT_DESKTOP_PANE_STATE.sidebarView,
     sidebarWidthPx: toNumber(candidate.sidebarWidthPx, toNumber(candidate.filesWidthPx, DEFAULT_DESKTOP_PANE_STATE.sidebarWidthPx)),
     chatWidthPx: toNumber(candidate.chatWidthPx, DEFAULT_DESKTOP_PANE_STATE.chatWidthPx),
     editorHeightPx: toNumber(candidate.editorHeightPx, DEFAULT_DESKTOP_PANE_STATE.editorHeightPx),
@@ -59,7 +54,8 @@ export function useWorkbenchState() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(WORKBENCH_PANE_STATE_STORAGE_KEY, JSON.stringify(paneState));
+      const { sidebarView: _sidebarView, ...persistedPaneState } = paneState;
+      localStorage.setItem(WORKBENCH_PANE_STATE_STORAGE_KEY, JSON.stringify(persistedPaneState));
     } catch {
       // Ignore storage failures and keep the in-memory state.
     }
@@ -94,6 +90,13 @@ export function useWorkbenchState() {
     }));
   }
 
+  function restoreSidebarView(sidebarView: DesktopSidebarView) {
+    setPaneState((current) => ({
+      ...current,
+      sidebarView,
+    }));
+  }
+
   function resizePane(
     key: "sidebarWidthPx" | "chatWidthPx" | "editorHeightPx",
     nextValue: number,
@@ -116,6 +119,7 @@ export function useWorkbenchState() {
     toggleTerminal,
     toggleChat,
     setSidebarView,
+    restoreSidebarView,
     resizePane,
   };
 }

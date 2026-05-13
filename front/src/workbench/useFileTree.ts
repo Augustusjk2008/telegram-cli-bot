@@ -308,7 +308,6 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       ...ancestorPathsForPath(result.highlightPath || path),
     ]);
     expandedPathsRef.current = nextExpandedPaths;
-    setRootPath(result.rootPath || rootPath);
     setExpandedPaths(nextExpandedPaths);
     setBranches((current) => ({
       ...current,

@@ -146,13 +146,15 @@ export function DesktopWorkbench({
   onDirtyTabsChange,
   onChatPaneVisibilityChange,
 }: Props) {
-  const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, resizePane } = useWorkbenchState();
+  const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly });
   const tabs = useEditorTabs({ botAlias, client });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const editorPaneRef = useRef<HTMLElement | null>(null);
   const restoringRef = useRef(false);
+  const previousBotAliasRef = useRef(botAlias);
+  const previousWorkspaceRootRef = useRef("");
   const [layoutBounds, setLayoutBounds] = useState({
     columnsWidthPx: 1440,
     centerHeightPx: 900,
@@ -351,6 +353,37 @@ export function DesktopWorkbench({
   }, [focusedPane, layoutState.chatWidthPx, layoutState.editorHeightPx, layoutState.sidebarCollapsed, layoutState.sidebarWidthPx]);
 
   useEffect(() => {
+    if (previousBotAliasRef.current === botAlias) {
+      return;
+    }
+    previousBotAliasRef.current = botAlias;
+    restoreSidebarView("files");
+    setFocusedPane(null);
+    setTerminalOverride(null);
+    setPendingTerminalOverride(null);
+    setPendingSidebarWorkdir("");
+    setWorkspaceView("editor");
+  }, [botAlias, restoreSidebarView]);
+
+  useEffect(() => {
+    if (!fileTree.rootPath) {
+      return;
+    }
+    const previousWorkspaceRoot = previousWorkspaceRootRef.current;
+    previousWorkspaceRootRef.current = fileTree.rootPath;
+    if (!previousWorkspaceRoot || previousWorkspaceRoot === fileTree.rootPath) {
+      return;
+    }
+    restoreSidebarView("files");
+    setFocusedPane(null);
+    setTerminalOverride(null);
+    setPendingTerminalOverride(null);
+    setPendingSidebarWorkdir("");
+    setWorkspaceView("editor");
+    void tabs.restoreFromSnapshot([], "");
+  }, [fileTree.rootPath, restoreSidebarView, tabs]);
+
+  useEffect(() => {
     if (!fileTree.rootPath || !session.restoreLoaded || session.restoreApplied || restoringRef.current) {
       return;
     }
@@ -362,7 +395,7 @@ export function DesktopWorkbench({
       try {
         const restoredSession = session.restoredSession;
         if (restoredSession) {
-          setSidebarView(restoredSession.sidebarView);
+          restoreSidebarView(restoredSession.sidebarView);
           setFocusedPane(restoredSession.focusedPane ?? null);
           setTerminalOverride(restoredSession.terminalOverrideCwd
             ? { cwd: restoredSession.terminalOverrideCwd, source: "manual" }

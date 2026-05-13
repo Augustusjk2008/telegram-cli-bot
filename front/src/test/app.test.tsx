@@ -2,8 +2,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "../app/App";
+import { DEMO_MAIN_WORKDIR, DEMO_TEAM_WORKDIR } from "../mocks/demoEnvironment";
 import type { BotSummary, ChatMessage, SessionState } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
 
 const terminalSessionMock = vi.hoisted(() => ({
   sendControl: vi.fn(),
@@ -237,6 +239,56 @@ test("desktop bot switcher keeps focused bot detail interactive with motion", as
 
   expect(within(popover).getAllByText(/team2/i).length).toBeGreaterThan(0);
   expect(within(detail).getByRole("button", { name: /进入|当前/i })).toBeEnabled();
+});
+
+test("desktop bot switching restores sidebar view per bot session", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  localStorage.setItem("web-workbench-pane-state", JSON.stringify({
+    sidebarView: "git",
+    sidebarCollapsed: false,
+    terminalCollapsed: false,
+    chatCollapsed: false,
+    sidebarWidthPx: 320,
+    chatWidthPx: 384,
+    editorHeightPx: 420,
+  }));
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", DEMO_MAIN_WORKDIR), JSON.stringify({
+    version: 1,
+    botAlias: "main",
+    workspaceRoot: DEMO_MAIN_WORKDIR,
+    sidebarView: "files",
+    expandedPaths: [],
+    selectedTreePath: "",
+    activeTabPath: "",
+    tabs: [],
+    focusedPane: null,
+  }));
+  localStorage.setItem(buildWorkbenchSessionStorageKey("team2", DEMO_TEAM_WORKDIR), JSON.stringify({
+    version: 1,
+    botAlias: "team2",
+    workspaceRoot: DEMO_TEAM_WORKDIR,
+    sidebarView: "git",
+    expandedPaths: [],
+    selectedTreePath: "",
+    activeTabPath: "",
+    tabs: [],
+    focusedPane: null,
+  }));
+
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.queryByTestId("git-scroll-region")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+
+  expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
+  expect(await screen.findByTestId("git-scroll-region")).toBeInTheDocument();
 });
 
 test("mobile bot switcher still uses bottom sheet", async () => {
