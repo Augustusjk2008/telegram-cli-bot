@@ -1,3 +1,4 @@
+import { Fragment, type CSSProperties, type ReactNode } from "react";
 import { X } from "lucide-react";
 import type { AnnouncementItem } from "../services/types";
 
@@ -15,6 +16,16 @@ const severityClass: Record<string, string> = {
   danger: "border-red-500 bg-red-500",
 };
 
+const allowedInlineTags = new Set(["span", "strong", "b", "em", "i", "u", "s", "code", "br"]);
+const dangerousTags = new Set(["script", "style", "iframe", "object", "embed", "link", "meta"]);
+const stylePropertyMap: Record<string, keyof CSSProperties> = {
+  color: "color",
+  "background-color": "backgroundColor",
+  "font-weight": "fontWeight",
+  "font-style": "fontStyle",
+  "text-decoration": "textDecoration",
+};
+
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -27,6 +38,98 @@ function formatTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function isSafeStyleValue(property: keyof CSSProperties, value: string) {
+  const normalized = value.trim();
+  const lower = normalized.toLowerCase();
+  if (!normalized || /url\s*\(|expression\s*\(|javascript:|data:|@import|behavior\s*:/.test(lower)) {
+    return false;
+  }
+  if (property === "color" || property === "backgroundColor") {
+    return /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\)|hsla?\([\d\s.,%]+\)|[a-z]+|transparent|currentcolor)$/i.test(normalized);
+  }
+  if (property === "fontWeight") {
+    return /^(normal|bold|bolder|lighter|[1-9]00)$/i.test(normalized);
+  }
+  if (property === "fontStyle") {
+    return /^(normal|italic|oblique)$/i.test(normalized);
+  }
+  if (property === "textDecoration") {
+    return /^(none|underline|overline|line-through)(\s+(none|underline|overline|line-through))*$/i.test(normalized);
+  }
+  return false;
+}
+
+function sanitizeStyleAttribute(value: string): CSSProperties {
+  const style: CSSProperties = {};
+  value.split(";").forEach((declaration) => {
+    const separatorIndex = declaration.indexOf(":");
+    if (separatorIndex < 0) {
+      return;
+    }
+    const rawProperty = declaration.slice(0, separatorIndex).trim().toLowerCase();
+    const rawValue = declaration.slice(separatorIndex + 1).trim();
+    const property = stylePropertyMap[rawProperty];
+    if (!property || !isSafeStyleValue(property, rawValue)) {
+      return;
+    }
+    (style as Record<string, string>)[property] = rawValue;
+  });
+  return style;
+}
+
+function styleProps(element: Element): { style?: CSSProperties } {
+  const style = sanitizeStyleAttribute(element.getAttribute("style") || "");
+  return Object.keys(style).length > 0 ? { style } : {};
+}
+
+function renderInlineNode(node: ChildNode, key: string): ReactNode {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent || "";
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return null;
+  }
+
+  const element = node as Element;
+  const tag = element.tagName.toLowerCase();
+  if (dangerousTags.has(tag)) {
+    return null;
+  }
+  const children = Array.from(element.childNodes).map((child, index) => renderInlineNode(child, `${key}-${index}`));
+  if (!allowedInlineTags.has(tag)) {
+    return <Fragment key={key}>{children}</Fragment>;
+  }
+  if (tag === "br") {
+    return <br key={key} />;
+  }
+
+  const props = styleProps(element);
+  if (tag === "strong" || tag === "b") {
+    return <strong key={key} {...props}>{children}</strong>;
+  }
+  if (tag === "em" || tag === "i") {
+    return <em key={key} {...props}>{children}</em>;
+  }
+  if (tag === "u") {
+    return <u key={key} {...props}>{children}</u>;
+  }
+  if (tag === "s") {
+    return <s key={key} {...props}>{children}</s>;
+  }
+  if (tag === "code") {
+    return <code key={key} {...props}>{children}</code>;
+  }
+  return <span key={key} {...props}>{children}</span>;
+}
+
+function renderSafeInlineHtml(value: string): ReactNode {
+  if (!value || typeof DOMParser === "undefined") {
+    return value;
+  }
+  const document = new DOMParser().parseFromString(`<body>${value}</body>`, "text/html");
+  return Array.from(document.body.childNodes).map((node, index) => renderInlineNode(node, `announcement-html-${index}`));
 }
 
 export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
@@ -75,15 +178,15 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
                       <span>{formatTime(item.publishedAt)}</span>
                       <span className="rounded border border-[var(--border)] px-1.5 py-0.5">{item.category}</span>
                     </div>
-                    <h3 className="mt-2 text-sm font-semibold text-[var(--text)]">{item.title}</h3>
-                    <p className="mt-1 text-sm text-[var(--muted)]">{item.summary}</p>
+                    <h3 className="mt-2 text-sm font-semibold text-[var(--text)]">{renderSafeInlineHtml(item.title)}</h3>
+                    <p className="mt-1 text-sm text-[var(--muted)]">{renderSafeInlineHtml(item.summary)}</p>
                     {item.sections.length ? (
                       <div className="mt-3 space-y-3">
                         {item.sections.map((section) => (
                           <section key={`${item.id}-${section.label}`}>
                             <h4 className="text-xs font-semibold text-[var(--text)]">{section.label}</h4>
                             <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-[var(--muted)]">
-                              {section.items.map((entry) => <li key={entry}>{entry}</li>)}
+                              {section.items.map((entry) => <li key={entry}>{renderSafeInlineHtml(entry)}</li>)}
                             </ul>
                           </section>
                         ))}

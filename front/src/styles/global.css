@@ -15,6 +15,34 @@ html, body, #root {
   box-sizing: border-box;
 }
 
+.app-logo {
+  line-height: 0;
+}
+
+.app-logo-image {
+  display: block;
+}
+
+.app-logo-image--classic {
+  display: none;
+}
+
+:root[data-theme="classic"] .app-logo-image--deep {
+  display: none;
+}
+
+:root[data-theme="classic"] .app-logo-image--classic {
+  display: block;
+}
+
+.app-logo-mark {
+  filter: drop-shadow(0 0 18px var(--accent-soft-strong));
+}
+
+:root[data-theme="classic"] .app-logo-mark {
+  filter: drop-shadow(0 2px 3px rgba(46, 37, 28, 0.18));
+}
+
 .chat-body-content {
   font-family: var(--chat-body-font-family);
   font-size: var(--chat-body-font-size);

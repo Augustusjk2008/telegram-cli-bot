@@ -14,6 +14,7 @@ import { clsx } from "clsx";
 import type { ViewMode } from "./layoutMode";
 import type { SessionState } from "../services/types";
 import { isGuest } from "../utils/capabilities";
+import { AppLogo } from "../components/AppLogo";
 
 export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "plugins" | "settings";
 
@@ -76,6 +77,7 @@ export function MobileShell({
               />
             ) : null}
             <Menu className="w-5 h-5" />
+            <AppLogo size={22} decorative />
             <span className="font-semibold">{currentBot}</span>
           </button>
           <div className="flex items-center gap-2">

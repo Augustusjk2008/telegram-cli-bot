@@ -237,14 +237,14 @@ test("desktop titlebar layout controls toggle visible panes", async () => {
   expect(screen.getByTestId("desktop-pane-chat")).toHaveAttribute("data-collapsed", "true");
   expect(screen.queryByRole("separator", { name: "调整聊天区宽度" })).not.toBeInTheDocument();
   expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
-    gridTemplateColumns: "320px 8px minmax(0, 1fr) 0px 0px",
+    gridTemplateColumns: "320px 3px minmax(0, 1fr) 0px 0px",
   });
   expect(localStorage.getItem("web-workbench-pane-state")).toContain("\"chatCollapsed\":true");
 
   await user.click(screen.getByRole("button", { name: "隐藏左侧栏" }));
   expect(screen.getByTestId("desktop-pane-files")).toHaveAttribute("data-collapsed", "true");
   expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
-    gridTemplateColumns: "48px 8px minmax(0, 1fr) 0px 0px",
+    gridTemplateColumns: "48px 3px minmax(0, 1fr) 0px 0px",
   });
 });
 
@@ -263,6 +263,7 @@ test("desktop workbench marks pane resizing while dragging separators", async ()
   const root = await screen.findByTestId("desktop-workbench-root");
   const separator = screen.getByRole("separator", { name: "调整文件区宽度" });
 
+  expect(separator).toHaveClass("bg-[var(--workbench-titlebar-bg)]");
   expect(root).toHaveAttribute("data-resizing", "false");
   fireEvent.pointerDown(separator, { pointerId: 1, clientX: 320 });
   expect(root).toHaveAttribute("data-resizing", "true");
@@ -993,10 +994,10 @@ test("focused panes maximize into the available workbench area", async () => {
 
   expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-focused-pane", "none");
   expect(columns).toHaveStyle({
-    gridTemplateColumns: "320px 8px minmax(0, 1fr) 8px 384px",
+    gridTemplateColumns: "320px 3px minmax(0, 1fr) 3px 384px",
   });
   expect(centerRows).toHaveStyle({
-    gridTemplateRows: "420px 8px minmax(160px, 1fr)",
+    gridTemplateRows: "420px 3px minmax(160px, 1fr)",
   });
 });
 

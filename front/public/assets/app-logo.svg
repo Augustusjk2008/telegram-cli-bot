@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="g02" x1="50" y1="38" x2="207" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A4FFF6"/>
+      <stop offset=".5" stop-color="#49D8FF"/>
+      <stop offset="1" stop-color="#6A79FF"/>
+    </linearGradient>
+    <linearGradient id="face02" x1="99" y1="84" x2="158" y2="149" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D7FFF9" stop-opacity=".32"/>
+      <stop offset=".55" stop-color="#43D8FF" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#6778FF" stop-opacity=".1"/>
+    </linearGradient>
+    <filter id="glow02" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#57EAFF" flood-opacity=".75"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="9" flood-color="#6C6DFF" flood-opacity=".22"/>
+    </filter>
+  </defs>
+  <g filter="url(#glow02)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 42 190 78v71l-62 36-62-36V78z" fill="#11162C" fill-opacity=".18" stroke="url(#g02)" stroke-width="7"/>
+    <path d="M128 42v-19" stroke="url(#g02)" stroke-width="7"/>
+    <path d="M72 150 47 172" stroke="url(#g02)" stroke-width="7"/>
+    <path d="M184 150 209 172" stroke="url(#g02)" stroke-width="7"/>
+    <circle cx="128" cy="20" r="10" fill="#11162C" stroke="url(#g02)" stroke-width="6"/>
+    <circle cx="44" cy="175" r="10" fill="#11162C" stroke="url(#g02)" stroke-width="6"/>
+    <circle cx="212" cy="175" r="10" fill="#11162C" stroke="url(#g02)" stroke-width="6"/>
+    <path d="m128 76 31 18v36l-31 18-31-18V94z" fill="url(#face02)" stroke="url(#g02)" stroke-width="6"/>
+    <path d="m97 94 31 18 31-18" stroke="#D9FFF9" stroke-width="4" opacity=".62"/>
+    <path d="M128 112v36" stroke="#7AF0FF" stroke-width="4" opacity=".65"/>
+    <path d="M66 78 128 114 190 78" stroke="#8FF8FF" stroke-width="3" opacity=".28"/>
+    <path d="M78 145 128 174 178 145" stroke="#6EEAFF" stroke-width="3" opacity=".24"/>
+    <circle cx="128" cy="112" r="4" fill="#FFFFFF"/>
+  </g>
+</svg>

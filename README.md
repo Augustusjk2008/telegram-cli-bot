@@ -1,16 +1,15 @@
-# Orbit Safe Claw 🦞
+# Orbit Safe Claw
 
-把本地 `codex` / `claude` CLI 封装成网页控制台。支持桌面和手机浏览器，当前仅保留 Web 入口，不再包含 Telegram 机器人入口。
+远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude`、项目文件、Git、终端、插件视图、Assistant 自动化和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent、集群任务和后台维护流程。
 
-## 现在支持什么
+## 核心能力
 
-- 本地 CLI：`codex`、`claude`
-- Bot 模式：`cli`、`assistant`
-- 1 个主 Bot + 多个托管 Bot（`managed_bots.json`），全局最多 1 个 `assistant` Bot
-- CLI Bot 子 agent：非集群模式下拉切换 active agent；集群模式消息里用 `@agent_id`
-- assistant 宿主管理能力：proposal、patch 生成 / apply、memory、diagnostics、audit、Automation 队列 / cron / runs
-- Web 面板：Chat、Files、Git、Terminal、Debug、Plugins、Settings、Assistant Ops
-- 可选 Cloudflare quick tunnel，方便手机直接访问
+- 多 Bot 编排：主 Bot + 托管 Bot 共同运行，每个 Bot 绑定 CLI、工作目录、运行模式、CLI 参数和独立会话。
+- 集群协作：CLI Bot 支持子 agents、`@agent_id` 路由、集群模板、JSON bundle、MCP 连接和模型档位，适合并行分派审查、实现、验证等任务。
+- Assistant Ops：提供 proposal 审批、patch 生成 / dry-run / apply、memory、diagnostics、audit、Automation 队列、cron 和 runs，承载长期维护流程。
+- 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本。
+- 插件运行时：基于 `plugin.json` 扩展文件视图、插件配置和进程运行能力，支持 session 型重型视图，内置 Vivado waveform 示例。
+- 管理与交付：Admin Center 覆盖用户权限、邀请码、公告发布、更新检查、Release 下载和离线包管理；Cloudflare quick tunnel 支持移动端远程访问。
 
 ## 环境要求
 
@@ -36,7 +35,7 @@ Linux：
 2. 下载最新 `orbit-safe-claw-linux-x64-<version>.tar.gz`
 3. 解压后运行 `bash install.sh`
 
-如果你只想拉源码快照：
+源码快照安装：
 
 Windows：
 
@@ -57,7 +56,7 @@ curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/ma
 - 前端依赖和构建
 - `.env`
 
-`codex` / `claude` 只检查，不自动安装；都缺失时会给出提示。
+安装器会检查本机 `codex` / `claude` 可用性，并给出后续配置提示。
 
 ## 如何运行
 
@@ -70,7 +69,7 @@ Linux：
 
 - 运行 `bash start.sh`
 
-如果目录里还没有 `.env`，Windows 的 `start.bat` / `start.ps1` 会先自动运行 `install.bat` 生成配置，再继续启动。
+首次启动时，Windows 的 `start.bat` / `start.ps1` 会自动补齐 `.env` 配置，再继续启动。
 
 默认 Web 绑定地址 `0.0.0.0:8765`，本机访问可用 `http://127.0.0.1:8765`。登录口令使用 `.env` 里的 `WEB_API_TOKEN`。
 
@@ -117,25 +116,22 @@ WEB_API_TOKEN=change-this-password
 }
 ```
 
-说明：
+运行模型：
 
 - `cli` Bot 支持子 agent 和集群配置
 - `assistant` Bot 走宿主管理流程，工作目录下会维护 `.assistant/`
-- 当前机器只允许 1 个 `assistant` Bot
+- `assistant` Bot 采用单实例宿主模型
 
-## 常用能力
+## 工作界面
 
-- Chat：Web 聊天、流式输出、会话历史、trace 查看
-- CLI Bot：子 agent 管理、非集群切换、集群模板、集群 JSON 配置、cluster MCP
-- Assistant Ops：proposal 审批、patch 生成、dry-run、apply、memory、diagnostics、audit、Automation
-- Files：目录浏览、预览、编辑、上传、下载
-- Git：状态、diff、stage/unstage、commit、fetch/pull/push、stash/pop
-- Terminal / Debug：内置终端、调试面板、系统脚本
-- Plugins：插件目录扫描、配置、文件视图扩展，内置 Vivado waveform 示例
+- `cli` Bot：把 Web 消息转发到本地 `codex` / `claude`，保留会话、trace、CLI 参数和子 agent 作用域。
+- `assistant` Bot：走宿主管理流程，在工作目录下维护 `.assistant/`，用于长期记忆、任务编排和自动化维护。
+- Desktop Workbench：面向重复开发操作，集中承载文件树、编辑器、Git、终端、聊天和插件视图。
+- Admin Center：面向运维管理，集中承载账号权限、邀请、公告和更新。
 
 ## 更新
 
-主 Bot 设置页支持 GitHub Release 自动检查和下载更新。下载后的更新会在下次启动或重启后生效。
+主 Bot 设置页和管理中心支持 GitHub Release 自动检查、下载更新和离线包查看。下载后的更新会在下次启动或重启后生效。
 
 首次安装生成的 `.env` 默认写入：
 

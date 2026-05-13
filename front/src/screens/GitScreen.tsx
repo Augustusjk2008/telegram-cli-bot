@@ -80,6 +80,40 @@ function buttonClass(kind: "plain" | "primary" = "plain") {
   );
 }
 
+function sectionClass(extra = "") {
+  return clsx("min-w-0 bg-[var(--workbench-panel-bg)]", extra);
+}
+
+function sectionStackClass(extra = "") {
+  return clsx("min-w-0 space-y-0.5 bg-[var(--workbench-titlebar-bg)]", extra);
+}
+
+function sectionHeaderClass(extra = "") {
+  return clsx(
+    "flex items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--accent)_18%,var(--border))] bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface-strong))] px-3 py-1.5",
+    extra,
+  );
+}
+
+function sectionBodyClass(extra = "") {
+  return clsx("px-3", extra);
+}
+
+function listClass(extra = "") {
+  return clsx("divide-y divide-[var(--border)]/70", extra);
+}
+
+function listRowClass(extra = "") {
+  return clsx(
+    "flex min-w-0 items-center justify-between gap-2 px-1.5 py-1.5 hover:bg-[var(--surface-strong)]",
+    extra,
+  );
+}
+
+function emptyStateClass(extra = "") {
+  return clsx("border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]", extra);
+}
+
 function identityForScope(config: GitIdentityConfig | null, scope: GitIdentityScope) {
   return scope === "local" ? config?.local : config?.global;
 }
@@ -375,9 +409,12 @@ export function GitScreen({
 
       <section
         data-testid="git-scroll-region"
-        className={clsx("min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto", embedded ? "p-3" : "p-4")}
+        className={clsx(
+          "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto",
+          embedded ? "bg-[var(--workbench-titlebar-bg)] py-0.5" : "py-3",
+        )}
       >
-        <div className="space-y-3">
+        <div className={sectionStackClass()}>
           {loading ? <div className="text-center text-[var(--muted)]">加载中...</div> : null}
           {error ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -391,8 +428,8 @@ export function GitScreen({
           ) : null}
 
           {!loading && overview && !overview.repoFound ? (
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-              <div className="space-y-2">
+            <section className={sectionClass()}>
+              <div className={sectionBodyClass("space-y-2")}>
                 <h2 className="text-lg font-semibold">当前目录不在 Git 仓库中</h2>
                 <p className="break-all text-sm text-[var(--muted)]">{overview.workingDir}</p>
               </div>
@@ -412,23 +449,23 @@ export function GitScreen({
                   }
                 }}
                 disabled={actionLoading === "init" || !overview.canInit}
-                className={clsx("mt-4", buttonClass("primary"))}
+                className={clsx("ml-3 mt-4", buttonClass("primary"))}
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
               </button>
-            </div>
+            </section>
           ) : null}
 
           {!loading && overview && overview.repoFound ? (
             <div
               data-testid="git-desktop-shell"
-              className="space-y-3"
+              className={sectionStackClass()}
             >
-              <aside
+              <section
                 data-testid="git-changes-panel"
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)]"
+                className={sectionClass()}
               >
-                <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
+                <div className={sectionHeaderClass()}>
                   <div>
                     <h2 className="text-sm font-semibold">变更</h2>
                     <p className="text-xs text-[var(--muted)]">{countLabel("文件", totalChanges)}</p>
@@ -453,7 +490,7 @@ export function GitScreen({
                   </div>
                 </div>
                 {!changesCollapsed ? (
-                  <div data-testid="git-changes-content" className="space-y-3 p-3">
+                  <div data-testid="git-changes-content" className={sectionBodyClass("mt-2 space-y-3")}>
                     {changeGroups.map(([key, title, items]) => (
                       <div key={key} className="space-y-2">
                         <div className="flex items-center justify-between text-xs font-medium text-[var(--muted)]">
@@ -463,16 +500,16 @@ export function GitScreen({
                           </span>
                         </div>
                         {items.length === 0 ? (
-                          <div className="rounded-md border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]">
+                          <div className={emptyStateClass()}>
                             当前分组暂无文件
                           </div>
                         ) : (
-                          <div className="space-y-1.5">
+                          <div className={listClass()}>
                             {items.map((item) => (
                               <div
                                 key={`${key}-${item.path}`}
                                 data-testid={`git-change-row-${item.path}`}
-                                className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-2.5 py-1.5"
+                                className={listRowClass()}
                               >
                                 <div className="flex min-w-0 items-center justify-between gap-2">
                                   <div className="flex min-w-0 items-center gap-2">
@@ -545,48 +582,50 @@ export function GitScreen({
                     ))}
                   </div>
                 ) : null}
-              </aside>
+              </section>
 
               {blame ? (
-                <aside className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
-                  <div className="flex items-center justify-between gap-2">
+                <section className={sectionClass()}>
+                  <div className={sectionHeaderClass()}>
                     <h2 className="min-w-0 truncate text-sm font-semibold">{blame.path} blame</h2>
                     <button type="button" onClick={() => setBlame(null)} className={buttonClass()}>
                       关闭
                     </button>
                   </div>
-                  <div className="mt-3 max-h-80 overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)]">
-                    {blame.lines.map((line) => (
-                      <div
-                        key={`${line.line}-${line.commit}`}
-                        className="grid min-w-[520px] grid-cols-[48px_88px_minmax(100px,160px)_minmax(160px,1fr)] gap-2 border-b border-[var(--border)] px-2 py-1.5 text-xs last:border-b-0"
-                      >
-                        <span className="text-right font-mono text-[var(--muted)]">{line.line}</span>
-                        <span className="font-mono text-[var(--text)]">{line.shortCommit}</span>
-                        <span className="truncate text-[var(--muted)]" title={`${line.authorName} · ${line.summary}`}>
-                          {line.authorName}
-                        </span>
-                        <span className="min-w-0 truncate font-mono text-[var(--text)]" title={line.content}>
-                          {line.content}
-                        </span>
-                      </div>
-                    ))}
+                  <div className={sectionBodyClass("mt-3")}>
+                    <div className="max-h-80 overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)]">
+                      {blame.lines.map((line) => (
+                        <div
+                          key={`${line.line}-${line.commit}`}
+                          className="grid min-w-[520px] grid-cols-[48px_88px_minmax(100px,160px)_minmax(160px,1fr)] gap-2 border-b border-[var(--border)] px-2 py-1.5 text-xs last:border-b-0"
+                        >
+                          <span className="text-right font-mono text-[var(--muted)]">{line.line}</span>
+                          <span className="font-mono text-[var(--text)]">{line.shortCommit}</span>
+                          <span className="truncate text-[var(--muted)]" title={`${line.authorName} · ${line.summary}`}>
+                            {line.authorName}
+                          </span>
+                          <span className="min-w-0 truncate font-mono text-[var(--text)]" title={line.content}>
+                            {line.content}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </aside>
+                </section>
               ) : null}
 
-              <aside
+              <div
                 data-testid="git-commit-panel"
-                className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3"
+                className={sectionStackClass()}
               >
-                <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--bg)] p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <GitBranch className="h-4 w-4 text-[var(--accent)]" />
+                <section className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
+                    <div className="flex min-w-0 items-start gap-2">
+                      <GitBranch className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
+                      <div className="min-w-0">
                         <h2 className="truncate text-sm font-semibold">{overview.repoName}</h2>
+                        <p className="mt-1 break-all text-xs text-[var(--muted)]">{overview.repoPath}</p>
                       </div>
-                      <p className="mt-1 break-all text-xs text-[var(--muted)]">{overview.repoPath}</p>
                     </div>
                     <span className={clsx(
                       "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
@@ -595,28 +634,28 @@ export function GitScreen({
                       {overview.isClean ? "工作区干净" : "存在改动"}
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="rounded-md border border-[var(--border)] px-2 py-2">
+                  <div className={sectionBodyClass("grid grid-cols-2 gap-2 text-xs")}>
+                    <div className="border-l border-[var(--border)] px-2 py-1.5">
                       <div className="text-[var(--muted)]">当前分支</div>
                       <div className="mt-1 truncate font-medium">{overview.currentBranch || "-"}</div>
                     </div>
-                    <div className="rounded-md border border-[var(--border)] px-2 py-2">
+                    <div className="border-l border-[var(--border)] px-2 py-1.5">
                       <div className="text-[var(--muted)]">Ahead / Behind</div>
                       <div className="mt-1 font-medium">{overview.aheadCount} / {overview.behindCount}</div>
                     </div>
                   </div>
-                </div>
+                </section>
 
-                <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--bg)] p-3">
-                  <div className="flex items-center justify-between gap-2">
+                <section className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">分支</h2>
                     <button type="button" onClick={() => void loadBranches()} className={buttonClass()}>
                       <RefreshCw className="h-3.5 w-3.5" />
                       刷新
                     </button>
                   </div>
-                  {branchesLoading ? <p className="text-xs text-[var(--muted)]">加载分支...</p> : null}
-                  <div className="flex flex-wrap gap-2">
+                  {branchesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载分支...</p> : null}
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <label className="min-w-[180px] flex-1">
                       <span className="sr-only">切换分支</span>
                       <select
@@ -642,7 +681,7 @@ export function GitScreen({
                       切换
                     </button>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <label className="min-w-[180px] flex-1">
                       <span className="sr-only">新建分支名</span>
                       <input
@@ -663,9 +702,12 @@ export function GitScreen({
                       新建分支
                     </button>
                   </div>
-                  <div className="space-y-1">
+                  <div className={sectionBodyClass(listClass())}>
                     {branches.branches.map((branch) => (
-                      <div key={branch.name} className="rounded border border-[var(--border)] px-2 py-1.5 text-xs">
+                      <div
+                        key={branch.name}
+                        className={listRowClass(clsx("block text-xs", branch.current ? "bg-[var(--surface-strong)]" : ""))}
+                      >
                         <div className="flex items-center justify-between gap-2">
                           <span className="truncate font-medium">{branch.name}</span>
                           <span className="shrink-0 text-[var(--muted)]">{branch.shortHash || "-"}</span>
@@ -676,64 +718,71 @@ export function GitScreen({
                       </div>
                     ))}
                   </div>
-                </div>
+                </section>
 
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void runAction("fetch", () => client.fetchGitRemote(botAlias))}
-                    disabled={actionLoading !== ""}
-                    className={buttonClass()}
-                  >
-                    <DownloadCloud className="h-3.5 w-3.5" />
-                    Fetch
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void runAction("pull", () => client.pullGitRemote(botAlias))}
-                    disabled={actionLoading !== ""}
-                    className={buttonClass()}
-                  >
-                    <DownloadCloud className="h-3.5 w-3.5" />
-                    Pull
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void runAction("push", () => client.pushGitRemote(botAlias))}
-                    disabled={actionLoading !== ""}
-                    className={buttonClass()}
-                  >
-                    <UploadCloud className="h-3.5 w-3.5" />
-                    Push
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void stashChanges()}
-                    disabled={actionLoading !== ""}
-                    className={buttonClass()}
-                  >
-                    <Archive className="h-3.5 w-3.5" />
-                    Stash Push
-                  </button>
-                </div>
+                <section className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
+                    <h2 className="text-sm font-semibold">远端</h2>
+                  </div>
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                    <button
+                      type="button"
+                      onClick={() => void runAction("fetch", () => client.fetchGitRemote(botAlias))}
+                      disabled={actionLoading !== ""}
+                      className={buttonClass()}
+                    >
+                      <DownloadCloud className="h-3.5 w-3.5" />
+                      Fetch
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runAction("pull", () => client.pullGitRemote(botAlias))}
+                      disabled={actionLoading !== ""}
+                      className={buttonClass()}
+                    >
+                      <DownloadCloud className="h-3.5 w-3.5" />
+                      Pull
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runAction("push", () => client.pushGitRemote(botAlias))}
+                      disabled={actionLoading !== ""}
+                      className={buttonClass()}
+                    >
+                      <UploadCloud className="h-3.5 w-3.5" />
+                      Push
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void stashChanges()}
+                      disabled={actionLoading !== ""}
+                      className={buttonClass()}
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                      Stash Push
+                    </button>
+                  </div>
+                </section>
 
-                <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--bg)] p-3">
-                  <div className="flex items-center justify-between gap-2">
+                <section className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">Stash</h2>
                     <button type="button" onClick={() => void loadStashes()} className={buttonClass()}>
                       <RefreshCw className="h-3.5 w-3.5" />
                       刷新
                     </button>
                   </div>
-                  {stashesLoading ? <p className="text-xs text-[var(--muted)]">加载 stash...</p> : null}
+                  {stashesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 stash...</p> : null}
                   {stashes.items.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]">
-                      暂无 stash
+                    <div className={sectionBodyClass()}>
+                      <div className={emptyStateClass()}>
+                        暂无 stash
+                      </div>
                     </div>
                   ) : (
-                    <div className="space-y-1.5">
+                    <div className={sectionBodyClass(listClass())}>
                       {stashes.items.map((stash) => (
-                        <div key={stash.ref} className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div key={stash.ref} className={listRowClass("items-start py-2")}>
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="font-mono text-xs font-medium text-[var(--text)]">{stash.ref}</div>
@@ -769,18 +818,22 @@ export function GitScreen({
                       ))}
                     </div>
                   )}
-                </div>
+                </section>
 
-                <div className="space-y-2">
-                  <h2 className="text-sm font-semibold">提交更改</h2>
-                  <textarea
-                    value={commitMessage}
-                    onChange={(event) => setCommitMessage(event.target.value)}
-                    rows={5}
-                    placeholder="输入 commit message"
-                    className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                  <div className="flex flex-wrap gap-2">
+                <section className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
+                    <h2 className="text-sm font-semibold">提交更改</h2>
+                  </div>
+                  <div className={sectionBodyClass()}>
+                    <textarea
+                      value={commitMessage}
+                      onChange={(event) => setCommitMessage(event.target.value)}
+                      rows={5}
+                      placeholder="输入 commit message"
+                      className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                    />
+                  </div>
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <button
                       type="button"
                       onClick={() => void runAction("stage-all", async () => {
@@ -815,10 +868,10 @@ export function GitScreen({
                       {actionLoading === "commit" ? "提交中..." : "提交更改"}
                     </button>
                   </div>
-                </div>
+                </section>
 
-                <div data-testid="git-recent-commits-panel" className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
+                <section data-testid="git-recent-commits-panel" className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">最近提交</h2>
                     <button
                       type="button"
@@ -831,13 +884,15 @@ export function GitScreen({
                   </div>
                   {!commitsCollapsed ? (
                     overview.recentCommits.length === 0 ? (
-                      <div className="rounded-md border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]">
-                        当前仓库还没有提交记录
+                      <div className={sectionBodyClass()}>
+                        <div className={emptyStateClass()}>
+                          当前仓库还没有提交记录
+                        </div>
                       </div>
                     ) : (
-                      <div data-testid="git-recent-commits-content" className="space-y-2">
+                      <div data-testid="git-recent-commits-content" className={sectionBodyClass(listClass())}>
                         {overview.recentCommits.map((item) => (
-                          <div key={item.hash} className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                          <div key={item.hash} className={listRowClass("block px-1.5 py-2")}>
                             <div className="text-sm font-medium text-[var(--text)]">{item.subject}</div>
                             <div className="mt-1 text-[11px] text-[var(--muted)]">
                               {item.shortHash} · {item.authorName} · {item.authoredAt}
@@ -847,17 +902,17 @@ export function GitScreen({
                       </div>
                     )
                   ) : null}
-                </div>
-              </aside>
+                </section>
+              </div>
             </div>
           ) : null}
 
           {!loading ? (
-            <aside
+            <section
               data-testid="git-identity-panel"
-              className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3"
+              className={sectionClass("space-y-3")}
             >
-              <div className="flex items-center justify-between gap-3">
+              <div className={sectionHeaderClass("gap-3")}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <UserRound className="h-4 w-4 text-[var(--accent)]" />
@@ -873,9 +928,9 @@ export function GitScreen({
                 </button>
               </div>
 
-              {identityLoading ? <p className="text-xs text-[var(--muted)]">加载 Git 用户...</p> : null}
+              {identityLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 Git 用户...</p> : null}
 
-              <div className="flex flex-wrap gap-2">
+              <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                 <button
                   type="button"
                   onClick={() => selectIdentityScope("global")}
@@ -893,7 +948,7 @@ export function GitScreen({
                 </button>
               </div>
 
-              <div className="grid gap-2 md:grid-cols-2">
+              <div className={sectionBodyClass("grid gap-2 md:grid-cols-2")}>
                 <label className="space-y-1">
                   <span className="text-xs font-medium text-[var(--muted)]">用户名</span>
                   <input
@@ -916,7 +971,7 @@ export function GitScreen({
                 </label>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className={sectionBodyClass("flex flex-wrap items-center justify-between gap-2")}>
                 <p className="text-xs text-[var(--muted)]">
                   {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
                 </p>
@@ -930,7 +985,7 @@ export function GitScreen({
                   {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
                 </button>
               </div>
-            </aside>
+            </section>
           ) : null}
         </div>
       </section>

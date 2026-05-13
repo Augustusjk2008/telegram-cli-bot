@@ -71,7 +71,7 @@ export function PluginConfigForm({ plugin, disabled = false, onSubmit }: Props) 
   }
 
   return (
-    <div className="mt-3 space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] p-3">
+    <div className="mt-3 space-y-3 border-t border-[var(--border)]/70 bg-[var(--surface-strong)] px-3 py-3">
       {plugin.configSchema.title ? (
         <div className="text-sm font-medium text-[var(--text)]">{plugin.configSchema.title}</div>
       ) : null}
@@ -153,7 +153,7 @@ export function PluginConfigForm({ plugin, disabled = false, onSubmit }: Props) 
             setError("");
             onSubmit({ config: nextConfig });
           }}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-60"
+          className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-60"
           aria-label={`保存 ${plugin.name} 设置`}
         >
           保存

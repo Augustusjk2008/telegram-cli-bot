@@ -72,7 +72,7 @@ export type DesktopPaneState = {
 
 export const ACTIVITY_RAIL_WIDTH_PX = 48;
 export const COLLAPSED_SIDEBAR_SIZE_PX = ACTIVITY_RAIL_WIDTH_PX;
-export const PANE_RESIZER_SIZE_PX = 8;
+export const PANE_RESIZER_SIZE_PX = 3;
 export const MIN_SIDEBAR_WIDTH_PX = 220;
 export const MIN_CHAT_WIDTH_PX = 260;
 export const MIN_EDITOR_HEIGHT_PX = 220;

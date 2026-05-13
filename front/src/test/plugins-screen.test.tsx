@@ -4,6 +4,13 @@ import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PluginsScreen } from "../screens/PluginsScreen";
 
+function expectNoStructuralCard(element: HTMLElement) {
+  expect(element).not.toHaveClass("rounded-lg");
+  expect(element).not.toHaveClass("rounded-xl");
+  expect(element).not.toHaveClass("border");
+  expect(element).not.toHaveClass("bg-[var(--surface)]");
+}
+
 test("plugins screen toggles plugin enabled state and saves schema config", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -30,6 +37,24 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
   await waitFor(() => {
     expect(updateSpy).toHaveBeenCalledWith("timing-report", { config: { defaultPageSize: 200 } });
   });
+});
+
+test("plugins screen uses flat workbench sections like git", async () => {
+  render(<PluginsScreen client={new MockWebBotClient()} botAlias="main" embedded />);
+
+  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
+  expect(screen.getByTestId("plugins-scroll-region")).toHaveClass("bg-[var(--workbench-titlebar-bg)]", "py-0.5");
+  expect(screen.getByTestId("plugins-catalog")).toHaveClass("bg-[var(--workbench-panel-bg)]");
+  expect(screen.getByTestId("plugins-overview-header")).toHaveClass(
+    "border-[color-mix(in_srgb,var(--accent)_18%,var(--border))]",
+    "bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface-strong))]",
+  );
+  expectNoStructuralCard(screen.getByTestId("plugins-overview-panel"));
+  expectNoStructuralCard(screen.getByTestId("plugin-catalog-item-vivado-waveform"));
+  expect(screen.getByTestId("plugin-catalog-item-vivado-waveform")).not.toHaveClass("bg-[var(--workbench-panel-bg)]");
+  expect(screen.queryByText("安装管理")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "安装插件" })).toHaveClass("h-7", "px-2", "text-xs");
+  expect(screen.getAllByRole("button", { name: "卸载" })[0]).toHaveClass("h-7", "px-2", "text-xs");
 });
 
 test("plugins screen lets repo outline pick a folder before opening", async () => {
@@ -66,25 +91,43 @@ test("plugins screen opens folder picker before installing plugin", async () => 
 
   await waitFor(() => {
     expect(installSpy).toHaveBeenCalledWith({
+      force: true,
       sourcePath: expect.any(String),
     });
   });
 });
 
-test("plugins screen can force reinstall and uninstall plugins", async () => {
+test("plugins screen can uninstall plugins from plugin rows", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
 
   render(<PluginsScreen botAlias="main" client={client} />);
 
   expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
-  const pluginRow = screen.getByText("vivado-waveform").closest("div");
-  expect(pluginRow).not.toBeNull();
-
-  await user.click(within(pluginRow as HTMLElement).getByRole("button", { name: "覆盖安装" }));
-  expect(await screen.findByText(/插件已覆盖安装/)).toBeInTheDocument();
+  const pluginRow = screen.getByTestId("plugin-catalog-item-vivado-waveform");
 
   await user.click(within(pluginRow as HTMLElement).getByRole("button", { name: "卸载" }));
   await user.click(await screen.findByRole("button", { name: "确认卸载" }));
   expect(await screen.findByText(/插件已卸载/)).toBeInTheDocument();
+});
+
+test("plugins screen renders uninstall dialog outside nested desktop pane", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const host = document.createElement("div");
+  host.style.transform = "translateZ(0)";
+  document.body.appendChild(host);
+
+  const { unmount } = render(<PluginsScreen botAlias="main" client={client} embedded />, { container: host });
+
+  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
+  const pluginRow = screen.getByTestId("plugin-catalog-item-vivado-waveform");
+
+  await user.click(within(pluginRow as HTMLElement).getByRole("button", { name: "卸载" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "卸载插件" });
+  expect(dialog.parentElement).toBe(document.body);
+
+  unmount();
+  host.remove();
 });

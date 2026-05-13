@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { useState, type ReactNode } from "react";
 import type { HostEffect, PluginAction, PluginSummary, PluginUpdateInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -72,6 +73,21 @@ function getFolderInputKey(action: PluginAction) {
 function getFolderDialogTitle(action: PluginAction) {
   const title = action.payload?.folderTitle;
   return typeof title === "string" && title.trim() ? title.trim() : "选择文件夹";
+}
+
+function sectionClass(extra = "") {
+  return clsx("min-w-0 bg-[var(--workbench-panel-bg)]", extra);
+}
+
+function sectionBodyClass(extra = "") {
+  return clsx("px-3", extra);
+}
+
+function buttonClass(extra = "") {
+  return clsx(
+    "inline-flex h-7 items-center justify-center rounded border px-2 text-xs font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60",
+    extra,
+  );
 }
 
 export function PluginCatalog({
@@ -162,132 +178,146 @@ export function PluginCatalog({
   }
 
   if (loading) {
-    return <p className="text-sm text-[var(--muted)]">正在检测插件...</p>;
+    return (
+      <section className={sectionClass()}>
+        <div className={sectionBodyClass("py-2 text-sm text-[var(--muted)]")}>正在检测插件...</div>
+      </section>
+    );
   }
 
   if (error || actionError) {
-    return <p className="text-sm text-[var(--danger)]">{error || actionError}</p>;
+    return (
+      <section className={sectionClass()}>
+        <div className={sectionBodyClass("py-2 text-sm text-[var(--danger)]")}>{error || actionError}</div>
+      </section>
+    );
   }
 
   if (plugins.length === 0) {
-    return <p className="text-sm text-[var(--muted)]">{emptyText}</p>;
+    return (
+      <section className={sectionClass()}>
+        <div className={sectionBodyClass("py-2 text-sm text-[var(--muted)]")}>{emptyText}</div>
+      </section>
+    );
   }
 
   return (
-    <div className="space-y-3">
+    <section data-testid="plugins-catalog" className={sectionClass()}>
       {showUsageHint ? (
-        <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-sm text-[var(--muted)]">
-          打开匹配文件会自动进入对应插件视图。
-        </p>
+        <div className={sectionBodyClass("border-b border-[var(--border)]/70 py-2 text-sm text-[var(--muted)]")}>打开匹配文件会自动进入对应插件视图。</div>
       ) : null}
 
-      {plugins.map((plugin) => (
-        <article key={plugin.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          {(() => {
-            const primaryAction = client && botAlias ? getPrimaryCatalogAction(plugin) : null;
-            const extraActions = primaryAction
-              ? (plugin.catalogActions || []).filter((action) => action.id !== primaryAction.id)
-              : (plugin.catalogActions || []);
-            const pluginEnabled = plugin.enabled !== false;
-            const expanded = expandedPluginIds.includes(plugin.id);
-            const statusClassName = pluginEnabled ? "text-emerald-600" : "text-red-600";
-            const toggleButtonClassName = pluginEnabled
-              ? "rounded-lg border border-red-500 px-3 py-1.5 text-sm text-red-600 hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              : "rounded-lg border border-emerald-500 px-3 py-1.5 text-sm text-emerald-600 hover:bg-[var(--surface-strong)] disabled:opacity-60";
-            const expandButtonClassName = "rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--surface-strong)]";
+      <div className={sectionBodyClass("py-1")}>
+        <div className="divide-y divide-[var(--border)]/70">
+          {plugins.map((plugin) => (
+            <article key={plugin.id} data-testid={`plugin-catalog-item-${plugin.id}`} className="min-w-0">
+              {(() => {
+                const primaryAction = client && botAlias ? getPrimaryCatalogAction(plugin) : null;
+                const extraActions = primaryAction
+                  ? (plugin.catalogActions || []).filter((action) => action.id !== primaryAction.id)
+                  : (plugin.catalogActions || []);
+                const pluginEnabled = plugin.enabled !== false;
+                const expanded = expandedPluginIds.includes(plugin.id);
+                const statusClassName = pluginEnabled ? "text-emerald-600" : "text-red-600";
+                const toggleButtonClassName = pluginEnabled
+                  ? buttonClass("border-red-500 text-red-600")
+                  : buttonClass("border-emerald-500 text-emerald-600");
+                const expandButtonClassName = buttonClass("border-[var(--border)] text-[var(--muted)]");
 
-            return (
-              <>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-medium text-[var(--text)]">{plugin.name}</div>
-                    <div className="mt-1 text-xs text-[var(--muted)]">
-                      <span className={statusClassName}>{pluginEnabled ? "已启用" : "已禁用"}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {renderPluginActions ? renderPluginActions(plugin) : null}
-                    {onUpdatePlugin ? (
-                      <button
-                        type="button"
-                        disabled={updatingPluginId === plugin.id}
-                        onClick={() => onUpdatePlugin(plugin.id, { enabled: plugin.enabled === false })}
-                        className={toggleButtonClassName}
-                        aria-label={`${plugin.enabled === false ? "启用" : "禁用"} ${plugin.name}`}
-                      >
-                        {plugin.enabled === false ? "启用" : "禁用"}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      aria-label={`${expanded ? "收起" : "展开"} ${plugin.name}`}
-                      onClick={() => togglePluginExpanded(plugin.id)}
-                      className={expandButtonClassName}
-                    >
-                      {expanded ? "收起" : "展开"}
-                    </button>
-                  </div>
-                </div>
-
-                {expanded ? (
+                return (
                   <>
-                    <div className="mt-3 text-xs text-[var(--muted)]">v{plugin.version}</div>
-                    <p className="mt-1 text-sm text-[var(--muted)]">{plugin.description}</p>
-
-                    {client && botAlias && primaryAction ? (
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div className="flex items-center justify-between gap-3 px-1.5 py-2 hover:bg-[var(--surface-strong)]">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-[var(--text)]">{plugin.name}</div>
+                        <div className="mt-1 text-xs text-[var(--muted)]">
+                          <span className={statusClassName}>{pluginEnabled ? "已启用" : "已禁用"}</span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                        {renderPluginActions ? renderPluginActions(plugin) : null}
+                        {onUpdatePlugin ? (
+                          <button
+                            type="button"
+                            disabled={updatingPluginId === plugin.id}
+                            onClick={() => onUpdatePlugin(plugin.id, { enabled: plugin.enabled === false })}
+                            className={toggleButtonClassName}
+                            aria-label={`${plugin.enabled === false ? "启用" : "禁用"} ${plugin.name}`}
+                          >
+                            {plugin.enabled === false ? "启用" : "禁用"}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
-                          onClick={() => runCatalogAction(plugin, primaryAction)}
-                          className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm text-white hover:opacity-90"
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? "收起" : "展开"} ${plugin.name}`}
+                          onClick={() => togglePluginExpanded(plugin.id)}
+                          className={expandButtonClassName}
                         >
-                          {primaryAction.label}
+                          {expanded ? "收起" : "展开"}
                         </button>
-                        {extraActions.length > 0 ? <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} /> : null}
                       </div>
-                    ) : null}
+                    </div>
 
-                    {client && botAlias && !primaryAction && extraActions.length > 0 ? (
-                      <div className="mt-3">
-                        <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} />
-                      </div>
-                    ) : null}
+                    {expanded ? (
+                      <div className="px-1.5 pb-3">
+                        <div className="text-xs text-[var(--muted)]">v{plugin.version}</div>
+                        <p className="mt-1 text-sm text-[var(--muted)]">{plugin.description}</p>
 
-                    {onUpdatePlugin ? (
-                      <PluginConfigForm
-                        plugin={plugin}
-                        disabled={updatingPluginId === plugin.id}
-                        onSubmit={(input) => onUpdatePlugin(plugin.id, input)}
-                      />
-                    ) : null}
+                        {client && botAlias && primaryAction ? (
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => runCatalogAction(plugin, primaryAction)}
+                              className="inline-flex h-7 items-center justify-center rounded bg-[var(--accent)] px-2 text-xs font-medium text-white hover:opacity-90"
+                            >
+                              {primaryAction.label}
+                            </button>
+                            {extraActions.length > 0 ? <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} /> : null}
+                          </div>
+                        ) : null}
 
-                    {plugin.views.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                        {plugin.views.map((view) => (
-                          <span key={view.id} className="rounded-full bg-[var(--surface-strong)] px-2 py-1">
-                            视图 {view.title}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
+                        {client && botAlias && !primaryAction && extraActions.length > 0 ? (
+                          <div className="mt-3">
+                            <PluginActionBar actions={extraActions} onRunAction={(action) => runCatalogAction(plugin, action)} />
+                          </div>
+                        ) : null}
 
-                    {plugin.fileHandlers.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                        {plugin.fileHandlers.map((handler) => (
-                          <span key={handler.id} className="rounded-full bg-[var(--surface-strong)] px-2 py-1">
-                            支持 {handler.extensions.join(", ")}
-                          </span>
-                        ))}
+                        {onUpdatePlugin ? (
+                          <PluginConfigForm
+                            plugin={plugin}
+                            disabled={updatingPluginId === plugin.id}
+                            onSubmit={(input) => onUpdatePlugin(plugin.id, input)}
+                          />
+                        ) : null}
+
+                        {plugin.views.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+                            {plugin.views.map((view) => (
+                              <span key={view.id} className="rounded bg-[var(--surface-strong)] px-2 py-1">
+                                视图 {view.title}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {plugin.fileHandlers.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+                            {plugin.fileHandlers.map((handler) => (
+                              <span key={handler.id} className="rounded bg-[var(--surface-strong)] px-2 py-1">
+                                支持 {handler.extensions.join(", ")}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </>
-                ) : null}
-              </>
-            );
-          })()}
-        </article>
-      ))}
+                );
+              })()}
+            </article>
+          ))}
+        </div>
+      </div>
       {folderAction && client && botAlias ? (
         <DirectoryPickerDialog
           title={getFolderDialogTitle(folderAction.action)}
@@ -308,6 +338,6 @@ export function PluginCatalog({
           onClose={() => setFolderAction(null)}
         />
       ) : null}
-    </div>
+    </section>
   );
 }

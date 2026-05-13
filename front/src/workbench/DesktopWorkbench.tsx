@@ -851,7 +851,7 @@ export function DesktopWorkbench({
         onOpenBotSwitcher={(anchorRect) => onOpenBotSwitcher?.(anchorRect)}
       />
 
-      <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden">
+      <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
         <div
           data-testid="desktop-workbench-columns"
           ref={columnsRef}

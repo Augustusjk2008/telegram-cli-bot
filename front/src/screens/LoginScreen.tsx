@@ -4,6 +4,7 @@ import {
   APP_TAGLINE,
   APP_VERSION,
 } from "../theme";
+import { AppLogo } from "../components/AppLogo";
 import type { PublicHostInfo } from "../services/types";
 
 type LoginMode = "login" | "register";
@@ -58,9 +59,12 @@ export function LoginScreen({
             <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,transparent,var(--accent),transparent)] opacity-80" />
             <div className="relative flex h-full flex-col justify-center gap-6">
               <div className="space-y-4">
-                <h1 className="text-[1.8rem] font-black tracking-[0.03em] text-[var(--text)] sm:text-[2.3rem] lg:text-[2.7rem]">
-                  {APP_LOGIN_NAME}
-                </h1>
+                <div className="flex flex-wrap items-center gap-4">
+                  <AppLogo size={78} className="app-logo-mark" />
+                  <h1 className="text-[1.8rem] font-black tracking-[0.03em] text-[var(--text)] sm:text-[2.3rem] lg:text-[2.7rem]">
+                    {APP_LOGIN_NAME}
+                  </h1>
+                </div>
                 <p className="max-w-2xl text-lg font-semibold text-[var(--accent)] sm:text-xl">
                   {APP_TAGLINE}
                 </p>

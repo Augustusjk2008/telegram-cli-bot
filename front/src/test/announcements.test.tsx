@@ -35,6 +35,25 @@ test("announcement dialog renders timeline and closes", () => {
   expect(onClose).toHaveBeenCalledWith(item.id);
 });
 
+test("announcement dialog renders safe inline html", () => {
+  const richItem: AnnouncementItem = {
+    ...item,
+    summary: `<span style="color: red; position: fixed;" onclick="alert(1)">这是红色文字</span><img src=x onerror=alert(1)><script>bad()</script>`,
+    sections: [{ label: "新增", items: [`支持 <span style="color: #2563eb;">蓝色</span> 条目`] }],
+  };
+
+  const { container } = render(<AnnouncementDialog open items={[richItem]} latestId={richItem.id} onClose={() => {}} />);
+
+  const redText = screen.getByText("这是红色文字");
+  expect(redText.tagName.toLowerCase()).toBe("span");
+  expect(redText).toHaveStyle({ color: "rgb(255, 0, 0)" });
+  expect(redText).not.toHaveAttribute("onclick");
+  expect(redText).not.toHaveStyle({ position: "fixed" });
+  expect(container.querySelector("img")).toBeNull();
+  expect(screen.queryByText("bad()")).not.toBeInTheDocument();
+  expect(screen.getByText("蓝色")).toHaveStyle({ color: "rgb(37, 99, 235)" });
+});
+
 test("announcement dialog shows empty state", () => {
   render(<AnnouncementDialog open items={[]} latestId="" onClose={() => {}} />);
 

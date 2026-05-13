@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
+import { AppLogo } from "../components/AppLogo";
 
 type LayoutControlId = "sidebar" | "terminal" | "chat";
 
@@ -87,6 +88,7 @@ export function WorkbenchHeader({
       className="flex items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2">
+        <AppLogo size={24} decorative />
         <button
           type="button"
           onClick={(event) => onOpenBotSwitcher(event.currentTarget.getBoundingClientRect())}
