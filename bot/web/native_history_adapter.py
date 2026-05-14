@@ -930,19 +930,27 @@ def _consume_live_kimi_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     if role == "assistant":
         events: list[dict[str, Any]] = []
         content = item.get("content")
-        if isinstance(content, list):
+        text = _stringify_value(content) if isinstance(content, str) else ""
+        if text:
+            events.append(_trace_event("commentary", raw_type="text", summary=text))
+        elif isinstance(content, list):
             for block in content:
                 if not isinstance(block, dict):
                     continue
                 block_type = str(block.get("type") or "").strip().lower()
-                if block_type not in {"think", "reasoning"}:
+                if block_type == "text":
+                    summary = _stringify_value(block.get("text"))
+                    raw_type = "text"
+                elif block_type in {"think", "reasoning"}:
+                    summary = _stringify_value(block.get("think")) or _stringify_value(block.get("text"))
+                    raw_type = block_type
+                else:
                     continue
-                summary = _stringify_value(block.get("think")) or _stringify_value(block.get("text"))
                 if summary:
                     events.append(
                         _trace_event(
                             "commentary",
-                            raw_type="think",
+                            raw_type=raw_type,
                             summary=summary,
                             payload=block,
                         )

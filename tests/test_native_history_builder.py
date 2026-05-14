@@ -135,9 +135,28 @@ def test_consume_stream_trace_chunk_maps_kimi_tool_events():
         state,
     )
 
-    assert [event["kind"] for event in events] == ["commentary", "tool_call", "tool_result"]
-    assert events[1]["summary"] == "Get-ChildItem -Force"
-    assert events[2]["summary"] == "README.md\nbot\nfront"
+    assert [event["kind"] for event in events] == ["commentary", "commentary", "tool_call", "tool_result"]
+    assert events[1]["summary"] == "我先检查目录。"
+    assert events[2]["summary"] == "Get-ChildItem -Force"
+    assert events[3]["summary"] == "README.md\nbot\nfront"
+
+
+def test_consume_stream_trace_chunk_maps_kimi_text_as_commentary():
+    state = create_stream_trace_state("kimi")
+
+    events = consume_stream_trace_chunk(
+        "kimi",
+        "\n".join(
+            [
+                '{"role":"assistant","content":[{"type":"text","text":"正在分析需求。"}]}',
+                '{"role":"assistant","content":"准备读取文件。"}',
+            ]
+        ) + "\n",
+        state,
+    )
+
+    assert [event["kind"] for event in events] == ["commentary", "commentary"]
+    assert [event["summary"] for event in events] == ["正在分析需求。", "准备读取文件。"]
 
 
 def test_claude_tool_result_does_not_start_new_turn(tmp_path: Path):
