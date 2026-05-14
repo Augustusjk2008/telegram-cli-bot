@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,6 +27,16 @@ class AskAgentRequest:
 
 
 @dataclass
+class ClusterAgentTaskMessage:
+    sequence: int
+    task_id: str
+    agent_id: str
+    kind: str
+    content: str
+    created_at: str
+
+
+@dataclass
 class ClusterAgentTask:
     task_id: str
     agent_id: str
@@ -39,6 +50,7 @@ class ClusterAgentTask:
     completed_at: str = ""
     output: str = ""
     error: str = ""
+    messages: list[ClusterAgentTaskMessage] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +65,8 @@ class ClusterRun:
     updated_at: str
     events: list[dict[str, Any]] = field(default_factory=list)
     tasks: dict[str, ClusterAgentTask] = field(default_factory=dict)
+    _next_message_sequence: int = 1
+    message_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
 
 
 class ClusterToolError(RuntimeError):
@@ -182,6 +196,63 @@ class ClusterRuntime:
         self.append_event(run_id, {"kind": "agent_task_started", "task_id": task.task_id, "agent_id": task.agent_id})
         return task
 
+    def append_agent_task_message(
+        self,
+        run_id: str,
+        task_id: str,
+        *,
+        kind: str,
+        content: str,
+    ) -> ClusterAgentTaskMessage | None:
+        run = self._runs[str(run_id)]
+        task = run.tasks[str(task_id)]
+        normalized_kind = str(kind or "").strip().lower()
+        if normalized_kind not in {"progress", "final"}:
+            return None
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            return None
+        if (
+            task.messages
+            and task.messages[-1].kind == normalized_kind
+            and task.messages[-1].content == normalized_content
+        ):
+            return None
+        if normalized_kind == "final" and any(message.kind == "final" for message in task.messages):
+            return None
+        now = self._now_iso()
+        message = ClusterAgentTaskMessage(
+            sequence=run._next_message_sequence,
+            task_id=task.task_id,
+            agent_id=task.agent_id,
+            kind=normalized_kind,
+            content=normalized_content[:4000],
+            created_at=now,
+        )
+        run._next_message_sequence += 1
+        task.messages.append(message)
+        if len(task.messages) > 100:
+            del task.messages[: len(task.messages) - 100]
+        self.append_event(
+            run_id,
+            {
+                "kind": "agent_task_message",
+                "task_id": task.task_id,
+                "agent_id": task.agent_id,
+                "message_kind": message.kind,
+                "sequence": message.sequence,
+                "summary": message.content[:200],
+            },
+        )
+        return message
+
+    async def notify_agent_task_message(self, run_id: str) -> None:
+        run = self._runs.get(str(run_id))
+        if run is None:
+            return
+        async with run.message_condition:
+            run.message_condition.notify_all()
+
     def complete_agent_task(self, run_id: str, task_id: str, output: str) -> ClusterAgentTask:
         task = self._runs[str(run_id)].tasks[str(task_id)]
         now = self._now_iso()
@@ -189,6 +260,7 @@ class ClusterRuntime:
         task.completed_at = now
         task.output = str(output or "")
         task.error = ""
+        self.append_agent_task_message(run_id, task_id, kind="final", content=task.output)
         self.append_event(
             run_id,
             {"kind": "agent_task_completed", "task_id": task.task_id, "agent_id": task.agent_id, "summary": task.output[:200]},
@@ -201,6 +273,7 @@ class ClusterRuntime:
         task.status = "failed"
         task.completed_at = now
         task.error = str(error or "")
+        self.append_agent_task_message(run_id, task_id, kind="final", content=task.error)
         self.append_event(
             run_id,
             {"kind": "agent_task_failed", "task_id": task.task_id, "agent_id": task.agent_id, "error": task.error[:200]},
@@ -219,7 +292,24 @@ class ClusterRuntime:
         elapsed_seconds = (datetime.now().astimezone() - started_at).total_seconds()
         return elapsed_seconds >= task.timeout_seconds
 
-    def _serialize_task(self, task: ClusterAgentTask, *, include_output: bool) -> dict[str, Any]:
+    def _serialize_task_message(self, message: ClusterAgentTaskMessage) -> dict[str, Any]:
+        return {
+            "sequence": message.sequence,
+            "task_id": message.task_id,
+            "agent_id": message.agent_id,
+            "kind": message.kind,
+            "content": message.content,
+            "created_at": message.created_at,
+        }
+
+    def _serialize_task(
+        self,
+        task: ClusterAgentTask,
+        *,
+        include_output: bool,
+        include_messages: bool = False,
+        message_limit: int = 20,
+    ) -> dict[str, Any]:
         item = {
             "task_id": task.task_id,
             "agent_id": task.agent_id,
@@ -232,9 +322,14 @@ class ClusterRuntime:
             "started_at": task.started_at,
             "completed_at": task.completed_at,
             "error": task.error,
+            "message_count": len(task.messages),
+            "latest_message_sequence": task.messages[-1].sequence if task.messages else 0,
         }
         if include_output:
             item["output"] = task.output
+        if include_messages:
+            limit = max(1, min(100, int(message_limit or 20)))
+            item["messages"] = [self._serialize_task_message(message) for message in task.messages[-limit:]]
         return item
 
     def build_task_status(
@@ -243,6 +338,8 @@ class ClusterRuntime:
         task_ids: list[str] | None = None,
         *,
         include_output: bool = True,
+        include_messages: bool = False,
+        message_limit: int = 20,
     ) -> dict[str, Any]:
         run = self._runs[str(run_id)]
         selected_ids = {str(item) for item in task_ids or [] if str(item).strip()}
@@ -252,13 +349,104 @@ class ClusterRuntime:
             if not selected_ids or task.task_id in selected_ids
         ]
         return {
-            "tasks": [self._serialize_task(task, include_output=include_output) for task in tasks],
+            "tasks": [
+                self._serialize_task(
+                    task,
+                    include_output=include_output,
+                    include_messages=include_messages,
+                    message_limit=message_limit,
+                )
+                for task in tasks
+            ],
             "queued_count": sum(1 for task in tasks if task.status == "queued"),
             "running_count": sum(1 for task in tasks if task.status == "running"),
             "completed_count": sum(1 for task in tasks if task.status == "completed"),
             "failed_count": sum(1 for task in tasks if task.status == "failed"),
             "pending_count": sum(1 for task in tasks if task.status in {"queued", "running"}),
         }
+
+    def build_agent_messages(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        include_progress: bool = True,
+        include_final: bool = True,
+        message_limit: int = 20,
+    ) -> dict[str, Any]:
+        run = self._runs[str(run_id)]
+        allowed_kinds: set[str] = set()
+        if include_progress:
+            allowed_kinds.add("progress")
+        if include_final:
+            allowed_kinds.add("final")
+        if not allowed_kinds:
+            allowed_kinds = {"progress", "final"}
+        limit = max(1, min(100, int(message_limit or 20)))
+        messages = [
+            message
+            for task in run.tasks.values()
+            for message in task.messages
+            if message.sequence > after_sequence and message.kind in allowed_kinds
+        ]
+        messages.sort(key=lambda item: item.sequence)
+        limited = messages[:limit]
+        cursor = limited[-1].sequence if limited else max(0, run._next_message_sequence - 1)
+        return {
+            "timed_out": False,
+            "cursor": cursor,
+            "messages": [self._serialize_task_message(message) for message in limited],
+        }
+
+    async def wait_agent_messages(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int,
+        wait_seconds: float,
+        include_progress: bool = True,
+        include_final: bool = True,
+        message_limit: int = 20,
+    ) -> dict[str, Any]:
+        run = self._runs[str(run_id)]
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(1.0, min(300.0, float(wait_seconds or 60.0)))
+        while True:
+            result = self.build_agent_messages(
+                run_id,
+                after_sequence=after_sequence,
+                include_progress=include_progress,
+                include_final=include_final,
+                message_limit=message_limit,
+            )
+            if result["messages"]:
+                return result
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                result["timed_out"] = True
+                return result
+            async with run.message_condition:
+                result = self.build_agent_messages(
+                    run_id,
+                    after_sequence=after_sequence,
+                    include_progress=include_progress,
+                    include_final=include_final,
+                    message_limit=message_limit,
+                )
+                if result["messages"]:
+                    return result
+                try:
+                    await asyncio.wait_for(run.message_condition.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    result = self.build_agent_messages(
+                        run_id,
+                        after_sequence=after_sequence,
+                        include_progress=include_progress,
+                        include_final=include_final,
+                        message_limit=message_limit,
+                    )
+                    result["timed_out"] = not bool(result["messages"])
+                    return result
 
     def build_status(self, run_id: str) -> dict[str, Any]:
         run = self._runs[str(run_id)]

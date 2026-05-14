@@ -1236,6 +1236,11 @@ class WebApiServer:
         raw_task_ids = request.query.get("task_ids", "")
         task_ids = [item.strip() for item in raw_task_ids.split(",") if item.strip()] if raw_task_ids else None
         include_output = request.query.get("include_output", "1") not in {"0", "false", "False"}
+        include_messages = request.query.get("include_messages", "0") in {"1", "true", "True"}
+        try:
+            message_limit = int(request.query.get("message_limit", "20"))
+        except ValueError:
+            message_limit = 20
         data = get_cluster_task_status(
             self.manager,
             alias,
@@ -1243,6 +1248,8 @@ class WebApiServer:
             run_id,
             task_ids=task_ids,
             include_output=include_output,
+            include_messages=include_messages,
+            message_limit=message_limit,
         )
         return _json({"ok": True, "data": data})
 

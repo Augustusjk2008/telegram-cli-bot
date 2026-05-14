@@ -213,6 +213,12 @@ export type ClusterAgentTask = {
   createdAt: string;
   startedAt: string;
   completedAt: string;
+  message?: string;
+  timeoutSeconds?: number;
+  deadlineExceeded?: boolean;
+  messageCount?: number;
+  latestMessageSequence?: number;
+  messages?: ClusterTaskMessage[];
   output?: string;
   error: string;
 };
@@ -230,6 +236,15 @@ export type ActiveClusterRun = {
   runId: string;
   status: string;
   tasks?: ClusterTaskStatus;
+};
+
+export type ClusterTaskMessage = {
+  sequence: number;
+  taskId: string;
+  agentId: string;
+  kind: "progress" | "final" | string;
+  content: string;
+  createdAt: string;
 };
 
 export type ClusterSetupPrepareResult = {

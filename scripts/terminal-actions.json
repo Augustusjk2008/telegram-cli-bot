@@ -60,6 +60,16 @@
       "cwd": ".",
       "confirm": false,
       "enabled": true
+    },
+    {
+      "id": "todesk",
+      "label": "远程操控",
+      "icon": "Terminal",
+      "windowsCommand": ".\\scripts\\start_todesk_admin.bat",
+      "linuxCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }

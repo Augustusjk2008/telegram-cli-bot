@@ -892,12 +892,20 @@ def get_cluster_task_status(
     *,
     task_ids: list[str] | None = None,
     include_output: bool = True,
+    include_messages: bool = False,
+    message_limit: int = 20,
 ) -> dict[str, Any]:
     run = _CLUSTER_RUNTIME.get_run(run_id)
     if run is None or run.bot_alias != alias or run.user_id != user_id:
         _raise(404, "cluster_run_not_found", "未找到集群任务")
     _ = get_profile_or_raise(manager, alias)
-    return _CLUSTER_RUNTIME.build_task_status(run_id, task_ids, include_output=include_output)
+    return _CLUSTER_RUNTIME.build_task_status(
+        run_id,
+        task_ids,
+        include_output=include_output,
+        include_messages=include_messages,
+        message_limit=message_limit,
+    )
 
 
 def _cluster_task_wait_seconds(payload: dict[str, Any]) -> float:
@@ -907,6 +915,35 @@ def _cluster_task_wait_seconds(payload: dict[str, Any]) -> float:
     except (TypeError, ValueError):
         seconds = 0.0
     return max(0.0, min(60.0, seconds))
+
+
+def _cluster_wait_seconds(payload: dict[str, Any]) -> float:
+    raw = payload.get("wait_seconds", payload.get("waitSeconds", 60))
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        seconds = 60.0
+    return max(1.0, min(300.0, seconds))
+
+
+def _cluster_task_message_limit(payload: dict[str, Any]) -> int:
+    raw = payload.get("message_limit", payload.get("messageLimit", 20))
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        limit = 20
+    return max(1, min(100, limit))
+
+
+def _cluster_after_sequence(payload: dict[str, Any], run_id: str) -> int:
+    if "after_sequence" in payload or "afterSequence" in payload:
+        raw = payload.get("after_sequence", payload.get("afterSequence", 0))
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    return max(0, getattr(run, "_next_message_sequence", 1) - 1) if run else 0
 
 
 async def _wait_for_cluster_tasks_if_requested(
@@ -942,8 +979,28 @@ async def handle_cluster_mcp_tool(
             raw_task_ids = payload.get("task_ids", payload.get("taskIds"))
             task_ids = [str(item) for item in raw_task_ids] if isinstance(raw_task_ids, list) else None
             include_output = payload.get("include_output", payload.get("includeOutput", True)) is not False
+            include_messages = payload.get("include_messages", payload.get("includeMessages", True)) is not False
             await _wait_for_cluster_tasks_if_requested(run_id, task_ids, _cluster_task_wait_seconds(payload))
-            return {"ok": True, "data": _CLUSTER_RUNTIME.build_task_status(run_id, task_ids, include_output=include_output)}
+            return {
+                "ok": True,
+                "data": _CLUSTER_RUNTIME.build_task_status(
+                    run_id,
+                    task_ids,
+                    include_output=include_output,
+                    include_messages=include_messages,
+                    message_limit=_cluster_task_message_limit(payload),
+                ),
+            }
+        if tool_name == "wait_agent_messages":
+            result = await _CLUSTER_RUNTIME.wait_agent_messages(
+                run_id,
+                after_sequence=_cluster_after_sequence(payload, run_id),
+                wait_seconds=_cluster_wait_seconds(payload),
+                include_progress=payload.get("include_progress", payload.get("includeProgress", True)) is not False,
+                include_final=payload.get("include_final", payload.get("includeFinal", True)) is not False,
+                message_limit=_cluster_task_message_limit(payload),
+            )
+            return {"ok": True, "data": result}
         if tool_name != "ask_agent":
             _raise(404, "cluster_tool_not_found", "未知集群工具")
 
@@ -2284,23 +2341,53 @@ async def _run_cluster_agent_task(
                     return
                 live_task = _CLUSTER_RUNTIME.mark_agent_task_running(run_id, task_id)
                 cli_params_override = build_cluster_cli_params_override(live_run.profile, live_task.model_tier)
-                result = await run_cli_chat(
+                final_output = ""
+                returncode = 0
+                async for event in _stream_cli_chat(
                     manager,
                     live_run.bot_alias,
                     live_run.user_id,
                     live_task.message,
                     agent_id=live_task.agent_id,
                     cli_params_override=cli_params_override,
-                )
+                ):
+                    event_type = str(event.get("type") or "")
+                    if event_type == "status":
+                        progress_text = str(event.get("preview_text") or "").strip()
+                        if progress_text:
+                            _CLUSTER_RUNTIME.append_agent_task_message(
+                                run_id,
+                                task_id,
+                                kind="progress",
+                                content=progress_text,
+                            )
+                            await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
+                        continue
+                    if event_type in {"trace", "meta"}:
+                        continue
+                    if event_type == "done":
+                        final_output = str(event.get("output") or "")
+                        raw_returncode = event.get("returncode")
+                        returncode = raw_returncode if isinstance(raw_returncode, int) else 0
+                        break
+                    if event_type == "error":
+                        final_output = str(event.get("message") or "")
+                        returncode = 1
+                        break
+
+                result = {"output": final_output, "returncode": returncode}
                 error = _cluster_agent_result_error(result)
                 if error:
                     _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, error)
                 else:
-                    _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, str(result.get("output") or ""))
+                    _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, final_output)
+                await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
     except asyncio.TimeoutError:
         _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, "子 agent 执行超时")
+        await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
     except Exception as exc:
         _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, str(exc))
+        await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
 
 
 def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "") -> str:
@@ -2317,6 +2404,8 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "
         "ask_agent 会异步启动任务并返回 task_id，不会自动等子 agent 完成。\n"
         "ask_agent 的 timeout_seconds 是软期限；超时不强行中断子 agent，poll_agent_tasks 会通过 deadline_exceeded 告知主 agent。\n"
         "你可在同一轮对话内多轮指挥集群：连续 ask_agent 并发启动多个任务，调用 poll_agent_tasks 查看结果，再按结果追加新任务或汇总。\n"
+        "poll_agent_tasks 可返回 messages；每条 message.kind 为 kind=progress 或 kind=final。progress 是子 agent 可读过程，final 是最终结果；不会返回事件和工具调用。\n"
+        "wait_agent_messages 可阻塞等待任意子 agent 下一条回告；传 after_sequence 和 wait_seconds，返回 messages 里会带 agent_id、task_id、kind。\n"
         "如果需要等待结果，调用 poll_agent_tasks 时传 wait_seconds；如果用户只要求启动或你判断可后台运行，可先结束并说明任务仍在运行。\n"
         "最终回答前自行选择：等待并汇总已完成任务，或明确说明哪些任务仍在后台运行。\n"
         "如用户未显式提及子 agent，则你应自主决定是否和如何使用集群，使用前查询集群配置，使用时遵循安全和效率原则，即：多 agents 不要写相同文件，不要做重复的事情（尤其包括你自己，即便子 agent 看上去卡住了，也不要尝试代劳委派的子 agent 的工作）。\n"

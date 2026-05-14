@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from bot.cluster.config import AgentClusterConfig
@@ -169,3 +171,104 @@ def test_cluster_runtime_keeps_finished_run_with_tasks_for_polling():
     assert runtime.get_run(run.run_id) is not None
     status = runtime.build_task_status(run.run_id, [task.task_id], include_output=False)
     assert status["queued_count"] == 1
+
+
+def test_cluster_runtime_appends_progress_and_final_messages():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = runtime.create_agent_task(run.run_id, request)
+
+    runtime.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="我先检查测试。")
+    runtime.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="我先检查测试。")
+    runtime.complete_agent_task(run.run_id, task.task_id, "全部通过。")
+
+    status = runtime.build_task_status(
+        run.run_id,
+        [task.task_id],
+        include_output=True,
+        include_messages=True,
+        message_limit=10,
+    )
+    item = status["tasks"][0]
+    assert item["message_count"] == 2
+    assert item["latest_message_sequence"] == 2
+    assert item["messages"] == [
+        {
+            "sequence": 1,
+            "task_id": task.task_id,
+            "agent_id": "tester",
+            "kind": "progress",
+            "content": "我先检查测试。",
+            "created_at": item["messages"][0]["created_at"],
+        },
+        {
+            "sequence": 2,
+            "task_id": task.task_id,
+            "agent_id": "tester",
+            "kind": "final",
+            "content": "全部通过。",
+            "created_at": item["messages"][1]["created_at"],
+        },
+    ]
+
+
+def test_cluster_runtime_limits_task_messages():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = runtime.create_agent_task(run.run_id, request)
+
+    for index in range(5):
+        runtime.append_agent_task_message(run.run_id, task.task_id, kind="progress", content=f"step {index}")
+
+    status = runtime.build_task_status(
+        run.run_id,
+        [task.task_id],
+        include_output=False,
+        include_messages=True,
+        message_limit=2,
+    )
+
+    item = status["tasks"][0]
+    assert "output" not in item
+    assert item["message_count"] == 5
+    assert [message["content"] for message in item["messages"]] == ["step 3", "step 4"]
+
+
+@pytest.mark.asyncio
+async def test_cluster_runtime_wait_agent_messages_returns_next_message():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = runtime.create_agent_task(run.run_id, request)
+
+    async def append_later():
+        await asyncio.sleep(0.01)
+        runtime.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="开始处理。")
+        await runtime.notify_agent_task_message(run.run_id)
+
+    background = asyncio.create_task(append_later())
+    result = await runtime.wait_agent_messages(run.run_id, after_sequence=0, wait_seconds=1)
+    await background
+
+    assert result["timed_out"] is False
+    assert result["messages"][0]["agent_id"] == "tester"
+    assert result["messages"][0]["task_id"] == task.task_id
+    assert result["messages"][0]["kind"] == "progress"
+    assert result["messages"][0]["content"] == "开始处理。"
+
+
+@pytest.mark.asyncio
+async def test_cluster_runtime_wait_agent_messages_times_out():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+
+    result = await runtime.wait_agent_messages(run.run_id, after_sequence=0, wait_seconds=0.01)
+
+    assert result["timed_out"] is True
+    assert result["messages"] == []

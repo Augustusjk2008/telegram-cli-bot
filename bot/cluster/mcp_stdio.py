@@ -52,14 +52,31 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "poll_agent_tasks",
-            "description": "轮询当前 TCB 集群子 agent 异步任务状态和结果。必须传 run_id。task_ids 为空时返回当前 run 全部任务。wait_seconds 可选，用于本次工具调用内等待任务完成；默认 0 立即返回。",
+            "description": "轮询当前 TCB 集群子 agent 异步任务状态、过程消息和结果。必须传 run_id。task_ids 为空时返回当前 run 全部任务。wait_seconds 可选，用于本次工具调用内等待任务完成；默认 0 立即返回。include_messages 默认 true；messages[].kind 为 progress 或 final，且不包含事件/工具调用。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "run_id": {"type": "string"},
                     "task_ids": {"type": "array", "items": {"type": "string"}},
                     "include_output": {"type": "boolean"},
+                    "include_messages": {"type": "boolean"},
+                    "message_limit": {"type": "integer"},
                     "wait_seconds": {"type": "number"},
+                },
+            },
+        },
+        {
+            "name": "wait_agent_messages",
+            "description": "阻塞等待当前 TCB 集群任意子 agent 的下一条回告。必须传 run_id。wait_seconds 指定最长等待时间；到时间无回告返回 timed_out=true。返回 messages[].agent_id/task_id/kind，可区分 progress 和 final；不返回事件/工具调用。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "after_sequence": {"type": "integer"},
+                    "wait_seconds": {"type": "number"},
+                    "include_progress": {"type": "boolean"},
+                    "include_final": {"type": "boolean"},
+                    "message_limit": {"type": "integer"},
                 },
             },
         },

@@ -82,6 +82,7 @@ import type {
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterAgentTask,
+  ClusterTaskMessage,
   ClusterTaskStatus,
   ClusterTemplateListResult,
   ClusterTemplateSummary,
@@ -292,15 +293,44 @@ type RawChatTraceDetails = {
 
 type RawClusterAgentTask = {
   task_id?: string;
+  taskId?: string;
   agent_id?: string;
+  agentId?: string;
+  message?: string;
   status?: string;
   model_tier?: string;
+  modelTier?: string;
+  timeout_seconds?: number;
+  timeoutSeconds?: number;
+  deadline_exceeded?: boolean;
+  deadlineExceeded?: boolean;
   allow_write?: boolean;
+  allowWrite?: boolean;
   created_at?: string;
+  createdAt?: string;
   started_at?: string;
+  startedAt?: string;
   completed_at?: string;
+  completedAt?: string;
+  message_count?: number;
+  messageCount?: number;
+  latest_message_sequence?: number;
+  latestMessageSequence?: number;
+  messages?: RawClusterTaskMessage[];
   output?: string;
   error?: string;
+};
+
+type RawClusterTaskMessage = {
+  sequence?: number;
+  task_id?: string;
+  taskId?: string;
+  agent_id?: string;
+  agentId?: string;
+  kind?: string;
+  content?: string;
+  created_at?: string;
+  createdAt?: string;
 };
 
 type RawClusterTaskStatus = {
@@ -1173,16 +1203,53 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
   };
 }
 
+function mapClusterTaskMessage(raw: RawClusterTaskMessage): ClusterTaskMessage {
+  return {
+    sequence: Number(raw.sequence ?? 0),
+    taskId: String(raw.task_id ?? raw.taskId ?? ""),
+    agentId: String(raw.agent_id ?? raw.agentId ?? ""),
+    kind: String(raw.kind || "progress"),
+    content: String(raw.content || ""),
+    createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
+  };
+}
+
 function mapClusterAgentTask(raw: RawClusterAgentTask): ClusterAgentTask {
   return {
-    taskId: String(raw.task_id || ""),
-    agentId: String(raw.agent_id || ""),
+    taskId: String(raw.task_id ?? raw.taskId ?? ""),
+    agentId: String(raw.agent_id ?? raw.agentId ?? ""),
     status: String(raw.status || "queued") as ClusterAgentTask["status"],
-    modelTier: String(raw.model_tier || "") as ClusterAgentTask["modelTier"],
-    allowWrite: Boolean(raw.allow_write),
-    createdAt: String(raw.created_at || ""),
-    startedAt: String(raw.started_at || ""),
-    completedAt: String(raw.completed_at || ""),
+    modelTier: String(raw.model_tier ?? raw.modelTier ?? "") as ClusterAgentTask["modelTier"],
+    allowWrite: Boolean(raw.allow_write ?? raw.allowWrite),
+    createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
+    startedAt: String(raw.started_at ?? raw.startedAt ?? ""),
+    completedAt: String(raw.completed_at ?? raw.completedAt ?? ""),
+    message: typeof raw.message === "string" ? raw.message : undefined,
+    timeoutSeconds:
+      typeof raw.timeout_seconds === "number"
+        ? raw.timeout_seconds
+        : typeof raw.timeoutSeconds === "number"
+          ? raw.timeoutSeconds
+          : undefined,
+    deadlineExceeded:
+      typeof raw.deadline_exceeded === "boolean"
+        ? raw.deadline_exceeded
+        : typeof raw.deadlineExceeded === "boolean"
+          ? raw.deadlineExceeded
+          : undefined,
+    messageCount:
+      typeof raw.message_count === "number"
+        ? raw.message_count
+        : typeof raw.messageCount === "number"
+          ? raw.messageCount
+          : undefined,
+    latestMessageSequence:
+      typeof raw.latest_message_sequence === "number"
+        ? raw.latest_message_sequence
+        : typeof raw.latestMessageSequence === "number"
+          ? raw.latestMessageSequence
+          : undefined,
+    messages: Array.isArray(raw.messages) ? raw.messages.map(mapClusterTaskMessage) : undefined,
     output: typeof raw.output === "string" ? raw.output : undefined,
     error: String(raw.error || ""),
   };

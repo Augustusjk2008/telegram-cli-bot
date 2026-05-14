@@ -178,12 +178,35 @@ describe("RealWebBotClient", () => {
               {
                 task_id: "clt_1",
                 agent_id: "tester",
+                message: "跑测试",
                 status: "completed",
                 model_tier: "low",
+                timeout_seconds: 900,
+                deadline_exceeded: false,
                 allow_write: false,
                 created_at: "2026-05-06T10:00:00+08:00",
                 started_at: "2026-05-06T10:00:01+08:00",
                 completed_at: "2026-05-06T10:00:02+08:00",
+                message_count: 2,
+                latest_message_sequence: 2,
+                messages: [
+                  {
+                    sequence: 1,
+                    task_id: "clt_1",
+                    agent_id: "tester",
+                    kind: "progress",
+                    content: "开始跑测试",
+                    created_at: "2026-05-06T10:00:01+08:00",
+                  },
+                  {
+                    sequence: 2,
+                    task_id: "clt_1",
+                    agent_id: "tester",
+                    kind: "final",
+                    content: "测试完成",
+                    created_at: "2026-05-06T10:00:02+08:00",
+                  },
+                ],
                 output: "3 passed",
                 error: "",
               },
@@ -214,9 +237,32 @@ describe("RealWebBotClient", () => {
     expect(status.tasks[0]).toMatchObject({
       taskId: "clt_1",
       agentId: "tester",
+      message: "跑测试",
       status: "completed",
+      timeoutSeconds: 900,
+      deadlineExceeded: false,
+      messageCount: 2,
+      latestMessageSequence: 2,
       output: "3 passed",
     });
+    expect(status.tasks[0].messages).toEqual([
+      {
+        sequence: 1,
+        taskId: "clt_1",
+        agentId: "tester",
+        kind: "progress",
+        content: "开始跑测试",
+        createdAt: "2026-05-06T10:00:01+08:00",
+      },
+      {
+        sequence: 2,
+        taskId: "clt_1",
+        agentId: "tester",
+        kind: "final",
+        content: "测试完成",
+        createdAt: "2026-05-06T10:00:02+08:00",
+      },
+    ]);
   });
 
   test("sendMessage includes cluster mention payload", async () => {
@@ -1017,6 +1063,114 @@ describe("RealWebBotClient", () => {
         },
       ],
     });
+  });
+
+  test("getBotOverview preserves active cluster task messages", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            bot: {
+              alias: "main",
+              cli_type: "codex",
+              status: "running",
+              working_dir: "C:\\workspace\\profile",
+            },
+            session: {
+              working_dir: "C:\\workspace\\session",
+              message_count: 3,
+              history_count: 2,
+              is_processing: false,
+            },
+            agents: [
+              {
+                id: "reviewer",
+                name: "代码审查",
+                system_prompt: "先列风险",
+                enabled: true,
+                is_main: false,
+              },
+            ],
+            active_cluster_run: {
+              run_id: "clr_active",
+              status: "running",
+              tasks: {
+                tasks: [
+                  {
+                    task_id: "clt_active",
+                    agent_id: "reviewer",
+                    message: "检查改动",
+                    status: "running",
+                    model_tier: "high",
+                    timeout_seconds: 600,
+                    deadline_exceeded: false,
+                    allow_write: false,
+                    created_at: "2026-05-04T00:00:03Z",
+                    started_at: "2026-05-04T00:00:04Z",
+                    completed_at: "",
+                    message_count: 1,
+                    latest_message_sequence: 1,
+                    messages: [
+                      {
+                        sequence: 1,
+                        task_id: "clt_active",
+                        agent_id: "reviewer",
+                        kind: "progress",
+                        content: "正在检查 diff",
+                        created_at: "2026-05-04T00:00:05Z",
+                      },
+                    ],
+                    error: "",
+                  },
+                ],
+                queued_count: 0,
+                running_count: 1,
+                completed_count: 0,
+                failed_count: 0,
+                pending_count: 1,
+              },
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const overview = await client.getBotOverview("main");
+
+    expect(overview.activeClusterRun?.runId).toBe("clr_active");
+    expect(overview.activeClusterRun?.tasks?.pendingCount).toBe(1);
+    expect(overview.activeClusterRun?.tasks?.tasks[0]).toMatchObject({
+      taskId: "clt_active",
+      agentId: "reviewer",
+      message: "检查改动",
+      status: "running",
+      timeoutSeconds: 600,
+      deadlineExceeded: false,
+      messageCount: 1,
+      latestMessageSequence: 1,
+    });
+    expect(overview.activeClusterRun?.tasks?.tasks[0].messages).toEqual([
+      {
+        sequence: 1,
+        taskId: "clt_active",
+        agentId: "reviewer",
+        kind: "progress",
+        content: "正在检查 diff",
+        createdAt: "2026-05-04T00:00:05Z",
+      },
+    ]);
   });
 
   test("agent endpoints and scoped chat requests use agent_id", async () => {

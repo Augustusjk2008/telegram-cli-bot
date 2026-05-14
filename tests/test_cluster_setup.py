@@ -139,7 +139,18 @@ def test_cluster_mcp_stdio_advertises_tools_without_active_env(tmp_path: Path, m
     response = cluster_mcp_stdio.handle_request(config, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
     tool_names = {tool["name"] for tool in response["result"]["tools"]}
-    assert {"cluster_status", "list_agents", "ask_agent", "poll_agent_tasks"}.issubset(tool_names)
+    assert {"cluster_status", "list_agents", "ask_agent", "poll_agent_tasks", "wait_agent_messages"}.issubset(tool_names)
+    tools = response["result"]["tools"]
+    poll_tool = next(tool for tool in tools if tool["name"] == "poll_agent_tasks")
+    assert "include_messages" in poll_tool["inputSchema"]["properties"]
+    assert "message_limit" in poll_tool["inputSchema"]["properties"]
+    assert "progress" in poll_tool["description"]
+    assert "final" in poll_tool["description"]
+    wait_tool = next(tool for tool in tools if tool["name"] == "wait_agent_messages")
+    assert "wait_seconds" in wait_tool["inputSchema"]["properties"]
+    assert "after_sequence" in wait_tool["inputSchema"]["properties"]
+    assert "progress" in wait_tool["description"]
+    assert "final" in wait_tool["description"]
 
 
 def test_cluster_mcp_stdio_uses_run_id_argument(tmp_path: Path, monkeypatch):
@@ -250,3 +261,37 @@ def test_cluster_mcp_stdio_forwards_poll_agent_tasks(tmp_path: Path, monkeypatch
         "payload": {"task_ids": ["clt_one"], "include_output": True, "wait_seconds": 2},
         "run_id": "clr_test",
     }
+
+
+def test_cluster_mcp_stdio_forwards_wait_agent_messages(tmp_path: Path, monkeypatch):
+    captured = {}
+
+    def fake_post(_config, tool_name, payload, *, run_id):
+        captured["tool_name"] = tool_name
+        captured["payload"] = payload
+        captured["run_id"] = run_id
+        return {"ok": True, "data": {"timed_out": False, "messages": []}}
+
+    token = tmp_path / "token"
+    token.write_text("secret", encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"bridge_url": "http://127.0.0.1:8765", "token_file": str(token)}), encoding="utf-8")
+    monkeypatch.setattr(cluster_mcp_stdio, "post_mcp_tool", fake_post)
+
+    response = cluster_mcp_stdio.handle_request(
+        config,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "wait_agent_messages",
+                "arguments": {"run_id": "clr_1", "after_sequence": 2, "wait_seconds": 5},
+            },
+        },
+    )
+
+    assert response is not None
+    assert captured["tool_name"] == "wait_agent_messages"
+    assert captured["run_id"] == "clr_1"
+    assert captured["payload"] == {"after_sequence": 2, "wait_seconds": 5}
