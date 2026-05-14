@@ -30,6 +30,7 @@ def test_start_sh_requires_env_and_applies_pending_updates():
     assert "apply-pending" in content
     assert "WEB_TUNNEL_MODE" in content
     assert "WEB_PUBLIC_URL" in content
+    assert "install.sh 或 install.bat" in content
 
 
 def test_start_sh_drops_sudo_to_original_user():
@@ -64,3 +65,11 @@ def test_start_scripts_run_env_migration_before_boot():
 
     assert "bot.env_migration" in start_ps1
     assert "bot.env_migration" in start_sh
+
+
+def test_install_sh_offers_kimi_choice_but_keeps_codex_default():
+    content = Path("install.sh").read_text(encoding="utf-8")
+
+    assert "选择默认 CLI：1) codex" in content
+    assert "2) kimi" in content or "3) kimi" in content
+    assert "printf 'codex\\n'" in content

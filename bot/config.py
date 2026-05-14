@@ -84,7 +84,7 @@ APP_UPDATE_REPOSITORY = _get_project_config(
 ).strip()
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"claude", "codex"}
+SUPPORTED_CLI_TYPES = {"claude", "codex", "kimi"}
 if CLI_TYPE not in SUPPORTED_CLI_TYPES:
     logging.warning("CLI_TYPE=%s 已不再受支持，自动回退为 codex", CLI_TYPE)
     CLI_TYPE = "codex"

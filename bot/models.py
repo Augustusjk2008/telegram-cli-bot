@@ -161,6 +161,7 @@ class UserSession:
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
     claude_session_id: Optional[str] = None
+    kimi_session_id: Optional[str] = None
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
     is_processing: bool = False
@@ -328,6 +329,7 @@ class UserSession:
         with self._lock:
             self.codex_session_id = None
             self.claude_session_id = None
+            self.kimi_session_id = None
             self.claude_session_initialized = False
             self.active_conversation_id = None
         self.persist()

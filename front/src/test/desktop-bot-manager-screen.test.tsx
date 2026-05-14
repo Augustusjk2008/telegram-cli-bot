@@ -329,8 +329,11 @@ test("desktop bot manager creates a bot from detail panel", async () => {
 
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  expect(screen.getByRole("option", { name: "kimi" })).toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("新智能体 CLI 类型"), "kimi");
   await user.type(screen.getByLabelText("新智能体别名"), "team3");
-  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "codex");
+  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveAttribute("placeholder", "kimi");
+  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "kimi");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
@@ -339,7 +342,8 @@ test("desktop bot manager creates a bot from detail panel", async () => {
   });
   expect(client.addBotCalls[0]).toMatchObject({
     alias: "team3",
-    cliPath: "codex",
+    cliType: "kimi",
+    cliPath: "kimi",
     workingDir: "C:\\workspace\\team3",
   });
 });
@@ -536,6 +540,23 @@ test("desktop bot manager agent tab loads real child agents and config tab embed
   expect(agentPanel).not.toBeNull();
   expect(within(agentPanel as HTMLElement).getByText("代码审查")).toBeInTheDocument();
   expect(within(agentPanel as HTMLElement).getAllByText("主 agent").length).toBeGreaterThan(0);
+});
+
+test("desktop bot manager edit panel supports kimi cli type", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: /review/ }));
+  await user.click(screen.getByRole("button", { name: "编辑 review" }));
+
+  const cliTypeSelect = screen.getByLabelText("智能体 CLI 类型");
+  expect(screen.getByRole("option", { name: "kimi" })).toBeInTheDocument();
+  await user.selectOptions(cliTypeSelect, "kimi");
+  expect(cliTypeSelect).toHaveValue("kimi");
+  expect(screen.getByLabelText("智能体 CLI 路径")).toHaveAttribute("placeholder", "kimi");
 });
 
 test("desktop bot manager bulk starts only offline managed bots", async () => {

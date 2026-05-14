@@ -8,6 +8,7 @@ import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
   EMPTY_CREATE_DRAFT,
+  defaultCliPathForType,
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
@@ -193,6 +194,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
               >
                 <option value="codex">codex</option>
                 <option value="claude">claude</option>
+                <option value="kimi">kimi</option>
               </select>
             </label>
           </div>
@@ -202,7 +204,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
             value={createDraft.cliPath}
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder="codex"
+            placeholder={defaultCliPathForType(createDraft.cliType)}
           />
           <div className="flex flex-col gap-2 sm:flex-row">
             <input

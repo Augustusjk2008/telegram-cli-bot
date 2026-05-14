@@ -1,4 +1,4 @@
-export type CliType = "claude" | "codex";
+export type CliType = "claude" | "codex" | "kimi";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
 export type BotActivityStatus = "idle" | "busy";
@@ -199,6 +199,7 @@ export type ClusterStatus = {
     runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
+    kimi: ClusterMcpTargetStatus;
   };
   agents: ClusterAgentStatus[];
 };

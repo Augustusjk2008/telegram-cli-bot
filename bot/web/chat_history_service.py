@@ -91,7 +91,7 @@ class ChatHistoryService:
         if str(context.get("completion_state") or "") not in {"completed", "cancelled"}:
             return False
         provider = normalize_cli_type(str(context.get("native_provider") or ""))
-        if provider not in {"codex", "claude"}:
+        if provider not in {"codex", "claude", "kimi"}:
             return False
         return bool(str(context.get("native_session_id") or "").strip())
 
@@ -282,7 +282,7 @@ class ChatHistoryService:
     ) -> bool:
         provider = normalize_cli_type(getattr(profile, "cli_type", ""))
         session_id = str(native_session_id or "").strip()
-        if provider not in {"codex", "claude"} or not session_id:
+        if provider not in {"codex", "claude", "kimi"} or not session_id:
             return False
 
         try:
@@ -333,6 +333,7 @@ class ChatHistoryService:
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
+                "kimi_session_id": session.kimi_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },
             "active_conversation_id": _active_conversation_id(session),

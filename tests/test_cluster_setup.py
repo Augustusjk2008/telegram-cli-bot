@@ -9,6 +9,7 @@ from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
     build_cli_install_command,
     build_cli_remove_command,
+    build_cli_verify_command,
     prepare_cluster_mcp_launcher,
 )
 
@@ -76,6 +77,23 @@ def test_build_claude_install_command_user_scope():
 def test_build_remove_commands():
     assert build_cli_remove_command("codex", "codex") == ["codex", "mcp", "remove", "tcb-cluster"]
     assert build_cli_remove_command("claude", "claude") == ["claude", "mcp", "remove", "tcb-cluster"]
+
+
+def test_cluster_setup_builds_kimi_mcp_commands(tmp_path: Path):
+    launcher = tmp_path / "tcb-cluster-mcp.cmd"
+
+    assert build_cli_install_command(cli_type="kimi", cli_path="kimi", launcher_path=launcher) == [
+        "kimi",
+        "mcp",
+        "add",
+        "--transport",
+        "stdio",
+        "tcb-cluster",
+        "--",
+        str(launcher),
+    ]
+    assert build_cli_verify_command("kimi", "kimi") == ["kimi", "mcp", "test", "tcb-cluster"]
+    assert build_cli_remove_command("kimi", "kimi") == ["kimi", "mcp", "remove", "tcb-cluster"]
 
 
 def test_load_mcp_bridge_config_reads_token(tmp_path: Path):

@@ -161,16 +161,52 @@ detect_python() {
   return 1
 }
 
-detect_default_cli_type() {
-  if command -v codex >/dev/null 2>&1; then
+select_default_cli_type() {
+  local has_claude=0 has_kimi=0 choice prompt
+
+  command -v claude >/dev/null 2>&1 && has_claude=1
+  command -v kimi >/dev/null 2>&1 && has_kimi=1
+
+  if [[ "$NON_INTERACTIVE" == "1" || ( "$has_claude" == "0" && "$has_kimi" == "0" ) ]]; then
     printf 'codex\n'
     return 0
   fi
-  if command -v claude >/dev/null 2>&1; then
-    printf 'claude\n'
-    return 0
+
+  prompt="选择默认 CLI：1) codex"
+  if [[ "$has_claude" == "1" ]]; then
+    prompt+="  2) claude"
   fi
-  printf 'codex\n'
+  if [[ "$has_kimi" == "1" ]]; then
+    if [[ "$has_claude" == "1" ]]; then
+      prompt+="  3) kimi"
+    else
+      prompt+="  2) kimi"
+    fi
+  fi
+  prompt+=" [默认 1] "
+
+  read -r -p "$prompt" choice
+  case "$choice" in
+    2)
+      if [[ "$has_claude" == "1" ]]; then
+        printf 'claude\n'
+      elif [[ "$has_kimi" == "1" ]]; then
+        printf 'kimi\n'
+      else
+        printf 'codex\n'
+      fi
+      ;;
+    3)
+      if [[ "$has_claude" == "1" && "$has_kimi" == "1" ]]; then
+        printf 'kimi\n'
+      else
+        printf 'codex\n'
+      fi
+      ;;
+    *)
+      printf 'codex\n'
+      ;;
+  esac
 }
 
 ensure_env_file() {
@@ -181,7 +217,7 @@ ensure_env_file() {
   fi
 
   cp .env.example .env
-  cli_type="$(detect_default_cli_type)"
+  cli_type="$(select_default_cli_type)"
   cli_path="$cli_type"
   token="$(date +%s | sha256sum | cut -c1-24)"
 
@@ -282,13 +318,14 @@ else
   warn "未检测到 Git"
 fi
 
-step "检查 codex / claude"
-if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
-  warn "未检测到 codex / claude。"
-  printf '%s\n' "请先安装 Codex CLI 或 Claude Code CLI，并确认 codex --version / claude --version 可运行。"
+step "检查 codex / claude / kimi"
+if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1 && ! command -v kimi >/dev/null 2>&1; then
+  warn "未检测到 codex / claude / kimi。"
+  printf '%s\n' "请先安装 Codex CLI、Claude Code CLI 或 Kimi CLI，并确认 codex --version / claude --version / kimi info 可运行。"
 else
   command -v codex >/dev/null 2>&1 && info "已检测到 codex"
   command -v claude >/dev/null 2>&1 && info "已检测到 claude"
+  command -v kimi >/dev/null 2>&1 && info "已检测到 kimi"
 fi
 
 if [[ "$CHECK_ONLY" == "1" ]]; then

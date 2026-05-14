@@ -83,7 +83,11 @@ def _parse_key(key: str) -> Tuple[int, int, str] | None:
 def _snapshot_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
     snapshot = dict(data or {})
     message_count = max(0, int(snapshot.get("message_count", 0) or 0))
-    session_count = int(bool(snapshot.get("codex_session_id"))) + int(bool(snapshot.get("claude_session_id")))
+    session_count = (
+        int(bool(snapshot.get("codex_session_id")))
+        + int(bool(snapshot.get("claude_session_id")))
+        + int(bool(snapshot.get("kimi_session_id")))
+    )
     session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
     last_activity = str(snapshot.get("last_activity") or "")
     return (message_count, session_count, session_epoch, last_activity)
@@ -136,6 +140,8 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         merged.pop("codex_session_id", None)
     if not merged.get("claude_session_id"):
         merged.pop("claude_session_id", None)
+    if not merged.get("kimi_session_id"):
+        merged.pop("kimi_session_id", None)
     if not merged.get("active_conversation_id"):
         merged.pop("active_conversation_id", None)
     if not merged.get("managed_prompt_hash_seen"):
@@ -172,7 +178,7 @@ def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[
     """加载指定会话的 session 信息
     
     Returns:
-        dict: 包含 codex_session_id, claude_session_id
+        dict: 包含 codex_session_id, claude_session_id, kimi_session_id
         None: 如果没有找到
     """
     _flush_live_session_if_available(bot_id, user_id, agent_id)
@@ -196,6 +202,7 @@ def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_worki
     next_data["browse_dir"] = next_data.get("browse_dir") or next_data["working_dir"]
     next_data["codex_session_id"] = None
     next_data["claude_session_id"] = None
+    next_data["kimi_session_id"] = None
     next_data["claude_session_initialized"] = False
     next_data.pop("running_user_text", None)
     next_data.pop("running_preview_text", None)
@@ -210,6 +217,7 @@ def save_session(
     user_id: int,
     codex_session_id: Optional[str] = None,
     claude_session_id: Optional[str] = None,
+    kimi_session_id: Optional[str] = None,
     working_dir: Optional[str] = None,
     browse_dir: Optional[str] = None,
     history: Optional[list[dict]] = None,
@@ -235,6 +243,8 @@ def save_session(
         session_data["codex_session_id"] = codex_session_id
     if claude_session_id:
         session_data["claude_session_id"] = claude_session_id
+    if kimi_session_id:
+        session_data["kimi_session_id"] = kimi_session_id
     if isinstance(working_dir, str) and working_dir:
         session_data["working_dir"] = working_dir
     if isinstance(browse_dir, str) and browse_dir:
@@ -253,6 +263,8 @@ def save_session(
         session_data["managed_prompt_hash_seen"] = managed_prompt_hash_seen
     if agent_prompt_hash_seen:
         session_data["agent_prompt_hash_seen"] = agent_prompt_hash_seen
+    if session_data and "local_history_backend" not in session_data:
+        session_data["local_history_backend"] = LOCAL_HISTORY_BACKEND
     # legacy history is intentionally no longer persisted
     # legacy running_* and web_turn_overlays are intentionally dropped on local_v1
 

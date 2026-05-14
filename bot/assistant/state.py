@@ -61,6 +61,7 @@ def attach_assistant_persist_hook(session, home: AssistantHome, user_id: int) ->
                 "browse_dir": current.browse_dir or "",
                 "codex_session_id": current.codex_session_id,
                 "claude_session_id": current.claude_session_id,
+                "kimi_session_id": current.kimi_session_id,
                 "claude_session_initialized": current.claude_session_initialized,
                 "message_count": current.message_count,
                 "managed_prompt_hash_seen": current.managed_prompt_hash_seen,
@@ -100,6 +101,7 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
                 "browse_dir": state.get("browse_dir") or "",
                 "codex_session_id": state.get("codex_session_id"),
                 "claude_session_id": state.get("claude_session_id"),
+                "kimi_session_id": state.get("kimi_session_id"),
                 "claude_session_initialized": bool(state.get("claude_session_initialized")),
                 "message_count": max(0, int(state.get("message_count", 0) or 0)),
                 "managed_prompt_hash_seen": state.get("managed_prompt_hash_seen"),
@@ -130,6 +132,7 @@ def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) 
 
         session.codex_session_id = _normalize_optional_str(state.get("codex_session_id"))
         session.claude_session_id = _normalize_optional_str(state.get("claude_session_id"))
+        session.kimi_session_id = _normalize_optional_str(state.get("kimi_session_id"))
         session.claude_session_initialized = bool(
             state.get("claude_session_initialized") or session.claude_session_id
         )

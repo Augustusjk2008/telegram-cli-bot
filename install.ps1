@@ -2,7 +2,9 @@
     [switch]$CheckOnly,
     [switch]$NonInteractive,
     [switch]$InstallExamplePlugins,
-    [switch]$SkipExamplePlugins
+    [switch]$SkipExamplePlugins,
+    [Alias("h", "?")]
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,7 +14,7 @@ $script:RootDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $script:RootDir
 
 $script:StepIndex = 0
-$script:TotalSteps = if ($CheckOnly) { 6 } else { 12 }
+$script:TotalSteps = if ($CheckOnly) { 6 } elseif ($Help) { 0 } else { 12 }
 $script:Warnings = New-Object System.Collections.Generic.List[string]
 $script:Summary = [ordered]@{}
 $script:WingetAvailable = $false
@@ -56,6 +58,17 @@ function Save-Summary {
     )
 
     $script:Summary[$Key] = $Value
+}
+
+function Show-Usage {
+    Write-Host "用法: .\install.ps1 [-CheckOnly] [-NonInteractive] [-InstallExamplePlugins] [-SkipExamplePlugins] [-Help]"
+    Write-Host ""
+    Write-Host "参数:"
+    Write-Host "  -CheckOnly             只检查环境，不执行安装"
+    Write-Host "  -NonInteractive        使用默认值，跳过交互"
+    Write-Host "  -InstallExamplePlugins 安装 examples 中的示例插件"
+    Write-Host "  -SkipExamplePlugins    跳过示例插件安装"
+    Write-Host "  -Help                  显示帮助并退出"
 }
 
 function Get-CommandPath {
@@ -242,6 +255,7 @@ function Get-LocalCliInfo {
     return [pscustomobject]@{
         Codex  = Get-CliCommandInfo -Name "codex" -VersionArgs @("--version")
         Claude = Get-CliCommandInfo -Name "claude" -VersionArgs @("--version")
+        Kimi   = Get-CliCommandInfo -Name "kimi" -VersionArgs @("info")
     }
 }
 
@@ -506,32 +520,52 @@ function New-WebToken {
 function Select-DefaultCli {
     param([object]$CliInfo)
 
-    if ($CliInfo.Codex -and -not $CliInfo.Claude) {
+    if ($CliInfo.Codex -and -not $CliInfo.Claude -and -not $CliInfo.Kimi) {
         return [pscustomobject]@{
             Type = "codex"
             Path = $CliInfo.Codex.Path
         }
     }
 
-    if ($CliInfo.Claude -and -not $CliInfo.Codex) {
+    if ($CliInfo.Claude -and -not $CliInfo.Codex -and -not $CliInfo.Kimi) {
         return [pscustomobject]@{
             Type = "claude"
             Path = $CliInfo.Claude.Path
         }
     }
 
-    if ($CliInfo.Codex -and $CliInfo.Claude) {
-        $choice = Read-Choice -Prompt "选择默认 CLI：1) codex  2) claude" -Choices @("1", "2") -DefaultChoice "1"
-        if ($choice -eq "2") {
-            return [pscustomobject]@{
-                Type = "claude"
-                Path = $CliInfo.Claude.Path
-            }
+    $availableCli = @(
+        [pscustomobject]@{
+            Choice = "1"
+            Type   = "codex"
+            Path   = if ($CliInfo.Codex) { $CliInfo.Codex.Path } else { "codex" }
         }
+    )
 
-        return [pscustomobject]@{
-            Type = "codex"
-            Path = $CliInfo.Codex.Path
+    if ($CliInfo.Claude) {
+        $availableCli += [pscustomobject]@{
+            Choice = [string]($availableCli.Count + 1)
+            Type   = "claude"
+            Path   = $CliInfo.Claude.Path
+        }
+    }
+    if ($CliInfo.Kimi) {
+        $availableCli += [pscustomobject]@{
+            Choice = [string]($availableCli.Count + 1)
+            Type   = "kimi"
+            Path   = "kimi"
+        }
+    }
+
+    if ($availableCli.Count -gt 1 -and ($CliInfo.Codex -or $CliInfo.Claude -or $CliInfo.Kimi)) {
+        $promptChoices = @($availableCli | ForEach-Object { "{0}) {1}" -f $_.Choice, $_.Type })
+        $choice = Read-Choice -Prompt ("选择默认 CLI：{0}" -f ($promptChoices -join "  ")) -Choices @($availableCli.Choice) -DefaultChoice "1"
+        $selected = $availableCli | Where-Object { $_.Choice -eq $choice } | Select-Object -First 1
+        if ($selected) {
+            return [pscustomobject]@{
+                Type = $selected.Type
+                Path = $selected.Path
+            }
         }
     }
 
@@ -722,20 +756,20 @@ function Install-ExamplePlugins {
 }
 
 function Show-CliWarning {
-    Write-Warn "未检测到 codex / claude。"
-    Write-Host "请先安装 Codex CLI 或 Claude Code CLI，并完成登录。"
-    Write-Host "安装完成后，在 PowerShell / cmd 中确认可以运行 codex --version 或 claude --version。"
+    Write-Warn "未检测到 codex / claude / kimi。"
+    Write-Host "请先安装 Codex CLI、Claude Code CLI 或 Kimi CLI，并完成登录。"
+    Write-Host "安装完成后，在 PowerShell / cmd 中确认可以运行 codex --version、claude --version 或 kimi info。"
     Write-Host "然后重新运行安装器，或手动修改 .env 中的 CLI_TYPE / CLI_PATH。"
 }
 
 function Ensure-OptionalCodexInstall {
     param([object]$CliInfo)
 
-    if ($CliInfo.Codex -or $CliInfo.Claude) {
+    if ($CliInfo.Codex -or $CliInfo.Claude -or $CliInfo.Kimi) {
         return $CliInfo
     }
 
-    $choice = Read-Choice -Prompt "未检测到 codex / claude：1) 自动安装 codex  2) 跳过" -Choices @("1", "2") -DefaultChoice "1"
+    $choice = Read-Choice -Prompt "未检测到 codex / claude / kimi：1) 自动安装 codex  2) 跳过" -Choices @("1", "2") -DefaultChoice "1"
     if ($choice -ne "1") {
         return $CliInfo
     }
@@ -821,6 +855,11 @@ if ($env:CLI_BRIDGE_INSTALLER_TEST_SKIP_MAIN -eq "1") {
     return
 }
 
+if ($Help) {
+    Show-Usage
+    exit 0
+}
+
 try {
     Write-Step "检查仓库文件"
     foreach ($requiredPath in @("requirements.txt", "front\\package.json", ".env.example")) {
@@ -853,7 +892,7 @@ try {
     Write-Step "检查 Git"
     $gitInfo = Ensure-Tool -DisplayName "Git" -Detector ${function:Get-GitInfo} -MinimumVersion "2.0.0" -WingetPackageId "Git.Git" -FallbackInstaller ${function:Install-GitFallback}
 
-    Write-Step "检查 codex / claude"
+    Write-Step "检查 codex / claude / kimi"
     $cliInfo = Get-LocalCliInfo
     if ($cliInfo.Codex) {
         Write-Info ("已检测到 codex: {0}" -f $cliInfo.Codex.Path)
@@ -861,11 +900,15 @@ try {
     if ($cliInfo.Claude) {
         Write-Info ("已检测到 claude: {0}" -f $cliInfo.Claude.Path)
     }
+    if ($cliInfo.Kimi) {
+        Write-Info ("已检测到 kimi: {0}" -f $cliInfo.Kimi.Path)
+    }
 
-    if ($cliInfo.Codex -or $cliInfo.Claude) {
+    if ($cliInfo.Codex -or $cliInfo.Claude -or $cliInfo.Kimi) {
         $detectedCli = @()
         if ($cliInfo.Codex) { $detectedCli += "codex" }
         if ($cliInfo.Claude) { $detectedCli += "claude" }
+        if ($cliInfo.Kimi) { $detectedCli += "kimi" }
         Save-Summary -Key "本地 CLI" -Value ($detectedCli -join ", ")
     } else {
         Save-Summary -Key "本地 CLI" -Value "未检测到"

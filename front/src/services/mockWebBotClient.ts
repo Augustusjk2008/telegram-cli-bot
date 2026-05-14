@@ -198,6 +198,97 @@ const DEFAULT_AGENT_CLUSTER = {
   sessionPolicy: "persistent" as const,
   timeoutSeconds: 600,
 };
+
+function defaultCliPathForType(cliType: string) {
+  return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
+}
+
+function buildMockCliParams(cliType: string): CliParamsPayload {
+  if (cliType === "kimi") {
+    return {
+      cliType: "kimi",
+      params: {
+        thinking: "default",
+        stream_json: true,
+        yolo: true,
+        extra_args: [],
+      },
+      defaults: {
+        thinking: "default",
+        stream_json: true,
+        yolo: true,
+        extra_args: [],
+      },
+      schema: {
+        thinking: {
+          type: "string",
+          enum: ["enabled", "disabled", "default"],
+          description: "Thinking 模式",
+        },
+        stream_json: {
+          type: "boolean",
+          description: "启用 stream-json 输出",
+        },
+        yolo: {
+          type: "boolean",
+          description: "自动批准操作",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    };
+  }
+  return {
+    cliType: cliType === "claude" ? "claude" : "codex",
+    params: {
+      reasoning_effort: "xhigh",
+      model: "gpt-5.4",
+      skip_git_check: true,
+      json_output: true,
+      yolo: true,
+      extra_args: [],
+    },
+    defaults: {
+      reasoning_effort: "xhigh",
+      model: "gpt-5.4",
+      skip_git_check: true,
+      json_output: true,
+      yolo: true,
+      extra_args: [],
+    },
+    schema: {
+      reasoning_effort: {
+        type: "string",
+        enum: ["xhigh", "high", "medium", "low"],
+        description: "推理努力程度",
+      },
+      model: {
+        type: "string",
+        description: "模型选择",
+        nullable: true,
+        enum: MOCK_CLI_MODEL_OPTIONS,
+      },
+      skip_git_check: {
+        type: "boolean",
+        description: "跳过 Git 仓库检查",
+      },
+      json_output: {
+        type: "boolean",
+        description: "JSON 格式输出",
+      },
+      yolo: {
+        type: "boolean",
+        description: "绕过审批和沙箱",
+      },
+      extra_args: {
+        type: "string_list",
+        description: "额外参数",
+      },
+    },
+  };
+}
 const DEFAULT_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
   {
     id: "full_test",
@@ -927,7 +1018,7 @@ export class MockWebBotClient implements WebBotClient {
       item.alias,
       {
         ...item,
-        cliPath: item.cliType,
+        cliPath: defaultCliPathForType(item.cliType),
         botMode: "cli",
         enabled: true,
         isMain: item.alias === "main",
@@ -2591,6 +2682,7 @@ export class MockWebBotClient implements WebBotClient {
         runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: bot.cliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: bot.cliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        kimi: bot.cliType === "kimi" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
         .filter((agent) => !agent.isMain)
@@ -2615,15 +2707,21 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async prepareClusterSetup(_botAlias: string): Promise<ClusterSetupPrepareResult> {
+  async prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult> {
+    const cliPath = this.getBotSummary(botAlias).cliPath || defaultCliPathForType(this.getBotSummary(botAlias).cliType);
+    const cliType = this.getBotSummary(botAlias).cliType;
     return {
       serverName: "tcb-cluster",
       launcherPath: "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd",
       configPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\config.json",
       tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
-      installCommand: ["codex", "mcp", "add", "tcb-cluster", "--", "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd"],
-      verifyCommand: ["codex", "mcp", "get", "tcb-cluster"],
-      removeCommand: ["codex", "mcp", "remove", "tcb-cluster"],
+      installCommand: cliType === "kimi"
+        ? [cliPath, "mcp", "add", "--transport", "stdio", "tcb-cluster", "--", "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd"]
+        : [cliPath, "mcp", "add", "tcb-cluster", "--", "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd"],
+      verifyCommand: cliType === "kimi"
+        ? [cliPath, "mcp", "test", "tcb-cluster"]
+        : [cliPath, "mcp", "get", "tcb-cluster"],
+      removeCommand: [cliPath, "mcp", "remove", "tcb-cluster"],
     };
   }
 
@@ -5234,7 +5332,7 @@ export class MockWebBotClient implements WebBotClient {
     const bot: BotSummary = {
       alias,
       cliType: input.cliType,
-      cliPath: input.cliPath.trim(),
+      cliPath: input.cliPath.trim() || defaultCliPathForType(input.cliType),
       botMode: input.botMode,
       status: "running",
       workingDir: input.workingDir.trim(),
@@ -5421,55 +5519,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
-    const cliType = this.getBotSummary(botAlias).cliType;
-    return {
-      cliType,
-      params: {
-        reasoning_effort: "xhigh",
-        model: "gpt-5.4",
-        skip_git_check: true,
-        json_output: true,
-        yolo: true,
-        extra_args: [],
-      },
-      defaults: {
-        reasoning_effort: "xhigh",
-        model: "gpt-5.4",
-        skip_git_check: true,
-        json_output: true,
-        yolo: true,
-        extra_args: [],
-      },
-      schema: {
-        reasoning_effort: {
-          type: "string",
-          enum: ["xhigh", "high", "medium", "low"],
-          description: "推理努力程度",
-        },
-        model: {
-          type: "string",
-          description: "模型选择",
-          nullable: true,
-          enum: MOCK_CLI_MODEL_OPTIONS,
-        },
-        skip_git_check: {
-          type: "boolean",
-          description: "跳过 Git 仓库检查",
-        },
-        json_output: {
-          type: "boolean",
-          description: "JSON 格式输出",
-        },
-        yolo: {
-          type: "boolean",
-          description: "绕过审批和沙箱",
-        },
-        extra_args: {
-          type: "string_list",
-          description: "额外参数",
-        },
-      },
-    };
+    return buildMockCliParams(this.getBotSummary(botAlias).cliType);
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {

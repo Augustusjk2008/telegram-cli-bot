@@ -29,7 +29,7 @@ class TestConfigConstants:
     """测试配置常量值"""
 
     def test_supported_cli_types(self):
-        assert SUPPORTED_CLI_TYPES == {"claude", "codex"}
+        assert SUPPORTED_CLI_TYPES == {"claude", "codex", "kimi"}
 
     def test_dangerous_commands_is_set(self):
         assert isinstance(DANGEROUS_COMMANDS, set)

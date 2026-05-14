@@ -48,10 +48,21 @@ DEFAULT_CODEX_PARAMS = {
     "extra_args": [],                # 额外参数列表
 }
 
+DEFAULT_KIMI_PARAMS = {
+    "yolo": True,
+    "stream_json": True,
+    "model": None,
+    "thinking": None,
+    "agent": None,
+    "max_steps_per_turn": None,
+    "extra_args": [],
+}
+
 # CLI 类型到默认参数的映射
 DEFAULT_PARAMS_MAP = {
     "claude": DEFAULT_CLAUDE_PARAMS,
     "codex": DEFAULT_CODEX_PARAMS,
+    "kimi": DEFAULT_KIMI_PARAMS,
 }
 
 # 支持的 CLI 类型
@@ -83,6 +94,25 @@ PARAM_SCHEMA_MAP = {
         "model": {"type": "string", "description": "模型选择", "nullable": True},
         "extra_args": {"type": "string_list", "description": "额外参数"},
     },
+    "kimi": {
+        "yolo": {"type": "boolean", "description": "自动批准操作"},
+        "stream_json": {"type": "boolean", "description": "启用 stream-json 输出"},
+        "model": {"type": "string", "description": "模型选择", "nullable": True},
+        "thinking": {
+            "type": "string",
+            "description": "Thinking 模式",
+            "nullable": True,
+            "enum": ["enabled", "disabled", "default"],
+        },
+        "agent": {"type": "string", "description": "内置 Agent", "nullable": True},
+        "max_steps_per_turn": {
+            "type": "number",
+            "description": "单轮最大步数",
+            "integer": True,
+            "nullable": True,
+        },
+        "extra_args": {"type": "string_list", "description": "额外参数"},
+    },
 }
 
 
@@ -92,12 +122,14 @@ class CliParamsConfig:
     
     claude: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CLAUDE_PARAMS))
     codex: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CODEX_PARAMS))
+    kimi: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_KIMI_PARAMS))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
         return {
             "claude": copy.deepcopy(self.claude),
             "codex": copy.deepcopy(self.codex),
+            "kimi": copy.deepcopy(self.kimi),
         }
     
     @classmethod
@@ -140,6 +172,7 @@ class CliParamsConfig:
             # 重置所有
             self.claude = copy.deepcopy(DEFAULT_CLAUDE_PARAMS)
             self.codex = copy.deepcopy(DEFAULT_CODEX_PARAMS)
+            self.kimi = copy.deepcopy(DEFAULT_KIMI_PARAMS)
         else:
             cli_type = cli_type.lower().strip()
             if cli_type not in SUPPORTED_CLI_TYPES:
@@ -214,6 +247,16 @@ def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
 
     if key == "model" and isinstance(value, str) and value.strip().lower() == MODEL_OPTION_NONE:
         value = None
+
+    if cli_type == "kimi" and key == "thinking":
+        normalized = str(value or "").strip().lower()
+        if normalized in {"", "default", "none"}:
+            return None
+        if normalized in {"enabled", "true", "1", "yes", "on"}:
+            return "enabled"
+        if normalized in {"disabled", "false", "0", "no", "off"}:
+            return "disabled"
+        raise ValueError("参数 thinking 的可选值为: enabled, disabled, default")
 
     if nullable and (value is None or (isinstance(value, str) and not value.strip())):
         return None
@@ -299,6 +342,9 @@ def build_cli_args_from_config(
 
     if cli_type == "codex":
         return _build_codex_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, working_dir)
+
+    if cli_type == "kimi":
+        return _build_kimi_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, working_dir)
 
     raise ValueError(f"不支持的 CLI 类型: {cli_type}")
 
@@ -424,6 +470,52 @@ def _build_codex_args(
             "-",
         ]
     
+    return cmd, True
+
+
+def _build_kimi_args(
+    resolved_cli: str,
+    params: Dict[str, Any],
+    user_text: str,
+    is_cli_subcommand: bool,
+    session_id: Optional[str],
+    working_dir: Optional[str],
+) -> Tuple[List[str], bool]:
+    """构建 Kimi CLI 参数"""
+
+    if is_cli_subcommand:
+        subcmd = user_text[1:]
+        if subcmd in ("help", "usage"):
+            return [resolved_cli, "--help"], False
+        return [resolved_cli, subcmd], False
+
+    cmd = [resolved_cli]
+    if working_dir:
+        cmd.extend(["--work-dir", str(working_dir)])
+    if session_id:
+        cmd.extend(["--session", str(session_id)])
+    cmd.append("--print")
+    if params.get("stream_json", True):
+        cmd.extend(["--output-format", "stream-json"])
+    if params.get("yolo"):
+        cmd.append("--yolo")
+    if params.get("model"):
+        cmd.extend(["--model", str(params["model"])])
+    if params.get("agent"):
+        cmd.extend(["--agent", str(params["agent"])])
+    thinking = params.get("thinking")
+    if isinstance(thinking, bool):
+        thinking = "enabled" if thinking else "disabled"
+    else:
+        thinking = str(thinking or "").strip().lower()
+    if thinking == "enabled":
+        cmd.append("--thinking")
+    elif thinking == "disabled":
+        cmd.append("--no-thinking")
+    max_steps = params.get("max_steps_per_turn")
+    if max_steps is not None:
+        cmd.extend(["--max-steps-per-turn", str(int(max_steps))])
+    cmd.extend([str(arg) for arg in params.get("extra_args", []) if str(arg).strip()])
     return cmd, True
 
 

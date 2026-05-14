@@ -19,10 +19,10 @@ from bot.models import BotProfile
 from bot.sessions import get_or_create_session
 
 
-def test_removed_legacy_cli_types_literal_is_explicit():
+def test_kimi_cli_type_is_no_longer_removed_legacy_type():
     from bot.manager import REMOVED_LEGACY_CLI_TYPES
 
-    assert "kimi" in REMOVED_LEGACY_CLI_TYPES
+    assert "kimi" not in REMOVED_LEGACY_CLI_TYPES
 
 
 def test_profile_store_save_matches_manager_private_wrapper(temp_dir: Path):
@@ -111,17 +111,17 @@ class TestManagerLoadSave:
         assert "sub1" in m.managed_profiles
         assert m.managed_profiles["sub1"].token == "tok1"
 
-    def test_load_profiles_rejects_removed_legacy_cli_type(self, temp_dir: Path):
+    def test_load_profiles_accepts_kimi_cli_type(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(
             json.dumps(
                 {
                     "bots": [
                         {
-                            "alias": "legacy1",
-                            "token": "tok1",
-                            "cli_type": "ki" "mi",
-                            "cli_path": "ki" "mi",
+                            "alias": "kimi1",
+                            "token": "",
+                            "cli_type": "kimi",
+                            "cli_path": "kimi",
                             "working_dir": str(temp_dir),
                             "enabled": True,
                         }
@@ -131,8 +131,9 @@ class TestManagerLoadSave:
             encoding="utf-8",
         )
 
-        with pytest.raises(ValueError, match="已移除"):
-            MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        assert manager.managed_profiles["kimi1"].cli_type == "kimi"
 
     def test_save_bots_format(self, temp_dir: Path):
         storage = temp_dir / "bots.json"

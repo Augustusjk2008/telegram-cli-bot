@@ -50,10 +50,11 @@ describe("RealWebBotClient", () => {
           model_tiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
           mcp: {
             server_name: "tcb-cluster",
-            active_cli_type: "codex",
+            active_cli_type: "kimi",
             runtime: { state: "runtime_ready", message: "运行态可用" },
-            codex: { state: "installed", message: "已安装" },
+            codex: { state: "not_checked", message: "未使用" },
             claude: { state: "not_checked", message: "未使用" },
+            kimi: { state: "installed", message: "已安装" },
           },
           agents: [{ id: "reviewer", name: "代码审查", enabled: true, allow_cluster: true, allow_write: false }],
         },
@@ -66,8 +67,9 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/bots/main/cluster/status", expect.objectContaining({ cache: "no-store" }));
     expect(status.enabled).toBe(true);
     expect(status.mcp.serverName).toBe("tcb-cluster");
-    expect(status.mcp.activeCliType).toBe("codex");
+    expect(status.mcp.activeCliType).toBe("kimi");
     expect(status.mcp.runtime?.state).toBe("runtime_ready");
+    expect(status.mcp.kimi.state).toBe("installed");
     expect(status.modelTiers.low).toBe("fast-model");
     expect(status.agents[0].allowWrite).toBe(false);
   });
@@ -2025,6 +2027,90 @@ describe("RealWebBotClient", () => {
         extra_args: {
           type: "string_list",
           description: "额外参数",
+        },
+      },
+    });
+  });
+
+  test("getCliParams maps kimi backend cli param payload", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            cli_type: "kimi",
+            params: {
+              thinking: "disabled",
+              stream_json: true,
+              max_steps_per_turn: 3,
+            },
+            defaults: {
+              thinking: "default",
+              stream_json: true,
+              max_steps_per_turn: null,
+            },
+            schema: {
+              thinking: {
+                type: "string",
+                enum: ["enabled", "disabled", "default"],
+                description: "Thinking 模式",
+              },
+              stream_json: {
+                type: "boolean",
+                description: "启用 stream-json 输出",
+              },
+              max_steps_per_turn: {
+                type: "number",
+                description: "单轮最大步数",
+                integer: true,
+                nullable: true,
+              },
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const payload = await client.getCliParams("main");
+
+    expect(payload).toEqual({
+      cliType: "kimi",
+      params: {
+        thinking: "disabled",
+        stream_json: true,
+        max_steps_per_turn: 3,
+      },
+      defaults: {
+        thinking: "default",
+        stream_json: true,
+        max_steps_per_turn: null,
+      },
+      schema: {
+        thinking: {
+          type: "string",
+          enum: ["enabled", "disabled", "default"],
+          description: "Thinking 模式",
+        },
+        stream_json: {
+          type: "boolean",
+          description: "启用 stream-json 输出",
+        },
+        max_steps_per_turn: {
+          type: "number",
+          description: "单轮最大步数",
+          integer: true,
+          nullable: true,
         },
       },
     });

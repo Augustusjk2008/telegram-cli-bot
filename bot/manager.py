@@ -32,7 +32,7 @@ from bot.profile_store import (
 from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
-REMOVED_LEGACY_CLI_TYPES = {"kimi"}
+REMOVED_LEGACY_CLI_TYPES: set[str] = set()
 
 
 class MultiBotManager:

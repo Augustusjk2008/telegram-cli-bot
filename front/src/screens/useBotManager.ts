@@ -33,6 +33,10 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   avatarName: "",
 };
 
+export function defaultCliPathForType(cliType: CliType) {
+  return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
+}
+
 export function asWebApiClientError(error: unknown): WebApiClientError | null {
   return error instanceof WebApiClientError ? error : null;
 }

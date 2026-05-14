@@ -120,7 +120,36 @@ def test_install_ps1_check_only_mode_warns_when_no_cli():
     lowered_output = output.lower()
     assert "codex --version" in lowered_output
     assert "claude --version" in lowered_output
+    assert "kimi info" in lowered_output
     assert "cli_type / cli_path" in lowered_output
+
+@pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
+def test_install_ps1_help_exits_before_main_flow():
+    script_path = Path("install.ps1").resolve()
+    assert script_path.exists(), "install.ps1 应存在"
+
+    result = subprocess.run(
+        [
+            str(WINDOWS_POWERSHELL),
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script_path),
+            "-Help",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=20,
+        cwd=Path.cwd(),
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "用法:" in output
+    assert "检查仓库文件" not in output
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_install_repo_executable_places_binary_under_tools_dir(tmp_path: Path):
@@ -289,6 +318,44 @@ Get-Content (Join-Path $script:RootDir '.env')
     assert "CLI_PATH=C:\\repo\\tools\\codex\\codex.exe" in output
     assert "WEB_TUNNEL_MODE=cloudflare_quick" in output
     assert "WEB_TUNNEL_CLOUDFLARED_PATH=C:\\repo\\tools\\cloudflared\\cloudflared.exe" in output
+
+@pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
+def test_install_ps1_select_default_cli_uses_kimi_command_name():
+    result = _run_install_ps1_command(
+        """
+$cliInfo = [pscustomobject]@{
+    Codex = [pscustomobject]@{ Path = 'C:\\repo\\tools\\codex\\codex.exe' }
+    Claude = [pscustomobject]@{ Path = 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.ps1' }
+    Kimi = [pscustomobject]@{ Path = 'C:\\Users\\me\\.local\\bin\\kimi.exe' }
+}
+function Read-Choice {
+    param([string]$Prompt, [string[]]$Choices, [string]$DefaultChoice)
+    return '3'
+}
+Select-DefaultCli -CliInfo $cliInfo | ConvertTo-Json -Compress
+"""
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload == {"Type": "kimi", "Path": "kimi"}
+
+@pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
+def test_install_ps1_select_default_cli_keeps_codex_default_when_only_kimi_exists():
+    result = _run_install_ps1_command(
+        """
+$cliInfo = [pscustomobject]@{
+    Codex = $null
+    Claude = $null
+    Kimi = [pscustomobject]@{ Path = 'C:\\Users\\me\\.local\\bin\\kimi.exe' }
+}
+Select-DefaultCli -CliInfo $cliInfo | ConvertTo-Json -Compress
+"""
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload == {"Type": "codex", "Path": "codex"}
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_installs_example_plugins_when_requested(tmp_path: Path):

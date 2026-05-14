@@ -19,6 +19,7 @@ import type {
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
+import { defaultCliPathForType } from "./useBotManager";
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
   CHAT_BODY_FONT_SIZE_OPTIONS,
@@ -132,7 +133,7 @@ export function SettingsScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
-  const [cliTypeDraft, setCliTypeDraft] = useState("codex");
+  const [cliTypeDraft, setCliTypeDraft] = useState<"codex" | "claude" | "kimi">("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
   const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -612,6 +613,7 @@ export function SettingsScreen({
                     >
                       <option value="codex">codex</option>
                       <option value="claude">claude</option>
+                      <option value="kimi">kimi</option>
                     </select>
                   </label>
                   <label className="space-y-1">
@@ -623,6 +625,7 @@ export function SettingsScreen({
                       disabled={!canManageBotRuntime}
                       onChange={(event) => setCliPathDraft(event.target.value)}
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+                      placeholder={defaultCliPathForType(cliTypeDraft)}
                     />
                   </label>
                 </div>

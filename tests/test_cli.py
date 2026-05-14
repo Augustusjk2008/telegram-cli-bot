@@ -20,6 +20,8 @@ from bot.cli import (
     parse_claude_stream_json_output,
     parse_codex_json_line,
     parse_codex_json_output,
+    parse_kimi_stream_json_line,
+    parse_kimi_stream_json_output,
     read_codex_status_from_terminal,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
@@ -35,6 +37,7 @@ class TestValidateCliType:
     def test_valid_types(self):
         assert validate_cli_type("claude") == "claude"
         assert validate_cli_type("codex") == "codex"
+        assert validate_cli_type("kimi") == "kimi"
 
     def test_case_insensitive(self):
         assert validate_cli_type("Claude") == "claude"
@@ -42,13 +45,11 @@ class TestValidateCliType:
 
     def test_with_whitespace(self):
         assert validate_cli_type("  claude  ") == "claude"
+        assert validate_cli_type(" KIMI ") == "kimi"
 
     def test_invalid_type(self):
         with pytest.raises(ValueError):
             validate_cli_type("unsupported")
-
-        with pytest.raises(ValueError):
-            validate_cli_type("ki" "mi")
 
     def test_empty_string(self):
         with pytest.raises(ValueError):
@@ -95,16 +96,6 @@ class TestResolveCliExecutable:
 
 class TestBuildCliCommand:
     """测试 build_cli_command"""
-
-    def test_removed_legacy_cli_type_is_rejected(self):
-        with pytest.raises(ValueError):
-            build_cli_command(
-                cli_type="ki" "mi",
-                resolved_cli="ki" "mi",
-                user_text="hello",
-                env={},
-                params_config=CliParamsConfig(),
-            )
 
     def test_claude_basic(self):
         env = {}
@@ -212,6 +203,66 @@ class TestBuildCliCommand:
         assert any(value.startswith("projects.") and value.endswith('.trust_level="trusted"') for value in config_values)
         assert "--no-alt-screen" in cmd
 
+    def test_kimi_command_uses_print_stream_json_stdin_and_session(self, temp_dir: Path):
+        env = {}
+        params_config = CliParamsConfig()
+
+        cmd, use_stdin = build_cli_command(
+            cli_type="kimi",
+            resolved_cli="kimi",
+            user_text="hello",
+            env=env,
+            params_config=params_config,
+            session_id="kimi-session-1",
+            resume_session=True,
+            working_dir=str(temp_dir),
+        )
+
+        assert cmd[:1] == ["kimi"]
+        assert "--print" in cmd
+        assert "--output-format" in cmd
+        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+        assert "--session" in cmd
+        assert cmd[cmd.index("--session") + 1] == "kimi-session-1"
+        assert "--work-dir" in cmd
+        assert cmd[cmd.index("--work-dir") + 1] == str(temp_dir)
+        assert use_stdin is True
+
+    def test_kimi_command_applies_model_thinking_and_extra_args(self):
+        params_config = CliParamsConfig()
+        params_config.kimi["model"] = "kimi-code/kimi-for-coding"
+        params_config.kimi["thinking"] = "disabled"
+        params_config.kimi["extra_args"] = ["--max-steps-per-turn", "3"]
+
+        cmd, use_stdin = build_cli_command(
+            cli_type="kimi",
+            resolved_cli="kimi",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+            session_id="kimi-session-2",
+        )
+
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "kimi-code/kimi-for-coding"
+        assert "--no-thinking" in cmd
+        assert "--max-steps-per-turn" in cmd
+        assert use_stdin is True
+
+    def test_kimi_command_accepts_bool_thinking_config(self):
+        params_config = CliParamsConfig()
+        params_config.kimi["thinking"] = False
+
+        cmd, _ = build_cli_command(
+            cli_type="kimi",
+            resolved_cli="kimi",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+        )
+
+        assert "--no-thinking" in cmd
+
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""
 
@@ -299,6 +350,30 @@ class TestParseClaudeStreamJsonOutput:
 
         assert text == "Error: Session ID not found"
         assert session_id == "sess-1"
+
+class TestParseKimiStreamJson:
+    """测试 Kimi stream-json 输出解析"""
+
+    def test_extracts_last_assistant_text(self):
+        raw = "\n".join([
+            '{"role":"assistant","content":"我先看目录。","tool_calls":[{"type":"function","id":"tc_1","function":{"name":"Shell","arguments":"{\\"command\\":\\"Get-ChildItem\\"}"}}]}',
+            '{"role":"tool","tool_call_id":"tc_1","content":"README.md\\nbot"}',
+            '{"role":"assistant","content":[{"type":"think","think":"略"},{"type":"text","text":"目录里有 README.md 和 bot。"}]}',
+        ])
+
+        text = parse_kimi_stream_json_output(raw)
+
+        assert text == "目录里有 README.md 和 bot。"
+
+    def test_line_reports_error_text(self):
+        parsed = parse_kimi_stream_json_line('{"type":"error","message":"auth failed"}')
+
+        assert parsed["error_text"] == "auth failed"
+
+    def test_line_reports_top_level_message_as_error_text(self):
+        parsed = parse_kimi_stream_json_line('{"message":"auth failed"}')
+
+        assert parsed["error_text"] == "auth failed"
 
 class TestExtractCodexStatus:
     """测试 Codex 状态文本提取"""

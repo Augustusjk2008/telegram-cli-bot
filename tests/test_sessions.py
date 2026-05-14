@@ -129,6 +129,19 @@ class TestClearBotSessions:
         assert main.codex_session_id is None
         assert reviewer.codex_session_id is None
 
+    def test_update_workdir_resets_kimi_native_sessions(self, temp_dir: Path):
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        session = get_or_create_session(1, "main", 100, str(old_dir), agent_id="main")
+        session.kimi_session_id = "kimi-main"
+
+        update_bot_working_dir("main", str(new_dir))
+
+        assert session.working_dir == str(new_dir)
+        assert session.kimi_session_id is None
+
 
 class TestIsBotProcessing:
     """测试 is_bot_processing"""
@@ -204,6 +217,21 @@ class TestSessionPersistence:
             data2 = load_session(1, 200)
             assert data2["claude_session_id"] == "claude_s2"
 
+    def test_get_session_restores_kimi_session_id(self, temp_dir: Path):
+        from unittest.mock import patch
+        from bot.session_store import save_session
+
+        store_file = temp_dir / ".session_store.json"
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(1, 100, kimi_session_id="kimi-session-1", working_dir=str(temp_dir))
+            with sessions_lock:
+                sessions.clear()
+
+            session = get_session(1, "main", 100, str(temp_dir))
+
+        assert session.kimi_session_id == "kimi-session-1"
+
     def test_get_or_create_session_clears_legacy_native_session_ids_on_cutover(self, temp_dir: Path):
         """测试首轮 cutover 会清掉 legacy native session 和可见 overlay 状态"""
         from unittest.mock import patch
@@ -243,6 +271,7 @@ class TestSessionPersistence:
             assert session.session_epoch == 1
             assert session.codex_session_id is None
             assert session.claude_session_id is None
+            assert session.kimi_session_id is None
             assert session.working_dir == str(restored_dir)
             assert session.history == []
             assert getattr(session, "web_turn_overlays", []) == []

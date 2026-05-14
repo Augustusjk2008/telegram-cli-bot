@@ -44,6 +44,22 @@ def test_build_web_chat_history_maps_claude_tool_use_and_tool_result():
     assert turns[-1]["meta"]["process_count"] == 0
 
 
+def test_build_web_chat_history_maps_kimi_wire_tool_calls_and_summary():
+    transcript = FIXTURE_DIR / "kimi-session-wire.jsonl"
+
+    turns = load_native_transcript("kimi", transcript, session_id="kimi-session-1")
+
+    assert turns[-1]["user_text"] == "列出当前目录"
+    assert turns[-1]["content"] == "目录已读取完成。"
+    assert [item["kind"] for item in turns[-1]["meta"]["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+    assert turns[-1]["meta"]["trace"][1]["summary"] == "Get-ChildItem -Force"
+    assert turns[-1]["meta"]["trace"][2]["summary"] == "README.md\nbot\nfront"
+
+
 def test_claude_skill_injection_text_is_not_promoted_to_user_turn():
     transcript = FIXTURE_DIR / "claude-skill-injection-session.jsonl"
 
@@ -100,6 +116,26 @@ def test_consume_stream_trace_chunk_maps_codex_response_item_and_event_msg_event
         "tool_result",
         "commentary",
     ]
+    assert events[1]["summary"] == "Get-ChildItem -Force"
+    assert events[2]["summary"] == "README.md\nbot\nfront"
+
+
+def test_consume_stream_trace_chunk_maps_kimi_tool_events():
+    state = create_stream_trace_state("kimi")
+
+    events = consume_stream_trace_chunk(
+        "kimi",
+        "\n".join(
+            [
+                '{"role":"assistant","content":[{"type":"think","think":"需要查看目录。"}]}',
+                '{"role":"assistant","content":"我先检查目录。","tool_calls":[{"type":"function","id":"tc_1","function":{"name":"Shell","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}"}}]}',
+                '{"role":"tool","tool_call_id":"tc_1","content":"README.md\\nbot\\nfront"}',
+            ]
+        ) + "\n",
+        state,
+    )
+
+    assert [event["kind"] for event in events] == ["commentary", "tool_call", "tool_result"]
     assert events[1]["summary"] == "Get-ChildItem -Force"
     assert events[2]["summary"] == "README.md\nbot\nfront"
 
@@ -279,6 +315,45 @@ def test_build_web_chat_history_expands_turns_into_user_and_assistant_messages(m
     assert messages[1]["meta"]["trace"][1]["kind"] == "tool_call"
 
 
+def test_build_web_chat_history_loads_kimi_native_turns(monkeypatch):
+    transcript = FIXTURE_DIR / "kimi-session-wire.jsonl"
+    profile = BotProfile(
+        alias="main",
+        token="dummy-token",
+        cli_type="kimi",
+        cli_path="kimi",
+        working_dir="/srv/demo",
+    )
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=100,
+        working_dir="/srv/demo",
+    )
+    session.kimi_session_id = "kimi-session-1"
+
+    def locate_transcript(session_id: str):
+        return LocatedTranscript(
+            provider="kimi",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint="/srv/demo",
+        )
+
+    monkeypatch.setattr("bot.web.native_history_builder.locate_kimi_transcript", locate_transcript)
+
+    messages = build_web_chat_history(profile, session, limit=20, include_trace=True)
+
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "列出当前目录"
+    assert messages[1]["content"] == "目录已读取完成。"
+    assert [item["kind"] for item in messages[1]["meta"]["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+
+
 def test_build_web_chat_history_returns_lightweight_trace_counts_by_default(monkeypatch):
     transcript = FIXTURE_DIR / "codex-session.jsonl"
     profile = BotProfile(
@@ -426,3 +501,35 @@ def test_finalize_web_chat_turn_reuses_native_final_message_instead_of_overlay_d
     assert message["content"] == "已经确认根因。"
     assert message["meta"]["summary_kind"] == "final"
     assert message["meta"]["completion_state"] == "completed"
+
+
+def test_resolve_native_trace_for_turn_returns_kimi_tool_trace(monkeypatch):
+    transcript = FIXTURE_DIR / "kimi-session-wire.jsonl"
+
+    def locate_transcript(session_id: str, *, cwd_hint: str | None = None):
+        return LocatedTranscript(
+            provider="kimi",
+            session_id=session_id,
+            path=transcript,
+            cwd_hint=cwd_hint,
+        )
+
+    monkeypatch.setattr("bot.web.native_history_builder.locate_kimi_transcript", locate_transcript)
+
+    trace_data = resolve_native_trace_for_turn(
+        "kimi",
+        "kimi-session-1",
+        user_text="列出当前目录",
+        assistant_text="目录已读取完成。",
+        cwd_hint="/srv/demo",
+    )
+
+    assert trace_data is not None
+    assert trace_data["trace_count"] == 3
+    assert trace_data["tool_call_count"] == 1
+    assert [item["kind"] for item in trace_data["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+    assert trace_data["trace"][1]["summary"] == "Get-ChildItem -Force"

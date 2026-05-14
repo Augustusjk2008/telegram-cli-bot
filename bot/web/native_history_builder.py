@@ -5,7 +5,11 @@ from typing import Any
 
 from bot.cli import normalize_cli_type
 from bot.web.native_history_adapter import load_native_transcript
-from bot.web.native_history_locator import locate_claude_transcript, locate_codex_transcript
+from bot.web.native_history_locator import (
+    locate_claude_transcript,
+    locate_codex_transcript,
+    locate_kimi_transcript,
+)
 
 
 def _turn_key(turn: dict[str, Any]) -> tuple[str, str, str]:
@@ -236,6 +240,10 @@ def build_web_chat_history(
         ref = locate_claude_transcript(session.claude_session_id, cwd_hint=session.working_dir)
         if ref is not None:
             native_turns = load_native_transcript("claude", ref.path, session_id=ref.session_id, include_trace=include_trace)
+    elif provider == "kimi" and getattr(session, "kimi_session_id", None):
+        ref = locate_kimi_transcript(str(getattr(session, "kimi_session_id", "") or ""))
+        if ref is not None:
+            native_turns = load_native_transcript("kimi", ref.path, session_id=ref.session_id, include_trace=include_trace)
 
     native_turns = _drop_active_native_turn(provider, session, native_turns)
 
@@ -257,6 +265,8 @@ def _locate_native_transcript(provider: str, session_id: str, *, cwd_hint: str |
         return locate_codex_transcript(session_id)
     if provider == "claude":
         return locate_claude_transcript(session_id, cwd_hint=cwd_hint)
+    if provider == "kimi":
+        return locate_kimi_transcript(session_id)
     return None
 
 
@@ -319,7 +329,7 @@ def resolve_native_trace_for_turn(
 ) -> dict[str, Any] | None:
     normalized_provider = normalize_cli_type(provider)
     normalized_session_id = str(session_id or "").strip()
-    if normalized_provider not in {"codex", "claude"} or not normalized_session_id:
+    if normalized_provider not in {"codex", "claude", "kimi"} or not normalized_session_id:
         return None
 
     ref = _locate_native_transcript(
@@ -366,6 +376,8 @@ def _get_native_session_id(provider: str, session) -> str:
         return str(getattr(session, "codex_session_id", "") or "")
     if provider == "claude":
         return str(getattr(session, "claude_session_id", "") or "")
+    if provider == "kimi":
+        return str(getattr(session, "kimi_session_id", "") or "")
     return ""
 
 

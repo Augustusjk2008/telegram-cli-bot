@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from typing import Literal
 
 @dataclass(frozen=True)
 class LocatedTranscript:
-    provider: Literal["codex", "claude"]
+    provider: Literal["codex", "claude", "kimi"]
     session_id: str
     path: Path
     cwd_hint: str | None = None
@@ -81,4 +82,66 @@ def locate_claude_transcript(
     matches = sorted(projects_dir.glob(f"**/{session_id}.jsonl"))
     if matches:
         return LocatedTranscript("claude", session_id, matches[0], cwd_hint)
+    return None
+
+
+def locate_kimi_transcript(
+    session_id: str,
+    *,
+    kimi_home: Path | None = None,
+) -> LocatedTranscript | None:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return None
+
+    home = kimi_home or (Path.home() / ".kimi")
+    for candidate in sorted(home.glob(f"sessions/*/{normalized_session_id}/wire.jsonl")):
+        if candidate.is_file():
+            return LocatedTranscript("kimi", normalized_session_id, candidate)
+
+    imported = home / "imported_sessions" / normalized_session_id / "wire.jsonl"
+    if imported.is_file():
+        return LocatedTranscript("kimi", normalized_session_id, imported)
+    return None
+
+
+def _normalize_kimi_workdir_path(value: str | None) -> str:
+    normalized = str(value or "").strip().replace("\\", "/").rstrip("/")
+    if re.match(r"^[A-Za-z]:", normalized):
+        normalized = normalized[0].lower() + normalized[1:]
+    return normalized.lower()
+
+
+def locate_kimi_last_session_id_for_workdir(
+    working_dir: str,
+    *,
+    kimi_home: Path | None = None,
+) -> str | None:
+    target_dir = _normalize_kimi_workdir_path(working_dir)
+    if not target_dir:
+        return None
+
+    home = kimi_home or (Path.home() / ".kimi")
+    metadata_path = home / "kimi.json"
+    if not metadata_path.is_file():
+        return None
+
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    work_dirs = payload.get("work_dirs")
+    if not isinstance(work_dirs, list):
+        return None
+
+    for item in work_dirs:
+        if not isinstance(item, dict):
+            continue
+        path_value = _normalize_kimi_workdir_path(item.get("path"))
+        if path_value != target_dir:
+            continue
+        session_id = str(item.get("last_session_id") or "").strip()
+        if session_id:
+            return session_id
     return None

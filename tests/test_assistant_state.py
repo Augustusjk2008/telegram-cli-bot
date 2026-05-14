@@ -72,6 +72,23 @@ def test_assistant_runtime_state_roundtrips_managed_prompt_hash_seen(tmp_path):
     assert restored.managed_prompt_hash_seen == "hash-before"
 
 
+def test_assistant_runtime_state_roundtrips_kimi_session_id(tmp_path):
+    from bot.assistant.state import attach_assistant_persist_hook, restore_assistant_runtime_state
+
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    session = UserSession(bot_id=1, bot_alias="assistant1", user_id=1001, working_dir=str(workdir))
+    session.kimi_session_id = "kimi-session-1"
+    attach_assistant_persist_hook(session, home, 1001)
+    session.persist()
+
+    restored = UserSession(bot_id=1, bot_alias="assistant1", user_id=1001, working_dir=str(workdir))
+    restore_assistant_runtime_state(restored, home, 1001)
+
+    assert restored.kimi_session_id == "kimi-session-1"
+
+
 def test_assistant_runtime_state_cutover_drops_legacy_visible_history_fields(tmp_path):
     from bot.assistant.state import restore_assistant_runtime_state, save_assistant_runtime_state
 

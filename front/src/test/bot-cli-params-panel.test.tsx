@@ -35,6 +35,40 @@ function cliParamsWithModel(params: Partial<Record<string, unknown>> = {}): CliP
   };
 }
 
+function kimiCliParams(params: Partial<Record<string, unknown>> = {}): CliParamsPayload {
+  return {
+    cliType: "kimi",
+    params: {
+      model: "kimi-code/kimi-for-coding",
+      thinking: "default",
+      stream_json: true,
+      ...params,
+    },
+    defaults: {
+      model: "kimi-code/kimi-for-coding",
+      thinking: "default",
+      stream_json: true,
+    },
+    schema: {
+      model: {
+        type: "string",
+        description: "模型选择",
+        nullable: true,
+        enum: ["kimi-code/kimi-for-coding", "none"],
+      },
+      thinking: {
+        type: "string",
+        description: "Thinking 模式",
+        enum: ["enabled", "disabled", "default"],
+      },
+      stream_json: {
+        type: "boolean",
+        description: "启用 stream-json 输出",
+      },
+    },
+  };
+}
+
 test("bot cli params panel hides model and only saves visible params", async () => {
   const user = userEvent.setup();
   const updateCliParam = vi.fn(async (_botAlias: string, key: string, value: unknown) => (
@@ -76,4 +110,28 @@ test("bot cli params panel reset preserves current chat model", async () => {
   await waitFor(() => {
     expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.5", "codex");
   });
+});
+
+test("bot cli params panel keeps kimi model hidden and saves visible kimi params", async () => {
+  const user = userEvent.setup();
+  const updateCliParam = vi.fn(async (_botAlias: string, key: string, value: unknown) => (
+    kimiCliParams({ [key]: value })
+  ));
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCliParams").mockResolvedValue(kimiCliParams());
+  vi.spyOn(client, "updateCliParam").mockImplementation(updateCliParam);
+
+  render(<BotCliParamsPanel botAlias="main" client={client} />);
+
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+  expect(screen.queryByLabelText("模型选择")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Thinking 模式")).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("Thinking 模式"), "enabled");
+  await user.click(screen.getByRole("button", { name: "保存参数" }));
+
+  await waitFor(() => {
+    expect(updateCliParam).toHaveBeenCalledWith("main", "thinking", "enabled");
+  });
+  expect(updateCliParam).not.toHaveBeenCalledWith("main", "model", expect.anything());
 });

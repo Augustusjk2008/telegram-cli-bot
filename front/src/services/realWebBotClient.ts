@@ -1158,6 +1158,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       runtime: mapTarget(mcp.runtime),
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
+      kimi: mapTarget(mcp.kimi),
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
       const agent = rawAgent && typeof rawAgent === "object" ? rawAgent as Record<string, unknown> : {};

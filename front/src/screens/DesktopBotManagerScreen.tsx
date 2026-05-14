@@ -51,6 +51,7 @@ import {
 } from "./botManagerModel";
 import {
   EMPTY_CREATE_DRAFT,
+  defaultCliPathForType,
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
@@ -133,6 +134,10 @@ function clusterConfigFromBot(bot: BotSummary): BotClusterConfig {
 
 function createDraftEquals(left: CreateDraft, right: CreateDraft) {
   return JSON.stringify(normalizeCreateDraft(left)) === JSON.stringify(normalizeCreateDraft(right));
+}
+
+function cliPathPlaceholder(cliType: CliType) {
+  return defaultCliPathForType(cliType);
 }
 
 function issueClassName(severity: "info" | "warning") {
@@ -282,6 +287,7 @@ function CreatePanel({
           >
             <option value="codex">codex</option>
             <option value="claude">claude</option>
+            <option value="kimi">kimi</option>
           </select>
         </label>
         <label className="space-y-1 text-sm">
@@ -291,7 +297,7 @@ function CreatePanel({
             value={draft.cliPath}
             onChange={(event) => setDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
-            placeholder="codex"
+            placeholder={cliPathPlaceholder(draft.cliType)}
           />
         </label>
       </div>
@@ -504,6 +510,7 @@ function EditPanel({
           >
             <option value="codex">codex</option>
             <option value="claude">claude</option>
+            <option value="kimi">kimi</option>
           </select>
         </label>
         <label className="space-y-1 text-sm">
@@ -514,6 +521,7 @@ function EditPanel({
             disabled={!canManage}
             onChange={(event) => setDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
+            placeholder={cliPathPlaceholder(draft.cliType)}
           />
         </label>
       </div>

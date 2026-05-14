@@ -222,6 +222,7 @@ async def test_cluster_status_detects_installed_codex_mcp(
     assert payload["data"]["mcp"]["codex"]["state"] == "installed"
     assert payload["data"]["mcp"]["codex"]["message"] == "已安装"
     assert payload["data"]["mcp"]["claude"]["state"] == "not_checked"
+    assert payload["data"]["mcp"]["kimi"]["state"] == "not_checked"
     assert all(command[0] != "claude" for command in commands)
 
 
@@ -574,6 +575,27 @@ async def test_run_cli_chat_injects_cluster_mcp_config_for_codex(web_manager: Mu
     extra_args = captured["params"]["extra_args"]
     assert "-c" in extra_args
     assert any("mcp_servers.tcb-cluster.command" in arg for arg in extra_args)
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_injects_cluster_mcp_config_for_kimi(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.cli_type = "kimi"
+    captured = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["params"] = kwargs["params_config"].get_params("kimi")
+        return ["kimi"], False
+
+    with patch("bot.web.api_service.Path.home", return_value=tmp_path), \
+         patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.api_service._communicate_kimi_process", new_callable=AsyncMock, return_value=("ok", 0)):
+        await run_cli_chat(web_manager, "main", 1001, "hello", cluster_run_id="clr_test")
+
+    extra_args = captured["params"]["extra_args"]
+    assert "--mcp-config" in extra_args
+    config = json.loads(extra_args[extra_args.index("--mcp-config") + 1])
+    assert config["mcpServers"]["tcb-cluster"]["command"].endswith(("tcb-cluster-mcp.cmd", "tcb-cluster-mcp.sh"))
 
 
 @pytest.mark.asyncio
@@ -1395,10 +1417,11 @@ async def test_cron_watch_run_error_preserves_started_at_and_elapsed_seconds(tem
     assert records[-1]["elapsed_seconds"] == 167
     assert records[-1]["error"] == "dream 结果处理失败"
 
-def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: MultiBotManager):
+def test_build_session_snapshot_includes_supported_native_session_ids(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-1"
     session.claude_session_id = "claude-1"
+    session.kimi_session_id = "kimi-1"
     session.claude_session_initialized = True
 
     snapshot = build_session_snapshot(web_manager.main_profile, session)
@@ -1406,6 +1429,7 @@ def test_build_session_snapshot_omits_removed_legacy_session_id(web_manager: Mul
     assert snapshot["session_ids"] == {
         "codex_session_id": "thread-1",
         "claude_session_id": "claude-1",
+        "kimi_session_id": "kimi-1",
         "claude_session_initialized": True,
     }
 
@@ -6894,6 +6918,100 @@ async def test_run_cli_chat_codex_final_event_terminates_hanging_process(web_man
     assert result["output"] == "完成回复"
     assert result["returncode"] == 0
     fake_process.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_kimi_allocates_session_and_uses_parser(web_manager: MultiBotManager, temp_dir: Path):
+    web_manager.main_profile.cli_type = "kimi"
+    web_manager.main_profile.cli_path = "kimi"
+    web_manager.main_profile.working_dir = str(temp_dir)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)) as build_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=MagicMock()), \
+         patch("bot.web.api_service._communicate_kimi_process", new_callable=AsyncMock, return_value=("OK", 0)):
+        result = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    assert result["output"] == "OK"
+    assert session.kimi_session_id
+    assert build_mock.call_args.kwargs["session_id"] == session.kimi_session_id
+    assert build_mock.call_args.kwargs["resume_session"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_kimi_reuses_existing_session(web_manager: MultiBotManager, temp_dir: Path):
+    web_manager.main_profile.cli_type = "kimi"
+    web_manager.main_profile.cli_path = "kimi"
+    web_manager.main_profile.working_dir = str(temp_dir)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.kimi_session_id = "kimi-existing"
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)) as build_mock, \
+         patch("bot.web.api_service.subprocess.Popen", return_value=MagicMock()), \
+         patch("bot.web.api_service._communicate_kimi_process", new_callable=AsyncMock, return_value=("OK", 0)):
+        await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert build_mock.call_args.kwargs["session_id"] == "kimi-existing"
+    assert build_mock.call_args.kwargs["resume_session"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_kimi_emits_preview_and_done(web_manager: MultiBotManager, temp_dir: Path):
+    web_manager.main_profile.cli_type = "kimi"
+    web_manager.main_profile.cli_path = "kimi"
+    web_manager.main_profile.working_dir = str(temp_dir)
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"role":"assistant","content":"处理中"}\n',
+                '{"role":"assistant","content":[{"type":"text","text":"完成"}]}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    status_events = [event for event in events if event["type"] == "status" and event.get("preview_text")]
+    assert status_events
+    assert status_events[-1]["preview_text"] == "完成"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["output"] == "完成"
 
 @pytest.mark.asyncio
 async def test_stream_cli_chat_cancellation_terminates_active_process(web_manager: MultiBotManager):

@@ -13,8 +13,14 @@ function commandText(command: string[]) {
   return command.map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(" ");
 }
 
+const CLI_LABELS: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  kimi: "Kimi",
+};
+
 function cliLabel(cliType: string) {
-  return cliType === "claude" ? "Claude" : "Codex";
+  return CLI_LABELS[cliType] || cliType;
 }
 
 export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props) {
@@ -88,8 +94,16 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
       {status ? (
         <div className="mt-3 grid gap-2 text-sm">
           {(() => {
-            const activeCliType = status.mcp.activeCliType === "claude" ? "claude" : "codex";
-            const activeStatus = activeCliType === "claude" ? status.mcp.claude : status.mcp.codex;
+            const activeCliType = status.mcp.activeCliType === "kimi"
+              ? "kimi"
+              : status.mcp.activeCliType === "claude"
+                ? "claude"
+                : "codex";
+            const activeStatus = activeCliType === "kimi"
+              ? status.mcp.kimi
+              : activeCliType === "claude"
+                ? status.mcp.claude
+                : status.mcp.codex;
             return <div>{cliLabel(activeCliType)}：{activeStatus.message || activeStatus.state}</div>;
           })()}
         </div>

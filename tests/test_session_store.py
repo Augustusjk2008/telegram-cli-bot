@@ -103,6 +103,21 @@ class TestSaveAndLoadSession:
             assert data is not None
             assert data["active_conversation_id"] == "conv_abc"
 
+    def test_save_and_load_kimi_session_id(self, temp_dir: Path):
+        store_file = temp_dir / ".session_store.json"
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(
+                bot_id=1,
+                user_id=100,
+                kimi_session_id="kimi-session-1",
+            )
+
+            data = load_session(1, 100)
+
+        assert data is not None
+        assert data["kimi_session_id"] == "kimi-session-1"
+
 
 class TestRemoveSession:
     """测试删除会话"""
