@@ -108,6 +108,16 @@ test("TerminalActionsConfigDialog edits and saves actions", async () => {
   });
 });
 
+test("TerminalActionsConfigDialog escapes pane stacking contexts", () => {
+  render(
+    <div data-testid="stacked-pane" style={{ position: "relative", zIndex: 1, transform: "translateZ(0)" }}>
+      <TerminalActionsConfigDialog config={config} saving={false} error="" onSave={vi.fn()} onClose={vi.fn()} />
+    </div>,
+  );
+
+  expect(screen.getByRole("dialog", { name: "终端快捷命令" }).parentElement).toBe(document.body);
+});
+
 test("TerminalActionsConfigDialog shows icon picker and saves selected icon", async () => {
   const save = vi.fn();
   const user = userEvent.setup();

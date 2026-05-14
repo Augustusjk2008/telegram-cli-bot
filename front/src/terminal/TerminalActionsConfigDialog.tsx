@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, ChevronDown, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { TerminalAction, TerminalActionsConfig, TerminalActionsEditableConfig } from "../services/types";
 import {
   TERMINAL_ACTION_ICON_OPTIONS,
@@ -107,7 +108,7 @@ export function TerminalActionsConfigDialog({
   const selectedIconLabel = getTerminalActionIconLabel(selected?.icon);
   const footerError = error || validationMessage;
 
-  return (
+  const dialog = (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true" aria-labelledby="terminal-actions-title">
       <section className="flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
         <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
@@ -291,4 +292,9 @@ export function TerminalActionsConfigDialog({
       </section>
     </div>
   );
+
+  if (typeof document === "undefined") {
+    return dialog;
+  }
+  return createPortal(dialog, document.body);
 }
