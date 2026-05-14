@@ -85,7 +85,7 @@ function sectionClass(extra = "") {
 }
 
 function sectionStackClass(extra = "") {
-  return clsx("min-w-0 space-y-0.5 bg-[var(--workbench-titlebar-bg)]", extra);
+  return clsx("min-w-0 space-y-2 bg-[var(--workbench-titlebar-bg)]", extra);
 }
 
 function sectionHeaderClass(extra = "") {
