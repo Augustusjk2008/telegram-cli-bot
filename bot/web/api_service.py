@@ -131,6 +131,7 @@ from bot.utils import is_dangerous_command
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
+from bot.web.native_history_locator import locate_kimi_transcript
 from bot.web.api_common import (
     AuthContext,
     WebApiError,
@@ -3051,6 +3052,46 @@ def _merge_trace_events(*sources: list[dict[str, Any]] | None) -> list[dict[str,
     return merged
 
 
+class _KimiWireTail:
+    def __init__(self, session_id: str, *, skip_existing: bool = False):
+        self.session_id = str(session_id or "").strip()
+        self.path: Path | None = None
+        self.offset = 0
+        self.state = create_stream_trace_state("kimi")
+        if skip_existing:
+            self._prime_existing_offset()
+
+    def _prime_existing_offset(self) -> None:
+        ref = locate_kimi_transcript(self.session_id)
+        if ref is None:
+            return
+        try:
+            self.path = ref.path
+            self.offset = ref.path.stat().st_size
+        except OSError:
+            self.path = None
+            self.offset = 0
+
+    def poll(self) -> list[dict[str, Any]]:
+        if not self.session_id:
+            return []
+        if self.path is None:
+            ref = locate_kimi_transcript(self.session_id)
+            if ref is None:
+                return []
+            self.path = ref.path
+        try:
+            with self.path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(self.offset)
+                chunk = handle.read()
+                self.offset = handle.tell()
+        except OSError:
+            return []
+        if not chunk:
+            return []
+        return consume_stream_trace_chunk("kimi", chunk, self.state)
+
+
 def _build_terminal_trace(
     *,
     live_trace: list[dict[str, Any]],
@@ -3603,6 +3644,20 @@ async def _stream_cli_chat(
             trace_state = create_stream_trace_state(cli_type)
             live_trace_events: list[dict[str, Any]] = []
             latest_preview_text = ""
+            kimi_wire_tail = (
+                _KimiWireTail(attempt.cli_session_id or "", skip_existing=attempt.resume_session)
+                if cli_type == "kimi"
+                else None
+            )
+
+            def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
+                event_key = _trace_event_key(trace_event)
+                if any(_trace_event_key(existing) == event_key for existing in live_trace_events):
+                    return None
+                live_trace_events.append(trace_event)
+                persistence_buffer.queue_trace(trace_event)
+                persistence_buffer.maybe_flush()
+                return trace_event
 
             def read_stdout() -> None:
                 try:
@@ -3643,10 +3698,9 @@ async def _stream_cli_chat(
                         text_chunk = str(item)
                         preview_state.consume(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
-                            live_trace_events.append(trace_event)
-                            persistence_buffer.queue_trace(trace_event)
-                            persistence_buffer.maybe_flush()
-                            yield {"type": "trace", "event": trace_event}
+                            appended_trace = append_live_trace_event(trace_event)
+                            if appended_trace is not None:
+                                yield {"type": "trace", "event": appended_trace}
 
                         if cli_type == "codex":
                             now = loop.time()
@@ -3660,6 +3714,12 @@ async def _stream_cli_chat(
                                 )
                         elif claude_collector is not None:
                             claude_collector.consume_chunk(text_chunk, now=loop.time())
+
+                    if kimi_wire_tail is not None:
+                        for trace_event in kimi_wire_tail.poll():
+                            appended_trace = append_live_trace_event(trace_event)
+                            if appended_trace is not None:
+                                yield {"type": "trace", "event": appended_trace}
 
                     with session._lock:
                         stop_requested = bool(session.stop_requested)

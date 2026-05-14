@@ -60,6 +60,36 @@ def test_build_web_chat_history_maps_kimi_wire_tool_calls_and_summary():
     assert turns[-1]["meta"]["trace"][2]["summary"] == "README.md\nbot\nfront"
 
 
+def test_build_web_chat_history_maps_kimi_message_wrapped_wire_events(tmp_path: Path):
+    transcript = tmp_path / "kimi-message-wrapped-wire.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                '{"type": "metadata", "protocol_version": "1.10"}',
+                '{"timestamp": 1778739377.9021995, "message": {"type": "TurnBegin", "payload": {"user_input": "列出当前目录"}}}',
+                '{"timestamp": 1778739377.9069147, "message": {"type": "StepBegin", "payload": {"n": 1}}}',
+                '{"timestamp": 1778739380.122419, "message": {"type": "ContentPart", "payload": {"type": "think", "think": "需要查看目录。"}}}',
+                '{"timestamp": 1778739381.200000, "message": {"type": "ToolCall", "payload": {"type": "function", "id": "tc_1", "function": {"name": "Shell", "arguments": "{\\"command\\":\\"Get-ChildItem -Force\\"}"}}}}',
+                '{"timestamp": 1778739382.240000, "message": {"type": "ToolResult", "payload": {"tool_call_id": "tc_1", "return_value": {"is_error": false, "output": "README.md\\nbot\\nfront", "message": "ok"}}}}',
+                '{"timestamp": 1778739383.260000, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "目录已读取完成。"}}}',
+                '{"timestamp": 1778739384.000000, "message": {"type": "TurnEnd", "payload": {}}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    turns = load_native_transcript("kimi", transcript, session_id="kimi-session-1")
+
+    assert turns[-1]["user_text"] == "列出当前目录"
+    assert turns[-1]["content"] == "目录已读取完成。"
+    assert [item["kind"] for item in turns[-1]["meta"]["trace"]] == [
+        "commentary",
+        "tool_call",
+        "tool_result",
+    ]
+    assert turns[-1]["meta"]["trace"][1]["summary"] == "Get-ChildItem -Force"
+
+
 def test_claude_skill_injection_text_is_not_promoted_to_user_turn():
     transcript = FIXTURE_DIR / "claude-skill-injection-session.jsonl"
 

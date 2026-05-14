@@ -7013,6 +7013,165 @@ async def test_stream_cli_chat_kimi_emits_preview_and_done(web_manager: MultiBot
     assert events[-1]["type"] == "done"
     assert events[-1]["output"] == "完成"
 
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_kimi_tails_wire_trace_before_stdout_done(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "kimi"
+    web_manager.main_profile.cli_path = "kimi"
+    web_manager.main_profile.working_dir = str(temp_dir)
+    wire_path = temp_dir / "wire.jsonl"
+    wire_path.write_text(
+        "\n".join(
+            [
+                '{"type": "metadata", "protocol_version": "1.10"}',
+                '{"timestamp": 1778739377.9021995, "message": {"type": "TurnBegin", "payload": {"user_input": "hello"}}}',
+                '{"timestamp": 1778739380.122419, "message": {"type": "ContentPart", "payload": {"type": "think", "think": "正在分析需求。"}}}',
+                '{"timestamp": 1778739384.000000, "message": {"type": "TurnEnd", "payload": {}}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._sent = False
+
+        def readline(self):
+            if not self._sent:
+                self._sent = True
+                time.sleep(0.2)
+                return '{"role":"assistant","content":[{"type":"text","text":"完成"}]}\n'
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+    captured_session_id = ""
+
+    def fake_locate(session_id: str):
+        nonlocal captured_session_id
+        captured_session_id = session_id
+        return LocatedTranscript("kimi", session_id, wire_path)
+
+    monkeypatch.setattr("bot.web.api_service.locate_kimi_transcript", fake_locate)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    trace_events = [event for event in events if event["type"] == "trace"]
+    assert captured_session_id
+    assert trace_events[0]["event"]["summary"] == "正在分析需求。"
+    assert trace_events[0]["event"]["raw_type"] == "ContentPart"
+    assert events[-1]["output"] == "完成"
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_kimi_tail_skips_existing_wire_on_resume(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "kimi"
+    web_manager.main_profile.cli_path = "kimi"
+    web_manager.main_profile.working_dir = str(temp_dir)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.kimi_session_id = "kimi-existing"
+    wire_path = temp_dir / "wire.jsonl"
+    wire_path.write_text(
+        "\n".join(
+            [
+                '{"timestamp": 1778739377.9021995, "message": {"type": "TurnBegin", "payload": {"user_input": "上一轮"}}}',
+                '{"timestamp": 1778739380.122419, "message": {"type": "ContentPart", "payload": {"type": "think", "think": "旧过程不应显示。"}}}',
+                '{"timestamp": 1778739384.000000, "message": {"type": "TurnEnd", "payload": {}}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._sent = False
+
+        def readline(self):
+            if not self._sent:
+                self._sent = True
+                with wire_path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        '{"timestamp": 1778739390.000000, "message": {"type": "ContentPart", "payload": {"type": "think", "think": "新过程应显示。"}}}\n'
+                    )
+                time.sleep(0.2)
+                return '{"role":"assistant","content":[{"type":"text","text":"完成"}]}\n'
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "bot.web.api_service.locate_kimi_transcript",
+        lambda session_id: LocatedTranscript("kimi", session_id, wire_path),
+    )
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["kimi"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    summaries = [event["event"]["summary"] for event in events if event["type"] == "trace"]
+    assert "旧过程不应显示。" not in summaries
+    assert "新过程应显示。" in summaries
+    assert events[-1]["output"] == "完成"
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_cancellation_terminates_active_process(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"

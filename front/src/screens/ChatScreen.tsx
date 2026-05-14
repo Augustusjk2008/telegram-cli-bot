@@ -1831,6 +1831,7 @@ export function ChatScreen({
 
     try {
       let usingPreviewReplace = false;
+      let usingTracePreview = false;
       const onChunk = (chunk: string) => {
         if (sendVersion !== assistantSendVersionRef.current) {
           return;
@@ -1862,6 +1863,7 @@ export function ChatScreen({
         }
         if (status.previewText) {
           usingPreviewReplace = true;
+          usingTracePreview = false;
           setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
             text: status.previewText || item.text,
@@ -1878,7 +1880,22 @@ export function ChatScreen({
           prev,
           assistantId,
           localStartedAtMs,
-          (item) => appendTraceToMessage(item, traceEvent),
+          (item) => {
+            const nextItem = appendTraceToMessage(item, traceEvent);
+            const canUseTracePreview = traceEvent.kind === "commentary"
+              && Boolean(traceEvent.summary.trim())
+              && !usingPreviewReplace
+              && (!item.text.trim() || usingTracePreview);
+            if (!canUseTracePreview) {
+              return nextItem;
+            }
+            usingTracePreview = true;
+            return {
+              ...nextItem,
+              text: traceEvent.summary,
+              state: "streaming",
+            };
+          },
         ));
       };
       const finalMessage = options.sendOptions

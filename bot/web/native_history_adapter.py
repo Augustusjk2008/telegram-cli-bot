@@ -597,6 +597,10 @@ def _resolve_kimi_wire_event(item: dict[str, Any]) -> tuple[str, dict[str, Any]]
         event_type = str(params.get("type") or "").strip()
         payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
         return event_type, payload
+    message = item.get("message") if isinstance(item.get("message"), dict) else {}
+    if message:
+        payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
+        return str(message.get("type") or "").strip(), payload
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return str(item.get("type") or "").strip(), payload
 
@@ -926,6 +930,12 @@ def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _consume_live_kimi_line(item: dict[str, Any]) -> list[dict[str, Any]]:
+    event_type, payload = _resolve_kimi_wire_event(item)
+    if event_type:
+        turn = _new_turn_state()
+        _consume_kimi_line(item, turn, include_trace=True)
+        return [dict(event) for event in turn["trace"]]
+
     role = str(item.get("role") or "").strip().lower()
     if role == "assistant":
         events: list[dict[str, Any]] = []

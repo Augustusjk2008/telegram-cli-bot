@@ -761,6 +761,39 @@ test("streamed trace count grows beyond the first process event", async () => {
   expect(screen.getByText("2 条过程")).toBeInTheDocument();
 });
 
+test("shows streamed commentary trace in the assistant bubble before final text", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      _onChunk: (chunk: string) => void,
+      _onStatus,
+      onTrace,
+    ) => new Promise<ChatMessage>((resolve) => {
+      onTrace?.({ kind: "commentary", summary: "正在分析需求" } as never);
+      window.setTimeout(() => {
+        resolve({
+          id: "assistant-final",
+          role: "assistant",
+          text: "最终结果",
+          createdAt: new Date().toISOString(),
+          state: "done",
+        });
+      }, 50);
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "执行");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("正在分析需求")).toBeInTheDocument();
+  expect(await screen.findByText("最终结果")).toBeInTheDocument();
+});
+
 test("expanding a partially loaded trace fetches full trace details", async () => {
   const user = userEvent.setup();
   const getMessageTrace = vi.fn(async () => ({
