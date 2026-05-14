@@ -67,7 +67,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "wait_agent_messages",
-            "description": "阻塞等待当前 TCB 集群任意子 agent 的下一条回告。必须传 run_id。wait_seconds 指定最长等待时间；到时间无回告返回 timed_out=true。返回 messages[].agent_id/task_id/kind，可区分 progress 和 final；不返回事件/工具调用。",
+            "description": "阻塞等待当前 TCB 集群任意子 agent 的下一条未读回告。必须传 run_id。默认使用服务端未读游标；可传 after_sequence 覆盖。wait_seconds 指定最长等待时间；到时间无回告返回 timed_out=true。返回 messages[].agent_id/task_id/kind，可区分 progress 和 final；不返回事件/工具调用。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

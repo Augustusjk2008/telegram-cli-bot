@@ -66,6 +66,7 @@ class ClusterRun:
     events: list[dict[str, Any]] = field(default_factory=list)
     tasks: dict[str, ClusterAgentTask] = field(default_factory=dict)
     _next_message_sequence: int = 1
+    _agent_message_read_sequence: int = 0
     message_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
 
 
@@ -397,6 +398,21 @@ class ClusterRuntime:
             "cursor": cursor,
             "messages": [self._serialize_task_message(message) for message in limited],
         }
+
+    def agent_message_read_sequence(self, run_id: str) -> int:
+        run = self._runs.get(str(run_id))
+        if run is None:
+            return 0
+        return max(0, int(getattr(run, "_agent_message_read_sequence", 0)))
+
+    def mark_agent_messages_read(self, run_id: str, cursor: int) -> None:
+        run = self._runs.get(str(run_id))
+        if run is None:
+            return
+        run._agent_message_read_sequence = max(
+            run._agent_message_read_sequence,
+            max(0, int(cursor or 0)),
+        )
 
     async def wait_agent_messages(
         self,

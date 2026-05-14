@@ -675,6 +675,44 @@ async def test_cluster_wait_agent_messages_returns_any_agent_message(web_manager
 
 
 @pytest.mark.asyncio
+async def test_cluster_wait_agent_messages_without_after_sequence_reads_pending_messages(
+    web_manager: MultiBotManager,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+    request = api_service._CLUSTER_RUNTIME.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    task = api_service._CLUSTER_RUNTIME.create_agent_task(run.run_id, request)
+    api_service._CLUSTER_RUNTIME.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="step 1")
+    api_service._CLUSTER_RUNTIME.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="step 2")
+
+    first = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "wait_agent_messages",
+        {"wait_seconds": 1, "message_limit": 1},
+    )
+    second = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "wait_agent_messages",
+        {"wait_seconds": 1, "message_limit": 1},
+    )
+
+    assert first["data"]["timed_out"] is False
+    assert [message["content"] for message in first["data"]["messages"]] == ["step 1"]
+    assert second["data"]["timed_out"] is False
+    assert [message["content"] for message in second["data"]["messages"]] == ["step 2"]
+    api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
+    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
+
+
+@pytest.mark.asyncio
 async def test_cluster_wait_agent_messages_times_out(web_manager: MultiBotManager):
     from bot.cluster.config import BotClusterConfig
 

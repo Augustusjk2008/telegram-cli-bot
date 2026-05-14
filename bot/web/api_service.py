@@ -942,8 +942,7 @@ def _cluster_after_sequence(payload: dict[str, Any], run_id: str) -> int:
             return max(0, int(raw))
         except (TypeError, ValueError):
             return 0
-    run = _CLUSTER_RUNTIME.get_run(run_id)
-    return max(0, getattr(run, "_next_message_sequence", 1) - 1) if run else 0
+    return _CLUSTER_RUNTIME.agent_message_read_sequence(run_id)
 
 
 async def _wait_for_cluster_tasks_if_requested(
@@ -992,6 +991,7 @@ async def handle_cluster_mcp_tool(
                 ),
             }
         if tool_name == "wait_agent_messages":
+            uses_managed_cursor = "after_sequence" not in payload and "afterSequence" not in payload
             result = await _CLUSTER_RUNTIME.wait_agent_messages(
                 run_id,
                 after_sequence=_cluster_after_sequence(payload, run_id),
@@ -1000,6 +1000,8 @@ async def handle_cluster_mcp_tool(
                 include_final=payload.get("include_final", payload.get("includeFinal", True)) is not False,
                 message_limit=_cluster_task_message_limit(payload),
             )
+            if uses_managed_cursor and result.get("messages"):
+                _CLUSTER_RUNTIME.mark_agent_messages_read(run_id, result.get("cursor", 0))
             return {"ok": True, "data": result}
         if tool_name != "ask_agent":
             _raise(404, "cluster_tool_not_found", "未知集群工具")
@@ -2405,7 +2407,7 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "
         "ask_agent 的 timeout_seconds 是软期限；超时不强行中断子 agent，poll_agent_tasks 会通过 deadline_exceeded 告知主 agent。\n"
         "你可在同一轮对话内多轮指挥集群：连续 ask_agent 并发启动多个任务，调用 poll_agent_tasks 查看结果，再按结果追加新任务或汇总。\n"
         "poll_agent_tasks 可返回 messages；每条 message.kind 为 kind=progress 或 kind=final。progress 是子 agent 可读过程，final 是最终结果；不会返回事件和工具调用。\n"
-        "wait_agent_messages 可阻塞等待任意子 agent 下一条回告；传 after_sequence 和 wait_seconds，返回 messages 里会带 agent_id、task_id、kind。\n"
+        "wait_agent_messages 可阻塞等待任意子 agent 下一条未读回告；可传 after_sequence 覆盖默认未读游标，wait_seconds 指定最长等待时间，返回 messages 里会带 agent_id、task_id、kind。\n"
         "如果需要等待结果，调用 poll_agent_tasks 时传 wait_seconds；如果用户只要求启动或你判断可后台运行，可先结束并说明任务仍在运行。\n"
         "最终回答前自行选择：等待并汇总已完成任务，或明确说明哪些任务仍在后台运行。\n"
         "如用户未显式提及子 agent，则你应自主决定是否和如何使用集群，使用前查询集群配置，使用时遵循安全和效率原则，即：多 agents 不要写相同文件，不要做重复的事情（尤其包括你自己，即便子 agent 看上去卡住了，也不要尝试代劳委派的子 agent 的工作）。\n"
