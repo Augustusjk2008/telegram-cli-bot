@@ -124,7 +124,6 @@ export function TerminalScreen({
   const runningWorkingDir = terminal.snapshot.cwd.trim();
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
   const preferredTerminalDir = preferredWorkingDir.trim();
-  const displayWorkingDir = runningWorkingDir || stagedWorkingDir || preferredTerminalDir;
   const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
 
   useEffect(() => {
@@ -507,27 +506,24 @@ export function TerminalScreen({
 
   return (
     <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--bg)]">
-      <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3">
+      <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-semibold text-[var(--text)]">{connectionText}</h1>
               {stagedWorkingDir ? (
-                <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
                   下次重建目录
                 </span>
               ) : null}
               {resolvedPtyMode !== null ? (
-                <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
                   {resolvedPtyMode ? "PTY" : "PIPE"}
                 </span>
               ) : null}
             </div>
-            <p className="truncate text-xs text-[var(--muted)]">
-              {displayWorkingDir || "等待工作目录..."}
-            </p>
             {effectiveError ? (
-              <p className="mt-1 text-xs text-red-600">{effectiveError}</p>
+              <p className="mt-0.5 text-xs text-red-600">{effectiveError}</p>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -547,7 +543,7 @@ export function TerminalScreen({
                 type="button"
                 aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
                 onClick={onToggleFocus}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs hover:bg-[var(--surface)]"
+                className="rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs hover:bg-[var(--surface)]"
               >
                 {focused ? "恢复" : "聚焦"}
               </button>
@@ -556,36 +552,36 @@ export function TerminalScreen({
               type="button"
               onClick={closeTerminal}
               disabled={!canCloseTerminal}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface)] disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface)] disabled:opacity-50"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
               关闭终端
             </button>
             <button
               type="button"
               onClick={rebuildTerminal}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface)] disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface)] disabled:opacity-60"
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className="h-3.5 w-3.5" />
               重建终端
             </button>
           </div>
         </div>
         {stagedWorkingDir ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs">
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs">
             <span className="font-medium text-[var(--text)]">下次重建目录</span>
             <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
             <button
               type="button"
               onClick={onAcceptPendingWorkingDir}
-              className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
+              className="rounded border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
             >
               设为下次重建
             </button>
             <button
               type="button"
               onClick={onCancelPendingWorkingDir}
-              className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
+              className="rounded border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
             >
               取消
             </button>
