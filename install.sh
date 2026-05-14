@@ -162,46 +162,22 @@ detect_python() {
 }
 
 select_default_cli_type() {
-  local has_claude=0 has_kimi=0 choice prompt
+  local choice prompt
 
-  command -v claude >/dev/null 2>&1 && has_claude=1
-  command -v kimi >/dev/null 2>&1 && has_kimi=1
-
-  if [[ "$NON_INTERACTIVE" == "1" || ( "$has_claude" == "0" && "$has_kimi" == "0" ) ]]; then
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
     printf 'codex\n'
     return 0
   fi
 
-  prompt="选择默认 CLI：1) codex"
-  if [[ "$has_claude" == "1" ]]; then
-    prompt+="  2) claude"
-  fi
-  if [[ "$has_kimi" == "1" ]]; then
-    if [[ "$has_claude" == "1" ]]; then
-      prompt+="  3) kimi"
-    else
-      prompt+="  2) kimi"
-    fi
-  fi
-  prompt+=" [默认 1] "
+  prompt="选择默认 CLI：1) codex  2) claude  3) kimi [默认 1] "
 
   read -r -p "$prompt" choice
   case "$choice" in
     2)
-      if [[ "$has_claude" == "1" ]]; then
-        printf 'claude\n'
-      elif [[ "$has_kimi" == "1" ]]; then
-        printf 'kimi\n'
-      else
-        printf 'codex\n'
-      fi
+      printf 'claude\n'
       ;;
     3)
-      if [[ "$has_claude" == "1" && "$has_kimi" == "1" ]]; then
-        printf 'kimi\n'
-      else
-        printf 'codex\n'
-      fi
+      printf 'kimi\n'
       ;;
     *)
       printf 'codex\n'

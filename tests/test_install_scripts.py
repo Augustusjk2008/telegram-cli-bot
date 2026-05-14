@@ -341,21 +341,37 @@ Select-DefaultCli -CliInfo $cliInfo | ConvertTo-Json -Compress
     assert payload == {"Type": "kimi", "Path": "kimi"}
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
-def test_install_ps1_select_default_cli_keeps_codex_default_when_only_kimi_exists():
+def test_install_ps1_select_default_cli_offers_all_supported_clis_when_only_kimi_exists():
     result = _run_install_ps1_command(
         """
+$captured = [ordered]@{}
 $cliInfo = [pscustomobject]@{
     Codex = $null
     Claude = $null
     Kimi = [pscustomobject]@{ Path = 'C:\\Users\\me\\.local\\bin\\kimi.exe' }
 }
+function Read-Choice {
+    param([string]$Prompt, [string[]]$Choices, [string]$DefaultChoice)
+    $captured['Prompt'] = $Prompt
+    $captured['Choices'] = $Choices -join ','
+    $captured['DefaultChoice'] = $DefaultChoice
+    return $DefaultChoice
+}
 Select-DefaultCli -CliInfo $cliInfo | ConvertTo-Json -Compress
+$captured | ConvertTo-Json -Compress
 """
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    lines = result.stdout.strip().splitlines()
+    payload = json.loads(lines[-2])
+    captured = json.loads(lines[-1])
     assert payload == {"Type": "codex", "Path": "codex"}
+    assert captured == {
+        "Prompt": "选择默认 CLI：1) codex  2) claude  3) kimi",
+        "Choices": "1,2,3",
+        "DefaultChoice": "1",
+    }
 
 @pytest.mark.skipif(not WINDOWS_POWERSHELL.exists(), reason="Windows PowerShell 5.1 不可用")
 def test_install_ps1_installs_example_plugins_when_requested(tmp_path: Path):

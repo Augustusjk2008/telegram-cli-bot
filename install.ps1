@@ -9,6 +9,9 @@
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$script:Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+[Console]::OutputEncoding = $script:Utf8NoBomEncoding
+$OutputEncoding = $script:Utf8NoBomEncoding
 
 $script:RootDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $script:RootDir
@@ -520,52 +523,31 @@ function New-WebToken {
 function Select-DefaultCli {
     param([object]$CliInfo)
 
-    if ($CliInfo.Codex -and -not $CliInfo.Claude -and -not $CliInfo.Kimi) {
-        return [pscustomobject]@{
-            Type = "codex"
-            Path = $CliInfo.Codex.Path
-        }
-    }
-
-    if ($CliInfo.Claude -and -not $CliInfo.Codex -and -not $CliInfo.Kimi) {
-        return [pscustomobject]@{
-            Type = "claude"
-            Path = $CliInfo.Claude.Path
-        }
-    }
-
     $availableCli = @(
         [pscustomobject]@{
             Choice = "1"
             Type   = "codex"
             Path   = if ($CliInfo.Codex) { $CliInfo.Codex.Path } else { "codex" }
-        }
-    )
-
-    if ($CliInfo.Claude) {
-        $availableCli += [pscustomobject]@{
-            Choice = [string]($availableCli.Count + 1)
+        },
+        [pscustomobject]@{
+            Choice = "2"
             Type   = "claude"
-            Path   = $CliInfo.Claude.Path
-        }
-    }
-    if ($CliInfo.Kimi) {
-        $availableCli += [pscustomobject]@{
-            Choice = [string]($availableCli.Count + 1)
+            Path   = if ($CliInfo.Claude) { $CliInfo.Claude.Path } else { "claude" }
+        },
+        [pscustomobject]@{
+            Choice = "3"
             Type   = "kimi"
             Path   = "kimi"
         }
-    }
+    )
 
-    if ($availableCli.Count -gt 1 -and ($CliInfo.Codex -or $CliInfo.Claude -or $CliInfo.Kimi)) {
-        $promptChoices = @($availableCli | ForEach-Object { "{0}) {1}" -f $_.Choice, $_.Type })
-        $choice = Read-Choice -Prompt ("选择默认 CLI：{0}" -f ($promptChoices -join "  ")) -Choices @($availableCli.Choice) -DefaultChoice "1"
-        $selected = $availableCli | Where-Object { $_.Choice -eq $choice } | Select-Object -First 1
-        if ($selected) {
-            return [pscustomobject]@{
-                Type = $selected.Type
-                Path = $selected.Path
-            }
+    $promptChoices = @($availableCli | ForEach-Object { "{0}) {1}" -f $_.Choice, $_.Type })
+    $choice = Read-Choice -Prompt ("选择默认 CLI：{0}" -f ($promptChoices -join "  ")) -Choices @($availableCli.Choice) -DefaultChoice "1"
+    $selected = $availableCli | Where-Object { $_.Choice -eq $choice } | Select-Object -First 1
+    if ($selected) {
+        return [pscustomobject]@{
+            Type = $selected.Type
+            Path = $selected.Path
         }
     }
 
@@ -786,6 +768,7 @@ function Ensure-OptionalCodexInstall {
             Version = ""
         }
         Claude = $CliInfo.Claude
+        Kimi   = $CliInfo.Kimi
     }
 }
 
