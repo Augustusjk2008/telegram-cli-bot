@@ -161,6 +161,16 @@ def _normalize_terminal_size(cols: int | None, rows: int | None) -> tuple[int, i
     return safe_cols, safe_rows
 
 
+def _build_windows_powershell_command(executable: str) -> str:
+    setup = (
+        "try { chcp.com 65001 > $null } catch {}; "
+        "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); "
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+        "$OutputEncoding = [Console]::OutputEncoding"
+    )
+    return f'{executable} -NoLogo -NoExit -Command "{setup}"'
+
+
 def create_shell_process(
     shell_type: str,
     cwd: str,
@@ -169,7 +179,7 @@ def create_shell_process(
     rows: int | None = None,
 ) -> PtyWrapper:
     if shell_type == "powershell":
-        cmdline = "powershell.exe -NoLogo -NoExit" if sys.platform == "win32" else "pwsh -NoLogo -NoExit"
+        cmdline = _build_windows_powershell_command("powershell.exe") if sys.platform == "win32" else "pwsh -NoLogo -NoExit"
     elif shell_type == "cmd":
         cmdline = "cmd.exe"
     elif shell_type == "bash":
@@ -189,14 +199,16 @@ def create_shell_process(
                 "FORCE_COLOR": "1",
                 "TERM": "xterm-256color",
                 "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
                 "PYTHONUNBUFFERED": "1",
+                "CHCP": "65001",
             },
         )
         return PtyWrapper(process, is_pty=True)
 
     if sys.platform == "win32":
         process = subprocess.Popen(
-            cmdline.split(),
+            cmdline,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

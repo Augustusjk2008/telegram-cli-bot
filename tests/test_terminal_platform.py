@@ -1,6 +1,16 @@
 from types import SimpleNamespace
 
-from bot.platform.terminal import PosixPtyProcess, PtyWrapper
+from bot.platform.terminal import PosixPtyProcess, PtyWrapper, _build_windows_powershell_command
+
+
+def test_windows_powershell_command_initializes_utf8_console():
+    command = _build_windows_powershell_command("powershell.exe")
+
+    assert "chcp.com 65001" in command
+    assert "[Console]::InputEncoding" in command
+    assert "[Console]::OutputEncoding" in command
+    assert "$OutputEncoding" in command
+    assert command.startswith("powershell.exe -NoLogo -NoExit -Command ")
 
 
 def test_pty_wrapper_resize_uses_setwinsize_for_winpty_like_process():
