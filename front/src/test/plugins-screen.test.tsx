@@ -79,6 +79,25 @@ test("plugins screen opens folder picker before installing plugin", async () => 
   });
 });
 
+test("plugins screen renders install directory picker outside nested desktop pane", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const host = document.createElement("div");
+  host.style.transform = "translateZ(0)";
+  document.body.appendChild(host);
+
+  const { unmount } = render(<PluginsScreen botAlias="main" client={client} embedded />, { container: host });
+
+  expect((await screen.findAllByText("Vivado Waveform")).length).toBeGreaterThan(0);
+  await user.click(screen.getByRole("button", { name: "安装插件" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "选择含 plugin.json 的插件根目录" });
+  expect(dialog.parentElement).toBe(document.body);
+
+  unmount();
+  host.remove();
+});
+
 test("plugins screen can uninstall plugins from plugin rows", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

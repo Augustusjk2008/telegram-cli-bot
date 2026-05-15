@@ -197,6 +197,18 @@ export function PluginsScreen({
   const renderedUninstallDialog = uninstallDialog && typeof document !== "undefined"
     ? createPortal(uninstallDialog, document.body)
     : uninstallDialog;
+  const installPickerDialog = installPickerOpen && canOperate ? (
+    <DirectoryPickerDialog
+      title="选择含 plugin.json 的插件根目录"
+      botAlias={botAlias}
+      client={client}
+      onPick={(path) => installPluginFromPath(path)}
+      onClose={() => setInstallPickerOpen(false)}
+    />
+  ) : null;
+  const renderedInstallPickerDialog = installPickerDialog && typeof document !== "undefined"
+    ? createPortal(installPickerDialog, document.body)
+    : installPickerDialog;
 
   return (
     <>
@@ -278,16 +290,8 @@ export function PluginsScreen({
             ) : null}
           </div>
         </section>
-        {installPickerOpen && canOperate ? (
-          <DirectoryPickerDialog
-            title="选择含 plugin.json 的插件根目录"
-            botAlias={botAlias}
-            client={client}
-            onPick={(path) => installPluginFromPath(path)}
-            onClose={() => setInstallPickerOpen(false)}
-          />
-        ) : null}
       </main>
+      {renderedInstallPickerDialog}
       {renderedUninstallDialog}
     </>
   );
