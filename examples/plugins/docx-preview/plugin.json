@@ -11,7 +11,8 @@
     "entry": "backend/main.py",
     "protocol": "jsonrpc-stdio",
     "permissions": {
-      "workspaceRead": true
+      "workspaceRead": true,
+      "tempArtifacts": true
     }
   },
   "views": [

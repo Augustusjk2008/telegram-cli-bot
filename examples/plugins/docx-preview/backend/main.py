@@ -49,11 +49,25 @@ def read_docx_bytes(path: str) -> bytes:
     return base64.b64decode(content_base64.encode("ascii"))
 
 
+def write_artifact(filename: str, content: bytes, content_type: str) -> dict[str, Any]:
+    response = call_host(
+        "host.temp.write_artifact",
+        {
+            "filename": filename,
+            "contentBase64": base64.b64encode(content).decode("ascii"),
+            "contentType": content_type,
+        },
+    )
+    if response.get("error"):
+        raise RuntimeError(str(response["error"].get("message") or "写入插件图片失败"))
+    return dict(response.get("result") or {})
+
+
 def render_view(input_payload: dict[str, Any]) -> dict[str, Any]:
     path = str(input_payload.get("path") or "").strip()
     if not path:
         raise RuntimeError("缺少 DOCX 路径")
-    payload = parse_docx_document(path, read_docx_bytes(path))
+    payload = parse_docx_document(path, read_docx_bytes(path), write_artifact=write_artifact)
     return {
         "renderer": "document",
         "title": str(payload.get("title") or Path(path).name),

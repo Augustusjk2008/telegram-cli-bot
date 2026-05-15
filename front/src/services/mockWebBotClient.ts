@@ -722,12 +722,22 @@ function buildMockDocumentPayload(sourcePath: string): DocumentViewPayload {
   return {
     path: sourcePath,
     title: "项目路线图",
-    statsText: "5 段 · 1 表格",
+    statsText: "5 段 · 1 表格 · 1 图片",
     blocks: [
       { type: "heading", level: 1, runs: [{ text: "项目路线图" }] },
       { type: "paragraph", runs: [{ text: "目标：" }, { text: "先打通 document renderer", bold: true }] },
       { type: "list_item", ordered: false, depth: 0, marker: "•", runs: [{ text: "支持标题和段落" }] },
       { type: "list_item", ordered: false, depth: 0, marker: "•", runs: [{ text: "支持列表和表格" }] },
+      {
+        type: "image",
+        artifactId: "artifact-docx-image-1",
+        filename: "image1.png",
+        contentType: "image/png",
+        alt: "系统架构图",
+        title: "系统架构",
+        widthPx: 320,
+        heightPx: 160,
+      },
       {
         type: "table",
         rows: [
@@ -1042,7 +1052,9 @@ export class MockWebBotClient implements WebBotClient {
     | { pluginId: string; renderer: "tree"; summary: TreeViewSummary; window: TreeWindowPayload; rootPath?: string }
   >();
   private pluginSessionCounter = 0;
-  private pluginArtifacts = new Map<string, { filename: string; content: string }>();
+  private pluginArtifacts = new Map<string, { filename: string; content: string; contentType?: string }>([
+    ["artifact-docx-image-1", { filename: "image1.png", content: "mock image", contentType: "image/png" }],
+  ]);
   private pluginArtifactCounter = 0;
   private workdirOverrides = new Map<string, string>();
   private conversationsByBot = new Map<string, ConversationSummary[]>();
@@ -3762,7 +3774,7 @@ export class MockWebBotClient implements WebBotClient {
       const content = input.payload?.rowId
         ? `endpoint,slack\n${String(input.payload.rowId)},-0.132\n`
         : "endpoint,slack\nrx_data,-0.132\ntx_data,-0.081\n";
-      this.pluginArtifacts.set(artifactId, { filename: "timing.csv", content });
+      this.pluginArtifacts.set(artifactId, { filename: "timing.csv", content, contentType: "text/csv" });
       return {
         message: "已导出",
         refresh: "session",
@@ -3791,7 +3803,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async downloadPluginArtifact(_botAlias: string, artifactId: string, filename: string): Promise<void> {
     const artifact = this.pluginArtifacts.get(artifactId);
-    const blob = new Blob([artifact?.content || ""], { type: "text/plain" });
+    const blob = new Blob([artifact?.content || ""], { type: artifact?.contentType || "text/plain" });
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = downloadUrl;
@@ -3800,6 +3812,11 @@ export class MockWebBotClient implements WebBotClient {
     link.click();
     link.remove();
     URL.revokeObjectURL(downloadUrl);
+  }
+
+  async getPluginArtifactBlob(_botAlias: string, artifactId: string): Promise<Blob> {
+    const artifact = this.pluginArtifacts.get(artifactId);
+    return new Blob([artifact?.content || ""], { type: artifact?.contentType || "application/octet-stream" });
   }
 
   async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult> {

@@ -3559,6 +3559,19 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
+  async getPluginArtifactBlob(botAlias: string, artifactId: string): Promise<Blob> {
+    const response = await fetch(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`,
+      {
+        headers: this.headers(),
+      },
+    );
+    if (!response.ok) {
+      throw new Error("读取插件产物失败");
+    }
+    return response.blob();
+  }
+
   async downloadPluginArtifact(botAlias: string, artifactId: string, filename: string): Promise<void> {
     const response = await fetch(
       `/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`,

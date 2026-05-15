@@ -9,7 +9,12 @@ from bot.plugins.host_api import PluginHostApi, PluginHostContext, PluginHostPer
 from bot.plugins.models import PluginManifest, PluginPermissions, PluginRuntimeSpec
 
 
-def _manifest(*, workspace_read: bool, workspace_list: bool = False) -> PluginManifest:
+def _manifest(
+    *,
+    workspace_read: bool,
+    workspace_list: bool = False,
+    temp_artifacts: bool = False,
+) -> PluginManifest:
     runtime = PluginRuntimeSpec(
         runtime_type="python",
         entry="backend/main.py",
@@ -17,7 +22,7 @@ def _manifest(*, workspace_read: bool, workspace_list: bool = False) -> PluginMa
         permissions=PluginPermissions(
             workspace_read=workspace_read,
             workspace_list=workspace_list,
-            temp_artifacts=False,
+            temp_artifacts=temp_artifacts,
         ),
     )
     return PluginManifest(
@@ -104,3 +109,29 @@ async def test_host_workspace_outline_rejects_out_of_workspace_path(tmp_path: Pa
             "host.workspace.outline",
             {"path": str(outside)},
         )
+
+
+@pytest.mark.asyncio
+async def test_host_api_write_artifact_records_content_type(tmp_path: Path) -> None:
+    api = PluginHostApi(ArtifactStore(tmp_path / ".artifacts"))
+    context = PluginHostContext(
+        bot_alias="main",
+        plugin_id="docx-preview",
+        workspace_root=tmp_path,
+    )
+
+    result = await api.dispatch(
+        context,
+        _manifest(workspace_read=False, temp_artifacts=True),
+        "host.temp.write_artifact",
+        {
+            "filename": "image1.png",
+            "contentBase64": "iVBORw0KGgo=",
+            "contentType": "image/png",
+        },
+    )
+    record = api.artifacts.get(bot_alias="main", artifact_id=result["artifactId"])
+
+    assert result["contentType"] == "image/png"
+    assert record.content_type == "image/png"
+    assert record.filename == "image1.png"

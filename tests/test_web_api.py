@@ -3170,6 +3170,7 @@ for line in sys.stdin:
             artifact_response = await client.get(f"/api/bots/main/plugins/artifacts/{effect['artifactId']}")
             assert artifact_response.status == 200
             assert "timing.csv" in artifact_response.headers.get("Content-Disposition", "")
+            assert artifact_response.headers.get("Content-Type", "").startswith("application/octet-stream")
             assert await artifact_response.text() == "path,slack\npath-1,0.1\n"
 
     await web_manager.plugin_service.shutdown()

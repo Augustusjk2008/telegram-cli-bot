@@ -191,6 +191,7 @@ export interface WebBotClient {
   ): Promise<PluginViewWindowPayload>;
   disposePluginViewSession(botAlias: string, pluginId: string, sessionId: string): Promise<void>;
   invokePluginAction(botAlias: string, pluginId: string, input: PluginActionInvokeInput): Promise<PluginActionResult>;
+  getPluginArtifactBlob(botAlias: string, artifactId: string): Promise<Blob>;
   downloadPluginArtifact(botAlias: string, artifactId: string, filename: string): Promise<void>;
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;

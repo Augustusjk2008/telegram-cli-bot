@@ -124,7 +124,7 @@ export function PluginViewSurface({
   }
 
   if (view.renderer === "document") {
-    return <DocumentView view={view} />;
+    return <DocumentView botAlias={botAlias} client={client} view={view} />;
   }
 
   if (view.renderer === "hex") {

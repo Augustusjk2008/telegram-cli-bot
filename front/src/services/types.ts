@@ -918,6 +918,18 @@ export type DocumentTextRun = {
   code?: boolean;
 };
 
+export type DocumentImageBlock = {
+  type: "image";
+  artifactId: string;
+  filename: string;
+  contentType: string;
+  alt?: string;
+  title?: string;
+  widthPx?: number;
+  heightPx?: number;
+  caption?: string;
+};
+
 export type DocumentBlock =
   | {
       type: "heading";
@@ -935,6 +947,7 @@ export type DocumentBlock =
       marker?: string;
       runs: DocumentTextRun[];
     }
+  | DocumentImageBlock
   | {
       type: "table";
       rows: Array<{

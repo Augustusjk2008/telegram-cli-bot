@@ -2268,7 +2268,10 @@ class WebApiServer:
         record = get_plugin_artifact(self.manager, alias, auth, artifact_id)
         return web.FileResponse(
             path=record.path,
-            headers={"Content-Disposition": f'attachment; filename="{record.filename}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{record.filename}"',
+                "Content-Type": record.content_type,
+            },
         )
 
     async def admin_bots(self, request: web.Request) -> web.Response:

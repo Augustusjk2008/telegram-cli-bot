@@ -128,10 +128,12 @@ class PluginHostApi:
                 plugin_id=context.plugin_id,
                 filename=str(params.get("filename") or "artifact.bin"),
                 content=self._coerce_artifact_bytes(params),
+                content_type=str(params.get("contentType") or params.get("content_type") or "application/octet-stream"),
             )
             return {
                 "artifactId": record.artifact_id,
                 "filename": record.filename,
                 "sizeBytes": record.size_bytes,
+                "contentType": record.content_type,
             }
         raise ValueError(f"unknown host api method: {method}")

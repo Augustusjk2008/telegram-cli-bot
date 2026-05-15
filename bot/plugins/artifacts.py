@@ -19,6 +19,7 @@ class ArtifactRecord:
     filename: str
     path: Path
     size_bytes: int
+    content_type: str = "application/octet-stream"
 
 
 class ArtifactStore:
@@ -26,17 +27,28 @@ class ArtifactStore:
         self.root = Path(repo_root) / ".plugins" / "artifacts"
         self._records: dict[str, ArtifactRecord] = {}
 
-    def write(self, *, bot_alias: str, plugin_id: str, filename: str, content: bytes) -> ArtifactRecord:
+    def write(
+        self,
+        *,
+        bot_alias: str,
+        plugin_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> ArtifactRecord:
         artifact_id = f"artifact-{uuid.uuid4().hex}"
         target_dir = self.root / bot_alias / plugin_id
         target_dir.mkdir(parents=True, exist_ok=True)
+        cleaned_filename = _sanitize_filename(filename)
+        normalized_content_type = str(content_type or "application/octet-stream").strip() or "application/octet-stream"
         record = ArtifactRecord(
             artifact_id=artifact_id,
             bot_alias=bot_alias,
             plugin_id=plugin_id,
-            filename=_sanitize_filename(filename),
-            path=target_dir / f"{artifact_id}-{_sanitize_filename(filename)}",
+            filename=cleaned_filename,
+            path=target_dir / f"{artifact_id}-{cleaned_filename}",
             size_bytes=len(content),
+            content_type=normalized_content_type,
         )
         record.path.write_bytes(content)
         self._records[artifact_id] = record

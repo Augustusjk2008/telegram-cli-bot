@@ -2066,6 +2066,39 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("getPluginArtifactBlob fetches artifact bytes with auth headers", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce(
+        {
+          ok: true,
+          blob: async () => new Blob(["image"], { type: "image/png" }),
+        },
+      );
+
+    const client = new RealWebBotClient();
+    await client.restoreSession("secret-token");
+    const blob = await client.getPluginArtifactBlob("main", "artifact-1");
+
+    expect(blob.type).toBe("image/png");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/bots/main/plugins/artifacts/artifact-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
   test("writeFile preserves string file versions in the request body", async () => {
     fetchMock
       .mockResolvedValueOnce({

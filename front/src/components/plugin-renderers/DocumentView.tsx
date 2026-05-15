@@ -1,7 +1,10 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
+import type { WebBotClient } from "../../services/webBotClient";
 import type { DocumentBlock, DocumentTextRun, PluginRenderResult } from "../../services/types";
 
 type Props = {
+  botAlias: string;
+  client: WebBotClient;
   view: Extract<PluginRenderResult, { renderer: "document"; mode: "snapshot" }>;
 };
 
@@ -45,7 +48,72 @@ function renderHeading(level: DocumentHeadingLevel, runs: DocumentTextRun[], key
   return <h6 key={key} className={className}>{renderRuns(runs)}</h6>;
 }
 
-function renderBlock(block: DocumentBlock, index: number) {
+function DocumentImage({
+  botAlias,
+  client,
+  block,
+}: {
+  botAlias: string;
+  client: WebBotClient;
+  block: Extract<DocumentBlock, { type: "image" }>;
+}) {
+  const [src, setSrc] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+
+    client
+      .getPluginArtifactBlob(botAlias, block.artifactId)
+      .then((blob) => {
+        if (!active) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch((exc: unknown) => {
+        if (active) {
+          setError(exc instanceof Error ? exc.message : "图片加载失败");
+        }
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [block.artifactId, botAlias, client]);
+
+  if (error) {
+    return <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
+  }
+  if (!src) {
+    return <div className="text-sm text-[var(--muted)]">图片加载中...</div>;
+  }
+
+  const width = Number(block.widthPx || 0);
+  const height = Number(block.heightPx || 0);
+  return (
+    <figure className="space-y-2">
+      <img
+        src={src}
+        alt={block.alt || block.title || block.filename}
+        title={block.title || block.filename}
+        className="max-w-full rounded border border-[var(--border)] bg-[var(--surface)] object-contain"
+        style={{
+          maxWidth: width > 0 ? `${width}px` : "100%",
+          maxHeight: height > 0 ? `${Math.max(height, 160)}px` : undefined,
+        }}
+      />
+      {block.caption ? <figcaption className="text-xs text-[var(--muted)]">{block.caption}</figcaption> : null}
+    </figure>
+  );
+}
+
+function renderBlock(block: DocumentBlock, index: number, botAlias: string, client: WebBotClient) {
   if (block.type === "heading") {
     return renderHeading(block.level, block.runs, index);
   }
@@ -63,6 +131,9 @@ function renderBlock(block: DocumentBlock, index: number) {
         <div className="min-w-0 flex-1 whitespace-pre-wrap">{renderRuns(block.runs)}</div>
       </div>
     );
+  }
+  if (block.type === "image") {
+    return <DocumentImage key={index} botAlias={botAlias} client={client} block={block} />;
   }
   return (
     <div key={index} className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
@@ -83,7 +154,7 @@ function renderBlock(block: DocumentBlock, index: number) {
   );
 }
 
-export function DocumentView({ view }: Props) {
+export function DocumentView({ botAlias, client, view }: Props) {
   return (
     <div data-testid="document-view" className="flex h-full min-h-0 flex-col overflow-y-auto p-5">
       <div className="mb-4">
@@ -93,7 +164,7 @@ export function DocumentView({ view }: Props) {
       </div>
       {view.payload.blocks.length ? (
         <div className="space-y-4 pb-6">
-          {view.payload.blocks.map((block, index) => renderBlock(block, index))}
+          {view.payload.blocks.map((block, index) => renderBlock(block, index, botAlias, client))}
         </div>
       ) : (
         <div className="text-sm text-[var(--muted)]">文档暂无可预览内容</div>

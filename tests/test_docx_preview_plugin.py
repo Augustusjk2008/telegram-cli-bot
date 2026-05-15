@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import shutil
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -7,6 +8,11 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from bot.plugins.service import PluginService
+
+PNG_1X1_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB"
+    "gKgn2WQAAAAASUVORK5CYII="
+)
 
 
 def _write_docx(path: Path) -> None:
@@ -82,6 +88,66 @@ def _write_docx(path: Path) -> None:
         archive.writestr("word/numbering.xml", numbering_xml)
 
 
+def _write_docx_with_image(path: Path) -> None:
+    document_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+  <w:body>
+    <w:p><w:r><w:t>图片如下</w:t></w:r></w:p>
+    <w:p>
+      <w:r>
+        <w:drawing>
+          <wp:inline>
+            <wp:extent cx="952500" cy="476250"/>
+            <wp:docPr id="1" name="架构图" descr="系统架构图"/>
+            <a:graphic>
+              <a:graphicData>
+                <pic:pic>
+                  <pic:blipFill>
+                    <a:blip r:embed="rId5"/>
+                  </pic:blipFill>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>
+"""
+    document_rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+</Relationships>
+"""
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>
+"""
+    rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
+        archive.writestr("word/media/image1.png", base64.b64decode(PNG_1X1_BASE64))
+
+
 @pytest.mark.asyncio
 async def test_docx_preview_plugin_renders_structured_document(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
@@ -112,4 +178,35 @@ async def test_docx_preview_plugin_renders_structured_document(tmp_path: Path) -
     assert any(block["type"] == "list_item" for block in rendered["payload"]["blocks"])
     assert any(block["type"] == "table" for block in rendered["payload"]["blocks"])
 
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_docx_preview_plugin_renders_embedded_images(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    plugins_root = tmp_path / "plugins"
+    shutil.copytree(Path("examples/plugins/docx-preview"), plugins_root / "docx-preview")
+    _write_docx_with_image(repo_root / "docs" / "image-doc.docx")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    rendered = await service.render_view(
+        bot_alias="main",
+        plugin_id="docx-preview",
+        view_id="document",
+        input_payload={"path": "docs/image-doc.docx"},
+        audit_context={"account_id": "u1", "bot_alias": "main"},
+    )
+
+    image_blocks = [block for block in rendered["payload"]["blocks"] if block["type"] == "image"]
+    assert len(image_blocks) == 1
+    image = image_blocks[0]
+    assert image["filename"] == "image1.png"
+    assert image["contentType"] == "image/png"
+    assert image["alt"] == "系统架构图"
+    assert image["widthPx"] == 100
+    assert image["heightPx"] == 50
+    artifact = service.get_artifact(bot_alias="main", artifact_id=image["artifactId"])
+    assert artifact.content_type == "image/png"
+    assert artifact.path.read_bytes().startswith(b"\x89PNG")
     await service.shutdown()

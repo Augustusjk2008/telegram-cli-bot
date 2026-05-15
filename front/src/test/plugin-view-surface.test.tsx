@@ -1,9 +1,32 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { runPluginAction } from "../components/plugins/pluginActions";
+
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (originalCreateObjectURL) {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectURL,
+    });
+  } else {
+    delete (URL as { createObjectURL?: unknown }).createObjectURL;
+  }
+  if (originalRevokeObjectURL) {
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
+  } else {
+    delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+  }
+});
 
 test("plugin view surface renders aligned zoomable waveform with time axis and bus tracks", async () => {
   const user = userEvent.setup();
@@ -234,6 +257,58 @@ test("plugin view surface renders document snapshot blocks", () => {
   expect(screen.getByText("开发中").tagName.toLowerCase()).toBe("em");
   expect(screen.getByText("1.")).toBeInTheDocument();
   expect(screen.getByRole("table")).toBeInTheDocument();
+});
+
+test("plugin view surface renders document image blocks from artifacts", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getPluginArtifactBlob").mockResolvedValue(
+    new Blob(["image"], { type: "image/png" }),
+  );
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:document-image"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "docx-preview",
+        viewId: "document",
+        title: "roadmap.docx",
+        renderer: "document",
+        mode: "snapshot",
+        payload: {
+          path: "docs/roadmap.docx",
+          title: "项目路线图",
+          statsText: "1 段 · 1 图片",
+          blocks: [
+            { type: "paragraph", runs: [{ text: "图片如下" }] },
+            {
+              type: "image",
+              artifactId: "artifact-image-1",
+              filename: "image1.png",
+              contentType: "image/png",
+              alt: "系统架构图",
+              title: "系统架构",
+              widthPx: 320,
+              heightPx: 160,
+            },
+          ],
+        },
+      }}
+    />,
+  );
+
+  const image = await screen.findByRole("img", { name: "系统架构图" });
+  expect(client.getPluginArtifactBlob).toHaveBeenCalledWith("main", "artifact-image-1");
+  expect(image).toHaveAttribute("src", "blob:document-image");
+  expect(image).toHaveStyle({ maxWidth: "320px" });
 });
 
 test("plugin view surface renders hex snapshot views", () => {
