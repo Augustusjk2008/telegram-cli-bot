@@ -71,6 +71,54 @@ def test_prepare_dream_prompt_uses_recent_history_and_captures(temp_dir: Path):
     assert prepared.context_stats["capture_count"] == 1
 
 
+def test_prepare_dream_prompt_deduplicates_matching_protocol_files(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    shared_protocol = "# Runtime\n- 使用中文\n"
+    (workdir / "AGENTS.md").write_text(shared_protocol, encoding="utf-8")
+    (workdir / "CLAUDE.md").write_text(shared_protocol, encoding="utf-8")
+    home = bootstrap_assistant_home(workdir)
+
+    prepared = prepare_dream_prompt(
+        home,
+        profile=SimpleNamespace(alias="assistant1"),
+        session=SimpleNamespace(),
+        history_service=_FakeHistoryService([]),
+        config=AssistantDreamConfig(prompt="根据近期工作做自我完善", lookback_hours=24, history_limit=10, capture_limit=5),
+        visible_text="daily dream",
+    )
+
+    assert "内容相同，仅展开 AGENTS.md" in prepared.prompt_text
+    assert "AGENTS.md sha256:" in prepared.prompt_text
+    assert "CLAUDE.md sha256:" in prepared.prompt_text
+    assert "### AGENTS.md\n# Runtime\n- 使用中文" in prepared.prompt_text
+    assert "### CLAUDE.md\n# Runtime\n- 使用中文" not in prepared.prompt_text
+
+
+def test_prepare_dream_prompt_includes_protocol_diff_when_files_differ(temp_dir: Path):
+    workdir = temp_dir / "assistant-repo"
+    workdir.mkdir()
+    (workdir / "AGENTS.md").write_text("- 使用中文\n- 少废话\n", encoding="utf-8")
+    (workdir / "CLAUDE.md").write_text("- 使用中文\n- 可详细解释\n", encoding="utf-8")
+    home = bootstrap_assistant_home(workdir)
+
+    prepared = prepare_dream_prompt(
+        home,
+        profile=SimpleNamespace(alias="assistant1"),
+        session=SimpleNamespace(),
+        history_service=_FakeHistoryService([]),
+        config=AssistantDreamConfig(prompt="根据近期工作做自我完善", lookback_hours=24, history_limit=10, capture_limit=5),
+        visible_text="daily dream",
+    )
+
+    assert "### AGENTS.md\n- 使用中文\n- 少废话" in prepared.prompt_text
+    assert "### CLAUDE.md 相对 AGENTS.md 的差异" in prepared.prompt_text
+    assert "--- AGENTS.md" in prepared.prompt_text
+    assert "+++ CLAUDE.md" in prepared.prompt_text
+    assert "-- 少废话" in prepared.prompt_text
+    assert "+- 可详细解释" in prepared.prompt_text
+
+
 def test_prepare_dream_prompt_includes_managed_bot_context(temp_dir: Path):
     workdir = temp_dir / "assistant-repo"
     workdir.mkdir()

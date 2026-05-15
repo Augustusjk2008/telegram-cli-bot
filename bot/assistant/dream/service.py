@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import unified_diff
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -149,6 +151,56 @@ def _format_capture_items(items: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _hash_text(value: str) -> str:
+    return sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _format_protocol_block(agents_text: str, claude_text: str) -> str:
+    agents = str(agents_text or "").strip()
+    claude = str(claude_text or "").strip()
+    if not agents and not claude:
+        return "- AGENTS.md: 无\n- CLAUDE.md: 无"
+
+    lines = [
+        f"- AGENTS.md sha256: {_hash_text(agents) if agents else 'missing'}",
+        f"- CLAUDE.md sha256: {_hash_text(claude) if claude else 'missing'}",
+    ]
+    if agents and claude and agents == claude:
+        lines.extend(
+            [
+                "- AGENTS.md 和 CLAUDE.md 内容相同，仅展开 AGENTS.md，避免重复占用上下文。",
+                f"### AGENTS.md\n{agents}",
+            ]
+        )
+        return "\n".join(lines)
+
+    if agents:
+        lines.append(f"### AGENTS.md\n{agents}")
+        if claude:
+            diff_lines = list(
+                unified_diff(
+                    agents.splitlines(),
+                    claude.splitlines(),
+                    fromfile="AGENTS.md",
+                    tofile="CLAUDE.md",
+                    lineterm="",
+                )
+            )
+            diff_text = _clip_text("\n".join(diff_lines), limit=4000)
+            lines.append(f"### CLAUDE.md 相对 AGENTS.md 的差异\n{diff_text or '- 无差异'}")
+        else:
+            lines.append("### CLAUDE.md\n- 无")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "- AGENTS.md 缺失，仅展开 CLAUDE.md。",
+            f"### CLAUDE.md\n{claude}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def prepare_dream_prompt(
     home: AssistantHome,
     *,
@@ -184,6 +236,7 @@ def prepare_dream_prompt(
     capture_block = _format_capture_items(recent_captures) or "- 无"
     managed_context_block = str(managed_context_text or "").strip() or "- 无"
     managed_stats = dict(managed_context_stats or {})
+    protocol_block = _format_protocol_block(agents_text, claude_text)
 
     prompt_text = "\n\n".join(
         [
@@ -231,8 +284,7 @@ def prepare_dream_prompt(
             f"### user_prefs\n{user_prefs or '- 无'}",
             f"### recent_summary\n{recent_summary or '- 无'}",
             "## 当前协议",
-            f"### AGENTS.md\n{agents_text or '- 无'}",
-            f"### CLAUDE.md\n{claude_text or '- 无'}",
+            protocol_block,
             "## 最近聊天历史",
             history_block,
             "## 最近 captures",
