@@ -970,6 +970,13 @@ async def handle_cluster_mcp_tool(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     try:
+        run = _CLUSTER_RUNTIME.get_run(run_id)
+        if run is None:
+            _raise(404, "cluster_run_not_found", "未找到集群任务")
+        current_profile = get_profile_or_raise(manager, run.bot_alias)
+        if not current_profile.cluster.enabled:
+            _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+
         if tool_name == "cluster_status":
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
         if tool_name == "list_agents":
@@ -1007,9 +1014,6 @@ async def handle_cluster_mcp_tool(
             _raise(404, "cluster_tool_not_found", "未知集群工具")
 
         request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
-        run = _CLUSTER_RUNTIME.get_run(run_id)
-        if run is None:
-            _raise(404, "cluster_run_not_found", "未找到集群任务")
         task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
         control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
         background_task = asyncio.create_task(_run_cluster_agent_task(manager, run_id, task.task_id))
@@ -2400,7 +2404,7 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "
     )
     return (
         "<tcb_cluster_mode>\n"
-        "你处于 TCB 集群模式。可用 MCP server: tcb-cluster。\n"
+        "你处于 TCB 集群模式。可用 MCP server: tcb-cluster。建议在复杂任务下分解任务，对集群委派。\n"
         "需要委派时，调用 MCP 工具 ask_agent。\n"
         f"当前集群 run_id: {run_id or '无'}。调用 ask_agent 时带 run_id。\n"
         "ask_agent 会异步启动任务并返回 task_id，不会自动等子 agent 完成。\n"
@@ -2414,6 +2418,32 @@ def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "
         f"用户显式提及的子 agent: {mentioned or '无'}\n"
         "</tcb_cluster_mode>\n\n"
     )
+
+
+def _has_cluster_child_agents(profile: BotProfile) -> bool:
+    return any(agent.id != "main" for agent in profile.normalized_agents())
+
+
+def _build_cluster_disabled_prompt() -> str:
+    return (
+        "<tcb_cluster_mode>\n"
+        "集群模式已关。\n"
+        "</tcb_cluster_mode>\n\n"
+    )
+
+
+def _apply_cluster_prompt(
+    profile: BotProfile,
+    prompt_text: str,
+    *,
+    cluster_run_id: str = "",
+    cluster_mentions: list[dict[str, Any]] | None = None,
+) -> str:
+    if cluster_run_id:
+        return _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
+    if not profile.cluster.enabled and _has_cluster_child_agents(profile):
+        return _build_cluster_disabled_prompt() + prompt_text
+    return prompt_text
 
 
 def _current_native_session_id(session: UserSession, cli_type: str) -> str:
@@ -3594,9 +3624,12 @@ async def _stream_cli_chat(
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
         text = "/" + text[2:]
-    prompt_text = text
-    if cluster_run_id:
-        prompt_text = _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
+    prompt_text = _apply_cluster_prompt(
+        profile,
+        text,
+        cluster_run_id=cluster_run_id,
+        cluster_mentions=cluster_mentions,
+    )
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False
@@ -4096,9 +4129,12 @@ async def run_cli_chat(
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
         text = "/" + text[2:]
-    prompt_text = text
-    if cluster_run_id:
-        prompt_text = _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
+    prompt_text = _apply_cluster_prompt(
+        profile,
+        text,
+        cluster_run_id=cluster_run_id,
+        cluster_mentions=cluster_mentions,
+    )
     assistant_home = None
     assistant_pre_surface: dict[str, str] = {}
     compaction_prompt_active = False

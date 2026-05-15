@@ -473,6 +473,83 @@ def test_cluster_prompt_includes_run_id():
     assert "阻塞等待" in prompt
 
 
+def test_cluster_disabled_prompt_only_when_child_agents_configured():
+    from bot.cluster.config import BotClusterConfig
+
+    profile = BotProfile(alias="main", cluster=BotClusterConfig(enabled=False))
+    assert api_service._apply_cluster_prompt(profile, "hello") == "hello"
+
+    profile.agents.append(AgentProfile(id="tester", name="测试专家"))
+    prompt = api_service._apply_cluster_prompt(profile, "hello")
+
+    assert prompt.startswith("<tcb_cluster_mode>\n集群模式已关。")
+    assert "不要调用 tcb-cluster MCP 工具" in prompt
+    assert prompt.endswith("hello")
+
+
+def test_active_cluster_prompt_takes_precedence_over_disabled_hint():
+    from bot.cluster.config import BotClusterConfig
+
+    profile = BotProfile(alias="main", cluster=BotClusterConfig(enabled=False))
+    profile.agents.append(AgentProfile(id="tester", name="测试专家"))
+
+    prompt = api_service._apply_cluster_prompt(
+        profile,
+        "hello",
+        cluster_run_id="clr_test",
+        cluster_mentions=[{"agent_id": "tester"}],
+    )
+
+    assert "当前集群 run_id: clr_test" in prompt
+    assert "集群模式已关" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_injects_cluster_disabled_prompt_when_child_agents_exist(
+    web_manager: MultiBotManager,
+):
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    captured = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["user_text"] = kwargs["user_text"]
+        return ["codex"], False
+
+    fake_process = MagicMock()
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("ok", "thread-1", 0),
+         ):
+        await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert captured["user_text"].startswith("<tcb_cluster_mode>\n集群模式已关。")
+    assert captured["user_text"].endswith("hello")
+
+
+@pytest.mark.asyncio
+async def test_cluster_mcp_tool_rejects_old_run_when_cluster_disabled(web_manager: MultiBotManager):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+    profile.cluster = BotClusterConfig(enabled=False)
+
+    with pytest.raises(WebApiError) as exc_info:
+        await api_service.handle_cluster_mcp_tool(web_manager, run.run_id, "cluster_status", {})
+
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "cluster_not_enabled"
+    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
+
+
 @pytest.mark.asyncio
 async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     from bot.cluster.config import BotClusterConfig
