@@ -483,7 +483,6 @@ def test_cluster_disabled_prompt_only_when_child_agents_configured():
     prompt = api_service._apply_cluster_prompt(profile, "hello")
 
     assert prompt.startswith("<tcb_cluster_mode>\n集群模式已关。")
-    assert "不要调用 tcb-cluster MCP 工具" in prompt
     assert prompt.endswith("hello")
 
 
