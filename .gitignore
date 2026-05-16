@@ -10,8 +10,7 @@ __pycache__/
 managed_bots.json
 .env
 *.log
-docs/
-docs/superpowers/
+/docs/
 .worktrees/
 .release-local/
 .tcb/
