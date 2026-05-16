@@ -474,6 +474,54 @@ class TestManagerValidation:
         assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["avatar_name"] == "claude-blue.png"
 
     @pytest.mark.asyncio
+    async def test_add_bot_defaults_cli_path_from_env_then_existing_same_cli(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+        manager.managed_profiles["review"] = BotProfile(
+            alias="review",
+            token="",
+            cli_type="claude",
+            cli_path="C:/tools/claude.cmd",
+            working_dir=str(temp_dir),
+            bot_mode="cli",
+        )
+        monkeypatch.setenv("CLI_TYPE", "codex")
+        monkeypatch.setenv("CLI_PATH", "C:/tools/codex.exe")
+
+        with patch("bot.manager.resolve_cli_executable", return_value="cli"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            codex_bot = await manager.add_bot("team2", cli_type="codex", cli_path="", working_dir=str(temp_dir), bot_mode="cli")
+            claude_bot = await manager.add_bot("team3", cli_type="claude", cli_path="", working_dir=str(temp_dir), bot_mode="cli")
+            kimi_bot = await manager.add_bot("team4", cli_type="kimi", cli_path="", working_dir=str(temp_dir), bot_mode="cli")
+
+        assert codex_bot.cli_path == "C:/tools/codex.exe"
+        assert claude_bot.cli_path == "C:/tools/claude.cmd"
+        assert kimi_bot.cli_path == "kimi"
+
+    @pytest.mark.asyncio
+    async def test_add_bot_prefers_existing_non_default_cli_path_when_env_missing(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+        manager.managed_profiles["worker"] = BotProfile(
+            alias="worker",
+            token="",
+            cli_type="codex",
+            cli_path="C:/tools/codex.exe",
+            working_dir=str(temp_dir),
+            bot_mode="cli",
+        )
+        monkeypatch.delenv("CLI_PATH", raising=False)
+        monkeypatch.setattr("bot.manager._DOTENV_VALUES", {})
+
+        with patch("bot.manager.resolve_cli_executable", return_value="cli"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            created = await manager.add_bot("team2", cli_type="codex", cli_path="", working_dir=str(temp_dir), bot_mode="cli")
+
+        assert created.cli_path == "C:/tools/codex.exe"
+
+    @pytest.mark.asyncio
     async def test_set_bot_avatar_updates_profile_and_storage(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")

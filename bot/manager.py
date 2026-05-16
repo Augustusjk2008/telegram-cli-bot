@@ -17,7 +17,7 @@ from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinat
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
-from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
+from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import AgentProfile, BotProfile
 from bot.plugins.service import PluginService
@@ -112,6 +112,26 @@ class MultiBotManager:
 
     def _count_assistant_profiles(self) -> int:
         return sum(1 for profile in self.managed_profiles.values() if profile.bot_mode == "assistant")
+
+    def _default_cli_path_for_type(self, cli_type: str) -> str:
+        normalized_cli_type = validate_cli_type(cli_type or CLI_TYPE)
+        env_cli_path = str(os.environ.get("CLI_PATH") or _DOTENV_VALUES.get("CLI_PATH") or "").strip()
+        env_cli_type = validate_cli_type(os.environ.get("CLI_TYPE") or _DOTENV_VALUES.get("CLI_TYPE") or CLI_TYPE)
+        if env_cli_type == normalized_cli_type and env_cli_path:
+            return env_cli_path
+
+        profiles = [self.main_profile, *[self.managed_profiles[alias] for alias in sorted(self.managed_profiles.keys())]]
+        default_cli_path = normalized_cli_type
+        for profile in profiles:
+            profile_cli_path = str(profile.cli_path or "").strip()
+            if profile.cli_type == normalized_cli_type and profile_cli_path and profile_cli_path != default_cli_path:
+                return profile_cli_path
+        for profile in profiles:
+            profile_cli_path = str(profile.cli_path or "").strip()
+            if profile.cli_type == normalized_cli_type and profile_cli_path:
+                return profile_cli_path
+
+        return normalized_cli_type
 
     def assistant_alias(self) -> str | None:
         if self.main_profile.bot_mode == "assistant":
@@ -367,7 +387,7 @@ class MultiBotManager:
         self._validate_alias(normalized_alias)
 
         resolved_cli_type = validate_cli_type(cli_type or CLI_TYPE)
-        resolved_cli_path = str(cli_path or CLI_PATH).strip()
+        resolved_cli_path = str(cli_path or "").strip() or self._default_cli_path_for_type(resolved_cli_type)
         resolved_bot_mode = str(bot_mode or "cli").strip().lower()
 
         if resolved_bot_mode == "webcli":

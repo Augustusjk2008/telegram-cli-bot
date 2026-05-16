@@ -676,12 +676,13 @@ export function SettingsScreen({
               />
               <button
                 type="button"
+                aria-label="保存 Git 代理"
                 onClick={() => void saveGitProxy()}
                 disabled={savingGitProxy}
                 className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
-                {savingGitProxy ? "保存中..." : "保存 Git 代理"}
+                {savingGitProxy ? "保存中..." : "保存"}
               </button>
             </div>
             <p className="text-xs text-[var(--muted)]">

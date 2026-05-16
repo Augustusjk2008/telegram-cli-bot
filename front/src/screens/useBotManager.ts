@@ -37,6 +37,31 @@ export function defaultCliPathForType(cliType: CliType) {
   return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
 }
 
+export function resolveDefaultCliPath(cliType: CliType, bots: BotSummary[]) {
+  const fallback = defaultCliPathForType(cliType);
+  const mainBot = bots.find((bot) => bot.isMain || bot.alias === "main");
+  if (mainBot?.cliType === cliType && mainBot.cliPath?.trim() && mainBot.cliPath.trim() !== fallback) {
+    return mainBot.cliPath.trim();
+  }
+  const existingBot = bots.find((bot) => bot.cliType === cliType && bot.cliPath?.trim() && bot.cliPath.trim() !== fallback);
+  if (existingBot?.cliPath?.trim()) {
+    return existingBot.cliPath.trim();
+  }
+  if (mainBot?.cliType === cliType && mainBot.cliPath?.trim()) {
+    return mainBot.cliPath.trim();
+  }
+  const anyBot = bots.find((bot) => bot.cliType === cliType && bot.cliPath?.trim());
+  return anyBot?.cliPath?.trim() || fallback;
+}
+
+export function buildCreateDraft(cliType: CliType = "codex", bots: BotSummary[] = []): CreateDraft {
+  return {
+    ...EMPTY_CREATE_DRAFT,
+    cliType,
+    cliPath: resolveDefaultCliPath(cliType, bots),
+  };
+}
+
 export function asWebApiClientError(error: unknown): WebApiClientError | null {
   return error instanceof WebApiClientError ? error : null;
 }

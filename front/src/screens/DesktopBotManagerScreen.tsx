@@ -50,7 +50,7 @@ import {
   type ManagerViewFilter,
 } from "./botManagerModel";
 import {
-  EMPTY_CREATE_DRAFT,
+  buildCreateDraft,
   defaultCliPathForType,
   useBotManager,
   type CreateDraft,
@@ -221,10 +221,24 @@ function CreatePanel({
   onCreated: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
-  const [draft, setDraft] = useState<CreateDraft>(EMPTY_CREATE_DRAFT);
+  const baseDraft = useMemo(() => buildCreateDraft("codex", manager.bots), [manager.bots]);
+  const [draft, setDraft] = useState<CreateDraft>(() => buildCreateDraft());
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
-  const dirty = !createDraftEquals(draft, EMPTY_CREATE_DRAFT);
+  const dirty = !createDraftEquals(draft, baseDraft);
   const directoryBrowserAlias = manager.bots.find((bot) => isMainBot(bot))?.alias || manager.bots[0]?.alias || "main";
+
+  useEffect(() => {
+    if (manager.bots.length === 0) {
+      return;
+    }
+    setDraft((prev) => {
+      const userEditedPath = prev.cliPath.trim() && prev.cliPath.trim() !== defaultCliPathForType(prev.cliType);
+      if (prev.alias.trim() || prev.workingDir.trim() || prev.avatarName.trim() || userEditedPath) {
+        return prev;
+      }
+      return { ...prev, cliPath: buildCreateDraft(prev.cliType, manager.bots).cliPath };
+    });
+  }, [manager.bots]);
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -233,7 +247,7 @@ function CreatePanel({
   async function submit() {
     const created = await manager.createBot(draft);
     if (created) {
-      setDraft(EMPTY_CREATE_DRAFT);
+      setDraft(buildCreateDraft(draft.cliType, manager.bots));
       onCreated(created.alias);
     }
   }
@@ -282,7 +296,10 @@ function CreatePanel({
           <select
             aria-label="新智能体 CLI 类型"
             value={draft.cliType}
-            onChange={(event) => setDraft((prev) => ({ ...prev, cliType: event.target.value as CliType }))}
+            onChange={(event) => {
+              const cliType = event.target.value as CliType;
+              setDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, manager.bots).cliPath }));
+            }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
           >
             <option value="codex">codex</option>

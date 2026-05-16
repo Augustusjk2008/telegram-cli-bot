@@ -22,7 +22,7 @@ class DesktopManagerClient extends MockWebBotClient {
       {
         alias: "main",
         cliType: "codex",
-        cliPath: "codex",
+        cliPath: "C:\\tools\\codex.exe",
         botMode: "cli",
         status: "running",
         serviceStatus: "online",
@@ -35,7 +35,7 @@ class DesktopManagerClient extends MockWebBotClient {
       {
         alias: "review",
         cliType: "claude",
-        cliPath: "claude",
+        cliPath: "C:\\tools\\claude.cmd",
         botMode: "cli",
         status: "busy",
         serviceStatus: "online",
@@ -329,11 +329,14 @@ test("desktop bot manager creates a bot from detail panel", async () => {
 
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("C:\\tools\\codex.exe");
+  await user.selectOptions(screen.getByLabelText("新智能体 CLI 类型"), "claude");
+  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("C:\\tools\\claude.cmd");
   expect(screen.getByRole("option", { name: "kimi" })).toBeInTheDocument();
   await user.selectOptions(screen.getByLabelText("新智能体 CLI 类型"), "kimi");
+  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("kimi");
   await user.type(screen.getByLabelText("新智能体别名"), "team3");
   expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveAttribute("placeholder", "kimi");
-  await user.type(screen.getByLabelText("新智能体 CLI 路径"), "kimi");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 

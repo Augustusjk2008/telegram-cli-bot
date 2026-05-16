@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
@@ -7,7 +7,7 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
-  EMPTY_CREATE_DRAFT,
+  buildCreateDraft,
   defaultCliPathForType,
   useBotManager,
   type CreateDraft,
@@ -74,7 +74,6 @@ function DeleteBotDialog({
 }
 
 export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange, canManage = true }: Props) {
-  const [createDraft, setCreateDraft] = useState<CreateDraft>(EMPTY_CREATE_DRAFT);
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
@@ -94,13 +93,27 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
     deleteBot,
     updateBotAvatar,
   } = useBotManager({ client, onBotsChange });
+  const [createDraft, setCreateDraft] = useState<CreateDraft>(() => buildCreateDraft());
 
   const directoryBrowserAlias = bots.find((bot) => bot.isMain || bot.alias === "main")?.alias || bots[0]?.alias || "main";
+
+  useEffect(() => {
+    if (bots.length === 0) {
+      return;
+    }
+    setCreateDraft((prev) => {
+      const userEditedPath = prev.cliPath.trim() && prev.cliPath.trim() !== defaultCliPathForType(prev.cliType);
+      if (prev.alias.trim() || prev.workingDir.trim() || prev.avatarName.trim() || userEditedPath) {
+        return prev;
+      }
+      return { ...prev, cliPath: buildCreateDraft(prev.cliType, bots).cliPath };
+    });
+  }, [bots]);
 
   async function handleCreateBot() {
     const created = await createBot(createDraft);
     if (created) {
-      setCreateDraft(EMPTY_CREATE_DRAFT);
+      setCreateDraft(buildCreateDraft(createDraft.cliType, bots));
     }
   }
 
@@ -189,7 +202,10 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
               <select
                 aria-label="新智能体 CLI 类型"
                 value={createDraft.cliType}
-                onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliType: event.target.value as CliType }))}
+                onChange={(event) => {
+                  const cliType = event.target.value as CliType;
+                  setCreateDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, bots).cliPath }));
+                }}
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
               >
                 <option value="codex">codex</option>
