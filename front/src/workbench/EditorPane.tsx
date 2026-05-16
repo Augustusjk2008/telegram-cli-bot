@@ -1,4 +1,5 @@
 import { clsx } from "clsx";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { FileEditorSurface } from "../components/FileEditorSurface";
@@ -285,10 +286,11 @@ export function EditorPane({
         <button
           type="button"
           aria-label={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
+          title={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
           onClick={onToggleFocus}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs hover:bg-[var(--surface)]"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
         >
-          {focused ? "恢复" : "聚焦"}
+          {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
       </div>
 

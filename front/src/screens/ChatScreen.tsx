@@ -2203,10 +2203,11 @@ export function ChatScreen({
               <button
                 type="button"
                 aria-label={focused ? "退出聚焦聊天" : "聚焦聊天"}
+                title={focused ? "退出聚焦聊天" : "聚焦聊天"}
                 onClick={onToggleFocus}
-                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)]"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
               >
-                {focused ? "恢复布局" : "聚焦聊天"}
+                {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </button>
             ) : null}
             <button

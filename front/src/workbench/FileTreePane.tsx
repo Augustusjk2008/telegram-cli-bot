@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { FilePlus, FolderPlus, RefreshCw, Upload } from "lucide-react";
+import { FilePlus, FolderPlus, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
@@ -1274,10 +1274,11 @@ export function FileTreePane({
           <button
             type="button"
             aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
+            title={focused ? "退出聚焦文件区" : "聚焦文件区"}
             onClick={onToggleFocus}
-            className="rounded border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
           >
-            {focused ? "恢复" : "聚焦"}
+            {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
         </div>
         <div className="mt-2 flex items-center gap-2">

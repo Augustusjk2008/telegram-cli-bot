@@ -542,10 +542,11 @@ export function TerminalScreen({
               <button
                 type="button"
                 aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
+                title={focused ? "退出聚焦终端" : "聚焦终端"}
                 onClick={onToggleFocus}
-                className="rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs hover:bg-[var(--surface)]"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
               >
-                {focused ? "恢复" : "聚焦"}
+                {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </button>
             ) : null}
             <button
