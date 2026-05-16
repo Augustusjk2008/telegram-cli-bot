@@ -3,8 +3,11 @@ import {
   APP_LOGIN_NAME,
   APP_TAGLINE,
   APP_VERSION,
+  DEFAULT_UI_THEME,
+  type UiThemeName,
 } from "../theme";
 import { AppLogo } from "../components/AppLogo";
+import { ThemeDropdown } from "../components/ThemeDropdown";
 import type { PublicHostInfo } from "../services/types";
 
 type LoginMode = "login" | "register";
@@ -16,6 +19,8 @@ type Props = {
   isLoading?: boolean;
   error?: string;
   hostInfo?: PublicHostInfo | null;
+  themeName?: UiThemeName;
+  onThemeChange?: (themeName: UiThemeName) => void;
 };
 
 export function LoginScreen({
@@ -25,6 +30,8 @@ export function LoginScreen({
   isLoading,
   error,
   hostInfo,
+  themeName = DEFAULT_UI_THEME,
+  onThemeChange,
 }: Props) {
   const [mode, setMode] = useState<LoginMode>("login");
   const allowLegacyTokenLogin = import.meta.env.MODE === "test";
@@ -52,6 +59,12 @@ export function LoginScreen({
         <div className="absolute left-[-6rem] top-12 h-56 w-56 border border-[var(--hero-ring)] opacity-40" />
         <div className="absolute right-[-5rem] top-[-2rem] h-72 w-72" style={{ background: "radial-gradient(circle, var(--bg-glow-strong) 0, transparent 66%)" }} />
       </div>
+
+      {onThemeChange ? (
+        <div className="absolute right-4 top-4 z-20 w-[min(13rem,calc(100vw-2rem))] sm:right-6 sm:top-6">
+          <ThemeDropdown value={themeName} onChange={onThemeChange} variant="compact" menuAlign="right" />
+        </div>
+      ) : null}
 
       <div className="relative mx-auto flex min-h-[calc(100dvh-2.5rem)] w-full max-w-6xl items-center justify-center">
         <div className="grid w-full gap-5 lg:grid-cols-[1.16fr_0.84fr]">

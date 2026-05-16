@@ -101,6 +101,73 @@ test("desktop command palette stays keyboard accessible with premium motion", as
   });
 });
 
+test("desktop structureOnly file click never opens editor or reads full content", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFile = vi.spyOn(client, "readFile");
+  const readFileFull = vi.spyOn(client, "readFileFull");
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      structureOnly
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+
+  await waitFor(() => {
+    expectDesktopTreeRowSelected("README.md");
+  });
+  expect(readFile).not.toHaveBeenCalled();
+  expect(readFileFull).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: /README\.md/ })).not.toBeInTheDocument();
+});
+
+test("desktop structureOnly preview hides full-read and edit entry", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFile = vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "# README\n\npreview",
+    mode: "head",
+    fileSizeBytes: 128,
+    isFullContent: false,
+    lastModifiedNs: "1",
+  });
+  const readFileFull = vi.spyOn(client, "readFileFull");
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      structureOnly
+      viewMode="desktop"
+      chatPaneContent={({ requestPreview }) => (
+        <button type="button" onClick={() => requestPreview("README.md")}>预览 README</button>
+      )}
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "预览 README" }));
+
+  await waitFor(() => {
+    expect(readFile).toHaveBeenCalledWith("main", "README.md");
+  });
+  expect(readFileFull).not.toHaveBeenCalled();
+  expect(await screen.findByTestId("desktop-workbench-preview-window")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+});
+
 test("desktop command palette keeps animated results clickable", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -204,6 +271,57 @@ test("desktop workbench persists and restores the selected tree path", async () 
   await waitFor(() => {
     expectDesktopTreeRowSelected("README.md");
   });
+});
+
+test("desktop structureOnly does not restore editor tabs from local session", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 12 }],
+  });
+  const readFileFull = vi.spyOn(client, "readFileFull");
+
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", "/workspace"), JSON.stringify({
+    version: 1,
+    botAlias: "main",
+    workspaceRoot: "/workspace",
+    sidebarView: "files",
+    expandedPaths: [],
+    selectedTreePath: "README.md",
+    activeTabPath: "README.md",
+    tabs: [
+      {
+        path: "README.md",
+        dirty: false,
+        savedContent: "RESTORED",
+        contentPersistence: "clean_snapshot",
+      },
+    ],
+    focusedPane: "editor",
+  }));
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      structureOnly
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-restore-state", "restored");
+  });
+  expect(readFileFull).not.toHaveBeenCalled();
+  expect(screen.queryByRole("tab", { name: /README\.md/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("RESTORED")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
 });
 
 test("desktop workbench restores sidebar view from bot session instead of global pane state", async () => {

@@ -194,6 +194,8 @@ test("structureOnly hides editing and preview-only actions", async () => {
   await user.click(screen.getByRole("button", { name: "打开 README.md" }));
 
   expect(screen.queryByText("Markdown Title")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
 });
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {

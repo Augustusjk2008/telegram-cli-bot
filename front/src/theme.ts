@@ -1,4 +1,5 @@
-export type UiThemeName = "deep-space" | "classic";
+export const UI_THEME_NAMES = ["deep-space", "classic", "graphite", "lab-light", "ink-paper", "high-contrast"] as const;
+export type UiThemeName = typeof UI_THEME_NAMES[number];
 export type ChatBodyFontFamilyName = "sans" | "serif" | "kai" | "fangsong" | "mono";
 export type ChatBodyFontSizeName = "small" | "medium" | "large";
 export type ChatBodyLineHeightName = "tight" | "normal" | "relaxed";
@@ -59,7 +60,63 @@ export const UI_THEME_OPTIONS: Array<{
       muted: "#6d675f",
     },
   },
+  {
+    value: "graphite",
+    label: "石墨终端",
+    description: "深灰工作台搭配绿与琥珀状态色，适合终端、Git 与调试场景。",
+    preview: {
+      accent: "#8fdc8b",
+      surface: "#191d20",
+      accentStrong: "#e3b55b",
+      border: "rgba(214, 222, 229, 0.16)",
+      text: "#e6e8ea",
+      muted: "#9aa4ad",
+    },
+  },
+  {
+    value: "lab-light",
+    label: "冷白实验室",
+    description: "冷白与浅灰界面，蓝绿强调，适合办公、文件浏览和长时间阅读。",
+    preview: {
+      accent: "#2563eb",
+      surface: "#ffffff",
+      accentStrong: "#0f766e",
+      border: "rgba(15, 23, 42, 0.12)",
+      text: "#142033",
+      muted: "#64748b",
+    },
+  },
+  {
+    value: "ink-paper",
+    label: "墨纸",
+    description: "低饱和纸面与墨色文字，减轻聊天与文档阅读疲劳。",
+    preview: {
+      accent: "#6f5f3d",
+      surface: "#fbf7ee",
+      accentStrong: "#4f7771",
+      border: "rgba(52, 43, 31, 0.12)",
+      text: "#211d19",
+      muted: "#766b5d",
+    },
+  },
+  {
+    value: "high-contrast",
+    label: "高对比",
+    description: "黑白强边界和高亮强调，适合投屏、弱光和可访问性场景。",
+    preview: {
+      accent: "#ffff00",
+      surface: "#000000",
+      accentStrong: "#00ffff",
+      border: "rgba(255, 255, 255, 0.68)",
+      text: "#ffffff",
+      muted: "#d4d4d4",
+    },
+  },
 ];
+
+export function isLightUiTheme(themeName: string | undefined): themeName is UiThemeName {
+  return themeName === "classic" || themeName === "lab-light" || themeName === "ink-paper";
+}
 
 export const CHAT_BODY_FONT_FAMILY_OPTIONS: Array<{
   value: ChatBodyFontFamilyName;
@@ -100,7 +157,7 @@ export const CHAT_BODY_PARAGRAPH_SPACING_OPTIONS: Array<{
 ];
 
 function isUiThemeName(value: string): value is UiThemeName {
-  return value === "deep-space" || value === "classic";
+  return (UI_THEME_NAMES as readonly string[]).includes(value);
 }
 
 function isChatBodyFontFamilyName(value: string): value is ChatBodyFontFamilyName {
@@ -330,6 +387,102 @@ export function getTerminalTheme(themeName: UiThemeName) {
     };
   }
 
+  if (themeName === "graphite") {
+    return {
+      background: "#111315",
+      foreground: "#e6e8ea",
+      cursor: "#c6f57b",
+      black: "#0b0d0f",
+      red: "#ff6b64",
+      green: "#8fdc8b",
+      yellow: "#e3b55b",
+      blue: "#75a7ff",
+      magenta: "#c792ea",
+      cyan: "#59d6c8",
+      white: "#dfe3e6",
+      brightBlack: "#586069",
+      brightRed: "#ff8f87",
+      brightGreen: "#b1f3ac",
+      brightYellow: "#f0ca78",
+      brightBlue: "#9cc0ff",
+      brightMagenta: "#d9b2f4",
+      brightCyan: "#8be8de",
+      brightWhite: "#ffffff",
+    };
+  }
+
+  if (themeName === "lab-light") {
+    return {
+      background: "#f8fafc",
+      foreground: "#142033",
+      cursor: "#0f766e",
+      black: "#1f2937",
+      red: "#b42318",
+      green: "#157f3b",
+      yellow: "#9a6700",
+      blue: "#2563eb",
+      magenta: "#7c3aed",
+      cyan: "#0891b2",
+      white: "#e5e7eb",
+      brightBlack: "#64748b",
+      brightRed: "#d92d20",
+      brightGreen: "#16a34a",
+      brightYellow: "#ca8a04",
+      brightBlue: "#3b82f6",
+      brightMagenta: "#8b5cf6",
+      brightCyan: "#06b6d4",
+      brightWhite: "#ffffff",
+    };
+  }
+
+  if (themeName === "ink-paper") {
+    return {
+      background: "#f6f1e8",
+      foreground: "#211d19",
+      cursor: "#6f5f3d",
+      black: "#2a241f",
+      red: "#a14d3a",
+      green: "#58784d",
+      yellow: "#8a6b2d",
+      blue: "#536f8d",
+      magenta: "#7a5c7d",
+      cyan: "#4f7771",
+      white: "#eadfce",
+      brightBlack: "#766b5d",
+      brightRed: "#bd614c",
+      brightGreen: "#6f925f",
+      brightYellow: "#a2823e",
+      brightBlue: "#6a84a3",
+      brightMagenta: "#917095",
+      brightCyan: "#67908a",
+      brightWhite: "#fffaf2",
+    };
+  }
+
+  if (themeName === "high-contrast") {
+    return {
+      background: "#000000",
+      foreground: "#ffffff",
+      cursor: "#ffff00",
+      black: "#000000",
+      red: "#ff4d4d",
+      green: "#00ff66",
+      yellow: "#ffff00",
+      blue: "#5aa9ff",
+      magenta: "#ff66ff",
+      cyan: "#00ffff",
+      white: "#f5f5f5",
+      brightBlack: "#8a8a8a",
+      brightRed: "#ff8080",
+      brightGreen: "#66ff99",
+      brightYellow: "#ffff66",
+      brightBlue: "#8fc7ff",
+      brightMagenta: "#ff9cff",
+      brightCyan: "#66ffff",
+      brightWhite: "#ffffff",
+    };
+  }
+
   return {
     background: "#07111d",
     foreground: "#dce7f3",
@@ -354,5 +507,8 @@ export function getTerminalTheme(themeName: UiThemeName) {
 }
 
 export function getTerminalMinimumContrastRatio(themeName: UiThemeName) {
-  return themeName === "classic" ? 4.5 : 1;
+  if (themeName === "high-contrast") {
+    return 7;
+  }
+  return isLightUiTheme(themeName) ? 4.5 : 1;
 }

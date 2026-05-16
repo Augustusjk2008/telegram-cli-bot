@@ -1093,6 +1093,7 @@ test("chat action bar toggles cluster mode without resetting config", async () =
         runtime: { state: "runtime_ready" as const, message: "运行态可用" },
         codex: { state: "runtime_ready" as const, message: "运行态可用" },
         claude: { state: "not_checked" as const, message: "未使用" },
+        kimi: { state: "not_checked" as const, message: "未使用" },
       },
       agents: [],
     },

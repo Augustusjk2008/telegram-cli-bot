@@ -1,4 +1,5 @@
 import { type ComponentType, useEffect, useMemo, useState } from "react";
+import { isLightUiTheme } from "../theme";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
 type Props = {
@@ -252,7 +253,7 @@ export function FileEditorSurface({
   const [editorRuntime, setEditorRuntime] = useState<EditorRuntime | null>(null);
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
-  const codeMirrorTheme = typeof document !== "undefined" && document.documentElement.dataset.theme === "classic"
+  const codeMirrorTheme = typeof document !== "undefined" && isLightUiTheme(document.documentElement.dataset.theme)
     ? "light"
     : "dark";
   const normalizedBreakpointLines = breakpointLines ?? EMPTY_BREAKPOINT_LINES;

@@ -69,7 +69,7 @@
   pointer-events: none;
   border: 1px solid transparent;
   background:
-    linear-gradient(120deg, transparent 0%, rgba(122, 246, 214, 0.18) 42%, transparent 64%) border-box;
+    linear-gradient(120deg, transparent 0%, color-mix(in srgb, var(--accent) 28%, transparent) 42%, transparent 64%) border-box;
   mask:
     linear-gradient(#000 0 0) padding-box,
     linear-gradient(#000 0 0);

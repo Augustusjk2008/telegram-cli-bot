@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import base64
 import select
 import subprocess
 import sys
@@ -163,12 +164,13 @@ def _normalize_terminal_size(cols: int | None, rows: int | None) -> tuple[int, i
 
 def _build_windows_powershell_command(executable: str) -> str:
     setup = (
-        "try { chcp.com 65001 > $null } catch {}; "
+        "try { chcp.com 65001 > $null 2>&1 } catch {}; "
         "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); "
         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
         "$OutputEncoding = [Console]::OutputEncoding"
     )
-    return f'{executable} -NoLogo -NoExit -Command "{setup}"'
+    encoded_setup = base64.b64encode(setup.encode("utf-16-le")).decode("ascii")
+    return f"{executable} -NoLogo -NoExit -EncodedCommand {encoded_setup}"
 
 
 def create_shell_process(

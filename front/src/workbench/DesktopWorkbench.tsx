@@ -148,7 +148,7 @@ export function DesktopWorkbench({
 }: Props) {
   const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly });
-  const tabs = useEditorTabs({ botAlias, client });
+  const tabs = useEditorTabs({ botAlias, client, structureOnly });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const editorPaneRef = useRef<HTMLElement | null>(null);
@@ -260,8 +260,8 @@ export function DesktopWorkbench({
   const previewStatusText = previewResult?.previewKind === "image"
     ? "已加载图片预览"
     : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
-  const canLoadFull = !isFilePreviewFullyLoaded(previewResult);
-  const canEditPreview = previewResult?.previewKind !== "image";
+  const canLoadFull = !structureOnly && !isFilePreviewFullyLoaded(previewResult);
+  const canEditPreview = !structureOnly && previewResult?.previewKind !== "image";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
@@ -526,6 +526,9 @@ export function DesktopWorkbench({
   }
 
   const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
+    if (structureOnly && mode === "full") {
+      return;
+    }
     setPreviewLoading(true);
     try {
       const result = mode === "full"
@@ -538,7 +541,7 @@ export function DesktopWorkbench({
     } finally {
       setPreviewLoading(false);
     }
-  }, [botAlias, client]);
+  }, [botAlias, client, structureOnly]);
 
   const handleRequestPreview = useCallback((path: string) => {
     void loadPreview(path, "preview");
@@ -560,6 +563,11 @@ export function DesktopWorkbench({
   async function openWorkspaceFile(path: string, line?: number) {
     const target = await client.resolveFileOpenTarget(botAlias, path);
     if (target.kind === "plugin_view") {
+      if (structureOnly) {
+        await fileTree.revealPath(path);
+        setEditorReveal(null);
+        return;
+      }
       await Promise.allSettled([
         tabs.openPluginView(target),
         fileTree.revealPath(path),
@@ -568,6 +576,15 @@ export function DesktopWorkbench({
       return;
     }
     if (isRasterImagePath(path)) {
+      await Promise.allSettled([
+        loadPreview(path, "preview"),
+        fileTree.revealPath(path),
+      ]);
+      setEditorReveal(null);
+      return;
+    }
+
+    if (structureOnly) {
       await Promise.allSettled([
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
@@ -1122,6 +1139,7 @@ export function DesktopWorkbench({
           open={commandPaletteOpen}
           botAlias={botAlias}
           client={client}
+          disabled={structureOnly}
           onClose={() => setCommandPaletteOpen(false)}
           onOpenFile={openWorkspaceFile}
         />
@@ -1140,6 +1158,7 @@ export function DesktopWorkbench({
           desktopAnchorRect={editorPaneBounds}
           loading={previewLoading}
           statusText={previewStatusText}
+          readOnly={structureOnly}
           onClose={closePreview}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => {

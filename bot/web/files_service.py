@@ -240,8 +240,18 @@ def resolve_safe_path(base_dir: str, filename: str) -> str:
     if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_path", "文件路径不安全")
     if os.path.isabs(candidate):
-        return os.path.abspath(os.path.expanduser(candidate))
-    return os.path.abspath(os.path.join(base_dir, os.path.expanduser(candidate)))
+        _raise(400, "unsafe_path", "不允许访问绝对路径")
+
+    resolved_base = os.path.realpath(base_dir)
+    resolved_path = os.path.realpath(os.path.join(resolved_base, os.path.expanduser(candidate)))
+
+    try:
+        if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
+            _raise(400, "unsafe_path", "文件路径不安全")
+    except ValueError:
+        _raise(400, "unsafe_path", "文件路径不安全")
+
+    return resolved_path
 
 
 def resolve_safe_write_path(base_dir: str, path: str) -> str:
@@ -251,8 +261,8 @@ def resolve_safe_write_path(base_dir: str, path: str) -> str:
     if os.path.isabs(candidate):
         _raise(400, "unsafe_write_path", "不允许写入绝对路径")
 
-    resolved_base = os.path.abspath(base_dir)
-    resolved_path = os.path.abspath(os.path.join(resolved_base, os.path.expanduser(candidate)))
+    resolved_base = os.path.realpath(base_dir)
+    resolved_path = os.path.realpath(os.path.join(resolved_base, os.path.expanduser(candidate)))
 
     try:
         if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
@@ -347,11 +357,11 @@ def resolve_action_parent_dir(session: UserSession, parent_path: str | None = No
     if not candidate:
         return browser_dir
 
-    resolved_base = os.path.abspath(browser_dir)
+    resolved_base = os.path.realpath(browser_dir)
     if os.path.isabs(candidate):
-        resolved_path = os.path.abspath(os.path.expanduser(candidate))
+        resolved_path = os.path.realpath(os.path.expanduser(candidate))
     else:
-        resolved_path = os.path.abspath(os.path.join(resolved_base, os.path.expanduser(candidate)))
+        resolved_path = os.path.realpath(os.path.join(resolved_base, os.path.expanduser(candidate)))
 
     try:
         if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
@@ -617,7 +627,7 @@ def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    target_path = resolve_safe_path(browser_dir, path)
+    target_path = resolve_safe_write_path(browser_dir, path)
 
     if os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(browser_dir)):
         _raise(400, "cannot_delete_current_dir", "不能删除当前目录")
@@ -699,7 +709,7 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
 
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_path(browser_dir, filename)
+    file_path = resolve_safe_write_path(browser_dir, filename)
     with open(file_path, "wb") as handle:
         handle.write(data)
     invalidate_workspace_indexes(manager, alias, user_id, browser_dir)

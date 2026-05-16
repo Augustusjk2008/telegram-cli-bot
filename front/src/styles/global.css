@@ -63,11 +63,15 @@ html, body, #root {
   display: none;
 }
 
-:root[data-theme="classic"] .app-logo-image--deep {
+:root[data-theme="classic"] .app-logo-image--deep,
+:root[data-theme="lab-light"] .app-logo-image--deep,
+:root[data-theme="ink-paper"] .app-logo-image--deep {
   display: none;
 }
 
-:root[data-theme="classic"] .app-logo-image--classic {
+:root[data-theme="classic"] .app-logo-image--classic,
+:root[data-theme="lab-light"] .app-logo-image--classic,
+:root[data-theme="ink-paper"] .app-logo-image--classic {
   display: block;
 }
 
@@ -75,7 +79,9 @@ html, body, #root {
   filter: drop-shadow(0 0 18px var(--accent-soft-strong));
 }
 
-:root[data-theme="classic"] .app-logo-mark {
+:root[data-theme="classic"] .app-logo-mark,
+:root[data-theme="lab-light"] .app-logo-mark,
+:root[data-theme="ink-paper"] .app-logo-mark {
   filter: drop-shadow(0 2px 3px rgba(46, 37, 28, 0.18));
 }
 

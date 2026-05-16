@@ -286,6 +286,47 @@ test("mobile bot switcher still uses bottom sheet", async () => {
   expect(screen.queryByTestId("desktop-bot-switcher-popover")).not.toBeInTheDocument();
 });
 
+test("desktop read-only session does not restore or open editor tabs", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", DEMO_MAIN_WORKDIR), JSON.stringify({
+    version: 1,
+    botAlias: "main",
+    workspaceRoot: DEMO_MAIN_WORKDIR,
+    sidebarView: "files",
+    expandedPaths: [],
+    selectedTreePath: "README.md",
+    activeTabPath: "README.md",
+    tabs: [
+      {
+        path: "README.md",
+        dirty: false,
+        savedContent: "RESTORED_APP_TAB",
+        contentPersistence: "clean_snapshot",
+      },
+    ],
+    focusedPane: "editor",
+  }));
+  const user = userEvent.setup();
+  const loginSpy = vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    ...SUPER_ADMIN_SESSION,
+    capabilities: SUPER_ADMIN_SESSION.capabilities.filter((capability) => capability !== "read_file_content"),
+  });
+  const readFileFull = vi.spyOn(MockWebBotClient.prototype, "readFileFull");
+  const readFile = vi.spyOn(MockWebBotClient.prototype, "readFile");
+
+  render(<App />);
+
+  await loginAsSuperAdmin(user);
+  expect(loginSpy).toHaveBeenCalled();
+  expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: /README\.md/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("RESTORED_APP_TAB")).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(readFile).not.toHaveBeenCalled();
+  expect(readFileFull).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
+});
+
 test("member can enter ungranted bot in read-only mode and hits create quota copy", async () => {
   const user = userEvent.setup();
   const seedClient = new MockWebBotClient();
@@ -333,10 +374,13 @@ test("main settings can switch and persist appearance preferences", async () => 
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "设置" }));
-  await user.click(await screen.findByRole("button", { name: "经典暖色" }));
+  await user.click(await screen.findByRole("button", { name: "界面主题" }));
+  const themeListbox = await screen.findByRole("listbox", { name: "界面主题选项" });
+  expect(within(themeListbox).getAllByRole("option")).toHaveLength(6);
+  await user.click(within(themeListbox).getByRole("option", { name: /冷白实验室/ }));
 
-  expect(document.documentElement.dataset.theme).toBe("classic");
-  expect(localStorage.getItem("web-ui-theme")).toBe("classic");
+  expect(document.documentElement.dataset.theme).toBe("lab-light");
+  expect(localStorage.getItem("web-ui-theme")).toBe("lab-light");
   expect(await screen.findByText("界面主题已切换")).toBeInTheDocument();
 
   await user.selectOptions(screen.getByLabelText("聊天正文字体"), "kai");
@@ -369,7 +413,8 @@ test("re-mounting app restores persisted appearance preferences", async () => {
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "设置" }));
-  await user.click(await screen.findByRole("button", { name: "经典暖色" }));
+  await user.click(await screen.findByRole("button", { name: "界面主题" }));
+  await user.click(await screen.findByRole("option", { name: /经典暖色/ }));
   await user.selectOptions(screen.getByLabelText("聊天正文字体"), "kai");
   await user.selectOptions(screen.getByLabelText("聊天正文字号"), "small");
   await user.selectOptions(screen.getByLabelText("聊天行间距"), "tight");

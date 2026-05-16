@@ -11,6 +11,7 @@ import {
 type Props = {
   botAlias: string;
   client: WebBotClient;
+  structureOnly?: boolean;
 };
 
 function basename(path: string) {
@@ -70,7 +71,7 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
   });
 }
 
-export function useEditorTabs({ botAlias, client }: Props) {
+export function useEditorTabs({ botAlias, client, structureOnly = false }: Props) {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState("");
   const [closedTabs, setClosedTabs] = useState<PersistedWorkbenchTab[]>([]);
@@ -137,6 +138,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
   }
 
   async function hydrateTabContent(path: string) {
+    if (structureOnly) {
+      return;
+    }
     const target = tabsRef.current.find((item) => item.path === path);
     if (target && !target.cold && !target.missing) {
       return;
@@ -209,6 +213,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
   }
 
   async function openFile(path: string) {
+    if (structureOnly) {
+      return;
+    }
     const existing = tabsRef.current.find((item) => item.path === path);
     if (existing) {
       setActiveTabPath(path);
@@ -330,6 +337,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
 
   async function activateTab(path: string) {
     setActiveTabPath(path);
+    if (structureOnly) {
+      return;
+    }
     const target = tabsRef.current.find((item) => item.path === path);
     if (target?.cold || target?.missing) {
       await hydrateTabContent(path);
@@ -445,6 +455,9 @@ export function useEditorTabs({ botAlias, client }: Props) {
   }
 
   async function reopenLastClosedTab() {
+    if (structureOnly) {
+      return;
+    }
     const target = closedTabsRef.current[0];
     if (!target) {
       return;
@@ -472,6 +485,13 @@ export function useEditorTabs({ botAlias, client }: Props) {
     restoredActiveTabPath: string,
     options?: { append?: boolean },
   ) {
+    if (structureOnly) {
+      if (!options?.append) {
+        setTabs([]);
+        setActiveTabPath("");
+      }
+      return;
+    }
     const snapshotTabs = restoredTabs.map(createTabFromSnapshot);
     if (snapshotTabs.length === 0) {
       if (!options?.append) {

@@ -6,11 +6,13 @@ import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotIdentity } from "../components/BotIdentity";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
+import { ThemeDropdown } from "../components/ThemeDropdown";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
   AvatarAsset,
   BotOverview,
+  CliType,
   GitProxySettings,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -30,7 +32,6 @@ import {
   DEFAULT_CHAT_BODY_LINE_HEIGHT,
   DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
   DEFAULT_UI_THEME,
-  UI_THEME_OPTIONS,
   type ChatBodyFontFamilyName,
   type ChatBodyFontSizeName,
   type ChatBodyLineHeightName,
@@ -133,7 +134,7 @@ export function SettingsScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
-  const [cliTypeDraft, setCliTypeDraft] = useState<"codex" | "claude" | "kimi">("codex");
+  const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
   const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -448,51 +449,9 @@ export function SettingsScreen({
           <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {UI_THEME_OPTIONS.map((themeOption) => {
-                const isActive = themeName === themeOption.value;
-                return (
-                  <button
-                    key={themeOption.value}
-                    type="button"
-                    aria-label={themeOption.label}
-                    aria-pressed={isActive}
-                    onClick={() => handleThemeChange(themeOption.value)}
-                    className={
-                      isActive
-                        ? "rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] p-4 text-left shadow-sm"
-                        : "rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4 text-left hover:bg-[var(--surface-strong)]"
-                    }
-                    >
-                      <div
-                        className="mb-3 rounded-2xl border p-3"
-                        style={{
-                          backgroundColor: themeOption.preview.surface,
-                        borderColor: themeOption.preview.border,
-                      }}
-                    >
-                      <div className="flex gap-2">
-                        <span
-                          className="h-3 w-8 rounded-full"
-                          style={{ backgroundColor: themeOption.preview.accent }}
-                        />
-                        <span
-                          className="h-3 w-8 rounded-full border"
-                          style={{
-                            backgroundColor: themeOption.preview.surface,
-                            borderColor: themeOption.preview.border,
-                          }}
-                        />
-                        <span
-                          className="h-3 w-8 rounded-full"
-                          style={{ backgroundColor: themeOption.preview.accentStrong }}
-                        />
-                      </div>
-                    </div>
-                    <div className="font-medium text-[var(--text)]">{themeOption.label}</div>
-                  </button>
-                );
-              })}
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-[var(--text)]">界面主题</div>
+              <ThemeDropdown value={themeName} onChange={handleThemeChange} />
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -608,7 +567,7 @@ export function SettingsScreen({
                       aria-label="CLI 类型"
                       value={cliTypeDraft}
                       disabled={!canManageBotRuntime}
-                      onChange={(event) => setCliTypeDraft(event.target.value)}
+                      onChange={(event) => setCliTypeDraft(event.target.value as CliType)}
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
                     >
                       <option value="codex">codex</option>

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { LoginScreen } from "../screens/LoginScreen";
@@ -49,4 +49,17 @@ test("login screen exposes guest entry", async () => {
   await user.click(screen.getByRole("button", { name: "以 guest 进入" }));
 
   expect(onGuestLogin).toHaveBeenCalledTimes(1);
+});
+
+test("login screen exposes compact theme switcher", async () => {
+  const user = userEvent.setup();
+  const onThemeChange = vi.fn();
+
+  render(<LoginScreen themeName="deep-space" onThemeChange={onThemeChange} />);
+
+  await user.click(screen.getByRole("button", { name: "界面主题" }));
+  const listbox = await screen.findByRole("listbox", { name: "界面主题选项" });
+  await user.click(within(listbox).getByRole("option", { name: "冷白实验室" }));
+
+  expect(onThemeChange).toHaveBeenCalledWith("lab-light");
 });

@@ -2043,6 +2043,22 @@ def test_read_file_content_still_rejects_non_image_binary_as_text(web_manager: M
 
     assert exc_info.value.code == "unsupported_encoding"
 
+
+def test_read_file_content_rejects_absolute_path_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    outside_dir = temp_dir / "outside"
+    outside_dir.mkdir()
+    target = outside_dir / "notes.txt"
+    target.write_text("outside\n", encoding="utf-8")
+
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        read_file_content(web_manager, "main", 1001, str(target), mode="cat", lines=0)
+
+    assert exc_info.value.code == "unsafe_path"
+
 def test_read_file_content_supports_gb18030_text(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "gbk.txt", "中文内容\n第二行\n".encode("gb18030"))
 
@@ -2148,6 +2164,22 @@ def test_write_file_content_rejects_non_text_target(web_manager: MultiBotManager
 
     assert exc_info.value.code == "not_text_file"
     assert (temp_dir / "notes.bin").read_bytes() == binary_bytes
+
+
+def test_save_uploaded_file_rejects_absolute_path_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    outside_dir = temp_dir / "outside"
+    outside_dir.mkdir()
+    target = outside_dir / "notes.txt"
+
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        save_uploaded_file(web_manager, "main", 1001, str(target), b"hello\n")
+
+    assert exc_info.value.code == "unsafe_write_path"
+    assert not target.exists()
 
 def test_create_directory_creates_folder_in_current_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
@@ -2315,6 +2347,23 @@ def test_delete_path_recursively_removes_non_empty_directory(web_manager: MultiB
     assert result["deleted_type"] == "directory"
     assert not (workspace / "docs").exists()
 
+
+def test_delete_path_rejects_absolute_path_outside_browser_dir(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    outside_dir = temp_dir / "outside"
+    outside_dir.mkdir()
+    target = outside_dir / "notes.txt"
+    target.write_text("outside\n", encoding="utf-8")
+
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    with pytest.raises(WebApiError) as exc_info:
+        api_service.delete_path(web_manager, "main", 1001, str(target))
+
+    assert exc_info.value.code == "unsafe_write_path"
+    assert target.read_text(encoding="utf-8") == "outside\n"
+
 def test_read_file_outside_workdir_by_absolute_path(web_manager: MultiBotManager, temp_dir: Path):
     workspace_dir = temp_dir / "workspace"
     workspace_dir.mkdir()
@@ -2324,9 +2373,10 @@ def test_read_file_outside_workdir_by_absolute_path(web_manager: MultiBotManager
     target.write_text("outside\nline2\n", encoding="utf-8")
 
     change_working_directory(web_manager, "main", 1001, str(workspace_dir))
-    content = read_file_content(web_manager, "main", 1001, str(target), mode="head", lines=1)
+    with pytest.raises(WebApiError) as exc_info:
+        read_file_content(web_manager, "main", 1001, str(target), mode="head", lines=1)
 
-    assert content["content"] == "outside"
+    assert exc_info.value.code == "unsafe_path"
 
 def test_run_git_command_uses_safe_text_decode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     captured: dict[str, object] = {}

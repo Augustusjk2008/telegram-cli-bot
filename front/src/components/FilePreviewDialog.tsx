@@ -21,6 +21,7 @@ type Props = {
   desktopAnchorRect?: DesktopAnchorRect | null;
   loading?: boolean;
   statusText?: string;
+  readOnly?: boolean;
   onClose: () => void;
   onLoadFull?: () => void;
   onEdit?: () => void;
@@ -51,6 +52,7 @@ export function FilePreviewDialog({
   desktopAnchorRect = null,
   loading = false,
   statusText = "",
+  readOnly = false,
   onClose,
   onLoadFull,
   onEdit,
@@ -263,7 +265,7 @@ export function FilePreviewDialog({
               {statusText}
             </div>
             <div className="flex justify-end gap-2">
-              {mode !== "full" && onLoadFull ? (
+              {!readOnly && mode !== "full" && onLoadFull ? (
                 <button
                   type="button"
                   onClick={onLoadFull}
@@ -273,7 +275,7 @@ export function FilePreviewDialog({
                   {loading ? "读取中..." : "全文读取"}
                 </button>
               ) : null}
-              {onEdit ? (
+              {!readOnly && onEdit ? (
                 <button
                   type="button"
                   onClick={onEdit}
@@ -336,7 +338,7 @@ export function FilePreviewDialog({
             {statusText}
           </div>
           <div className="flex justify-end gap-2">
-            {mode !== "full" && onLoadFull ? (
+            {!readOnly && mode !== "full" && onLoadFull ? (
               <button
                 type="button"
                 onClick={onLoadFull}
@@ -346,7 +348,7 @@ export function FilePreviewDialog({
                 {loading ? "读取中..." : "全文读取"}
               </button>
             ) : null}
-            {onEdit ? (
+            {!readOnly && onEdit ? (
               <button
                 type="button"
                 onClick={onEdit}

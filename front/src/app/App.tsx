@@ -725,6 +725,8 @@ export function App() {
         isLoading={loginLoading}
         error={loginError}
         hostInfo={publicHostInfo}
+        themeName={themeName}
+        onThemeChange={handleThemeChange}
       />
     );
   }

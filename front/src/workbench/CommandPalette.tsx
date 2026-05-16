@@ -11,6 +11,7 @@ type Props = {
   client: WebBotClient;
   onClose: () => void;
   onOpenFile: (path: string) => void | Promise<void>;
+  disabled?: boolean;
 };
 
 function basename(path: string) {
@@ -18,7 +19,7 @@ function basename(path: string) {
   return parts[parts.length - 1] || path;
 }
 
-export function CommandPalette({ open, botAlias, client, onClose, onOpenFile }: Props) {
+export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, disabled = false }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<WorkspaceQuickOpenItem[]>([]);
@@ -27,17 +28,17 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile }: 
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
-    if (!open) {
+    if (!open || disabled) {
       return;
     }
     setQuery("");
     setItems([]);
     setError("");
     window.setTimeout(() => inputRef.current?.focus(), 0);
-  }, [open]);
+  }, [disabled, open]);
 
   useEffect(() => {
-    if (!open) {
+    if (!open || disabled) {
       return;
     }
     const nextQuery = query.trim();
@@ -75,9 +76,12 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile }: 
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [botAlias, client, open, query]);
+  }, [botAlias, client, disabled, open, query]);
 
   async function openPath(path: string) {
+    if (disabled) {
+      return;
+    }
     await onOpenFile(path);
     onClose();
   }

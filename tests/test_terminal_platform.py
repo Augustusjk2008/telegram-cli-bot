@@ -1,16 +1,24 @@
+import base64
 from types import SimpleNamespace
 
 from bot.platform.terminal import PosixPtyProcess, PtyWrapper, _build_windows_powershell_command
 
 
-def test_windows_powershell_command_initializes_utf8_console():
+def test_windows_powershell_command_initializes_utf8_console_without_visible_setup_text():
     command = _build_windows_powershell_command("powershell.exe")
 
-    assert "chcp.com 65001" in command
-    assert "[Console]::InputEncoding" in command
-    assert "[Console]::OutputEncoding" in command
-    assert "$OutputEncoding" in command
-    assert command.startswith("powershell.exe -NoLogo -NoExit -Command ")
+    assert "chcp.com 65001" not in command
+    assert "[Console]::InputEncoding" not in command
+    assert "[Console]::OutputEncoding" not in command
+    assert "$OutputEncoding" not in command
+    assert command.startswith("powershell.exe -NoLogo -NoExit -EncodedCommand ")
+
+    encoded_setup = command.rsplit(" ", 1)[1]
+    decoded_setup = base64.b64decode(encoded_setup).decode("utf-16-le")
+    assert "chcp.com 65001" in decoded_setup
+    assert "[Console]::InputEncoding" in decoded_setup
+    assert "[Console]::OutputEncoding" in decoded_setup
+    assert "$OutputEncoding" in decoded_setup
 
 
 def test_pty_wrapper_resize_uses_setwinsize_for_winpty_like_process():
