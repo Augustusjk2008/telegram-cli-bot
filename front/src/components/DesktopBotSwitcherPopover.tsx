@@ -234,7 +234,7 @@ export function DesktopBotSwitcherPopover({
                 className={clsx(
                   "h-8 rounded px-2 text-xs",
                   statusFilter === filter.id
-                    ? "bg-[var(--accent)] text-white"
+                    ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                     : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
                 )}
               >
@@ -368,7 +368,7 @@ export function DesktopBotSwitcherPopover({
                         aria-disabled={isOffline(focusedBot)}
                         onClick={() => void selectBot(focusedBot)}
                         className={clsx(
-                          "inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white",
+                          "inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)]",
                           isOffline(focusedBot) ? "cursor-not-allowed opacity-60" : "",
                         )}
                       >

@@ -372,7 +372,7 @@ export function FileEditorSurface({
                 type="button"
                 onClick={onSave}
                 disabled={loading || saving || !canSave}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-60"
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-60"
               >
                 {saving ? "保存中..." : "保存"}
               </button>

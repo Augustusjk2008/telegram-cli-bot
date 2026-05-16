@@ -124,7 +124,7 @@ export function LoginScreen({
                     aria-selected={mode === value}
                     onClick={() => setMode(value)}
                     className={mode === value
-                      ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-slate-950"
+                      ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)]"
                       : "rounded-lg px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)]"}
                   >
                     {label}
@@ -195,7 +195,7 @@ export function LoginScreen({
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full border border-[var(--accent-outline)] bg-[var(--accent)] px-4 py-3 text-base font-semibold text-slate-950 shadow-[0_14px_32px_var(--accent-soft-strong)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                  className="w-full border border-[var(--accent-outline)] bg-[var(--accent)] px-4 py-3 text-base font-semibold text-[var(--accent-foreground)] shadow-[0_14px_32px_var(--accent-soft-strong)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
                 >
                   {isLoading ? "处理中..." : mode === "register" ? "注册并登录" : "登录"}
                 </button>

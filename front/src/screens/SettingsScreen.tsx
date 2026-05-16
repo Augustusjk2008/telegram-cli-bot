@@ -592,7 +592,7 @@ export function SettingsScreen({
                   type="button"
                   onClick={() => void saveCliConfig()}
                   disabled={!canManageBotRuntime || savingCliConfig}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
@@ -635,7 +635,7 @@ export function SettingsScreen({
                       type="button"
                       onClick={() => void saveWorkdir()}
                       disabled={!canManageBotRuntime || savingWorkdir}
-                      className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                      className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
                     >
                       <Save className="h-4 w-4" />
                       {savingWorkdir ? "保存中..." : "保存工作目录"}
@@ -679,7 +679,7 @@ export function SettingsScreen({
                 aria-label="保存 Git 代理"
                 onClick={() => void saveGitProxy()}
                 disabled={savingGitProxy}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
                 {savingGitProxy ? "保存中..." : "保存"}

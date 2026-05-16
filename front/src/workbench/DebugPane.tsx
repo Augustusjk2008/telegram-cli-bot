@@ -114,7 +114,7 @@ function DebugToolButton({
   danger?: boolean;
 }) {
   const tone = primary
-    ? "border-[var(--accent)] bg-[var(--accent)] text-white hover:brightness-110"
+    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-foreground)] hover:brightness-110"
     : danger
       ? "border-red-400/60 text-red-500 hover:bg-red-500/10"
       : "border-[var(--border)] text-[var(--text)] hover:bg-[var(--accent-soft)]";

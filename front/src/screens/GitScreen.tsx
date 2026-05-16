@@ -75,7 +75,7 @@ function buttonClass(kind: "plain" | "primary" = "plain") {
   return clsx(
     "inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-50",
     kind === "primary"
-      ? "bg-[var(--accent)] text-white hover:opacity-90"
+      ? "bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90"
       : "border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-strong)]",
   );
 }

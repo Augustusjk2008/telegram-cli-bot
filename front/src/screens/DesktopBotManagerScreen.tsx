@@ -345,7 +345,7 @@ function CreatePanel({
           type="button"
           onClick={() => void submit()}
           disabled={!canManage || manager.savingAction !== ""}
-          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white disabled:opacity-60"
+          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
         >
           <Plus className="h-4 w-4" />
           {manager.savingAction === "create" ? "创建中..." : "创建智能体"}
@@ -577,7 +577,7 @@ function EditPanel({
           type="button"
           onClick={() => void submit()}
           disabled={!canManage || manager.savingAction !== ""}
-          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white disabled:opacity-60"
+          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
         >
           <Save className="h-4 w-4" />
           保存智能体
@@ -1041,7 +1041,7 @@ export function DesktopBotManagerScreen({
             className={clsx(
               "h-8 rounded px-2 text-xs",
               inspectorTab === tab.id
-                ? "bg-[var(--accent)] text-white"
+                ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                 : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
             )}
           >
@@ -1131,7 +1131,7 @@ export function DesktopBotManagerScreen({
                   clearSelection();
                   setMode("create");
                 }}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white"
+                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)]"
               >
                 <Plus className="h-4 w-4" />
                 新增智能体
@@ -1149,7 +1149,7 @@ export function DesktopBotManagerScreen({
               className={clsx(
                 "h-8 rounded px-2 text-xs",
                 statusFilter === filter.id
-                  ? "bg-[var(--accent)] text-white"
+                  ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                   : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
               )}
             >
@@ -1401,7 +1401,7 @@ export function DesktopBotManagerScreen({
                       aria-label={isBotOffline(focusedBot) ? `${focusedBot.alias} 当前离线，不可进入` : `进入 ${focusedBot.alias}`}
                       disabled={isBotOffline(focusedBot)}
                       onClick={() => onSelect(focusedBot.alias)}
-                      className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <LogIn className="h-4 w-4" />
                       进入

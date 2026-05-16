@@ -246,7 +246,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           type="button"
           onClick={() => void handleCreateBot()}
           disabled={savingAction !== ""}
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
         >
           {savingAction === "create" ? "创建中..." : "创建智能体"}
         </button>
@@ -372,7 +372,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
                       aria-label={`保存别名 ${bot.alias}`}
                       onClick={() => void saveRename(bot)}
                       disabled={savingAction !== ""}
-                      className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                      className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
                     >
                       {savingAction === `${bot.alias}:rename` ? "保存中..." : "保存别名"}
                     </button>

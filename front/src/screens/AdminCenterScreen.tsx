@@ -463,7 +463,7 @@ export function AdminCenterScreen({
               aria-selected={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               className={activeTab === tab
-                ? "rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-white"
+                ? "rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)]"
                 : "rounded-md border border-[var(--border)] px-3 py-2 text-sm"}
             >
               {tab === "users" ? "用户权限" : tab === "invites" ? "邀请码" : tab === "updates" ? "升级" : "公告"}
@@ -573,7 +573,7 @@ export function AdminCenterScreen({
                   type="button"
                   onClick={() => void createRegisterCode()}
                   disabled={registerCodeCreating}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   {registerCodeCreating ? "生成中..." : "生成邀请码"}
@@ -770,7 +770,7 @@ export function AdminCenterScreen({
                 type="button"
                 onClick={() => void saveAnnouncement()}
                 disabled={announcementSaving}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
                 {announcementSaving ? "发布中..." : "发布公告"}

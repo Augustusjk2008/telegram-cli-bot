@@ -165,7 +165,7 @@ export function WorkbenchHeader({
               className={clsx(
                 "rounded-md px-2.5 py-0.5 text-xs transition-colors",
                 viewMode === nextMode
-                  ? "bg-[var(--accent)] text-white"
+                  ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                   : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
               )}
             >

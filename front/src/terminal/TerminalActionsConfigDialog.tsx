@@ -283,7 +283,7 @@ export function TerminalActionsConfigDialog({
               type="button"
               onClick={() => onSave({ schemaVersion: 1, actions: normalizeActions(actions) })}
               disabled={saving || Boolean(validationMessage) || !config.editable}
-              className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
             >
               {!config.editable ? "无保存权限" : saving ? "保存中..." : "保存快捷命令"}
             </button>

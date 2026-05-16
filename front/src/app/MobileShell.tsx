@@ -95,7 +95,7 @@ export function MobileShell({
                   className={clsx(
                     "rounded-lg px-2 py-1 text-xs transition-colors",
                     viewMode === nextMode
-                      ? "bg-[var(--accent)] text-white"
+                      ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                       : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
                   )}
                 >

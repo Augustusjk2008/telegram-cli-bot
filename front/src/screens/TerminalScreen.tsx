@@ -619,7 +619,7 @@ export function TerminalScreen({
           <button
             type="button"
             onClick={jumpToLatest}
-            className="absolute bottom-4 right-4 rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white shadow-[var(--shadow-card)]"
+            className="absolute bottom-4 right-4 rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)] shadow-[var(--shadow-card)]"
           >
             回到最新输出
           </button>

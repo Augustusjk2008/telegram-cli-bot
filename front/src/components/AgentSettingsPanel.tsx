@@ -232,7 +232,7 @@ export function AgentSettingsPanel({
           <button
             type="button"
             onClick={openCreate}
-            className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90"
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90"
           >
             <Plus className="h-4 w-4" />
             新增 agent
@@ -393,7 +393,7 @@ export function AgentSettingsPanel({
               type="button"
               onClick={() => void saveAgent()}
               disabled={!canManage || saving || Boolean(formError)}
-              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
               {saving ? "保存中..." : "保存"}

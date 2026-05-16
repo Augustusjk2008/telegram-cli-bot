@@ -651,7 +651,7 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
             onClick={() => setTab(item.id as AssistantOpsTab)}
             className={`rounded-lg px-3 py-2 text-sm ${
               tab === item.id
-                ? "bg-[var(--accent)] text-white"
+                ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                 : "border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface-strong)]"
             }`}
           >
@@ -770,7 +770,7 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
                           type="button"
                           onClick={() => void mutateProposal("apply")}
                           disabled={proposalActioning !== "" || !canApplyProposal}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                          className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
                         >
                           <Play className="h-4 w-4" />
                           Apply
@@ -1021,7 +1021,7 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
               type="button"
               onClick={() => void reindexMemory()}
               disabled={memoryReindexing}
-              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
             >
               <Database className="h-4 w-4" />
               {memoryReindexing ? "重建中..." : "Re-index"}
@@ -1160,7 +1160,7 @@ export function AssistantOpsScreen({ botAlias, client, chatBusy = false, onRevea
                 type="button"
                 onClick={() => void runMemoryEval()}
                 disabled={memoryEvaluating}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
               >
                 <Play className="h-4 w-4" />
                 {memoryEvaluating ? "运行中..." : "运行 Eval"}

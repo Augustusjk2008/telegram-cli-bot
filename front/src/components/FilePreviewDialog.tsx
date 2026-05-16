@@ -288,7 +288,7 @@ export function FilePreviewDialog({
                 <button
                   type="button"
                   onClick={onDownload}
-                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white"
+                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
                 >
                   下载
                 </button>
@@ -361,7 +361,7 @@ export function FilePreviewDialog({
               <button
                 type="button"
                 onClick={onDownload}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white"
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
               >
                 下载
               </button>

@@ -86,7 +86,7 @@ export function ConversationHistoryPanel({
             type="button"
             disabled={disabled}
             onClick={onNewConversation}
-            className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-3 text-sm font-medium text-white disabled:opacity-60"
+            className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
           >
             <MessageSquarePlus className="h-4 w-4" />
             新会话

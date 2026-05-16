@@ -268,7 +268,7 @@ export function PluginCatalog({
                             <button
                               type="button"
                               onClick={() => runCatalogAction(plugin, primaryAction)}
-                              className="inline-flex h-7 items-center justify-center rounded bg-[var(--accent)] px-2 text-xs font-medium text-white hover:opacity-90"
+                              className="inline-flex h-7 items-center justify-center rounded bg-[var(--accent)] px-2 text-xs font-medium text-[var(--accent-foreground)] hover:opacity-90"
                             >
                               {primaryAction.label}
                             </button>

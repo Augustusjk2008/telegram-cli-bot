@@ -77,7 +77,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
             type="button"
             onClick={() => void prepareInstall()}
             disabled={!canManage}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-60"
           >
             <Wrench className="h-4 w-4" />
             生成安装命令

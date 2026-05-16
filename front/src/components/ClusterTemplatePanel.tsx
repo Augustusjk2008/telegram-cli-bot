@@ -216,7 +216,7 @@ export function ClusterTemplatePanel({ botAlias, client, canManage = true, onApp
             type="button"
             aria-pressed={tab === "templates"}
             onClick={() => setTab("templates")}
-            className={tab === "templates" ? "rounded px-2 py-1 text-xs bg-[var(--accent)] text-white" : "rounded px-2 py-1 text-xs text-[var(--muted)]"}
+            className={tab === "templates" ? "rounded px-2 py-1 text-xs bg-[var(--accent)] text-[var(--accent-foreground)]" : "rounded px-2 py-1 text-xs text-[var(--muted)]"}
           >
             模板
           </button>
@@ -224,7 +224,7 @@ export function ClusterTemplatePanel({ botAlias, client, canManage = true, onApp
             type="button"
             aria-pressed={tab === "json"}
             onClick={() => setTab("json")}
-            className={tab === "json" ? "rounded px-2 py-1 text-xs bg-[var(--accent)] text-white" : "rounded px-2 py-1 text-xs text-[var(--muted)]"}
+            className={tab === "json" ? "rounded px-2 py-1 text-xs bg-[var(--accent)] text-[var(--accent-foreground)]" : "rounded px-2 py-1 text-xs text-[var(--muted)]"}
           >
             JSON 配置
           </button>
@@ -258,7 +258,7 @@ export function ClusterTemplatePanel({ botAlias, client, canManage = true, onApp
                       type="button"
                       onClick={() => void applyTemplate(template.id)}
                       disabled={!canManage}
-                      className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-60"
+                      className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-60"
                     >
                       {`覆盖应用 ${preview.bundle.name}`}
                     </button>
@@ -291,7 +291,7 @@ export function ClusterTemplatePanel({ botAlias, client, canManage = true, onApp
               type="button"
               onClick={() => void applyJson()}
               disabled={!canManage}
-              className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-60"
+              className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-60"
             >
               覆盖应用 JSON 配置
             </button>

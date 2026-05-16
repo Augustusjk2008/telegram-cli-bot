@@ -564,7 +564,7 @@ export function AutomationTabs({ botAlias, client, activeTab, onNotice, onError 
               type="button"
               onClick={() => void saveEdit()}
               disabled={savingEdit}
-              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
               {savingEdit ? "保存中..." : "保存修改"}
@@ -583,7 +583,7 @@ export function AutomationTabs({ botAlias, client, activeTab, onNotice, onError 
             type="button"
             onClick={() => void createJob()}
             disabled={creating}
-            className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
           >
             <Save className="h-4 w-4" />
             {creating ? "创建中..." : "创建任务"}

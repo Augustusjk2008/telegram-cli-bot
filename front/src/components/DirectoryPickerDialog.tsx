@@ -233,7 +233,7 @@ export function DirectoryPickerDialog({
             type="button"
             onClick={() => void closeDialog(normalizePathInput(currentPath))}
             disabled={busy || loading || !currentPath || isVirtualRoot}
-            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
           >
             使用当前目录
           </button>

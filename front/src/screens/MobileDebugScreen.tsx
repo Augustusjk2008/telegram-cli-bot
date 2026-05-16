@@ -68,7 +68,7 @@ function DebugIconButton({
   danger?: boolean;
 }) {
   const tone = primary
-    ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-foreground)]"
     : danger
       ? "border-red-400/60 text-red-500"
       : "border-[var(--border)] text-[var(--text)]";

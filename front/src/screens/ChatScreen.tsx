@@ -676,7 +676,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           className={[
             "chat-message-bubble-delight",
             isUser
-              ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-white"
+              ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
               : item.state === "error"
                 ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
                 : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]",
@@ -687,7 +687,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ) : isUser ? (
             <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
               {visibleUserText ? (
-                <ChatPlainTextMessage content={visibleUserText} className="text-white" />
+                <ChatPlainTextMessage content={visibleUserText} className="text-[var(--accent-foreground)]" />
               ) : null}
               {userAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
@@ -701,20 +701,20 @@ const ChatMessageRow = memo(function ChatMessageRow({
                         key={attachment.savedPath}
                         title={attachment.savedPath}
                         className={isDeleted
-                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70"
-                          : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs text-white"}
+                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/20 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]/70"
+                          : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/25 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]"}
                       >
                         <Paperclip className="h-3.5 w-3.5 shrink-0" />
                         <span className="truncate">{attachment.filename}</span>
                         {isDeleted ? (
-                          <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] text-white/80">已删除</span>
+                          <span className="rounded-full bg-[var(--accent-foreground)]/10 px-1.5 py-0.5 text-[10px] text-[var(--accent-foreground)]/80">已删除</span>
                         ) : (
                           <button
                             type="button"
                             aria-label={`删除附件文件 ${attachment.filename}`}
                             disabled={isDeleting}
                             onClick={() => onDeleteAttachment(item.id, attachment.savedPath)}
-                            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-white/80 hover:bg-white/15 disabled:opacity-60"
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[var(--accent-foreground)]/80 hover:bg-[var(--accent-foreground)]/15 disabled:opacity-60"
                           >
                             {isDeleting ? (
                               <LoaderCircle className="h-3 w-3 animate-spin" />
@@ -732,7 +732,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ) : (
             <ChatPlainTextMessage
               content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
-              className={isUser ? "text-white" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
+              className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
             />
           )}
         </div>

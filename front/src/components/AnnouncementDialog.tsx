@@ -203,7 +203,7 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
           <button
             type="button"
             onClick={() => onClose(latestId)}
-            className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white"
+            className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-foreground)]"
           >
             关闭
           </button>
