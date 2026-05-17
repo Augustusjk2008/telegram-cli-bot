@@ -508,6 +508,64 @@ test("renders png files as images in preview mode", async () => {
   expect(within(dialog).queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
 });
 
+test("renders html file preview in a sandboxed iframe", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "report.html", isDir: false, size: 56, updatedAt: "2026-04-27T10:00:00Z" }],
+    }),
+    readFile: async () => ({
+      content: "<!doctype html><html><body><h1>Report</h1></body></html>",
+      mode: "cat" as const,
+      fileSizeBytes: 56,
+      isFullContent: true,
+      previewKind: "html" as const,
+    }),
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 report.html" }));
+
+  const frame = await screen.findByTitle("report.html");
+  expect(frame).toBeInTheDocument();
+  expect(frame).toHaveAttribute("sandbox", "");
+  expect(frame).toHaveAttribute("srcdoc", expect.stringContaining("<h1>Report</h1>"));
+});
+
+test("auto-loads small html files as full html preview", async () => {
+  const user = userEvent.setup();
+  const readFile = vi.fn(async () => ({
+    content: "<html>",
+    mode: "head" as const,
+    fileSizeBytes: 128,
+    isFullContent: false,
+  }));
+  const readFileFull = vi.fn(async () => ({
+    content: "<!doctype html><html><body><h1>Report</h1></body></html>",
+    mode: "cat" as const,
+    fileSizeBytes: 56,
+    isFullContent: true,
+  }));
+  const client = createClient({
+    listFiles: async (): Promise<DirectoryListing> => ({
+      workingDir: "C:\\workspace",
+      entries: [{ name: "report.html", isDir: false, size: 128, updatedAt: "2026-04-27T10:00:00Z" }],
+    }),
+    readFile,
+    readFileFull,
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 report.html" }));
+
+  expect(readFile).toHaveBeenCalledWith("main", "report.html");
+  await waitFor(() => expect(readFileFull).toHaveBeenCalledWith("main", "report.html"));
+  expect(await screen.findByTitle("report.html")).toHaveAttribute("srcdoc", expect.stringContaining("<h1>Report</h1>"));
+});
+
 test("can load full file content from preview modal", async () => {
   const user = userEvent.setup();
   const readFullSpy = vi.fn(async () => ({

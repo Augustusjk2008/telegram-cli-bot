@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { MarkdownPreview } from "./MarkdownPreview";
+import type { FilePreviewKind } from "../services/types";
 import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
 
 type DesktopAnchorRect = {
@@ -14,7 +15,7 @@ type Props = {
   content: string;
   mode: "preview" | "full";
   botAlias?: string;
-  previewKind?: "text" | "image";
+  previewKind?: FilePreviewKind;
   contentType?: string;
   contentBase64?: string;
   variant?: "mobile" | "desktop";
@@ -62,6 +63,7 @@ export function FilePreviewDialog({
   const isMarkdownPreview = /\.(md|markdown)$/i.test(title);
   const isSvgPreview = /\.svg$/i.test(title);
   const isRasterPreview = previewKind === "image" && Boolean(contentType) && Boolean(contentBase64);
+  const isHtmlPreview = previewKind === "html";
   const [desktopOffset, setDesktopOffset] = useState({ x: 0, y: 0 });
   const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const dragStateRef = useRef<{
@@ -204,6 +206,41 @@ export function FilePreviewDialog({
     event.preventDefault();
   }
 
+  function renderPreviewContent(desktop: boolean) {
+    if (isMarkdownPreview) {
+      return (
+        <MarkdownPreview
+          content={content}
+          variant={desktop ? "desktop-preview" : undefined}
+          onFileLinkClick={onFileLinkClick}
+          resolveImageSrc={resolveMarkdownImageSrc}
+        />
+      );
+    }
+    if (imagePreviewUrl) {
+      return (
+        <div className={`${desktop ? "h-full" : "max-h-[50vh]"} flex items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4`}>
+          <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
+        </div>
+      );
+    }
+    if (isHtmlPreview) {
+      return (
+        <iframe
+          title={title}
+          sandbox=""
+          srcDoc={content}
+          className={`${desktop ? "h-full" : "h-[50vh]"} w-full rounded-xl border border-[var(--border)] bg-white`}
+        />
+      );
+    }
+    return (
+      <pre className={`${desktop ? "h-full" : "max-h-[50vh]"} overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all`}>
+        {content}
+      </pre>
+    );
+  }
+
   if (variant === "desktop" && desktopFrame) {
     return (
       <div
@@ -241,22 +278,7 @@ export function FilePreviewDialog({
           </div>
 
           <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
-            {isMarkdownPreview ? (
-              <MarkdownPreview
-                content={content}
-                variant="desktop-preview"
-                onFileLinkClick={onFileLinkClick}
-                resolveImageSrc={resolveMarkdownImageSrc}
-              />
-            ) : imagePreviewUrl ? (
-              <div className="flex h-full items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4">
-                <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
-              </div>
-            ) : (
-              <pre className="h-full overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all">
-                {content}
-              </pre>
-            )}
+            {renderPreviewContent(true)}
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-[var(--workbench-hairline)] px-5 py-4">
@@ -317,21 +339,7 @@ export function FilePreviewDialog({
             关闭
           </button>
         </div>
-        {isMarkdownPreview ? (
-          <MarkdownPreview
-            content={content}
-            onFileLinkClick={onFileLinkClick}
-            resolveImageSrc={resolveMarkdownImageSrc}
-          />
-        ) : imagePreviewUrl ? (
-          <div className="flex max-h-[50vh] items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4">
-            <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
-          </div>
-        ) : (
-          <pre className="max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all">
-            {content}
-          </pre>
-        )}
+        {renderPreviewContent(false)}
         <div className="mt-4 flex items-center justify-between gap-3">
           <div className="min-h-[1.25rem] text-sm text-[var(--muted)]">
             {statusText}

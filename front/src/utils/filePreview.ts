@@ -2,6 +2,10 @@ import type { FileReadResult } from "../services/types";
 
 export const FILE_PREVIEW_FULL_READ_LIMIT_BYTES = 1024 * 1024;
 
+export function isHtmlPreviewPath(path: string) {
+  return /\.(?:html?|xhtml)$/i.test(String(path || "").trim());
+}
+
 export function isFilePreviewTooLarge(result: FileReadResult | null) {
   return Boolean(
     result
@@ -21,12 +25,34 @@ export function isFilePreviewFullyLoaded(result: FileReadResult | null) {
   return result.mode === "cat" || Boolean(result.isFullContent);
 }
 
+export function shouldAutoLoadFullHtmlPreview(path: string, result: FileReadResult | null) {
+  return Boolean(
+    isHtmlPreviewPath(path)
+    && result
+    && !isFilePreviewFullyLoaded(result)
+    && !isFilePreviewTooLarge(result),
+  );
+}
+
+export function withDetectedPreviewKind(path: string, result: FileReadResult): FileReadResult {
+  if (result.previewKind || !isHtmlPreviewPath(path) || !isFilePreviewFullyLoaded(result)) {
+    return result;
+  }
+  return {
+    ...result,
+    previewKind: "html",
+  };
+}
+
 export function getFilePreviewStatusText(result: FileReadResult | null) {
   if (!result) {
     return "";
   }
   if (result.previewKind === "image") {
     return "已加载图片预览";
+  }
+  if (result.previewKind === "html") {
+    return "已加载 HTML 预览";
   }
   if (isFilePreviewTooLarge(result)) {
     return "文件超过1MB，请下载后读取全文";

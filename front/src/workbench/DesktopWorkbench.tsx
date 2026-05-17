@@ -19,7 +19,12 @@ import type {
   ChatBodyParagraphSpacingName,
   UiThemeName,
 } from "../theme";
-import { isFilePreviewFullyLoaded } from "../utils/filePreview";
+import {
+  isHtmlPreviewPath,
+  isFilePreviewFullyLoaded,
+  shouldAutoLoadFullHtmlPreview,
+  withDetectedPreviewKind,
+} from "../utils/filePreview";
 import { ChatPane } from "./ChatPane";
 import { CommandPalette } from "./CommandPalette";
 import { DebugPane } from "./DebugPane";
@@ -260,7 +265,9 @@ export function DesktopWorkbench({
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
   const previewStatusText = previewResult?.previewKind === "image"
     ? "已加载图片预览"
-    : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
+    : previewResult?.previewKind === "html"
+      ? "已加载 HTML 预览"
+      : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
   const canLoadFull = !structureOnly && !isFilePreviewFullyLoaded(previewResult);
   const canEditPreview = !structureOnly && previewResult?.previewKind !== "image";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
@@ -532,9 +539,13 @@ export function DesktopWorkbench({
     }
     setPreviewLoading(true);
     try {
-      const result = mode === "full"
+      let result = mode === "full"
         ? await client.readFileFull(botAlias, path)
         : await client.readFile(botAlias, path);
+      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(path, result)) {
+        result = await client.readFileFull(botAlias, path);
+      }
+      result = withDetectedPreviewKind(path, result);
       setPreviewName(path);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
@@ -576,7 +587,7 @@ export function DesktopWorkbench({
       setEditorReveal(typeof line === "number" && line > 0 ? { path, line } : null);
       return;
     }
-    if (isRasterImagePath(path)) {
+    if (isRasterImagePath(path) || isHtmlPreviewPath(path)) {
       await Promise.allSettled([
         loadPreview(path, "preview"),
         fileTree.revealPath(path),

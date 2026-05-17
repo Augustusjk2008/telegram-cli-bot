@@ -47,6 +47,8 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
+  shouldAutoLoadFullHtmlPreview,
+  withDetectedPreviewKind,
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
@@ -1469,9 +1471,13 @@ export function ChatScreen({
     setPreviewLoading(true);
     setError("");
     try {
-      const result = mode === "full"
+      let result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
+      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
+        result = await client.readFileFull(botAlias, name);
+      }
+      result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);

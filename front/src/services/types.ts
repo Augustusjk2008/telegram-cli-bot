@@ -568,7 +568,7 @@ export type FileEntry = {
 };
 
 export type FileReadMode = "head" | "cat";
-export type FilePreviewKind = "text" | "image";
+export type FilePreviewKind = "text" | "image" | "html";
 
 export type FileReadResult = {
   content: string;

@@ -12,6 +12,8 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
+  shouldAutoLoadFullHtmlPreview,
+  withDetectedPreviewKind,
 } from "../utils/filePreview";
 
 type Props = {
@@ -194,9 +196,13 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const loadPreview = async (name: string, mode: "preview" | "full") => {
     setPreviewLoading(true);
     try {
-      const result = mode === "full"
+      let result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
+      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
+        result = await client.readFileFull(botAlias, name);
+      }
+      result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);

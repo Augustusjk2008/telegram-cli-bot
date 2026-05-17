@@ -790,6 +790,50 @@ test("desktop workbench opens png files in the shared preview window", async () 
   expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
 });
 
+test("desktop workbench previews html files in a sandboxed iframe", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "report.html", isDir: false, size: 128 }],
+  });
+  vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "<html>",
+    mode: "head",
+    fileSizeBytes: 128,
+    isFullContent: false,
+  });
+  vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "<!doctype html><html><body><h1>Report</h1></body></html>",
+    mode: "cat",
+    fileSizeBytes: 56,
+    isFullContent: true,
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 report.html" }));
+
+  await waitFor(() => {
+    expect(document.querySelector('iframe[title="report.html"]')).toBeInTheDocument();
+  });
+  const frame = document.querySelector('iframe[title="report.html"]') as HTMLIFrameElement;
+  expect(frame).toHaveAttribute("sandbox", "");
+  expect(frame).toHaveAttribute("srcdoc", expect.stringContaining("<h1>Report</h1>"));
+});
+
 test("desktop workbench opens .hier files as tree plugin tabs and handles open-file effects", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
