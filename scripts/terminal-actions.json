@@ -55,7 +55,7 @@
       "id": "Publish",
       "label": "发布",
       "icon": "Terminal",
-      "windowsCommand": "$next = ([version]((Get-Content VERSION -Raw).Trim())); $v = \"{0}.{1}.{2}\" -f $next.Major, $next.Minor, ($next.Build + 1); pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version $v -RunChecks -AutoConfirmDirtyWorktree",
+      "windowsCommand": "$next = ([version]((Get-Content VERSION -Raw).Trim())); $v = \"{0}.{1}.{2}\" -f $next.Major, $next.Minor, ($next.Build + 1); pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version $v -RunChecks -AutoConfirmDirtyWorktree -ReleaseNotesFile \".\\docs\\release-notes\\v$($v).md\"",
       "linuxCommand": "",
       "cwd": ".",
       "confirm": false,

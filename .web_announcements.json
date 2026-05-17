@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-16T21:04:54+08:00",
+  "updated_at": "2026-05-17T21:03:12+08:00",
   "items": [
     {
       "id": "ann-2026-05-13-16-01",
@@ -116,12 +116,52 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ann-2026-05-17-21-01",
+      "published_at": "2026-05-17T21:01:00+08:00",
+      "publisher": "CLI Bridge",
+      "title": "版本更新公告 v1.2.7",
+      "category": "feature",
+      "severity": "info",
+      "summary": "升级调试系统，补齐 Python debugpy、Godot 和通用 DAP 调试能力，并修复调试暂停后源码路径问题。",
+      "sections": [
+        {
+          "label": "调试系统",
+          "items": [
+            "调试配置升级为 provider 架构，新增 provider 注册和会话抽象。",
+            "新增 Python debugpy provider，支持 DAP 启动、暂停、继续、单步、变量和断点。",
+            "新增 Godot DAP provider 和 C++ GDB provider 适配层。",
+            "新增 DAP stdio 客户端，统一请求、事件转发和连接关闭处理。",
+            "调试配置支持 spec v3、provider id、provider label、launch schema、能力声明和 UI 配置。"
+          ]
+        },
+        {
+          "label": "断点和源码",
+          "items": [
+            "修复 debugpy 启动后相对断点路径未转绝对路径，导致运行中断点设置不稳定的问题。",
+            "修复暂停后源码以绝对路径打开，触发“不允许访问绝对路径”的问题。",
+            "调试源码打开时将工作区内绝对路径转为相对路径，保留当前行定位。",
+            "DAP sourceReference 保持未解析状态，避免误开不可读源码。",
+            "Source resolver 增强本地绝对路径、source map、compile_commands 和工作区搜索处理。"
+          ]
+        },
+        {
+          "label": "前端体验",
+          "items": [
+            "桌面和移动调试页改为基于 provider 能力启用控制按钮。",
+            "启动参数改用 launch schema 动态渲染，兼容不同调试后端。",
+            "调试状态统一映射 starting、running、paused、stopping、error。",
+            "移动调试页支持 provider 名称、配置名称和动态启动参数。"
+          ]
+        }
+      ]
     }
   ],
   "reads": {
     "local-admin": {
-      "last_seen_id": "ann-2026-05-16-20-17",
-      "seen_at": "2026-05-16T20:09:49+08:00"
+      "last_seen_id": "ann-2026-05-17-21-01",
+      "seen_at": "2026-05-17T21:03:12+08:00"
     },
     "member_5f14dc11d7239710": {
       "last_seen_id": "ann-2026-05-16-20-17",
