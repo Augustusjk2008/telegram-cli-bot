@@ -58,6 +58,71 @@ def test_resolve_source_path_maps_remote_dir_to_workspace(tmp_path: Path) -> Non
     )
 
 
+def test_breakpoint_from_api_uses_dap_source_path_when_source_is_object(tmp_path: Path) -> None:
+    service = DebugService(object())
+    fallback = str(tmp_path / "main.py")
+    resolved = str(tmp_path / "src" / "main.py")
+
+    breakpoint = service._breakpoint_from_api(
+        fallback,
+        {
+            "source": {"path": resolved},
+            "line": 21,
+            "verified": True,
+        },
+    )
+
+    assert breakpoint.source == resolved
+    assert breakpoint.to_api()["source"] == resolved
+
+
+@pytest.mark.asyncio
+async def test_set_breakpoints_uses_dap_source_path_when_source_is_object(tmp_path: Path) -> None:
+    service = DebugService(object())
+    resolved = str(tmp_path / "main.py")
+    runtime = await service._get_runtime("main", 1001)
+
+    await service._set_breakpoints(
+        runtime,
+        {
+            "source": {"path": resolved},
+            "lines": [21],
+        },
+    )
+
+    assert runtime.state.breakpoints[0].source == resolved
+
+
+@pytest.mark.asyncio
+async def test_refresh_paused_state_uses_dap_source_path_when_frame_source_is_object(tmp_path: Path) -> None:
+    service = DebugService(object())
+    resolved = str(tmp_path / "main.py")
+    runtime = await service._get_runtime("main", 1001)
+
+    class FakeSession:
+        async def stack_trace(self):
+            return [{
+                "id": "frame-0",
+                "name": "main",
+                "source": {"path": resolved, "sourceReference": 99},
+                "line": 21,
+            }]
+
+        async def scopes(self, _frame_id: str):
+            return []
+
+        async def variables(self, _variables_reference: str):
+            return []
+
+    runtime.session = FakeSession()
+
+    await service._refresh_paused_state(runtime)
+
+    assert runtime.state.frames[0].source == resolved
+    assert runtime.state.frames[0].original_source == resolved
+    assert runtime.state.frames[0].source_reference == 99
+
+
 @pytest.mark.asyncio
 async def test_launch_runs_prepare_before_requiring_program(
     monkeypatch: pytest.MonkeyPatch,

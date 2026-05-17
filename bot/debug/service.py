@@ -201,6 +201,16 @@ class DebugService:
             return {"path": source, "line": line, "resolved": bool(source), "reason": "raw"}
         return resolve_source(runtime.workspace, runtime.profile, source, {"line": line, **(payload or {})})
 
+    def _source_path_from_payload(self, source_payload: object, fallback: str = "") -> str:
+        source_path = ""
+        if isinstance(source_payload, dict):
+            source_path = str(source_payload.get("path") or "").strip()
+            if not source_path:
+                source_path = str(source_payload.get("name") or "").strip()
+        elif isinstance(source_payload, str):
+            source_path = source_payload.strip()
+        return source_path or fallback
+
     def _sort_breakpoints(self, breakpoints: list[DebugBreakpoint]) -> list[DebugBreakpoint]:
         deduped: dict[tuple[str, int], DebugBreakpoint] = {}
         for item in breakpoints:
@@ -324,9 +334,12 @@ class DebugService:
         resolved_frames: list[DebugFrame] = []
         for item in frames_raw:
             frame_payload = dict(item) if isinstance(item, dict) else {}
+            raw_source = self._source_path_from_payload(frame_payload.get("source"))
+            source_payload = frame_payload.get("source")
+            source_reference = int(source_payload.get("sourceReference") or 0) if isinstance(source_payload, dict) else 0
             result = self._resolve_frame_source(
                 runtime,
-                str(frame_payload.get("source") or ""),
+                raw_source,
                 int(frame_payload.get("line") or 0),
                 frame_payload,
             )
@@ -334,11 +347,11 @@ class DebugService:
                 DebugFrame(
                     id=str(frame_payload.get("id") or ""),
                     name=str(frame_payload.get("name") or ""),
-                    source=str(result.get("path") or frame_payload.get("source") or "??"),
+                    source=str(result.get("path") or raw_source or "??"),
                     line=int(frame_payload.get("line") or 0),
                     source_resolved=bool(result.get("resolved")),
                     source_reason=str(result.get("reason") or ""),
-                    original_source=str(
+                    original_source=self._source_path_from_payload(
                         frame_payload.get("originalSource")
                         or frame_payload.get("original_source")
                         or frame_payload.get("source")
@@ -348,6 +361,7 @@ class DebugService:
                         result.get("sourceReference")
                         or frame_payload.get("sourceReference")
                         or frame_payload.get("source_reference")
+                        or source_reference
                         or 0
                     ),
                 )
@@ -596,8 +610,13 @@ class DebugService:
             raise DebugServiceError(exc.code, exc.message, data=exc.data) from exc
 
     def _breakpoint_from_api(self, source: str, data: dict[str, object]) -> DebugBreakpoint:
+        source_path = self._source_path_from_payload(data.get("source"))
+        if not source_path:
+            raw_path = data.get("path")
+            if isinstance(raw_path, str):
+                source_path = raw_path.strip()
         return DebugBreakpoint(
-            source=str(data.get("source") or source),
+            source=source_path or source,
             line=int(data.get("line") or 0),
             verified=bool(data.get("verified", True)),
             status=str(data.get("status") or ""),
@@ -610,7 +629,11 @@ class DebugService:
         )
 
     async def _set_breakpoints(self, runtime: _Runtime, payload: dict[str, object]) -> None:
-        source = str(payload.get("source") or "").strip()
+        source = self._source_path_from_payload(payload.get("source"))
+        if not source:
+            raw_path = payload.get("path")
+            if isinstance(raw_path, str):
+                source = raw_path.strip()
         raw_items = payload.get("breakpoints", payload.get("lines", []))
         items: list[dict[str, object]] = []
         if isinstance(raw_items, list):
