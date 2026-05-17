@@ -230,7 +230,6 @@ export function FilePreviewDialog({
           >
             <div className="min-w-0">
               <h2 className="truncate text-lg font-semibold text-[var(--text)]">{title}</h2>
-              <p className="mt-1 text-xs text-[var(--muted)]">桌面预览默认最大化显示</p>
             </div>
             <button
               type="button"
