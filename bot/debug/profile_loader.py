@@ -12,6 +12,7 @@ from .models import (
     DebugPrepare,
     DebugProfile,
     DebugProfileV2,
+    DebugProfileV3,
     DebugRemote,
     DebugSourceMap,
     DebugTarget,
@@ -201,6 +202,11 @@ def _source_maps_from_config(items: object, workspace: Path) -> list[DebugSource
 def _capabilities_from_config(data: object) -> DebugCapabilities:
     raw = data if isinstance(data, dict) else {}
     return DebugCapabilities(
+        continue_execution=bool(raw.get("continue", raw.get("continueExecution", True))),
+        pause=bool(raw.get("pause", True)),
+        step_in=bool(raw.get("stepIn", raw.get("step_in", True))),
+        step_out=bool(raw.get("stepOut", raw.get("step_out", True))),
+        next=bool(raw.get("next", True)),
         threads=bool(raw.get("threads", False)),
         variables=bool(raw.get("variables", True)),
         evaluate=bool(raw.get("evaluate", True)),
@@ -247,6 +253,33 @@ def _load_v2_config(root: Path) -> dict[str, Any] | None:
             continue
         data = _load_jsonc(path)
         config = _find_v2_config(data)
+        if config is not None:
+            return config
+    return None
+
+
+def _find_v3_config(data: dict[str, Any]) -> dict[str, Any] | None:
+    base = {key: value for key, value in data.items() if key != "configurations"}
+    spec_version = int(data.get("spec_version") or data.get("specVersion") or 0)
+    if spec_version >= 3 and "configurations" not in data:
+        return data
+    configurations = data.get("configurations")
+    if isinstance(configurations, list):
+        for item in configurations:
+            if not isinstance(item, dict):
+                continue
+            item_spec = int(item.get("spec_version") or item.get("specVersion") or spec_version or 0)
+            if item_spec >= 3:
+                return {**base, **item}
+    return None
+
+
+def _load_v3_config(root: Path) -> dict[str, Any] | None:
+    for path in _debug_config_candidates(root):
+        if not path.is_file():
+            continue
+        data = _load_jsonc(path)
+        config = _find_v3_config(data)
         if config is not None:
             return config
     return None
@@ -336,6 +369,84 @@ def _profile_from_v2_config(root: Path, config: dict[str, Any]) -> DebugProfileV
     )
 
 
+def _expand_launch_defaults(data: object, workspace: Path) -> dict[str, object]:
+    raw = data if isinstance(data, dict) else {}
+    payload: dict[str, object] = {}
+    for key, value in raw.items():
+        if isinstance(value, str):
+            payload[str(key)] = _expand_workspace_path(value, workspace) if _WORKSPACE_TOKEN in value else value
+        elif isinstance(value, list):
+            payload[str(key)] = [str(item) for item in value]
+        elif isinstance(value, dict):
+            payload[str(key)] = {str(k): str(v) for k, v in value.items()}
+        else:
+            payload[str(key)] = value
+    return payload
+
+
+def _profile_from_v3_config(root: Path, config: dict[str, Any]) -> DebugProfileV3:
+    target_raw = config.get("target") if isinstance(config.get("target"), dict) else {}
+    prepare_raw = config.get("prepare") if isinstance(config.get("prepare"), dict) else {}
+    ui_raw = config.get("ui") if isinstance(config.get("ui"), dict) else {}
+    provider_config = config.get("providerConfig") if isinstance(config.get("providerConfig"), dict) else {}
+    program = _expand_workspace_path(_first_string(target_raw.get("program"), config.get("program")), root)
+    cwd = _expand_workspace_path(_first_string(target_raw.get("cwd"), config.get("cwd"), default=_WORKSPACE_TOKEN), root)
+    target = DebugTarget(
+        type=_first_string(target_raw.get("type"), config.get("type"), default="launch"),
+        architecture=_first_string(target_raw.get("architecture"), default=""),
+        program=program,
+        cwd=cwd,
+        args=[str(item) for item in target_raw.get("args", [])] if isinstance(target_raw.get("args"), list) else [],
+        env={str(key): str(value) for key, value in target_raw.get("env", {}).items()} if isinstance(target_raw.get("env"), dict) else {},
+    )
+    prepare = DebugPrepare(
+        command=_first_string(prepare_raw.get("command"), config.get("prepareCommand"), default=""),
+        timeout_seconds=_coerce_float(
+            prepare_raw.get("timeout_seconds", prepare_raw.get("timeoutSeconds", config.get("prepareTimeoutSeconds"))),
+            300,
+        ),
+        problem_matchers=[
+            str(item)
+            for item in prepare_raw.get("problem_matchers", prepare_raw.get("problemMatchers", []))
+        ] if isinstance(prepare_raw.get("problem_matchers", prepare_raw.get("problemMatchers", [])), list) else [],
+    )
+    stop_at_entry = bool(ui_raw.get("stopAtEntry", ui_raw.get("stop_at_entry", config.get("stopAtEntry", False))))
+    default_panels_raw = ui_raw.get("defaultPanels", ui_raw.get("default_panels", ["source", "stack", "variables", "console"]))
+    launch_schema = config.get("launchSchema") if isinstance(config.get("launchSchema"), dict) else {}
+    launch_defaults = _expand_launch_defaults(config.get("launchDefaults"), root)
+    source_maps = _source_maps_from_config(config.get("sourceMaps", config.get("source_maps", [])), root)
+    return DebugProfileV3(
+        kind=_first_string(config.get("kind"), config.get("type"), default=_first_string(config.get("language"), default="generic")),
+        workspace=str(root),
+        config_name=_first_string(config.get("configName"), config.get("name"), default="Debug"),
+        program=program,
+        cwd=cwd,
+        mi_mode=_first_string(config.get("MIMode")),
+        mi_debugger_path=_first_string(config.get("miDebuggerPath")),
+        compile_commands=None,
+        prepare_command=prepare.command,
+        stop_at_entry=stop_at_entry,
+        setup_commands=[],
+        remote_host="",
+        remote_user="",
+        remote_dir="",
+        remote_port=0,
+        spec_version=max(3, int(config.get("spec_version") or config.get("specVersion") or 3)),
+        language=_first_string(config.get("language"), default=""),
+        provider_id=_first_string(config.get("providerId"), default=""),
+        provider_label=_first_string(config.get("providerLabel"), default=_first_string(config.get("providerId"), default="")),
+        target=target,
+        prepare=prepare,
+        source_maps=source_maps,
+        capabilities=_capabilities_from_config(config.get("capabilities", {})),
+        open_source_on_pause=bool(ui_raw.get("openSourceOnPause", ui_raw.get("open_source_on_pause", True))),
+        default_panels=[str(item) for item in default_panels_raw] if isinstance(default_panels_raw, list) else ["source", "stack", "variables", "console"],
+        provider_config={str(key): value for key, value in provider_config.items()},
+        launch_schema={str(key): value for key, value in launch_schema.items()},
+        launch_defaults=launch_defaults,
+    )
+
+
 def _resolve_remote_server(
     value: str,
     *,
@@ -419,8 +530,20 @@ def _require_v1_debug_profile(root: Path) -> DebugProfileV2:
         remote_port=remote_port,
         spec_version=2,
         language="cpp",
+        provider_id="cpp-gdb",
+        provider_label="C++ GDB",
         source_maps=source_maps,
     )
+
+
+def require_debug_profile_v3(workspace: str | Path) -> DebugProfileV3:
+    root = Path(workspace).resolve()
+    if not root.is_dir():
+        raise DebugProfileLoadError("workspace_not_supported", "当前工作目录不支持调试")
+    config = _load_v3_config(root)
+    if config is None:
+        raise DebugProfileLoadError("workspace_not_supported", "当前工作目录无可用调试配置")
+    return _profile_from_v3_config(root, config)
 
 
 def require_debug_profile_v2(workspace: str | Path) -> DebugProfileV2:
@@ -434,6 +557,10 @@ def require_debug_profile_v2(workspace: str | Path) -> DebugProfileV2:
 
 
 def require_debug_profile(workspace: str | Path) -> DebugProfile:
+    root = Path(workspace).resolve()
+    v3_config = _load_v3_config(root) if root.is_dir() else None
+    if v3_config is not None:
+        return _profile_from_v3_config(root, v3_config)
     return require_debug_profile_v2(workspace)
 
 
@@ -444,5 +571,15 @@ def load_debug_profile_v2(workspace: str | Path) -> DebugProfileV2 | None:
         return None
 
 
+def load_debug_profile_v3(workspace: str | Path) -> DebugProfileV3 | None:
+    try:
+        return require_debug_profile_v3(workspace)
+    except DebugProfileLoadError:
+        return None
+
+
 def load_debug_profile(workspace: str | Path) -> DebugProfile | None:
-    return load_debug_profile_v2(workspace)
+    try:
+        return require_debug_profile(workspace)
+    except DebugProfileLoadError:
+        return None

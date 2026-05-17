@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 
 DebugPhase = str
+
+
+def _clone_dict(data: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in data.items()}
 
 
 @dataclass(frozen=True)
@@ -99,6 +104,11 @@ class DebugGdb:
 
 @dataclass(frozen=True)
 class DebugCapabilities:
+    continue_execution: bool = True
+    pause: bool = True
+    step_in: bool = True
+    step_out: bool = True
+    next: bool = True
     threads: bool = False
     variables: bool = True
     evaluate: bool = True
@@ -111,6 +121,15 @@ class DebugCapabilities:
 
     def to_api(self) -> dict[str, object]:
         return {
+            "continue": self.continue_execution,
+            "continueExecution": self.continue_execution,
+            "continue_execution": self.continue_execution,
+            "pause": self.pause,
+            "stepIn": self.step_in,
+            "step_in": self.step_in,
+            "stepOut": self.step_out,
+            "step_out": self.step_out,
+            "next": self.next,
             "threads": self.threads,
             "variables": self.variables,
             "evaluate": self.evaluate,
@@ -169,6 +188,8 @@ class DebugProfile:
     setup_command_ignore_failures: list[bool] = field(default_factory=list)
     spec_version: int = 2
     language: str = "cpp"
+    provider_id: str = "cpp-gdb"
+    provider_label: str = "C++ GDB"
     target: DebugTarget | None = None
     prepare: DebugPrepare | None = None
     remote: DebugRemote | None = None
@@ -177,6 +198,9 @@ class DebugProfile:
     capabilities: DebugCapabilities = field(default_factory=DebugCapabilities)
     open_source_on_pause: bool = True
     default_panels: list[str] = field(default_factory=lambda: ["source", "stack", "variables", "console"])
+    provider_config: dict[str, object] = field(default_factory=dict)
+    launch_schema: dict[str, object] = field(default_factory=dict)
+    launch_defaults: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.target is None:
@@ -203,6 +227,27 @@ class DebugProfile:
                 for index, command in enumerate(self.setup_commands)
             ]
             object.__setattr__(self, "gdb", DebugGdb(path=self.mi_debugger_path, setup_commands=setup_commands))
+        if not self.provider_config:
+            provider_config: dict[str, object] = {}
+            if self.provider_id == "cpp-gdb":
+                provider_config = {
+                    "gdb": self.gdb.to_api() if self.gdb else {},
+                    "remote": self.remote.to_api() if self.remote else {},
+                }
+            object.__setattr__(self, "provider_config", provider_config)
+        if not self.launch_defaults:
+            object.__setattr__(
+                self,
+                "launch_defaults",
+                {
+                    "program": self.target.program if self.target else self.program,
+                    "cwd": self.target.cwd if self.target else self.cwd,
+                    "args": list(self.target.args) if self.target else [],
+                    "env": dict(self.target.env) if self.target else {},
+                    "stopAtEntry": self.stop_at_entry,
+                    "stop_at_entry": self.stop_at_entry,
+                },
+            )
 
     def with_remote(
         self,
@@ -226,7 +271,7 @@ class DebugProfile:
             dir=self.remote_dir,
             port=self.remote_port,
         )
-        return replace(
+        updated = replace(
             self,
             remote_host=next_remote_host,
             remote_user=next_remote_user,
@@ -243,6 +288,16 @@ class DebugProfile:
                 port=next_remote_port,
             ),
         )
+        if updated.provider_id == "cpp-gdb":
+            return replace(
+                updated,
+                provider_config={
+                    **_clone_dict(updated.provider_config),
+                    "gdb": updated.gdb.to_api() if updated.gdb else {},
+                    "remote": updated.remote.to_api() if updated.remote else {},
+                },
+            )
+        return updated
 
     def with_source_maps(self, source_maps: list[DebugSourceMap]) -> DebugProfile:
         return replace(self, source_maps=list(source_maps))
@@ -254,6 +309,7 @@ class DebugProfile:
             "spec_version": self.spec_version,
             "language": self.language,
             "workspace": self.workspace,
+            "configName": self.config_name,
             "config_name": self.config_name,
             "program": self.program,
             "cwd": self.cwd,
@@ -261,6 +317,7 @@ class DebugProfile:
             "mi_debugger_path": self.mi_debugger_path,
             "compile_commands": self.compile_commands,
             "prepare_command": self.prepare_command,
+            "stopAtEntry": self.stop_at_entry,
             "stop_at_entry": self.stop_at_entry,
             "setup_commands": list(self.setup_commands),
             "setup_command_ignore_failures": list(self.setup_command_ignore_failures),
@@ -268,6 +325,10 @@ class DebugProfile:
             "remote_user": self.remote_user,
             "remote_dir": self.remote_dir,
             "remote_port": self.remote_port,
+            "providerId": self.provider_id,
+            "provider_id": self.provider_id,
+            "providerLabel": self.provider_label,
+            "provider_label": self.provider_label,
             "target": self.target.to_api() if self.target else {},
             "prepare": self.prepare.to_api() if self.prepare else {},
             "remote": self.remote.to_api() if self.remote else {},
@@ -283,11 +344,22 @@ class DebugProfile:
                 "defaultPanels": list(self.default_panels),
                 "default_panels": list(self.default_panels),
             },
+            "providerConfig": _clone_dict(self.provider_config),
+            "provider_config": _clone_dict(self.provider_config),
+            "launchSchema": _clone_dict(self.launch_schema),
+            "launch_schema": _clone_dict(self.launch_schema),
+            "launchDefaults": _clone_dict(self.launch_defaults),
+            "launch_defaults": _clone_dict(self.launch_defaults),
         }
 
 
 @dataclass(frozen=True)
 class DebugProfileV2(DebugProfile):
+    pass
+
+
+@dataclass(frozen=True)
+class DebugProfileV3(DebugProfile):
     pass
 
 
@@ -335,6 +407,7 @@ class DebugFrame:
     source_resolved: bool = True
     source_reason: str = ""
     original_source: str = ""
+    source_reference: int = 0
 
     def to_api(self) -> dict[str, object]:
         return {
@@ -348,6 +421,8 @@ class DebugFrame:
             "source_reason": self.source_reason,
             "originalSource": self.original_source,
             "original_source": self.original_source,
+            "sourceReference": self.source_reference,
+            "source_reference": self.source_reference,
         }
 
 
@@ -386,6 +461,7 @@ class DebugVariable:
 class DebugState:
     phase: DebugPhase = "idle"
     message: str = ""
+    detail_phase: str = ""
     breakpoints: list[DebugBreakpoint] = field(default_factory=list)
     frames: list[DebugFrame] = field(default_factory=list)
     current_frame_id: str = ""
@@ -403,6 +479,8 @@ class DebugState:
         return {
             "phase": self.phase,
             "message": self.message,
+            "detailPhase": self.detail_phase,
+            "detail_phase": self.detail_phase,
             "breakpoints": [item.to_api() for item in self.breakpoints],
             "frames": [item.to_api() for item in self.frames],
             "current_frame_id": self.current_frame_id,

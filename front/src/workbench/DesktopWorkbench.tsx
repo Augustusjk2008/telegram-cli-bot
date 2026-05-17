@@ -37,6 +37,7 @@ import { useEditorTabs } from "./useEditorTabs";
 import { useFileTree } from "./useFileTree";
 import { useWorkbenchSession } from "./useWorkbenchSession";
 import { useWorkbenchState } from "./useWorkbenchState";
+import { toWorkspaceRelativeSourcePath } from "./debugSourcePath";
 import {
   clampPaneState,
   COLLAPSED_SIDEBAR_SIZE_PX,
@@ -211,8 +212,8 @@ export function DesktopWorkbench({
     botAlias,
     client,
     enabled: !structureOnly && layoutState.sidebarView === "debug",
-    onRevealLocation: ({ sourcePath }) => {
-      void tabs.openFile(sourcePath);
+    onRevealLocation: ({ sourcePath, line }) => {
+      void openWorkspaceFile(toWorkspaceRelativeSourcePath(sourcePath, fileTree.rootPath), line || undefined);
     },
   });
 

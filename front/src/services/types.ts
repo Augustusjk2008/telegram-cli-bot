@@ -1193,8 +1193,18 @@ export type PersistentTerminalSnapshot = {
 
 export type DebugProfile = {
   specVersion?: number;
+  providerId: string;
+  providerLabel: string;
   language?: string;
   configName: string;
+  workspace?: string;
+  target: Record<string, unknown>;
+  prepare?: Record<string, unknown>;
+  capabilities: DebugCapabilityMap;
+  ui?: Record<string, unknown>;
+  launchSchema: DebugLaunchSchema;
+  launchDefaults: Record<string, unknown>;
+  providerConfig?: Record<string, unknown>;
   program: string;
   cwd: string;
   miDebuggerPath: string;
@@ -1206,12 +1216,43 @@ export type DebugProfile = {
   remoteUser: string;
   remoteDir: string;
   remotePort: number;
-  target?: Record<string, unknown>;
-  prepare?: Record<string, unknown>;
   remote?: Record<string, unknown>;
   gdb?: Record<string, unknown>;
   sourceMaps?: Array<{ remote: string; local: string }>;
-  capabilities?: Record<string, boolean>;
+};
+
+export type DebugPhase = "idle" | "starting" | "running" | "paused" | "stopping" | "error";
+
+export type DebugCapabilityMap = {
+  continue?: boolean;
+  continueExecution?: boolean;
+  pause?: boolean;
+  next?: boolean;
+  stepIn?: boolean;
+  stepOut?: boolean;
+  variables?: boolean;
+  evaluate?: boolean;
+  threads?: boolean;
+  functionBreakpoints?: boolean;
+  conditionalBreakpoints?: boolean;
+  logpoints?: boolean;
+  memory?: boolean;
+  registers?: boolean;
+  disassembly?: boolean;
+};
+
+export type DebugLaunchField = {
+  key: string;
+  label: string;
+  type: "string" | "path" | "number" | "boolean" | "stringList" | "env" | "select";
+  required?: boolean;
+  secret?: boolean;
+  placeholder?: string;
+  options?: Array<{ value: string; label: string }>;
+};
+
+export type DebugLaunchSchema = {
+  fields: DebugLaunchField[];
 };
 
 export type DebugBreakpoint = {
@@ -1250,7 +1291,8 @@ export type DebugVariable = {
 };
 
 export type DebugState = {
-  phase: "idle" | "preparing" | "deploying" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
+  phase: DebugPhase;
+  detailPhase?: string;
   message: string;
   breakpoints: DebugBreakpoint[];
   frames: DebugFrame[];

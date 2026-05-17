@@ -15,6 +15,14 @@ def _line_from_payload(payload: dict[str, object] | None) -> int:
         return 0
 
 
+def _source_reference_from_payload(payload: dict[str, object] | None) -> int:
+    data = payload or {}
+    try:
+        return int(data.get("sourceReference", data.get("source_reference", 0)) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _is_unknown_source(source: str, line: int) -> bool:
     candidate = source.strip()
     return not candidate or candidate == "??" or (candidate.startswith("??") and line <= 0) or line <= 0
@@ -116,7 +124,16 @@ def resolve_source(
     payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     line = _line_from_payload(payload)
+    source_reference = _source_reference_from_payload(payload)
     candidate = str(source or "").strip()
+    if source_reference > 0 and not candidate:
+        return {
+            "path": "",
+            "line": line,
+            "resolved": False,
+            "reason": "source_reference",
+            "sourceReference": source_reference,
+        }
     if _is_unknown_source(candidate, line):
         return {"path": "", "line": line, "resolved": False, "reason": "unknown_source"}
 

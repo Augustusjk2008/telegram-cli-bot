@@ -40,7 +40,7 @@ export type ChatWorkbenchStatus = {
 };
 
 export type DebugWorkbenchStatus = {
-  phase: "idle" | "preparing" | "deploying" | "starting_gdb" | "connecting_remote" | "paused" | "running" | "terminating" | "error";
+  phase: "idle" | "starting" | "running" | "paused" | "stopping" | "error";
   connectionText: string;
   targetText?: string;
   currentSourcePath?: string;

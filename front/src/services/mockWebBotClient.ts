@@ -3035,7 +3035,43 @@ export class MockWebBotClient implements WebBotClient {
 
   async getDebugProfile(_botAlias: string): Promise<DebugProfile | null> {
     return {
+      specVersion: 3,
+      providerId: "cpp-gdb",
+      providerLabel: "C++ GDB",
+      language: "cpp",
       configName: "(gdb) Remote Debug",
+      target: {
+        program: "H:\\Resources\\RTLinux\\Demos\\MB_DDF\\build\\aarch64\\Debug\\MB_DDF",
+        cwd: "H:\\Resources\\RTLinux\\Demos\\MB_DDF",
+      },
+      capabilities: {
+        continue: true,
+        pause: true,
+        next: true,
+        stepIn: true,
+        stepOut: true,
+        variables: true,
+        evaluate: true,
+      },
+      launchSchema: {
+        fields: [
+          { key: "prepareCommand", label: "准备命令", type: "string" },
+          { key: "remoteHost", label: "host", type: "string" },
+          { key: "remoteUser", label: "user", type: "string" },
+          { key: "remoteDir", label: "remoteDir", type: "string" },
+          { key: "remotePort", label: "port", type: "number" },
+          { key: "password", label: "password", type: "string", secret: true },
+          { key: "stopAtEntry", label: "入口暂停", type: "boolean" },
+        ],
+      },
+      launchDefaults: {
+        prepareCommand: ".\\debug.bat",
+        remoteHost: "192.168.1.29",
+        remoteUser: "root",
+        remoteDir: "/home/sast8/tmp",
+        remotePort: 1234,
+        stopAtEntry: true,
+      },
       program: "H:\\Resources\\RTLinux\\Demos\\MB_DDF\\build\\aarch64\\Debug\\MB_DDF",
       cwd: "H:\\Resources\\RTLinux\\Demos\\MB_DDF",
       miDebuggerPath: "D:\\Toolchain\\aarch64-none-linux-gnu-gdb.exe",
@@ -3052,12 +3088,18 @@ export class MockWebBotClient implements WebBotClient {
       remoteUser: "root",
       remoteDir: "/home/sast8/tmp",
       remotePort: 1234,
+      providerConfig: {
+        gdb: {
+          path: "D:\\Toolchain\\aarch64-none-linux-gnu-gdb.exe",
+        },
+      },
     };
   }
 
   async getDebugState(_botAlias: string): Promise<DebugState> {
     return {
       phase: "idle",
+      detailPhase: "",
       message: "",
       breakpoints: [],
       frames: [],

@@ -119,6 +119,44 @@ test("real web bot client maps debug profile and state payloads", async () => {
   expect(state.variables["frame-0:locals"]?.[0]?.variablesReference).toBe("var-1");
 });
 
+test("real web bot client maps provider debug profile fields", async () => {
+  fetchMock.mockResolvedValueOnce(jsonResponse({
+    specVersion: 3,
+    providerId: "python-debugpy",
+    providerLabel: "Python debugpy",
+    language: "python",
+    configName: "Python: Current File",
+    target: {
+      program: "C:/demo/main.py",
+      cwd: "C:/demo",
+      args: ["--dev"],
+      env: { APP_ENV: "dev" },
+    },
+    launchSchema: {
+      fields: [{ key: "program", label: "入口文件", type: "path", required: true }],
+    },
+    launchDefaults: { program: "C:/demo/main.py", args: [] },
+    capabilities: {
+      continue: true,
+      pause: true,
+      next: true,
+      stepIn: true,
+      stepOut: true,
+      variables: true,
+      evaluate: true,
+    },
+    providerConfig: { dap: { module: "debugpy.adapter" } },
+  }));
+
+  const client = new RealWebBotClient();
+  const profile = await client.getDebugProfile("main");
+
+  expect(profile?.providerId).toBe("python-debugpy");
+  expect(profile?.providerLabel).toBe("Python debugpy");
+  expect(profile?.launchSchema.fields[0].key).toBe("program");
+  expect(profile?.capabilities.continue).toBe(true);
+});
+
 test("createDebugSession connects with token query and relays JSON events", async () => {
   const events: Array<{ type: string }> = [];
   const session = createDebugSession({

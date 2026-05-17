@@ -91,7 +91,9 @@ import type {
   ConversationSummary,
   CreateBotInput,
   DebugBreakpoint,
+  DebugCapabilityMap,
   DebugFrame,
+  DebugLaunchSchema,
   DebugProfile,
   DebugScope,
   DebugState,
@@ -2415,9 +2417,24 @@ function mapDebugVariable(raw: Record<string, unknown>): DebugVariable {
   };
 }
 
+function mapDebugPhase(rawPhase: unknown): DebugState["phase"] {
+  const phase = String(rawPhase || "idle");
+  if (phase === "preparing" || phase === "deploying" || phase === "starting_gdb" || phase === "connecting_remote") {
+    return "starting";
+  }
+  if (phase === "terminating") {
+    return "stopping";
+  }
+  if (phase === "idle" || phase === "starting" || phase === "running" || phase === "paused" || phase === "stopping" || phase === "error") {
+    return phase;
+  }
+  return "idle";
+}
+
 function mapDebugState(raw: Record<string, unknown>): DebugState {
   return {
-    phase: raw.phase as DebugState["phase"],
+    phase: mapDebugPhase(raw.phase),
+    detailPhase: String(raw.detailPhase || raw.detail_phase || ""),
     message: String(raw.message || ""),
     breakpoints: Array.isArray(raw.breakpoints)
       ? raw.breakpoints
@@ -3239,31 +3256,48 @@ export class RealWebBotClient implements WebBotClient {
       return null;
     }
     const rawSourceMaps = data.sourceMaps || data.source_maps;
+    const target = data.target && typeof data.target === "object" ? data.target as Record<string, unknown> : {};
+    const prepare = data.prepare && typeof data.prepare === "object" ? data.prepare as Record<string, unknown> : {};
+    const launchSchema = data.launchSchema && typeof data.launchSchema === "object"
+      ? data.launchSchema as DebugLaunchSchema
+      : { fields: [] };
+    const capabilities = data.capabilities && typeof data.capabilities === "object"
+      ? data.capabilities as DebugCapabilityMap
+      : {};
+    const remoteConfig = data.remote && typeof data.remote === "object" ? data.remote as Record<string, unknown> : undefined;
+    const ui = data.ui && typeof data.ui === "object" ? data.ui as Record<string, unknown> : {};
     return {
-      specVersion: Number(data.specVersion || data.spec_version || 1),
-      language: String(data.language || "cpp"),
-      configName: String(data.config_name || ""),
-      program: String(data.program || ""),
-      cwd: String(data.cwd || ""),
-      miDebuggerPath: String(data.mi_debugger_path || ""),
-      compileCommands: typeof data.compile_commands === "string" ? data.compile_commands : undefined,
-      prepareCommand: String(data.prepare_command || ".\\debug.bat"),
-      stopAtEntry: Boolean(data.stop_at_entry),
+      specVersion: Number(data.specVersion || data.spec_version || 0) || undefined,
+      providerId: String(data.providerId || data.provider_id || "cpp-gdb"),
+      providerLabel: String(data.providerLabel || data.provider_label || "C++ GDB"),
+      language: String(data.language || ""),
+      configName: String(data.configName || data.config_name || ""),
+      workspace: String(data.workspace || ""),
+      target,
+      prepare,
+      capabilities,
+      ui,
+      launchSchema,
+      launchDefaults: data.launchDefaults && typeof data.launchDefaults === "object" ? data.launchDefaults as Record<string, unknown> : {},
+      providerConfig: data.providerConfig && typeof data.providerConfig === "object" ? data.providerConfig as Record<string, unknown> : {},
+      program: String(data.program || target.program || ""),
+      cwd: String(data.cwd || target.cwd || ""),
+      miDebuggerPath: String(data.mi_debugger_path || data.miDebuggerPath || ""),
+      compileCommands: String(data.compile_commands || data.compileCommands || ""),
+      prepareCommand: String(data.prepare_command || data.prepareCommand || prepare.command || ""),
+      stopAtEntry: Boolean(data.stop_at_entry ?? data.stopAtEntry ?? ui.stopAtEntry ?? true),
       setupCommands: Array.isArray(data.setup_commands) ? data.setup_commands.map((item) => String(item)) : [],
-      remoteHost: String(data.remote_host || ""),
-      remoteUser: String(data.remote_user || ""),
-      remoteDir: String(data.remote_dir || ""),
-      remotePort: Number(data.remote_port || 0),
-      target: data.target && typeof data.target === "object" ? data.target as Record<string, unknown> : undefined,
-      prepare: data.prepare && typeof data.prepare === "object" ? data.prepare as Record<string, unknown> : undefined,
-      remote: data.remote && typeof data.remote === "object" ? data.remote as Record<string, unknown> : undefined,
+      remoteHost: String(data.remote_host || data.remoteHost || remoteConfig?.host || ""),
+      remoteUser: String(data.remote_user || data.remoteUser || remoteConfig?.user || ""),
+      remoteDir: String(data.remote_dir || data.remoteDir || remoteConfig?.dir || ""),
+      remotePort: Number(data.remote_port || data.remotePort || remoteConfig?.port || 0),
+      remote: remoteConfig,
       gdb: data.gdb && typeof data.gdb === "object" ? data.gdb as Record<string, unknown> : undefined,
       sourceMaps: Array.isArray(rawSourceMaps)
         ? rawSourceMaps
           .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
           .map((item) => ({ remote: String(item.remote || ""), local: String(item.local || "") }))
-        : undefined,
-      capabilities: data.capabilities && typeof data.capabilities === "object" ? data.capabilities as Record<string, boolean> : undefined,
+        : [],
     };
   }
 

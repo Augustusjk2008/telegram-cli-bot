@@ -31,16 +31,53 @@ test("mobile debug screen renders controls, views, and collapsed remote params",
   expect(screen.getByRole("button", { name: "日志" })).toBeInTheDocument();
   expect(screen.queryByLabelText("host")).not.toBeInTheDocument();
 
-  await user.click(screen.getByText("远端参数"));
+  await user.click(screen.getByText("启动参数"));
 
   expect(screen.getByLabelText("host")).toHaveValue("192.168.1.29");
   expect(screen.getByLabelText("准备命令")).toHaveValue(".\\debug.bat");
+});
+
+test("mobile debug screen renders provider schema fields", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getDebugProfile").mockResolvedValue({
+    specVersion: 3,
+    providerId: "python-debugpy",
+    providerLabel: "Python debugpy",
+    language: "python",
+    configName: "Python: Current File",
+    target: { program: "C:/demo/main.py", cwd: "C:/demo" },
+    prepare: {},
+    capabilities: { continue: true, pause: true, variables: true, evaluate: true },
+    ui: {},
+    launchSchema: { fields: [{ key: "program", label: "入口文件", type: "path", required: true }] },
+    launchDefaults: { program: "C:/demo/main.py" },
+    program: "C:/demo/main.py",
+    cwd: "C:/demo",
+    miDebuggerPath: "",
+    prepareCommand: "",
+    stopAtEntry: true,
+    setupCommands: [],
+    remoteHost: "",
+    remoteUser: "",
+    remoteDir: "",
+    remotePort: 0,
+    providerConfig: {},
+  });
+
+  render(<MobileDebugScreen authToken="123" botAlias="main" client={client} />);
+
+  expect(await screen.findByTestId("mobile-debug-screen")).toBeInTheDocument();
+  await user.click(screen.getByText("启动参数"));
+  expect(screen.getByLabelText("入口文件")).toHaveValue("C:/demo/main.py");
+  expect(screen.queryByLabelText("host")).not.toBeInTheDocument();
 });
 
 test("mobile debug screen opens current frame source", async () => {
   const client = new MockWebBotClient();
   const pausedState: DebugState = {
     phase: "paused",
+    detailPhase: "",
     message: "调试已暂停",
     breakpoints: [{ source: "src/main.cpp", line: 10, verified: true }],
     frames: [{ id: "frame-0", name: "main", source: "src/main.cpp", line: 10 }],

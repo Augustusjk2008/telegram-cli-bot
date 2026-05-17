@@ -319,3 +319,259 @@ async def test_pause_uses_stopped_event_returned_by_interrupt(
 
     assert state["phase"] == "paused"
     assert state["frames"][0]["line"] == 2
+
+
+@pytest.mark.asyncio
+async def test_paused_state_preserves_dap_source_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "debug.json").write_text(
+        """
+{
+  "specVersion": 3,
+  "providerId": "python-debugpy",
+  "language": "python",
+  "configName": "Python",
+  "target": {
+    "program": "${workspaceFolder}/main.py",
+    "cwd": "${workspaceFolder}"
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "bot.debug.service.get_working_directory",
+        lambda _manager, _alias, _user_id: {"working_dir": str(tmp_path)},
+    )
+
+    class FakeSession:
+        async def launch(self, _payload: dict[str, object]) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def stack_trace(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": "1",
+                    "name": "main",
+                    "source": "",
+                    "line": 5,
+                    "sourceReference": 99,
+                }
+            ]
+
+        async def scopes(self, _frame_id: str) -> list[dict[str, object]]:
+            return []
+
+        async def variables(self, _variables_reference: str) -> list[dict[str, object]]:
+            return []
+
+        def events(self):  # type: ignore[no-untyped-def]
+            async def _iter():
+                if False:
+                    yield {}
+
+            return _iter()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeProvider:
+        provider_id = "python-debugpy"
+
+        def can_handle(self, profile: DebugProfile) -> bool:
+            return profile.provider_id == self.provider_id
+
+        def create_session(self, _profile: DebugProfile) -> FakeSession:
+            return FakeSession()
+
+    service = DebugService(object(), providers=[FakeProvider()], poll_interval_seconds=60)
+    try:
+        await service.handle_ws_message("main", 1001, {"type": "launch", "payload": {}})
+        runtime = await service._get_runtime("main", 1001)
+        assert runtime.session is not None
+        await service._refresh_paused_state(runtime)
+        state = await service.get_state("main", 1001)
+    finally:
+        await service.shutdown()
+
+    assert state["frames"][0]["sourceResolved"] is False
+    assert state["frames"][0]["sourceReason"] == "source_reference"
+    assert state["frames"][0]["sourceReference"] == 99
+
+
+@pytest.mark.asyncio
+async def test_non_gdb_provider_launch_returns_running_when_no_stop_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "debug.json").write_text(
+        """
+{
+  "specVersion": 3,
+  "providerId": "python-debugpy",
+  "language": "python",
+  "configName": "Python",
+  "target": {
+    "program": "${workspaceFolder}/main.py",
+    "cwd": "${workspaceFolder}"
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "bot.debug.service.get_working_directory",
+        lambda _manager, _alias, _user_id: {"working_dir": str(tmp_path)},
+    )
+
+    class FakeSession:
+        async def launch(self, _payload: dict[str, object]) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        def events(self):  # type: ignore[no-untyped-def]
+            async def _iter():
+                if False:
+                    yield {}
+
+            return _iter()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeProvider:
+        provider_id = "python-debugpy"
+        provider_label = "Python debugpy"
+
+        def can_handle(self, profile: DebugProfile) -> bool:
+            return profile.provider_id == self.provider_id
+
+        def create_session(self, _profile: DebugProfile) -> FakeSession:
+            return FakeSession()
+
+    service = DebugService(object(), providers=[FakeProvider()], poll_interval_seconds=60)
+    try:
+        await service.handle_ws_message("main", 1001, {"type": "launch", "payload": {}})
+        state = await service.get_state("main", 1001)
+    finally:
+        await service.shutdown()
+
+    assert state["phase"] == "running"
+    assert state["detailPhase"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_launch_passes_dynamic_provider_fields_to_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "debug.json").write_text(
+        """
+{
+  "specVersion": 3,
+  "providerId": "godot",
+  "language": "gdscript",
+  "configName": "Godot",
+  "target": {
+    "program": "godot",
+    "cwd": "${workspaceFolder}"
+  },
+  "launchDefaults": {
+    "scene": "res://main.tscn",
+    "debugCollisions": false
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "project.godot").write_text("[application]\n", encoding="utf-8")
+    seen_payloads: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "bot.debug.service.get_working_directory",
+        lambda _manager, _alias, _user_id: {"working_dir": str(tmp_path)},
+    )
+
+    class FakeSession:
+        async def launch(self, payload: dict[str, object]) -> None:
+            seen_payloads.append(dict(payload))
+
+        async def stop(self) -> None:
+            return None
+
+        def events(self):  # type: ignore[no-untyped-def]
+            async def _iter():
+                if False:
+                    yield {}
+
+            return _iter()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeProvider:
+        provider_id = "godot"
+        provider_label = "Godot"
+
+        def can_handle(self, profile: DebugProfile) -> bool:
+            return profile.provider_id == self.provider_id
+
+        def create_session(self, _profile: DebugProfile) -> FakeSession:
+            return FakeSession()
+
+    service = DebugService(object(), providers=[FakeProvider()], poll_interval_seconds=60)
+    try:
+        await service.handle_ws_message(
+            "main",
+            1001,
+            {
+                "type": "launch",
+                "payload": {
+                    "scene": "res://test_scene.tscn",
+                    "debugCollisions": True,
+                    "customGodotFlag": "value",
+                },
+            },
+        )
+    finally:
+        await service.shutdown()
+
+    assert seen_payloads[0]["scene"] == "res://test_scene.tscn"
+    assert seen_payloads[0]["debugCollisions"] is True
+    assert seen_payloads[0]["customGodotFlag"] == "value"
+
+
+@pytest.mark.asyncio
+async def test_provider_output_events_are_appended_to_prepare_logs() -> None:
+    service = DebugService(object(), providers=[], poll_interval_seconds=60)
+    runtime = await service._get_runtime("main", 1001)
+
+    await service._apply_debug_event(
+        runtime,
+        {"type": "output", "payload": {"category": "stdout", "output": "Godot started"}},
+    )
+
+    assert runtime.prepare_logs == ["Godot started"]
+
+
+@pytest.mark.asyncio
+async def test_terminated_event_moves_runtime_back_to_idle() -> None:
+    service = DebugService(object(), providers=[], poll_interval_seconds=60)
+    runtime = await service._get_runtime("main", 1001)
+    runtime.state.phase = "running"
+
+    await service._apply_debug_event(runtime, {"type": "terminated", "payload": {"exitCode": 0}})
+
+    assert runtime.state.phase == "idle"
+    assert runtime.state.message == "调试已结束"

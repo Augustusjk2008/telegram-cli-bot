@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createDebugSession, type DebugSessionEvent, type DebugSessionHandle } from "../services/debugSession";
 import type {
   DebugBreakpoint,
+  DebugCapabilityMap,
   DebugFrame,
   DebugProfile,
   DebugScope,
@@ -9,10 +10,12 @@ import type {
   DebugVariable,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { buildDebugLaunchForm, type DebugLaunchForm } from "./debugLaunchSchema";
 import type { DebugWorkbenchStatus } from "./workbenchTypes";
 
 const EMPTY_STATE: DebugState = {
   phase: "idle",
+  detailPhase: "",
   message: "",
   breakpoints: [],
   frames: [],
@@ -21,17 +24,7 @@ const EMPTY_STATE: DebugState = {
   variables: {},
 };
 
-const EMPTY_LAUNCH_FORM = {
-  prepareCommand: "",
-  remoteHost: "",
-  remoteUser: "",
-  remoteDir: "",
-  remotePort: "",
-  password: "",
-  stopAtEntry: true,
-};
-
-type DebugLaunchForm = typeof EMPTY_LAUNCH_FORM;
+const EMPTY_LAUNCH_FORM: DebugLaunchForm = {};
 
 type RevealLocation = {
   sourcePath: string;
@@ -74,7 +67,8 @@ function mapDebugVariable(raw: Record<string, unknown>): DebugVariable {
 
 function mapDebugState(raw: Record<string, unknown>): DebugState {
   return {
-    phase: raw.phase as DebugState["phase"],
+    phase: mapDebugPhase(raw.phase),
+    detailPhase: String(raw.detailPhase || raw.detail_phase || ""),
     message: String(raw.message || ""),
     breakpoints: Array.isArray(raw.breakpoints)
       ? raw.breakpoints
@@ -128,11 +122,22 @@ function mapDebugState(raw: Record<string, unknown>): DebugState {
   };
 }
 
-function statusText(phase: DebugState["phase"]) {
-  if (phase === "preparing") {
-    return "调试准备中";
+function mapDebugPhase(rawPhase: unknown): DebugState["phase"] {
+  const phase = String(rawPhase || "idle");
+  if (phase === "preparing" || phase === "deploying" || phase === "starting_gdb" || phase === "connecting_remote") {
+    return "starting";
   }
-  if (phase === "deploying" || phase === "starting_gdb" || phase === "connecting_remote") {
+  if (phase === "terminating") {
+    return "stopping";
+  }
+  if (phase === "idle" || phase === "starting" || phase === "running" || phase === "paused" || phase === "stopping" || phase === "error") {
+    return phase;
+  }
+  return "idle";
+}
+
+function statusText(phase: DebugState["phase"]) {
+  if (phase === "starting") {
     return "调试连接中";
   }
   if (phase === "paused") {
@@ -141,7 +146,7 @@ function statusText(phase: DebugState["phase"]) {
   if (phase === "running") {
     return "调试运行中";
   }
-  if (phase === "terminating") {
+  if (phase === "stopping") {
     return "调试停止中";
   }
   if (phase === "error") {
@@ -152,6 +157,21 @@ function statusText(phase: DebugState["phase"]) {
 
 function currentFrame(state: DebugState) {
   return state.frames.find((item) => item.id === state.currentFrameId) || state.frames[0] || null;
+}
+
+function normalizeLaunchPayloadValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+  return value;
+}
+
+function capabilityEnabled(capabilities: DebugCapabilityMap | undefined, key: keyof DebugCapabilityMap, fallback = true) {
+  if (!capabilities) {
+    return fallback;
+  }
+  const value = capabilities[key];
+  return typeof value === "boolean" ? value : fallback;
 }
 
 export function useDebugSession({
@@ -285,8 +305,9 @@ export function useDebugSession({
 
   async function ensureSession() {
     setActivated(true);
-    if (!sessionRef.current) {
-      sessionRef.current = createDebugSession({
+    let session = sessionRef.current;
+    if (!session) {
+      session = createDebugSession({
         token: authToken,
         botAlias,
         onEvent: (event) => eventHandlerRef.current(event),
@@ -298,9 +319,10 @@ export function useDebugSession({
           }));
         },
       });
+      sessionRef.current = session;
     }
-    await sessionRef.current.connect();
-    return sessionRef.current;
+    await session.connect();
+    return session;
   }
 
   async function sendCommand(type: string, payload?: Record<string, unknown>) {
@@ -383,42 +405,44 @@ export function useDebugSession({
     if (!profile) {
       return;
     }
-    const nextKey = [
+    const nextKey = JSON.stringify([
       botAlias,
-      profile.program,
-      profile.prepareCommand,
+      profile.providerId,
+      profile.launchDefaults,
       profile.remoteHost,
-      profile.remoteUser,
-      profile.remoteDir,
       profile.remotePort,
       profile.stopAtEntry,
-    ].join("|");
+    ]);
     if (defaultsAppliedRef.current === nextKey) {
       return;
     }
     defaultsAppliedRef.current = nextKey;
-    setLaunchForm({
-      prepareCommand: profile.prepareCommand,
-      remoteHost: profile.remoteHost,
-      remoteUser: profile.remoteUser,
-      remoteDir: profile.remoteDir,
-      remotePort: profile.remotePort ? String(profile.remotePort) : "",
-      password: "",
-      stopAtEntry: profile.stopAtEntry,
-    });
+    setLaunchForm(buildDebugLaunchForm(profile));
   }, [botAlias, profile]);
 
   const activeFrame = currentFrame(state);
-  const targetHost = launchForm.remoteHost.trim() || profile?.remoteHost || "";
-  const targetPort = launchForm.remotePort.trim() || (profile?.remotePort ? String(profile.remotePort) : "");
+  const targetText = profile?.providerId === "cpp-gdb"
+    ? [
+        String(launchForm.remoteHost || profile.remoteHost || ""),
+        String(launchForm.remotePort || profile.remotePort || ""),
+      ].filter(Boolean).join(":")
+    : profile?.providerLabel || "";
 
   const statusBar: DebugWorkbenchStatus = {
     phase: state.phase,
     connectionText: statusText(state.phase),
-    ...(targetHost && targetPort ? { targetText: `${targetHost}:${targetPort}` } : {}),
+    ...(targetText ? { targetText } : {}),
     ...(activeFrame?.source ? { currentSourcePath: activeFrame.source } : {}),
     ...(activeFrame?.line ? { currentLine: activeFrame.line } : {}),
   };
+
+  const capabilities = profile?.capabilities || {};
+  const canContinue = Boolean(capabilities.continue ?? capabilities.continueExecution ?? true);
+  const canPause = capabilityEnabled(capabilities, "pause");
+  const canNext = capabilityEnabled(capabilities, "next");
+  const canStepIn = capabilityEnabled(capabilities, "stepIn");
+  const canStepOut = capabilityEnabled(capabilities, "stepOut");
+  const canEvaluate = capabilityEnabled(capabilities, "evaluate");
 
   return {
     profile,
@@ -433,19 +457,16 @@ export function useDebugSession({
       setPrepareLogs([]);
       setState((current) => ({
         ...current,
-        phase: "preparing",
+        phase: "starting",
+        detailPhase: "",
         message: "准备调试环境",
       }));
-      const parsedPort = Number.parseInt(launchForm.remotePort.trim(), 10);
+      const payload = Object.fromEntries(
+        Object.entries(launchForm).map(([key, value]) => [key, normalizeLaunchPayloadValue(value)]),
+      );
       await sendCommand("launch", {
         configName: profile.configName,
-        remoteHost: launchForm.remoteHost.trim() || profile.remoteHost,
-        remoteUser: launchForm.remoteUser.trim() || profile.remoteUser,
-        remoteDir: launchForm.remoteDir.trim() || profile.remoteDir,
-        remotePort: Number.isFinite(parsedPort) ? parsedPort : profile.remotePort,
-        prepareCommand: launchForm.prepareCommand.trim() || profile.prepareCommand,
-        password: launchForm.password,
-        stopAtEntry: launchForm.stopAtEntry,
+        ...payload,
       });
     },
     stop: async () => {
@@ -500,6 +521,13 @@ export function useDebugSession({
         ...patch,
       }));
     },
+    capabilities,
+    canContinue,
+    canPause,
+    canNext,
+    canStepIn,
+    canStepOut,
+    canEvaluate,
     breakpointLinesForPath: (path: string) => Array.from(new Set(
       state.breakpoints
         .filter((item) => pathsMatch(item.source, path))

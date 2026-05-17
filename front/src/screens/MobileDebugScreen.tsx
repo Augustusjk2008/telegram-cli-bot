@@ -14,8 +14,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
-import type { DebugState, DebugVariable, FileReadResult } from "../services/types";
+import type { DebugLaunchField, DebugState, DebugVariable, FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { fieldsForProfile } from "../workbench/debugLaunchSchema";
+import { toWorkspaceRelativeSourcePath } from "../workbench/debugSourcePath";
 import { useDebugSession } from "../workbench/useDebugSession";
 
 type Props = {
@@ -39,11 +41,10 @@ const VIEW_ITEMS: Array<{ value: MobileDebugView; label: string; Icon: LucideIco
 ];
 
 function phaseText(state: DebugState) {
-  if (state.phase === "preparing") return "准备中";
-  if (state.phase === "deploying" || state.phase === "starting_gdb" || state.phase === "connecting_remote") return "连接中";
+  if (state.phase === "starting") return "连接中";
   if (state.phase === "paused") return "已暂停";
   if (state.phase === "running") return "运行中";
-  if (state.phase === "terminating") return "停止中";
+  if (state.phase === "stopping") return "停止中";
   if (state.phase === "error") return "错误";
   return "未启动";
 }
@@ -83,6 +84,38 @@ function DebugIconButton({
     >
       <Icon className="h-4 w-4" />
     </button>
+  );
+}
+
+function MobileLaunchField({
+  field,
+  value,
+  onChange,
+}: {
+  field: DebugLaunchField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+}) {
+  if (field.type === "boolean") {
+    return (
+      <label className="flex items-center gap-2 text-sm text-[var(--text)]">
+        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+        <span>{field.label}</span>
+      </label>
+    );
+  }
+  return (
+    <label className="block text-xs">
+      <span className="mb-1 block text-[var(--muted)]">{field.label}</span>
+      <input
+        aria-label={field.label}
+        type={field.secret ? "password" : "text"}
+        inputMode={field.type === "number" ? "numeric" : undefined}
+        value={Array.isArray(value) ? value.join(" ") : String(value ?? "")}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]"
+      />
+    </label>
   );
 }
 
@@ -147,6 +180,11 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceError, setSourceError] = useState("");
   const [remoteExpanded, setRemoteExpanded] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState("");
+
+  function displaySourcePath(path: string) {
+    return toWorkspaceRelativeSourcePath(path, workspaceRoot);
+  }
 
   const debug = useDebugSession({
     authToken,
@@ -154,32 +192,41 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
     client,
     enabled: true,
     onRevealLocation: ({ sourcePath, line }) => {
-      setActiveSource({ path: sourcePath, ...(line ? { line } : {}) });
+      setActiveSource({ path: displaySourcePath(sourcePath), ...(line ? { line } : {}) });
       setView("source");
     },
   });
 
   const frame = currentFrame(debug.state);
-  const isBusy = debug.state.phase === "preparing"
-    || debug.state.phase === "starting_gdb"
-    || debug.state.phase === "connecting_remote"
-    || debug.state.phase === "terminating";
+  const launchFields = fieldsForProfile(debug.profile);
+  const isBusy = debug.state.phase === "starting" || debug.state.phase === "stopping";
   const targetLabel = useMemo(() => {
-    const host = debug.launchForm.remoteHost || debug.profile?.remoteHost || "";
-    const port = debug.launchForm.remotePort || (debug.profile?.remotePort ? String(debug.profile.remotePort) : "");
-    return host && port ? `${host}:${port}` : "";
-  }, [debug.launchForm.remoteHost, debug.launchForm.remotePort, debug.profile]);
+    if (!debug.profile) {
+      return "";
+    }
+    if (debug.profile.providerId === "cpp-gdb") {
+      const host = String(debug.launchForm.remoteHost || debug.profile.remoteHost || "");
+      const port = String(debug.launchForm.remotePort || debug.profile.remotePort || "");
+      return host && port ? `${host}:${port}` : host;
+    }
+    return debug.profile.providerLabel;
+  }, [debug.launchForm, debug.profile]);
+
+  useEffect(() => {
+    setWorkspaceRoot(debug.profile?.workspace || debug.profile?.cwd || "");
+  }, [debug.profile]);
 
   useEffect(() => {
     if (!frame?.source || !frame.line) {
       return;
     }
+    const sourcePath = displaySourcePath(frame.source);
     setActiveSource((current) => (
-      current?.path === frame.source && current.line === frame.line
+      current?.path === sourcePath && current.line === frame.line
         ? current
-        : { path: frame.source, line: frame.line }
+        : { path: sourcePath, line: frame.line }
     ));
-  }, [frame?.source, frame?.line]);
+  }, [frame?.source, frame?.line, workspaceRoot]);
 
   useEffect(() => {
     if (!activeSource?.path) {
@@ -223,7 +270,7 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
   if (!debug.profile) {
     return (
       <main data-testid="mobile-debug-screen" className="flex h-full items-center justify-center bg-[var(--bg)] p-4 text-center text-sm text-[var(--muted)]">
-        当前工作目录不支持 C++ 调试
+        当前工作目录无可用调试配置
       </main>
     );
   }
@@ -233,8 +280,8 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
       <header className="shrink-0 border-b border-[var(--border)] bg-[var(--surface-strong)] p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-sm font-semibold text-[var(--text)]">调试</h1>
-            <p className="truncate text-xs text-[var(--muted)]">{debug.state.message || phaseText(debug.state)}</p>
+            <h1 className="text-sm font-semibold text-[var(--text)]">{debug.profile.providerLabel}</h1>
+            <p className="truncate text-xs text-[var(--muted)]">{debug.profile.configName}</p>
           </div>
           <div className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-1 text-xs text-[var(--text)]">{phaseText(debug.state)}</div>
         </div>
@@ -247,54 +294,36 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
       <section className="shrink-0 border-b border-[var(--border)] bg-[var(--surface)] p-2">
         <div role="toolbar" aria-label="调试控制" className="flex items-center gap-1 overflow-x-auto">
           <DebugIconButton label="启动调试" Icon={BugPlay} onClick={() => void debug.launch()} disabled={isBusy} primary />
-          <DebugIconButton label="继续" Icon={Play} onClick={() => void debug.continueExecution()} disabled={debug.state.phase !== "paused"} />
-          <DebugIconButton label="暂停" Icon={Pause} onClick={() => void debug.pauseExecution()} disabled={debug.state.phase !== "running"} />
-          <DebugIconButton label="下一步" Icon={StepForward} onClick={() => void debug.next()} disabled={debug.state.phase !== "paused"} />
-          <DebugIconButton label="进入函数" Icon={ArrowDownToLine} onClick={() => void debug.stepIn()} disabled={debug.state.phase !== "paused"} />
-          <DebugIconButton label="跳出函数" Icon={ArrowUpFromLine} onClick={() => void debug.stepOut()} disabled={debug.state.phase !== "paused"} />
+          <DebugIconButton label="继续" Icon={Play} onClick={() => void debug.continueExecution()} disabled={!debug.canContinue || debug.state.phase !== "paused"} />
+          <DebugIconButton label="暂停" Icon={Pause} onClick={() => void debug.pauseExecution()} disabled={!debug.canPause || debug.state.phase !== "running"} />
+          <DebugIconButton label="下一步" Icon={StepForward} onClick={() => void debug.next()} disabled={!debug.canNext || debug.state.phase !== "paused"} />
+          <DebugIconButton label="进入函数" Icon={ArrowDownToLine} onClick={() => void debug.stepIn()} disabled={!debug.canStepIn || debug.state.phase !== "paused"} />
+          <DebugIconButton label="跳出函数" Icon={ArrowUpFromLine} onClick={() => void debug.stepOut()} disabled={!debug.canStepOut || debug.state.phase !== "paused"} />
           <DebugIconButton label="停止调试" Icon={Square} onClick={() => void debug.stop()} disabled={debug.state.phase === "idle"} danger />
         </div>
-        <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-xs text-[var(--text)]">
-          <button
-            type="button"
-            onClick={() => setRemoteExpanded((current) => !current)}
-            className="w-full text-left text-[var(--muted)]"
-          >
-            远端参数
-          </button>
-          {remoteExpanded ? (
-          <div className="mt-3 space-y-2">
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">准备命令</span>
-              <input aria-label="准备命令" value={debug.launchForm.prepareCommand} onChange={(event) => debug.updateLaunchForm({ prepareCommand: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">host</span>
-              <input aria-label="host" value={debug.launchForm.remoteHost} onChange={(event) => debug.updateLaunchForm({ remoteHost: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">user</span>
-              <input aria-label="user" value={debug.launchForm.remoteUser} onChange={(event) => debug.updateLaunchForm({ remoteUser: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">remoteDir</span>
-              <input aria-label="remoteDir" value={debug.launchForm.remoteDir} onChange={(event) => debug.updateLaunchForm({ remoteDir: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">port</span>
-              <input aria-label="port" inputMode="numeric" value={debug.launchForm.remotePort} onChange={(event) => debug.updateLaunchForm({ remotePort: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">password</span>
-              <input aria-label="password" type="password" value={debug.launchForm.password} onChange={(event) => debug.updateLaunchForm({ password: event.target.value })} className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 font-mono text-[var(--text)]" />
-            </label>
-            <label className="flex items-center gap-2 text-[var(--text)]">
-              <input type="checkbox" checked={debug.launchForm.stopAtEntry} onChange={(event) => debug.updateLaunchForm({ stopAtEntry: event.target.checked })} />
-              <span>入口暂停</span>
-            </label>
+        {launchFields.length > 0 ? (
+          <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-xs text-[var(--text)]">
+            <button
+              type="button"
+              onClick={() => setRemoteExpanded((current) => !current)}
+              className="w-full text-left text-[var(--muted)]"
+            >
+              启动参数
+            </button>
+            {remoteExpanded ? (
+              <div className="mt-3 space-y-2">
+                {launchFields.map((field) => (
+                  <MobileLaunchField
+                    key={field.key}
+                    field={field}
+                    value={debug.launchForm[field.key]}
+                    onChange={(value) => debug.updateLaunchForm({ [field.key]: value })}
+                  />
+                ))}
+              </div>
+            ) : null}
           </div>
-          ) : null}
-        </div>
+        ) : null}
       </section>
 
       <nav className="grid shrink-0 grid-cols-4 border-b border-[var(--border)] bg-[var(--surface-strong)] p-1">
@@ -347,7 +376,7 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
                 type="button"
                 onClick={() => {
                   if (item.sourceResolved !== false && item.source && item.source !== "??") {
-                    setActiveSource({ path: item.source, line: item.line });
+                    setActiveSource({ path: displaySourcePath(item.source), line: item.line });
                     setView("source");
                   }
                   void debug.selectFrame(item.id);

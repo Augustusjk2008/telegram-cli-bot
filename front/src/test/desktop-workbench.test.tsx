@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
+import { DebugPane } from "../workbench/DebugPane";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
 
@@ -512,8 +513,8 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
 
   await user.click(screen.getByRole("button", { name: "调试" }));
   expect(await screen.findByTestId("debug-pane")).toBeInTheDocument();
-  expect(screen.getByText("(gdb) Remote Debug")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "展开远端参数" }));
+  expect(screen.getByText("C++ GDB")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开启动参数" }));
   expect(screen.getByLabelText("准备命令")).toHaveValue(".\\debug.bat");
   expect(screen.getByRole("toolbar", { name: "调试控制" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "启动调试" })).toBeInTheDocument();
@@ -529,6 +530,120 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
 
   await user.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
+});
+
+test("desktop debug pane renders provider label and schema fields", async () => {
+  const user = userEvent.setup();
+  const profile = {
+    specVersion: 3,
+    providerId: "python-debugpy",
+    providerLabel: "Python debugpy",
+    language: "python",
+    configName: "Python: Current File",
+    target: { program: "C:/demo/main.py", cwd: "C:/demo" },
+    prepare: {},
+    capabilities: { continue: true, pause: true, variables: true, evaluate: true },
+    ui: {},
+    launchSchema: { fields: [{ key: "program", label: "入口文件", type: "path", required: true }] },
+    launchDefaults: { program: "C:/demo/main.py" },
+    program: "C:/demo/main.py",
+    cwd: "C:/demo",
+    miDebuggerPath: "",
+    prepareCommand: "",
+    stopAtEntry: true,
+    setupCommands: [],
+    remoteHost: "",
+    remoteUser: "",
+    remoteDir: "",
+    remotePort: 0,
+    providerConfig: {},
+  } as const;
+
+  render(
+    <DebugPane
+      profile={profile}
+      state={{
+        phase: "idle",
+        detailPhase: "",
+        message: "",
+        breakpoints: [],
+        frames: [],
+        currentFrameId: "",
+        scopes: [],
+        variables: {},
+      }}
+      prepareLogs={[]}
+      launchForm={{ program: "C:/demo/main.py" }}
+      onLaunchFormChange={() => {}}
+      onLaunch={() => {}}
+      onContinue={() => {}}
+      onPause={() => {}}
+      onNext={() => {}}
+      onStepIn={() => {}}
+      onStepOut={() => {}}
+      onStop={() => {}}
+      onSelectFrame={() => {}}
+      onRequestVariables={() => {}}
+    />,
+  );
+
+  expect(await screen.findByText("Python debugpy")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开启动参数" }));
+  expect(screen.getByLabelText("入口文件")).toHaveValue("C:/demo/main.py");
+  expect(screen.queryByText("启动参数")).toBeInTheDocument();
+});
+
+test("desktop debug reveal opens workspace-relative source from absolute debugger path", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "print('ok')\n",
+    mode: "cat",
+    fileSizeBytes: 12,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  });
+  vi.spyOn(client, "getDebugState").mockResolvedValue({
+    phase: "paused",
+    detailPhase: "",
+    message: "调试已暂停",
+    breakpoints: [],
+    frames: [{ id: "frame-0", name: "main", source: "H:/WorkSpace/PythonWorkspace/tcb-debugpy-demo/main.py", line: 2 }],
+    currentFrameId: "frame-0",
+    scopes: [],
+    variables: {},
+  });
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "H:/WorkSpace/PythonWorkspace/tcb-debugpy-demo",
+    entries: [{ name: "main.py", isDir: false, size: 12 }],
+  });
+  vi.spyOn(client, "resolveFileOpenTarget").mockResolvedValue({ kind: "file" });
+  vi.spyOn(client, "revealFileTreePath").mockResolvedValue({
+    rootPath: "H:/WorkSpace/PythonWorkspace/tcb-debugpy-demo",
+    highlightPath: "main.py",
+    expandedPaths: [],
+    branches: { "": [{ name: "main.py", isDir: false, size: 12 }] },
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "调试" }));
+  await user.click(await screen.findByText("H:/WorkSpace/PythonWorkspace/tcb-debugpy-demo/main.py:2"));
+
+  await waitFor(() => {
+    expect(readFileFull).toHaveBeenCalledWith("main", "main.py");
+  });
+  expect(readFileFull).not.toHaveBeenCalledWith("main", "H:/WorkSpace/PythonWorkspace/tcb-debugpy-demo/main.py");
+  expect(await screen.findByRole("tab", { name: "main.py" })).toBeInTheDocument();
 });
 
 test("desktop sidebar view switch keeps selected pane accessible with motion", async () => {
@@ -834,7 +949,7 @@ test("desktop debug pane uses generic unsupported C++ message", async () => {
 
   await user.click(screen.getByRole("button", { name: "调试" }));
 
-  expect(await screen.findByText("当前工作目录不支持 C++ 调试")).toBeInTheDocument();
+  expect(await screen.findByText("当前工作目录无可用调试配置")).toBeInTheDocument();
   expect(screen.queryByText("当前工作目录不支持 MB_DDF 调试")).not.toBeInTheDocument();
 });
 

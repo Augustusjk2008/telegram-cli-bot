@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from bot.debug.models import DebugProfileV2, DebugSourceMap
+from bot.debug.models import DebugProfile, DebugProfileV2, DebugSourceMap
 from bot.debug.profile_loader import load_debug_profile_v2
 from bot.debug.source_resolver import resolve_source
 
@@ -68,3 +68,31 @@ def test_unknown_frame_is_unresolved(tmp_path: Path) -> None:
     result = resolve_source(tmp_path, profile, "??", {"line": 0})
 
     assert result == {"path": "", "line": 0, "resolved": False, "reason": "unknown_source"}
+
+
+def test_dap_source_reference_stays_unresolved_without_provider_path(tmp_path: Path) -> None:
+    profile = DebugProfile(
+        kind="python",
+        workspace=str(tmp_path),
+        config_name="Python",
+        program=str(tmp_path / "main.py"),
+        cwd=str(tmp_path),
+        mi_mode="",
+        mi_debugger_path="",
+        compile_commands=None,
+        prepare_command="",
+        stop_at_entry=True,
+        setup_commands=[],
+        remote_host="",
+        remote_user="",
+        remote_dir="",
+        remote_port=0,
+        provider_id="python-debugpy",
+        language="python",
+    )
+
+    result = resolve_source(tmp_path, profile, "", {"line": 5, "sourceReference": 99})
+
+    assert result["resolved"] is False
+    assert result["reason"] == "source_reference"
+    assert result["sourceReference"] == 99

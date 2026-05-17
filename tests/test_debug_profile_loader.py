@@ -4,8 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from bot.debug.models import DebugProfileV2
-from bot.debug.profile_loader import DebugProfileLoadError, load_debug_profile, load_debug_profile_v2, require_debug_profile
+from bot.debug.models import DebugProfileV2, DebugProfileV3
+from bot.debug.profile_loader import (
+    DebugProfileLoadError,
+    load_debug_profile,
+    load_debug_profile_v2,
+    load_debug_profile_v3,
+    require_debug_profile,
+)
 
 
 def _write_workspace(root: Path, *, server_address: str = "192.168.1.88:2345", config_name: str = "(gdb) Remote Debug") -> None:
@@ -181,6 +187,124 @@ def test_v2_profile_loads_capabilities(tmp_path: Path) -> None:
     assert profile.capabilities.memory is True
     assert profile.to_api()["specVersion"] == 2
     assert profile.to_api()["sourceMaps"] == [{"remote": "/opt/app/src", "local": str(tmp_path / "src")}]
+
+
+def test_v3_debug_json_loads_provider_profile(tmp_path: Path) -> None:
+    (tmp_path / "debug.json").write_text(
+        """
+{
+  "specVersion": 3,
+  "providerId": "python-debugpy",
+  "providerLabel": "Python debugpy",
+  "language": "python",
+  "configName": "Python: Current File",
+  "workspace": "${workspaceFolder}",
+  "target": {
+    "program": "${workspaceFolder}/main.py",
+    "cwd": "${workspaceFolder}",
+    "args": ["--port", "8000"],
+    "env": { "APP_ENV": "dev" }
+  },
+  "capabilities": {
+    "continue": true,
+    "pause": true,
+    "next": true,
+    "stepIn": true,
+    "stepOut": true,
+    "variables": true,
+    "evaluate": true,
+    "threads": false
+  },
+  "ui": {
+    "openSourceOnPause": true,
+    "defaultPanels": ["source", "stack", "variables"]
+  },
+  "launchSchema": {
+    "fields": [
+      { "key": "program", "label": "入口文件", "type": "path", "required": true },
+      { "key": "args", "label": "参数", "type": "stringList" }
+    ]
+  },
+  "launchDefaults": {
+    "program": "${workspaceFolder}/main.py",
+    "args": []
+  },
+  "providerConfig": {
+    "dap": {
+      "adapter": "python",
+      "module": "debugpy.adapter",
+      "request": "launch"
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    profile = load_debug_profile_v3(tmp_path)
+
+    assert isinstance(profile, DebugProfileV3)
+    assert profile.spec_version == 3
+    assert profile.provider_id == "python-debugpy"
+    assert profile.provider_label == "Python debugpy"
+    assert profile.target.program == str(tmp_path / "main.py")
+    assert profile.target.args == ["--port", "8000"]
+    assert profile.target.env == {"APP_ENV": "dev"}
+    assert profile.capabilities.continue_execution is True
+    assert profile.launch_schema["fields"][0]["key"] == "program"
+    assert profile.launch_defaults["program"] == str(tmp_path / "main.py")
+    assert profile.provider_config["dap"]["module"] == "debugpy.adapter"
+    assert profile.to_api()["providerId"] == "python-debugpy"
+
+
+def test_v3_godot_debug_json_loads_launch_schema_and_defaults(tmp_path: Path) -> None:
+    (tmp_path / "debug.json").write_text(
+        """
+{
+  "specVersion": 3,
+  "providerId": "godot",
+  "providerLabel": "Godot",
+  "language": "gdscript",
+  "configName": "Godot: Run Project",
+  "target": {
+    "program": "godot",
+    "cwd": "${workspaceFolder}"
+  },
+  "launchSchema": {
+    "fields": [
+      { "key": "program", "label": "Godot", "type": "path", "required": true },
+      { "key": "scene", "label": "Scene", "type": "string" },
+      { "key": "debugCollisions", "label": "碰撞形状", "type": "boolean" }
+    ]
+  },
+  "launchDefaults": {
+    "program": "godot",
+    "cwd": "${workspaceFolder}",
+    "scene": "res://main.tscn",
+    "debugCollisions": false
+  },
+  "providerConfig": {
+    "godot": {
+      "remoteDebug": "tcp://127.0.0.1:6007"
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "project.godot").write_text("[application]\n", encoding="utf-8")
+
+    profile = load_debug_profile_v3(tmp_path)
+
+    assert isinstance(profile, DebugProfileV3)
+    assert profile.provider_id == "godot"
+    assert profile.provider_label == "Godot"
+    assert profile.target.cwd == str(tmp_path)
+    assert profile.launch_defaults["cwd"] == str(tmp_path)
+    assert profile.launch_defaults["scene"] == "res://main.tscn"
+    assert profile.launch_schema["fields"][2]["key"] == "debugCollisions"
+    assert profile.provider_config["godot"]["remoteDebug"] == "tcp://127.0.0.1:6007"
 
 
 def test_unsupported_message_is_generic_cpp_debug(tmp_path: Path) -> None:
