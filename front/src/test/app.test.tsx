@@ -341,6 +341,7 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await screen.findByRole("button", { name: "聊天" });
 
   await user.click(screen.getByRole("button", { name: "main" }));
+  expect(await screen.findByText("无权限 · 只读")).toBeInTheDocument();
   await user.click(await screen.findByRole("button", { name: /team2/i }));
 
   expect((await screen.findAllByText("只读模式")).length).toBeGreaterThan(0);

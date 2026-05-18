@@ -8,6 +8,8 @@ import type {
   AppUpdateStatus,
   BotSummary,
   CreateAnnouncementInput,
+  LanChatConfig,
+  LanChatConfigInput,
   OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -21,7 +23,7 @@ type Props = {
   onBotsChange?: (bots: BotSummary[]) => void;
 };
 
-type AdminCenterTab = "users" | "invites" | "updates" | "announcements";
+type AdminCenterTab = "users" | "invites" | "updates" | "announcements" | "lan-chat";
 
 const DEFAULT_ANNOUNCEMENT_DRAFT: CreateAnnouncementInput = {
   publisher: "CLI Bridge",
@@ -63,11 +65,15 @@ export function AdminCenterScreen({
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
+  const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
+  const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
+  const [lanChatSaving, setLanChatSaving] = useState(false);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
     users: false,
     invites: false,
     updates: false,
     announcements: false,
+    "lan-chat": false,
   });
   const [manualPackagePath, setManualPackagePath] = useState("");
   const [registerCodeDraftUses, setRegisterCodeDraftUses] = useState("1");
@@ -194,6 +200,39 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadLanChat(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const config = await client.getLanChatConfig();
+      setLanChatConfig(config);
+      setLanChatDraft({
+        mode: config.mode,
+        roomName: config.roomName,
+        instanceName: config.instanceName,
+        hostUrl: config.hostUrl,
+        lanOnly: config.lanOnly,
+        autoConnect: config.autoConnect,
+      });
+      setLoadedTabs((prev) => ({ ...prev, "lan-chat": true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载联机聊天配置失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function refreshActiveTab(nextNotice = "", refresh = false) {
     if (activeTab === "users") {
       await loadUsers(nextNotice, refresh);
@@ -201,6 +240,8 @@ export function AdminCenterScreen({
       await loadInvites(nextNotice, refresh);
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
+    } else if (activeTab === "lan-chat") {
+      await loadLanChat(nextNotice, refresh);
     } else {
       await loadAnnouncements(nextNotice, refresh);
     }
@@ -421,6 +462,30 @@ export function AdminCenterScreen({
     }
   };
 
+  const saveLanChatConfig = async () => {
+    setLanChatSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const saved = await client.updateLanChatConfig(lanChatDraft);
+      setLanChatConfig(saved);
+      setLanChatDraft({
+        mode: saved.mode,
+        roomName: saved.roomName,
+        instanceName: saved.instanceName,
+        hostUrl: saved.hostUrl,
+        roomKey: saved.roomKey || "",
+        lanOnly: saved.lanOnly,
+        autoConnect: saved.autoConnect,
+      });
+      setNotice("联机聊天配置已保存");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "保存联机聊天配置失败"));
+    } finally {
+      setLanChatSaving(false);
+    }
+  };
+
   const removeAnnouncement = async (id: string) => {
     setAnnouncementDeletingId(id);
     setError("");
@@ -454,7 +519,7 @@ export function AdminCenterScreen({
         </header>
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          {(["users", "invites", "updates", "announcements"] as AdminCenterTab[]).map((tab) => (
+          {(["users", "invites", "updates", "announcements", "lan-chat"] as AdminCenterTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -465,7 +530,7 @@ export function AdminCenterScreen({
                 ? "rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)]"
                 : "rounded-md border border-[var(--border)] px-3 py-2 text-sm"}
             >
-              {tab === "users" ? "用户权限" : tab === "invites" ? "邀请码" : tab === "updates" ? "升级" : "公告"}
+              {tab === "users" ? "用户权限" : tab === "invites" ? "邀请码" : tab === "updates" ? "升级" : tab === "announcements" ? "公告" : "联机聊天"}
             </button>
           ))}
           <button
@@ -659,6 +724,103 @@ export function AdminCenterScreen({
               )}
             </section>
           </div>
+        ) : null}
+
+        {!loading && activeTab === "lan-chat" ? (
+          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text)]">联机聊天</h2>
+              <p className="text-sm text-[var(--muted)]">一台实例作为主机，其它实例填主机地址和房间密钥加入。</p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              {([
+                ["off", "关闭"],
+                ["host", "作为主机"],
+                ["join", "加入主机"],
+              ] as const).map(([mode, label]) => (
+                <label key={mode} className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
+                  <input
+                    type="radio"
+                    name="lan-chat-mode"
+                    checked={(lanChatDraft.mode || lanChatConfig?.mode || "off") === mode}
+                    onChange={() => setLanChatDraft((prev) => ({ ...prev, mode }))}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1">
+                <span className="text-sm text-[var(--text)]">房间名</span>
+                <input
+                  aria-label="房间名"
+                  value={lanChatDraft.roomName || ""}
+                  onChange={(event) => setLanChatDraft((prev) => ({ ...prev, roomName: event.target.value }))}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-sm text-[var(--text)]">本节点名称</span>
+                <input
+                  aria-label="本节点名称"
+                  value={lanChatDraft.instanceName || ""}
+                  onChange={(event) => setLanChatDraft((prev) => ({ ...prev, instanceName: event.target.value }))}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+              </label>
+              <label className="space-y-1 sm:col-span-2">
+                <span className="text-sm text-[var(--text)]">主机地址</span>
+                <input
+                  aria-label="主机地址"
+                  value={lanChatDraft.hostUrl || ""}
+                  onChange={(event) => setLanChatDraft((prev) => ({ ...prev, hostUrl: event.target.value }))}
+                  placeholder="http://192.168.1.100:8765"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+              </label>
+              <label className="space-y-1 sm:col-span-2">
+                <span className="text-sm text-[var(--text)]">房间密钥</span>
+                <input
+                  aria-label="房间密钥"
+                  value={lanChatDraft.roomKey || ""}
+                  onChange={(event) => setLanChatDraft((prev) => ({ ...prev, roomKey: event.target.value }))}
+                  placeholder={lanChatConfig?.roomKeyPreview || "保存主机模式时自动生成"}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(lanChatDraft.lanOnly)}
+                  onChange={(event) => setLanChatDraft((prev) => ({ ...prev, lanOnly: event.target.checked }))}
+                />
+                仅允许局域网节点
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(lanChatDraft.autoConnect)}
+                  onChange={(event) => setLanChatDraft((prev) => ({ ...prev, autoConnect: event.target.checked }))}
+                />
+                启动后自动连接
+              </label>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void saveLanChatConfig()}
+              disabled={lanChatSaving}
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+            >
+              <Save className="h-4 w-4" />
+              {lanChatSaving ? "保存中..." : "保存联机聊天配置"}
+            </button>
+          </section>
         ) : null}
 
         {!loading && activeTab === "announcements" ? (

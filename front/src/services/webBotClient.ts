@@ -65,6 +65,12 @@ import type {
   GitOverview,
   GitStashList,
   GitTreeStatus,
+  LanChatConfig,
+  LanChatConfigInput,
+  LanChatConversation,
+  LanChatEvent,
+  LanChatMessage,
+  LanChatStatus,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   ChatSendOptions,
@@ -250,6 +256,15 @@ export interface WebBotClient {
   getGitBlame(botAlias: string, path: string): Promise<GitBlamePayload>;
   getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig>;
   updateGitIdentityConfig(botAlias: string, input: { scope: GitIdentityScope; name: string; email: string }): Promise<GitIdentityConfig>;
+  getLanChatConfig(): Promise<LanChatConfig>;
+  updateLanChatConfig(input: LanChatConfigInput): Promise<LanChatConfig>;
+  getLanChatStatus(): Promise<LanChatStatus>;
+  listLanChatConversations(): Promise<LanChatConversation[]>;
+  listLanChatMessages(conversationId: string, afterSeq?: number, limit?: number): Promise<LanChatMessage[]>;
+  createLanChatPrivateConversation(targetRoomUserId: string): Promise<LanChatConversation>;
+  sendLanChatMessage(conversationId: string, text: string): Promise<LanChatMessage>;
+  markLanChatRead(conversationId: string, seq: number): Promise<void>;
+  openLanChatSocket?(onEvent: (event: LanChatEvent) => void): () => void;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;

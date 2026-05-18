@@ -1976,3 +1976,77 @@ export type AssistantAdminAuditItem = {
 export type AssistantAdminAuditResult = {
   items: AssistantAdminAuditItem[];
 };
+
+export type LanChatMode = "off" | "host" | "join";
+export type LanChatConversationKind = "group" | "dm";
+
+export type LanChatConfig = {
+  mode: LanChatMode;
+  roomName: string;
+  instanceId: string;
+  instanceName: string;
+  hostUrl: string;
+  roomKey?: string;
+  roomKeyPreview: string;
+  lanOnly: boolean;
+  autoConnect: boolean;
+};
+
+export type LanChatConfigInput = Partial<{
+  mode: LanChatMode;
+  roomName: string;
+  instanceName: string;
+  hostUrl: string;
+  roomKey: string;
+  lanOnly: boolean;
+  autoConnect: boolean;
+}>;
+
+export type LanChatParticipant = {
+  roomUserId: string;
+  accountId: string;
+  username: string;
+  displayName: string;
+  instanceId: string;
+  instanceName: string;
+  online: boolean;
+  lastSeenAt: string;
+};
+
+export type LanChatMessage = {
+  id: string;
+  seq: number;
+  conversationId: string;
+  kind: LanChatConversationKind;
+  sender: LanChatParticipant;
+  text: string;
+  createdAt: string;
+};
+
+export type LanChatConversation = {
+  id: string;
+  kind: LanChatConversationKind;
+  title: string;
+  participantIds: string[];
+  lastMessage: LanChatMessage | null;
+  unreadCount: number;
+  updatedAt: string;
+};
+
+export type LanChatStatus = {
+  mode: LanChatMode;
+  connected: boolean;
+  roomName: string;
+  self: LanChatParticipant;
+  onlineUsers: LanChatParticipant[];
+  onlineNodes: Array<{ instanceId: string; connected: boolean }>;
+  lastError: string;
+};
+
+export type LanChatEvent =
+  | { type: "snapshot"; status: LanChatStatus }
+  | { type: "message_created"; message: LanChatMessage }
+  | { type: "conversation_updated"; conversation: LanChatConversation }
+  | { type: "presence_updated"; status?: LanChatStatus }
+  | { type: "read_updated"; conversationId: string; lastReadSeq: number }
+  | { type: "config_updated"; config: LanChatConfig };

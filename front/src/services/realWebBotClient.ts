@@ -140,6 +140,13 @@ import type {
   WorkspaceSearchResult,
   WorkdirChangeConflict,
   HistoryDeltaResult,
+  LanChatConfig,
+  LanChatConfigInput,
+  LanChatConversation,
+  LanChatEvent,
+  LanChatMessage,
+  LanChatParticipant,
+  LanChatStatus,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
@@ -1685,6 +1692,118 @@ function mapPublicHostInfo(raw?: RawPublicHostInfo | null): PublicHostInfo {
     hardwarePlatform: raw?.hardware_platform || "未知",
     hardwareSpec: raw?.hardware_spec || "未知",
   };
+}
+
+function asLanChatRecord(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+}
+
+function mapLanChatParticipant(raw: unknown): LanChatParticipant {
+  const item = asLanChatRecord(raw);
+  return {
+    roomUserId: String(item.room_user_id || item.roomUserId || ""),
+    accountId: String(item.account_id || item.accountId || ""),
+    username: String(item.username || ""),
+    displayName: String(item.display_name || item.displayName || item.username || ""),
+    instanceId: String(item.instance_id || item.instanceId || ""),
+    instanceName: String(item.instance_name || item.instanceName || ""),
+    online: Boolean(item.online),
+    lastSeenAt: String(item.last_seen_at || item.lastSeenAt || ""),
+  };
+}
+
+function mapLanChatMessage(raw: unknown): LanChatMessage {
+  const item = asLanChatRecord(raw);
+  return {
+    id: String(item.id || ""),
+    seq: Number(item.seq || 0),
+    conversationId: String(item.conversation_id || item.conversationId || ""),
+    kind: item.kind === "dm" ? "dm" : "group",
+    sender: mapLanChatParticipant(item.sender),
+    text: String(item.text || ""),
+    createdAt: String(item.created_at || item.createdAt || ""),
+  };
+}
+
+function mapLanChatConversation(raw: unknown): LanChatConversation {
+  const item = asLanChatRecord(raw);
+  const participantIds = item.participant_ids || item.participantIds;
+  const lastMessage = item.last_message || item.lastMessage;
+  return {
+    id: String(item.id || ""),
+    kind: item.kind === "dm" ? "dm" : "group",
+    title: String(item.title || ""),
+    participantIds: Array.isArray(participantIds) ? participantIds.map(String) : [],
+    lastMessage: lastMessage ? mapLanChatMessage(lastMessage) : null,
+    unreadCount: Number(item.unread_count || item.unreadCount || 0),
+    updatedAt: String(item.updated_at || item.updatedAt || ""),
+  };
+}
+
+function mapLanChatConfig(raw: unknown): LanChatConfig {
+  const item = asLanChatRecord(raw);
+  return {
+    mode: item.mode === "host" || item.mode === "join" ? item.mode : "off",
+    roomName: String(item.room_name || item.roomName || "工作室"),
+    instanceId: String(item.instance_id || item.instanceId || ""),
+    instanceName: String(item.instance_name || item.instanceName || ""),
+    hostUrl: String(item.host_url || item.hostUrl || ""),
+    roomKey: item.room_key || item.roomKey ? String(item.room_key || item.roomKey) : undefined,
+    roomKeyPreview: String(item.room_key_preview || item.roomKeyPreview || ""),
+    lanOnly: Boolean(item.lan_only ?? item.lanOnly),
+    autoConnect: Boolean(item.auto_connect ?? item.autoConnect),
+  };
+}
+
+function mapLanChatStatus(raw: unknown): LanChatStatus {
+  const item = asLanChatRecord(raw);
+  const onlineUsers = item.online_users || item.onlineUsers;
+  const onlineNodes = item.online_nodes || item.onlineNodes;
+  return {
+    mode: item.mode === "host" || item.mode === "join" ? item.mode : "off",
+    connected: Boolean(item.connected),
+    roomName: String(item.room_name || item.roomName || "工作室"),
+    self: mapLanChatParticipant(item.self),
+    onlineUsers: Array.isArray(onlineUsers) ? onlineUsers.map(mapLanChatParticipant) : [],
+    onlineNodes: Array.isArray(onlineNodes) ? onlineNodes.map((node) => {
+      const itemNode = asLanChatRecord(node);
+      return {
+        instanceId: String(itemNode.instance_id || itemNode.instanceId || ""),
+        connected: Boolean(itemNode.connected),
+      };
+    }) : [],
+    lastError: String(item.last_error || item.lastError || ""),
+  };
+}
+
+function mapLanChatEvent(raw: unknown): LanChatEvent | null {
+  const event = asLanChatRecord(raw);
+  if (event.type === "snapshot") {
+    return { type: "snapshot", status: mapLanChatStatus(event.status) };
+  }
+  if (event.type === "message_created") {
+    return { type: "message_created", message: mapLanChatMessage(event.message) };
+  }
+  if (event.type === "conversation_updated") {
+    return { type: "conversation_updated", conversation: mapLanChatConversation(event.conversation) };
+  }
+  if (event.type === "presence_updated") {
+    return {
+      type: "presence_updated",
+      ...(event.status ? { status: mapLanChatStatus(event.status) } : {}),
+    };
+  }
+  if (event.type === "read_updated") {
+    return {
+      type: "read_updated",
+      conversationId: String(event.conversation_id || event.conversationId || ""),
+      lastReadSeq: Number(event.last_read_seq || event.lastReadSeq || 0),
+    };
+  }
+  if (event.type === "config_updated") {
+    return { type: "config_updated", config: mapLanChatConfig(event.config) };
+  }
+  return null;
 }
 
 function mapSessionState(raw: RawAuthSession): SessionState {
@@ -4170,6 +4289,94 @@ export class RealWebBotClient implements WebBotClient {
       }),
     });
     return mapGitIdentityConfig(data);
+  }
+
+  async getLanChatConfig(): Promise<LanChatConfig> {
+    return mapLanChatConfig(await this.requestJson("/api/admin/lan-chat/config"));
+  }
+
+  async updateLanChatConfig(input: LanChatConfigInput): Promise<LanChatConfig> {
+    return mapLanChatConfig(await this.requestJson("/api/admin/lan-chat/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...(input.mode ? { mode: input.mode } : {}),
+        ...(input.roomName !== undefined ? { room_name: input.roomName } : {}),
+        ...(input.instanceName !== undefined ? { instance_name: input.instanceName } : {}),
+        ...(input.hostUrl !== undefined ? { host_url: input.hostUrl } : {}),
+        ...(input.roomKey !== undefined ? { room_key: input.roomKey } : {}),
+        ...(input.lanOnly !== undefined ? { lan_only: input.lanOnly } : {}),
+        ...(input.autoConnect !== undefined ? { auto_connect: input.autoConnect } : {}),
+      }),
+    }));
+  }
+
+  async getLanChatStatus(): Promise<LanChatStatus> {
+    return mapLanChatStatus(await this.requestJson("/api/lan-chat/status"));
+  }
+
+  async listLanChatConversations(): Promise<LanChatConversation[]> {
+    const data = await this.requestJson<{ items?: unknown[] }>("/api/lan-chat/conversations");
+    return Array.isArray(data.items) ? data.items.map(mapLanChatConversation) : [];
+  }
+
+  async listLanChatMessages(conversationId: string, afterSeq = 0, limit = 50): Promise<LanChatMessage[]> {
+    const data = await this.requestJson<{ items?: unknown[] }>(
+      `/api/lan-chat/conversations/${encodeURIComponent(conversationId)}/messages?after_seq=${afterSeq}&limit=${limit}`,
+    );
+    return Array.isArray(data.items) ? data.items.map(mapLanChatMessage) : [];
+  }
+
+  async createLanChatPrivateConversation(targetRoomUserId: string): Promise<LanChatConversation> {
+    return mapLanChatConversation(await this.requestJson("/api/lan-chat/private-conversations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ target_room_user_id: targetRoomUserId }),
+    }));
+  }
+
+  async sendLanChatMessage(conversationId: string, text: string): Promise<LanChatMessage> {
+    return mapLanChatMessage(await this.requestJson(
+      `/api/lan-chat/conversations/${encodeURIComponent(conversationId)}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+      },
+    ));
+  }
+
+  async markLanChatRead(conversationId: string, seq: number): Promise<void> {
+    await this.requestJson(`/api/lan-chat/conversations/${encodeURIComponent(conversationId)}/read`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ seq }),
+    });
+  }
+
+  openLanChatSocket(onEvent: (event: LanChatEvent) => void): () => void {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const tokenParam = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
+    const socket = new WebSocket(`${protocol}//${window.location.host}/lan-chat/ws${tokenParam}`);
+    socket.addEventListener("message", (event) => {
+      try {
+        const mapped = mapLanChatEvent(JSON.parse(event.data));
+        if (mapped) {
+          onEvent(mapped);
+        }
+      } catch {
+        return;
+      }
+    });
+    return () => socket.close();
   }
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {

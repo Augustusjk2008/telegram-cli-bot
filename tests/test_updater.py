@@ -259,6 +259,8 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
         json.dumps({"public_url": "https://keep.trycloudflare.com"}),
         encoding="utf-8",
     )
+    (repo_root / ".web_lan_chat.json").write_text(json.dumps({"mode": "host"}), encoding="utf-8")
+    (repo_root / ".web_lan_chat_messages.json").write_text(json.dumps({"messages": [{"text": "keep"}]}), encoding="utf-8")
     settings_file.write_text(json.dumps({"pending_update_version": "1.0.1"}), encoding="utf-8")
 
     package_path = tmp_path / "release.zip"
@@ -267,6 +269,8 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
         archive.writestr(".env", "WEB_API_TOKEN=replace-me\n")
         archive.writestr(".web_admin_settings.json", "{\"bad\":true}")
         archive.writestr(".web_tunnel_state.json", "{\"public_url\":\"https://replace.trycloudflare.com\"}")
+        archive.writestr(".web_lan_chat.json", "{\"mode\":\"off\"}")
+        archive.writestr(".web_lan_chat_messages.json", "{\"messages\":[]}")
 
     current_settings = app_settings._load_settings()
     current_settings["pending_update_version"] = "1.0.1"
@@ -281,6 +285,10 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
     assert (repo_root / ".env").read_text(encoding="utf-8") == "WEB_API_TOKEN=keep-me\n"
     assert json.loads((repo_root / ".web_tunnel_state.json").read_text(encoding="utf-8")) == {
         "public_url": "https://keep.trycloudflare.com"
+    }
+    assert json.loads((repo_root / ".web_lan_chat.json").read_text(encoding="utf-8")) == {"mode": "host"}
+    assert json.loads((repo_root / ".web_lan_chat_messages.json").read_text(encoding="utf-8")) == {
+        "messages": [{"text": "keep"}]
     }
     assert app_settings._load_settings()["pending_update_version"] == ""
 

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ViewMode } from "../app/layoutMode";
 import type {
   ChatWorkbenchStatus,
@@ -15,6 +16,7 @@ type Props = {
   restoreState: WorkbenchRestoreState;
   branchName?: string;
   viewMode: ViewMode;
+  rightAction?: ReactNode;
 };
 
 function viewModeLabel(viewMode: ViewMode) {
@@ -67,6 +69,7 @@ export function WorkbenchStatusBar({
   restoreState,
   branchName = "",
   viewMode,
+  rightAction,
 }: Props) {
   const debugLocation = debugLocationLabel(debugStatus);
 
@@ -96,6 +99,7 @@ export function WorkbenchStatusBar({
           {chatLabel(chatStatus)}
         </span>
         <span>{restoreLabel(restoreState)}</span>
+        {rightAction ? <span className="flex items-center">{rightAction}</span> : null}
         <span>{viewModeLabel(viewMode)}</span>
       </div>
     </footer>

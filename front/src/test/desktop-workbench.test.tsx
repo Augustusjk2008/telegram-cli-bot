@@ -1655,3 +1655,33 @@ test("desktop assistant ops rail item hides without the gate and falls back from
   expect(screen.queryByRole("button", { name: "运维" })).not.toBeInTheDocument();
   expect(screen.getByTestId("desktop-pane-editor")).toBeInTheDocument();
 });
+
+test("desktop workbench exposes lan chat dock in status bar only on desktop", async () => {
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: /成员聊天/ })).toBeInTheDocument();
+});
+
+test("desktop workbench exposes lan chat dock when layout mode is auto", async () => {
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      viewMode="auto"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: /成员聊天/ })).toBeInTheDocument();
+});

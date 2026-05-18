@@ -1,4 +1,5 @@
 import { BotSummary } from "../services/types";
+import { clsx } from "clsx";
 import { X } from "lucide-react";
 import { BotActivitySummary } from "./BotActivitySummary";
 import { ChatAvatar } from "./ChatAvatar";
@@ -54,6 +55,7 @@ export function BotSwitcherSheet({
         <div className="overflow-y-auto p-4 space-y-2">
           {bots.map((bot) => {
             const isOffline = bot.serviceStatus === "offline" || bot.status === "offline";
+            const noAccess = bot.canOperate === false;
             return (
               <button
                 key={bot.alias}
@@ -67,13 +69,17 @@ export function BotSwitcherSheet({
                     onClose();
                   }
                 }}
-                className={`w-full flex items-center justify-between p-4 rounded-xl border ${
+                className={clsx(
+                  "w-full flex items-center justify-between p-4 rounded-xl border transition",
                   isOffline
                     ? "cursor-not-allowed border-red-200 bg-red-50/80 opacity-95"
                     : currentAlias === bot.alias
                       ? "border-[var(--accent)] bg-[var(--accent)]/5"
-                      : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
-                }`}
+                      : "border-[var(--border)] hover:bg-[var(--surface-strong)]",
+                  noAccess
+                    ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px]"
+                    : "",
+                )}
               >
                 <div className="flex min-w-0 items-start gap-3">
                   <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
@@ -85,8 +91,10 @@ export function BotSwitcherSheet({
                     {isOffline ? (
                       <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
                     ) : null}
-                    {bot.canOperate === false ? (
-                      <span className="mt-1 text-xs text-[var(--muted)]">只读</span>
+                    {noAccess ? (
+                      <span className="mt-1 rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-xs font-semibold text-zinc-900">
+                        无权限 · 只读
+                      </span>
                     ) : null}
                     {!isOffline ? <BotActivitySummary bot={bot} className="mt-1" /> : null}
                   </div>

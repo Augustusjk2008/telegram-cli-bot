@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from bot import updater
+
 
 def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
     ignore = Path(".gitignore").read_text(encoding="utf-8")
@@ -13,6 +15,11 @@ def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
 
     example = json.loads(Path("managed_bots.example.json").read_text(encoding="utf-8"))
     assert isinstance(example["bots"], list)
+
+
+def test_lan_chat_runtime_files_are_protected_during_update():
+    assert ".web_lan_chat.json" in updater.PROTECTED_UPDATE_PATHS
+    assert ".web_lan_chat_messages.json" in updater.PROTECTED_UPDATE_PATHS
 
 
 def test_portable_build_script_only_copies_tracked_files():

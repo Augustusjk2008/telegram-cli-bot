@@ -27,6 +27,8 @@ PROTECTED_UPDATE_PATHS = {
     ".session_store.json",
     ".web_admin_settings.json",
     ".web_tunnel_state.json",
+    ".web_lan_chat.json",
+    ".web_lan_chat_messages.json",
     ".assistant",
     ".claude",
     ".git",

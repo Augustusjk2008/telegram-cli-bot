@@ -130,6 +130,17 @@ def test_web_server_routes_still_include_core_endpoints() -> None:
     assert "/api/admin/bots/{alias}/assistant/proposals" in routes
 
 
+def test_web_server_routes_include_lan_chat_endpoints() -> None:
+    server = WebApiServer(object())
+    app = server._build_app()
+    routes = {route.resource.canonical for route in app.router.routes()}
+
+    assert "/api/admin/lan-chat/config" in routes
+    assert "/api/lan-chat/status" in routes
+    assert "/api/lan-chat/conversations" in routes
+    assert "/lan-chat/ws" in routes
+
+
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_prints_qr_for_quick_tunnel(monkeypatch: pytest.MonkeyPatch) -> None:
     server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())

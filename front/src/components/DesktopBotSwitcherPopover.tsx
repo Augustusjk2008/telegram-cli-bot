@@ -261,6 +261,7 @@ export function DesktopBotSwitcherPopover({
               </div>
             ) : filteredBots.map((bot) => {
               const offline = isOffline(bot);
+              const noAccess = bot.canOperate === false;
               const status = effectiveStatus(bot);
               const current = bot.alias === currentAlias;
               return (
@@ -279,6 +280,7 @@ export function DesktopBotSwitcherPopover({
                     current ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-transparent hover:bg-[var(--surface-strong)]",
                     focusedAlias === bot.alias && !current ? "bg-[var(--surface-strong)]" : "",
                     offline ? "cursor-not-allowed opacity-70" : "",
+                    noAccess ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-zinc-200" : "",
                   )}
                 >
                   <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
@@ -291,8 +293,8 @@ export function DesktopBotSwitcherPopover({
                       {current ? (
                         <span className="rounded border border-[var(--accent)] px-1 text-[10px] text-[var(--accent)]">当前</span>
                       ) : null}
-                      {bot.canOperate === false ? (
-                        <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">只读</span>
+                      {noAccess ? (
+                        <span className="rounded border border-zinc-500 bg-white px-1 text-[10px] font-semibold text-zinc-900">无权限 · 只读</span>
                       ) : null}
                     </span>
                     <span className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-[var(--muted)]">
@@ -359,6 +361,12 @@ export function DesktopBotSwitcherPopover({
                     {isOffline(focusedBot) ? (
                       <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700">
                         离线中，暂不可切换
+                      </div>
+                    ) : null}
+
+                    {focusedBot.canOperate === false ? (
+                      <div className="rounded-md border border-zinc-500 bg-zinc-100 px-2 py-1.5 text-xs font-semibold text-zinc-900 grayscale">
+                        无操作权限，进入后仅可只读查看
                       </div>
                     ) : null}
 

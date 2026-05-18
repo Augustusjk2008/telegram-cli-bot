@@ -106,3 +106,25 @@ test("mock client generates announcement ids from publish minute", async () => {
     vi.useRealTimers();
   }
 });
+
+test("admin center configures lan chat host mode", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateLanChatConfig = vi.spyOn(client, "updateLanChatConfig");
+
+  render(<AdminCenterScreen client={client} onClose={vi.fn()} />);
+
+  await user.click(await screen.findByRole("tab", { name: "联机聊天" }));
+  await user.click(screen.getByRole("radio", { name: "作为主机" }));
+  await user.clear(screen.getByLabelText("房间名"));
+  await user.type(screen.getByLabelText("房间名"), "项目组");
+  await user.click(screen.getByRole("button", { name: "保存联机聊天配置" }));
+
+  await waitFor(() => {
+    expect(updateLanChatConfig).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "host",
+      roomName: "项目组",
+    }));
+  });
+  expect(await screen.findByText("联机聊天配置已保存")).toBeInTheDocument();
+});

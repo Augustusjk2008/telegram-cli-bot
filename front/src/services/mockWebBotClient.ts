@@ -90,6 +90,13 @@ import type {
   GitTreeStatus,
   FileMoveResult,
   FileRenameResult,
+  LanChatConfig,
+  LanChatConfigInput,
+  LanChatConversation,
+  LanChatEvent,
+  LanChatMessage,
+  LanChatParticipant,
+  LanChatStatus,
   HostEffect,
   InstallablePluginSummary,
   OfflineUpdatePackageList,
@@ -1467,6 +1474,43 @@ export class MockWebBotClient implements WebBotClient {
     role: "member",
     capabilities: [...MEMBER_CAPABILITIES],
   };
+  private lanChatConfig: LanChatConfig = {
+    mode: "host",
+    roomName: "工作室",
+    instanceId: "inst_mock",
+    instanceName: "演示机",
+    hostUrl: "",
+    roomKey: "tcbr_mock_demo",
+    roomKeyPreview: "tcbr...demo",
+    lanOnly: true,
+    autoConnect: true,
+  };
+  private lanChatUsers: LanChatParticipant[] = [
+    {
+      roomUserId: "inst_b:member_bob",
+      accountId: "member_bob",
+      username: "bob",
+      displayName: "Bob",
+      instanceId: "inst_b",
+      instanceName: "设计机",
+      online: true,
+      lastSeenAt: "2026-05-18T12:00:00+08:00",
+    },
+  ];
+  private lanChatConversations = new Map<string, LanChatConversation>([
+    ["group:default", {
+      id: "group:default",
+      kind: "group",
+      title: "工作室",
+      participantIds: [],
+      lastMessage: null,
+      unreadCount: 0,
+      updatedAt: "2026-05-18T12:00:00+08:00",
+    }],
+  ]);
+  private lanChatMessages: LanChatMessage[] = [];
+  private lanChatReadSeq = new Map<string, number>();
+  private lanChatSocketListeners = new Set<(event: LanChatEvent) => void>();
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -1489,6 +1533,73 @@ export class MockWebBotClient implements WebBotClient {
 
   private currentAccountId() {
     return String(this.session.accountId || this.session.username || "").trim();
+  }
+
+  private lanChatSelf(): LanChatParticipant {
+    const accountId = this.currentAccountId() || "member_demo";
+    const username = this.session.username || "demo";
+    return {
+      roomUserId: `${this.lanChatConfig.instanceId}:${accountId}`,
+      accountId,
+      username,
+      displayName: username,
+      instanceId: this.lanChatConfig.instanceId,
+      instanceName: this.lanChatConfig.instanceName,
+      online: true,
+      lastSeenAt: new Date().toISOString(),
+    };
+  }
+
+  private lanChatNow() {
+    return new Date().toISOString();
+  }
+
+  private cloneLanChatMessage(message: LanChatMessage): LanChatMessage {
+    return {
+      ...message,
+      sender: { ...message.sender },
+    };
+  }
+
+  private cloneLanChatConversation(conversation: LanChatConversation): LanChatConversation {
+    return {
+      ...conversation,
+      participantIds: [...conversation.participantIds],
+      lastMessage: conversation.lastMessage ? this.cloneLanChatMessage(conversation.lastMessage) : null,
+    };
+  }
+
+  private lanChatConversationWithUnread(conversation: LanChatConversation): LanChatConversation {
+    const lastReadSeq = this.lanChatReadSeq.get(conversation.id) || 0;
+    const unreadCount = this.lanChatMessages
+      .filter((message) => message.conversationId === conversation.id && message.seq > lastReadSeq)
+      .length;
+    return {
+      ...this.cloneLanChatConversation(conversation),
+      unreadCount,
+    };
+  }
+
+  private buildLanChatStatus(): LanChatStatus {
+    const self = this.lanChatSelf();
+    return {
+      mode: this.lanChatConfig.mode,
+      connected: this.lanChatConfig.mode !== "off",
+      roomName: this.lanChatConfig.roomName,
+      self,
+      onlineUsers: [self, ...this.lanChatUsers.map((user) => ({ ...user }))],
+      onlineNodes: [
+        { instanceId: this.lanChatConfig.instanceId, connected: this.lanChatConfig.mode !== "off" },
+        ...this.lanChatUsers.map((user) => ({ instanceId: user.instanceId, connected: user.online })),
+      ],
+      lastError: "",
+    };
+  }
+
+  private emitLanChatEvent(event: LanChatEvent) {
+    for (const listener of this.lanChatSocketListeners) {
+      listener(event);
+    }
   }
 
   private isLocalAdminSession() {
@@ -4678,6 +4789,128 @@ export class MockWebBotClient implements WebBotClient {
     };
     this.gitIdentityConfigs.set(botAlias, next);
     return next;
+  }
+
+  async getLanChatConfig(): Promise<LanChatConfig> {
+    return { ...this.lanChatConfig };
+  }
+
+  async updateLanChatConfig(input: LanChatConfigInput): Promise<LanChatConfig> {
+    this.lanChatConfig = {
+      ...this.lanChatConfig,
+      ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.roomName !== undefined ? { roomName: input.roomName } : {}),
+      ...(input.instanceName !== undefined ? { instanceName: input.instanceName } : {}),
+      ...(input.hostUrl !== undefined ? { hostUrl: input.hostUrl } : {}),
+      ...(input.roomKey !== undefined ? {
+        roomKey: input.roomKey,
+        roomKeyPreview: input.roomKey ? `tcbr...${input.roomKey.slice(-4)}` : "",
+      } : {}),
+      ...(input.lanOnly !== undefined ? { lanOnly: input.lanOnly } : {}),
+      ...(input.autoConnect !== undefined ? { autoConnect: input.autoConnect } : {}),
+    };
+    const group = this.lanChatConversations.get("group:default");
+    if (group) {
+      this.lanChatConversations.set("group:default", {
+        ...group,
+        title: this.lanChatConfig.roomName,
+        updatedAt: this.lanChatNow(),
+      });
+    }
+    this.emitLanChatEvent({ type: "config_updated", config: { ...this.lanChatConfig } });
+    this.emitLanChatEvent({ type: "presence_updated", status: this.buildLanChatStatus() });
+    return { ...this.lanChatConfig };
+  }
+
+  async getLanChatStatus(): Promise<LanChatStatus> {
+    return this.buildLanChatStatus();
+  }
+
+  async listLanChatConversations(): Promise<LanChatConversation[]> {
+    return Array.from(this.lanChatConversations.values())
+      .map((conversation) => this.lanChatConversationWithUnread(conversation))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async listLanChatMessages(conversationId: string, afterSeq = 0, limit = 50): Promise<LanChatMessage[]> {
+    return this.lanChatMessages
+      .filter((message) => message.conversationId === conversationId && message.seq > afterSeq)
+      .slice(-limit)
+      .map((message) => this.cloneLanChatMessage(message));
+  }
+
+  async createLanChatPrivateConversation(targetRoomUserId: string): Promise<LanChatConversation> {
+    const self = this.lanChatSelf();
+    const target = this.lanChatUsers.find((user) => user.roomUserId === targetRoomUserId);
+    if (!target) {
+      throw new WebApiClientError("联机聊天用户不存在", { status: 404, code: "lan_chat_user_not_found" });
+    }
+    const conversationId = `dm:${targetRoomUserId}`;
+    const current = this.lanChatConversations.get(conversationId);
+    if (current) {
+      return this.lanChatConversationWithUnread(current);
+    }
+    const conversation: LanChatConversation = {
+      id: conversationId,
+      kind: "dm",
+      title: target.displayName,
+      participantIds: [self.roomUserId, target.roomUserId],
+      lastMessage: null,
+      unreadCount: 0,
+      updatedAt: this.lanChatNow(),
+    };
+    this.lanChatConversations.set(conversation.id, conversation);
+    this.emitLanChatEvent({ type: "conversation_updated", conversation: this.cloneLanChatConversation(conversation) });
+    return this.cloneLanChatConversation(conversation);
+  }
+
+  async sendLanChatMessage(conversationId: string, text: string): Promise<LanChatMessage> {
+    const conversation = this.lanChatConversations.get(conversationId);
+    if (!conversation) {
+      throw new WebApiClientError("联机聊天会话不存在", { status: 404, code: "lan_chat_conversation_not_found" });
+    }
+    const message: LanChatMessage = {
+      id: `msg_${this.lanChatMessages.length + 1}`,
+      seq: this.lanChatMessages.length + 1,
+      conversationId,
+      kind: conversation.kind,
+      sender: this.lanChatSelf(),
+      text: text.trim(),
+      createdAt: this.lanChatNow(),
+    };
+    this.lanChatMessages = [...this.lanChatMessages, message];
+    const updatedConversation = {
+      ...conversation,
+      lastMessage: message,
+      updatedAt: message.createdAt,
+    };
+    this.lanChatConversations.set(conversationId, updatedConversation);
+    this.emitLanChatEvent({ type: "message_created", message: this.cloneLanChatMessage(message) });
+    this.emitLanChatEvent({
+      type: "conversation_updated",
+      conversation: this.lanChatConversationWithUnread(updatedConversation),
+    });
+    return this.cloneLanChatMessage(message);
+  }
+
+  async markLanChatRead(conversationId: string, seq: number): Promise<void> {
+    this.lanChatReadSeq.set(conversationId, Math.max(seq, this.lanChatReadSeq.get(conversationId) || 0));
+    this.emitLanChatEvent({
+      type: "read_updated",
+      conversationId,
+      lastReadSeq: this.lanChatReadSeq.get(conversationId) || 0,
+    });
+  }
+
+  openLanChatSocket(onEvent: (event: LanChatEvent) => void): () => void {
+    this.lanChatSocketListeners.add(onEvent);
+    const timer = window.setTimeout(() => {
+      onEvent({ type: "snapshot", status: this.buildLanChatStatus() });
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      this.lanChatSocketListeners.delete(onEvent);
+    };
   }
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {

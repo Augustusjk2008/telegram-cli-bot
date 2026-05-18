@@ -3442,4 +3442,125 @@ describe("RealWebBotClient", () => {
     expect(status.pendingUpdateVersion).toBe("1.2.3");
     expect(status.pendingUpdatePath).toBe("C:\\pkg\\offline.zip");
   });
+
+  test("maps lan chat config and sends messages", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/admin/lan-chat/config" && init?.method === "PATCH") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            data: {
+              mode: "host",
+              room_name: "工作室",
+              instance_id: "inst_a",
+              instance_name: "A-PC",
+              host_url: "",
+              room_key: "tcbr_full_1234",
+              room_key_preview: "tcbr...1234",
+              lan_only: true,
+              auto_connect: true,
+            },
+          }),
+        };
+      }
+      if (url === "/api/lan-chat/conversations/group%3Adefault/messages" && init?.method === "POST") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            data: {
+              id: "msg_1",
+              seq: 1,
+              conversation_id: "group:default",
+              kind: "group",
+              sender: {
+                room_user_id: "inst_a:member_1",
+                account_id: "member_1",
+                username: "alice",
+                display_name: "alice",
+                instance_id: "inst_a",
+                instance_name: "A-PC",
+                online: true,
+                last_seen_at: "2026-05-18T12:00:00+08:00",
+              },
+              text: "你好",
+              created_at: "2026-05-18T12:00:00+08:00",
+            },
+          }),
+        };
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ ok: false, error: { code: "missing", message: "missing" } }),
+      };
+    });
+
+    const client = new RealWebBotClient();
+    const config = await client.updateLanChatConfig({ mode: "host", roomName: "工作室", instanceName: "A-PC" });
+    const message = await client.sendLanChatMessage("group:default", "你好");
+
+    expect(config.roomName).toBe("工作室");
+    expect(config.instanceName).toBe("A-PC");
+    expect(config.roomKey).toBe("tcbr_full_1234");
+    expect(message.conversationId).toBe("group:default");
+    expect(message.text).toBe("你好");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/lan-chat/config",
+      expect.objectContaining({
+        body: JSON.stringify({ mode: "host", room_name: "工作室", instance_name: "A-PC" }),
+      }),
+    );
+  });
+
+  test("lan chat socket includes current auth token", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          token: "web_sess_lan",
+          username: "alice",
+          role: "member",
+          capabilities: ["view_chat_history"],
+        },
+      }),
+    });
+    const sockets: Array<{ url: string; close: () => void; addEventListener: () => void }> = [];
+    class MockSocket {
+      url: string;
+
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+
+      addEventListener() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", MockSocket);
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { protocol: "http:", host: "127.0.0.1:8765" },
+    });
+
+    try {
+      const client = new RealWebBotClient();
+      await client.loginGuest();
+      const close = client.openLanChatSocket(vi.fn());
+      close();
+
+      expect(sockets[0].url).toBe("ws://127.0.0.1:8765/lan-chat/ws?token=web_sess_lan");
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+    }
+  });
 });

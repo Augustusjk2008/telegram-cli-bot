@@ -48,6 +48,7 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
+from .lan_chat_service import LanChatService
 from .auth_store import (
     AuthStoreError,
     CAP_ADMIN_OPS,
@@ -87,6 +88,7 @@ from .routes import (
     debug_routes,
     files_routes,
     git_routes,
+    lan_chat_routes,
     plugin_routes,
     terminal_routes,
 )
@@ -646,6 +648,7 @@ class WebApiServer:
         self._debug_sockets: set[web.WebSocketResponse] = set()
         self._debug_tasks: set[asyncio.Task[Any]] = set()
         self.announcement_store = _ANNOUNCEMENT_STORE
+        self.lan_chat_service = LanChatService(repo_root=_REPO_ROOT)
         self._tunnel_service = tunnel_service or TunnelService(
             host=self._host,
             port=self._port,
@@ -3288,6 +3291,7 @@ class WebApiServer:
             assistant_routes,
             git_routes,
             admin_routes,
+            lan_chat_routes,
         ):
             module.register(app, self)
         
@@ -3386,6 +3390,7 @@ class WebApiServer:
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             await plugin_service.shutdown()
+        await self.lan_chat_service.close()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:

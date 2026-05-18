@@ -30,6 +30,7 @@ import { CommandPalette } from "./CommandPalette";
 import { DebugPane } from "./DebugPane";
 import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
+import { LanChatDock } from "./LanChatDock";
 import { OutlinePane } from "./OutlinePane";
 import { PaneResizer } from "./PaneResizer";
 import { SearchPane } from "./SearchPane";
@@ -876,6 +877,13 @@ export function DesktopWorkbench({
     }
   }
 
+  const lanChatDock = (
+    <LanChatDock
+      client={client}
+      visible={!structureOnly && !Boolean(focusedPane)}
+    />
+  );
+
   return (
     <div
       data-testid="desktop-workbench-root"
@@ -1144,6 +1152,7 @@ export function DesktopWorkbench({
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
+        rightAction={lanChatDock}
       />
 
       {!structureOnly ? (
