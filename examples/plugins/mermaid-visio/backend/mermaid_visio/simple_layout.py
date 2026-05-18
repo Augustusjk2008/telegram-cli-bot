@@ -11,12 +11,22 @@ def simple_layout(ir: FlowchartIR) -> LayoutResult:
     for edge in ir.edges:
         outgoing[edge.source].append(edge.target)
         indegree[edge.target] = indegree.get(edge.target, 0) + 1
-    queue = deque([node_id for node_id, count in indegree.items() if count == 0] or list(ir.nodes))
+    queue = deque([node_id for node_id, count in indegree.items() if count == 0])
+    remaining = set(ir.nodes)
     ranks: dict[str, int] = {}
-    while queue:
+    cycle_detected = False
+    while remaining:
+        if not queue:
+            cycle_detected = True
+            queue.append(next(node_id for node_id in ir.nodes if node_id in remaining))
         node_id = queue.popleft()
+        if node_id not in remaining:
+            continue
+        remaining.remove(node_id)
         rank = ranks.get(node_id, 0)
         for target in outgoing[node_id]:
+            if target not in remaining:
+                continue
             ranks[target] = max(ranks.get(target, 0), rank + 1)
             indegree[target] -= 1
             if indegree[target] <= 0:
@@ -51,7 +61,10 @@ def simple_layout(ir: FlowchartIR) -> LayoutResult:
     }
     width = max((node.x + node.width / 2 for node in nodes.values()), default=1.0) + 1.0
     height = max((node.y + node.height / 2 for node in nodes.values()), default=1.0) + 1.0
-    return LayoutResult(width=width, height=height, nodes=nodes, edges=edges, warnings=["已使用简单布局"])
+    warnings = ["已使用简单布局"]
+    if cycle_detected:
+        warnings.append("检测到回环，已按简单布局处理")
+    return LayoutResult(width=width, height=height, nodes=nodes, edges=edges, warnings=warnings)
 
 
 def _node_size(label: str, kind: str) -> tuple[float, float]:

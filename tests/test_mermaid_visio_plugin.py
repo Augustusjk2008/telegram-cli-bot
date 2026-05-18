@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -152,6 +153,38 @@ def test_vsdx_writer_creates_visio_zip_with_page_shapes(tmp_path: Path) -> None:
     assert "开始" in page_xml
     assert "判断" in page_xml
     assert warnings == ["已使用简单布局"]
+
+
+def test_simple_layout_converts_cyclic_flowchart_without_graphviz(tmp_path: Path) -> None:
+    output = tmp_path / "cycle.vsdx"
+    script = f"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, {str(BACKEND_SOURCE)!r})
+
+from mermaid_visio.converter import convert_source_to_vsdx
+from mermaid_visio.models import DiagramSource, PluginConfig
+
+convert_source_to_vsdx(
+    DiagramSource("diagram-1", "cycle", "flowchart TD\\nA --> B\\nB --> C\\nC --> A\\n", 1, "cycle.vsdx"),
+    PluginConfig(layout_engine="simple"),
+    Path(sys.argv[1]),
+)
+"""
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(output)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("simple layout timed out for cyclic flowchart")
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert output.read_bytes().startswith(b"PK")
 
 
 def test_export_selected_marks_budget_exhaustion_without_calling_worker() -> None:
