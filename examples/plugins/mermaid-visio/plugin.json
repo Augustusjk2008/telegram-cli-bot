@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 2,
+  "id": "mermaid-visio",
+  "name": "Mermaid To Visio",
+  "version": "0.1.0",
+  "description": "将 Mermaid flowchart 子集导出为可编辑 VSDX。",
+  "enabled": true,
+  "config": {
+    "conversionTimeoutSeconds": 45,
+    "graphvizTimeoutSeconds": 8,
+    "maxSourceBytes": 1048576,
+    "maxDiagramsPerExport": 20,
+    "maxNodesPerDiagram": 200,
+    "maxEdgesPerDiagram": 400,
+    "layoutEngine": "auto",
+    "allowSimpleLayoutFallback": true,
+    "dotPath": "dot"
+  },
+  "configSchema": {
+    "title": "Mermaid Visio Settings",
+    "sections": [
+      {
+        "id": "limits",
+        "title": "转换限制",
+        "fields": [
+          {
+            "key": "conversionTimeoutSeconds",
+            "label": "转换超时秒数",
+            "type": "integer",
+            "default": 45,
+            "minimum": 5,
+            "maximum": 55,
+            "description": "单次插件请求内的转换预算。"
+          },
+          {
+            "key": "graphvizTimeoutSeconds",
+            "label": "Graphviz 超时秒数",
+            "type": "integer",
+            "default": 8,
+            "minimum": 1,
+            "maximum": 30
+          },
+          {
+            "key": "maxDiagramsPerExport",
+            "label": "批量导出最大图数",
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100
+          },
+          {
+            "key": "layoutEngine",
+            "label": "布局引擎",
+            "type": "select",
+            "default": "auto",
+            "options": [
+              { "value": "auto", "label": "自动" },
+              { "value": "graphviz", "label": "Graphviz" },
+              { "value": "simple", "label": "简单布局" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true,
+      "tempArtifacts": true
+    }
+  },
+  "views": [
+    {
+      "id": "mermaid-visio",
+      "title": "Mermaid 转 Visio",
+      "renderer": "table",
+      "viewMode": "session",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "markdown-mermaid",
+      "label": "Markdown Mermaid 转 Visio",
+      "extensions": [".md"],
+      "viewId": "mermaid-visio"
+    },
+    {
+      "id": "mermaid-source",
+      "label": "Mermaid 转 Visio",
+      "extensions": [".mmd", ".mermaid"],
+      "viewId": "mermaid-visio"
+    }
+  ]
+}
