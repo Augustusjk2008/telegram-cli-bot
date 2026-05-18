@@ -4,6 +4,7 @@ import type {
   AdminUserUpdateInput,
   AccountRole,
   AnnouncementCategory,
+  CreateAnnouncementInput,
   AnnouncementItem,
   AnnouncementListResult,
   AnnouncementSeverity,
@@ -1786,10 +1787,8 @@ function mapAnnouncementList(raw: RawAnnouncementListResult): AnnouncementListRe
   };
 }
 
-function mapAnnouncementInput(input: AnnouncementItem): Record<string, unknown> {
+function mapAnnouncementInput(input: CreateAnnouncementInput): Record<string, unknown> {
   return {
-    id: input.id,
-    published_at: input.publishedAt,
     publisher: input.publisher,
     title: input.title,
     category: input.category,
@@ -2728,7 +2727,7 @@ export class RealWebBotClient implements WebBotClient {
     return mapAnnouncementList(data);
   }
 
-  async upsertAnnouncement(input: AnnouncementItem): Promise<AnnouncementItem> {
+  async upsertAnnouncement(input: CreateAnnouncementInput): Promise<AnnouncementItem> {
     const data = await this.requestJson<RawAnnouncementItem>("/api/admin/announcements", {
       method: "POST",
       headers: {

@@ -3,6 +3,7 @@ import type {
   AdminUserUpdateInput,
   AnnouncementItem,
   AnnouncementListResult,
+  CreateAnnouncementInput,
   BotOverview,
   BotSummary,
   AgentInput,
@@ -115,7 +116,7 @@ export interface WebBotClient {
   logout(): Promise<void>;
   listAnnouncements(): Promise<AnnouncementListResult>;
   markAnnouncementsSeen(latestId: string): Promise<AnnouncementListResult>;
-  upsertAnnouncement(input: AnnouncementItem): Promise<AnnouncementItem>;
+  upsertAnnouncement(input: CreateAnnouncementInput): Promise<AnnouncementItem>;
   deleteAnnouncement(id: string): Promise<{ deleted: boolean }>;
   listRegisterCodes(): Promise<RegisterCodeItem[]>;
   createRegisterCode(maxUses?: number): Promise<RegisterCodeCreateResult>;

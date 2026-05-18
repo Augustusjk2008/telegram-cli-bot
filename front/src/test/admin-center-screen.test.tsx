@@ -63,12 +63,46 @@ test("admin center publishes announcements", async () => {
 
   await user.click(screen.getByRole("tab", { name: "公告" }));
   await screen.findByRole("heading", { name: "发布公告" });
+  expect(screen.queryByLabelText("公告 ID")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("公告发布时间")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "发布公告" }));
 
   await waitFor(() => {
     expect(upsertAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
-      id: "ann-2026-05-13-admin-center",
+      publisher: "CLI Bridge",
       title: "管理中心更新",
     }));
   });
+});
+
+test("mock client generates announcement ids from publish minute", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-05-18T01:31:42.000Z"));
+  try {
+    const client = new MockWebBotClient();
+    await client.login({ username: "127.0.0.1", password: "test" });
+
+    const first = await client.upsertAnnouncement({
+      publisher: "CLI Bridge",
+      title: "第一条",
+      category: "feature",
+      severity: "info",
+      summary: "摘要",
+      sections: [],
+    });
+    const second = await client.upsertAnnouncement({
+      publisher: "CLI Bridge",
+      title: "第二条",
+      category: "feature",
+      severity: "info",
+      summary: "摘要",
+      sections: [],
+    });
+
+    expect(first.id).toBe("ann-2026-05-18-09-31");
+    expect(first.publishedAt).toBe("2026-05-18T09:31:00+08:00");
+    expect(second.id).toBe("ann-2026-05-18-09-31-02");
+  } finally {
+    vi.useRealTimers();
+  }
 });

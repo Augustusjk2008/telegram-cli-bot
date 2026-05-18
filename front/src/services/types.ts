@@ -63,6 +63,8 @@ export type AnnouncementItem = {
   sections: AnnouncementSection[];
 };
 
+export type CreateAnnouncementInput = Omit<AnnouncementItem, "id" | "publishedAt">;
+
 export type AnnouncementListResult = {
   items: AnnouncementItem[];
   latestId: string;

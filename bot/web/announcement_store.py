@@ -14,8 +14,27 @@ _CATEGORIES = {"release", "feature", "fix", "maintenance", "notice"}
 _SEVERITIES = {"info", "success", "warning", "danger"}
 
 
+def _now_announcement_datetime() -> datetime:
+    return datetime.now(timezone.utc).astimezone()
+
+
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return _now_announcement_datetime().isoformat(timespec="seconds")
+
+
+def _announcement_id_base(published_at: datetime) -> str:
+    return f"ann-{published_at.strftime('%Y-%m-%d-%H-%M')}"
+
+
+def _next_announcement_id(existing_ids: set[str], base_id: str) -> str:
+    if base_id not in existing_ids:
+        return base_id
+    index = 2
+    while True:
+        candidate = f"{base_id}-{index:02d}"
+        if candidate not in existing_ids:
+            return candidate
+        index += 1
 
 
 class AnnouncementStore:
@@ -62,6 +81,20 @@ class AnnouncementStore:
             items = [current for current in data.get("items", []) if current.get("id") != normalized["id"]]
             items.append(normalized)
             data["items"] = items
+            data["updated_at"] = _now_iso()
+            self._save(data)
+        return deepcopy(normalized)
+
+    def create_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        published_at = _now_announcement_datetime().replace(second=0, microsecond=0)
+        with self._lock:
+            data = self._load()
+            existing_ids = {str(current.get("id") or "") for current in data.get("items", []) if isinstance(current, dict)}
+            generated = dict(item)
+            generated["id"] = _next_announcement_id(existing_ids, _announcement_id_base(published_at))
+            generated["published_at"] = published_at.isoformat(timespec="seconds")
+            normalized = self._validate_item(generated)
+            data.setdefault("items", []).append(normalized)
             data["updated_at"] = _now_iso()
             self._save(data)
         return deepcopy(normalized)

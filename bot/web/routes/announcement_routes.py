@@ -54,7 +54,7 @@ async def post_admin_announcement(request: web.Request) -> web.Response:
     await server._with_capability(request, CAP_ADMIN_OPS)
     payload = await _parse_json(request)
     try:
-        data = server.announcement_store.upsert_item(payload)
+        data = server.announcement_store.create_item(payload)
     except ValueError as exc:
         raise WebApiError(400, "invalid_announcement", str(exc)) from exc
     return _json({"ok": True, "data": data})

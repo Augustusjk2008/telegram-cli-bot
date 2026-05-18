@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,33 @@ def test_store_marks_latest_seen_per_user(tmp_path: Path) -> None:
     assert store.list_for_user("other")["has_unseen"] is True
 
 
+def test_store_create_item_generates_id_and_publish_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import bot.web.announcement_store as announcement_store
+
+    frozen = datetime(2026, 5, 18, 9, 31, 42, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(announcement_store, "_now_announcement_datetime", lambda: frozen, raising=False)
+    store = AnnouncementStore(tmp_path / "announcements.json")
+
+    created = store.create_item(_announcement(id="", published_at=""))
+
+    assert created["id"] == "ann-2026-05-18-09-31"
+    assert created["published_at"] == "2026-05-18T09:31:00+08:00"
+
+
+def test_store_create_item_deduplicates_same_minute_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import bot.web.announcement_store as announcement_store
+
+    frozen = datetime(2026, 5, 18, 9, 31, 42, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(announcement_store, "_now_announcement_datetime", lambda: frozen, raising=False)
+    store = AnnouncementStore(tmp_path / "announcements.json")
+
+    first = store.create_item(_announcement(id="", published_at="", title="第一条"))
+    second = store.create_item(_announcement(id="", published_at="", title="第二条"))
+
+    assert first["id"] == "ann-2026-05-18-09-31"
+    assert second["id"] == "ann-2026-05-18-09-31-02"
+
+
 class _FakeAuth:
     def __init__(self, account_id: str, capabilities: set[str]) -> None:
         self.account_id = account_id
@@ -113,3 +141,29 @@ async def test_admin_upsert_requires_admin_capability(tmp_path: Path) -> None:
 
     with pytest.raises(web.HTTPForbidden):
         await post_admin_announcement(request)
+
+
+@pytest.mark.asyncio
+async def test_admin_post_generates_announcement_id_and_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bot.web.announcement_store as announcement_store
+    from bot.web.routes.announcement_routes import post_admin_announcement
+
+    frozen = datetime(2026, 5, 18, 9, 31, 42, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(announcement_store, "_now_announcement_datetime", lambda: frozen, raising=False)
+    store = AnnouncementStore(tmp_path / "announcements.json")
+    server = _FakeServer(store)
+    payload = _announcement()
+    payload.pop("id")
+    payload.pop("published_at")
+    request = make_mocked_request("POST", "/api/admin/announcements", app={"server": server})
+    request._read_bytes = json.dumps(payload).encode("utf-8")
+
+    response = await post_admin_announcement(request)
+    body = json.loads(response.text or "{}")
+
+    assert response.status == 200
+    assert body["data"]["id"] == "ann-2026-05-18-09-31"
+    assert body["data"]["published_at"] == "2026-05-18T09:31:00+08:00"

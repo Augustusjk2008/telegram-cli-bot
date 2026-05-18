@@ -2,6 +2,7 @@ import { WebApiClientError } from "./types";
 import type {
   AdminUser,
   AdminUserUpdateInput,
+  CreateAnnouncementInput,
   AnnouncementItem,
   AnnouncementListResult,
   AssistantAdminAuditItem,
@@ -1590,6 +1591,49 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  private formatAnnouncementTimestamp(date: Date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+    const datePart = `${value("year")}-${value("month")}-${value("day")}`;
+    const timePart = `${value("hour")}:${value("minute")}`;
+    return {
+      idBase: `ann-${datePart}-${value("hour")}-${value("minute")}`,
+      publishedAt: `${datePart}T${timePart}:00+08:00`,
+    };
+  }
+
+  private nextAnnouncementId(baseId: string) {
+    const existingIds = new Set(this.announcements.map((item) => item.id));
+    if (!existingIds.has(baseId)) {
+      return baseId;
+    }
+    let index = 2;
+    while (true) {
+      const candidate = `${baseId}-${String(index).padStart(2, "0")}`;
+      if (!existingIds.has(candidate)) {
+        return candidate;
+      }
+      index += 1;
+    }
+  }
+
+  private normalizeAnnouncementInput(input: CreateAnnouncementInput): AnnouncementItem {
+    const { idBase, publishedAt } = this.formatAnnouncementTimestamp(new Date());
+    return this.cloneAnnouncement({
+      ...input,
+      id: this.nextAnnouncementId(idBase),
+      publishedAt,
+    });
+  }
+
   private buildAnnouncementList(): AnnouncementListResult {
     const items = this.sortedAnnouncements();
     const latestId = items[0]?.id || "";
@@ -2392,11 +2436,11 @@ export class MockWebBotClient implements WebBotClient {
     return this.buildAnnouncementList();
   }
 
-  async upsertAnnouncement(input: AnnouncementItem): Promise<AnnouncementItem> {
+  async upsertAnnouncement(input: CreateAnnouncementInput): Promise<AnnouncementItem> {
     if (!this.isLocalAdminSession()) {
       throw new WebApiClientError("无权发布公告", { status: 403, code: "forbidden" });
     }
-    const normalized = this.cloneAnnouncement(input);
+    const normalized = this.normalizeAnnouncementInput(input);
     this.announcements = [
       normalized,
       ...this.announcements.filter((item) => item.id !== normalized.id),

@@ -7,6 +7,7 @@ import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   BotSummary,
+  CreateAnnouncementInput,
   OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -22,9 +23,7 @@ type Props = {
 
 type AdminCenterTab = "users" | "invites" | "updates" | "announcements";
 
-const DEFAULT_ANNOUNCEMENT_DRAFT: AnnouncementItem = {
-  id: "ann-2026-05-13-admin-center",
-  publishedAt: "2026-05-13T09:00:00+08:00",
+const DEFAULT_ANNOUNCEMENT_DRAFT: CreateAnnouncementInput = {
   publisher: "CLI Bridge",
   title: "管理中心更新",
   category: "feature",
@@ -61,7 +60,7 @@ export function AdminCenterScreen({
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [offlinePackages, setOfflinePackages] = useState<OfflineUpdatePackageList | null>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
-  const [announcementDraft, setAnnouncementDraft] = useState<AnnouncementItem>(DEFAULT_ANNOUNCEMENT_DRAFT);
+  const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
@@ -390,7 +389,7 @@ export function AdminCenterScreen({
     }
   };
 
-  const updateAnnouncementDraft = <K extends keyof AnnouncementItem>(key: K, value: AnnouncementItem[K]) => {
+  const updateAnnouncementDraft = <K extends keyof CreateAnnouncementInput>(key: K, value: CreateAnnouncementInput[K]) => {
     setAnnouncementDraft((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -667,28 +666,10 @@ export function AdminCenterScreen({
             <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">发布公告</h2>
-                <p className="text-sm text-[var(--muted)]">发布新 id 后，用户下次登录会自动看到。</p>
+                <p className="text-sm text-[var(--muted)]">发布后系统自动生成编号和时间，用户下次登录会自动看到。</p>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">公告 ID</span>
-                  <input
-                    aria-label="公告 ID"
-                    value={announcementDraft.id}
-                    onChange={(event) => updateAnnouncementDraft("id", event.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">发布时间</span>
-                  <input
-                    aria-label="公告发布时间"
-                    value={announcementDraft.publishedAt}
-                    onChange={(event) => updateAnnouncementDraft("publishedAt", event.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
                 <label className="space-y-1">
                   <span className="text-sm text-[var(--text)]">发布者</span>
                   <input
