@@ -806,6 +806,49 @@ test("copies final answer from collapsed trace header without expanding details"
   expect(screen.queryByText("过程内容")).not.toBeInTheDocument();
 });
 
+test("copy final answer button shows success feedback and locks briefly", async () => {
+  const writeText = mockClipboardWrite();
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "最终回答内容",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          trace: [{ kind: "commentary", summary: "过程内容" }],
+          traceCount: 1,
+          toolCallCount: 0,
+          processCount: 1,
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("最终回答内容")).toBeInTheDocument();
+  vi.useFakeTimers();
+  fireEvent.click(screen.getByRole("button", { name: "复制最终回答" }));
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(writeText).toHaveBeenCalledWith("最终回答内容");
+  const copiedButton = screen.getByRole("button", { name: "已复制最终回答" });
+  expect(copiedButton).toBeDisabled();
+
+  fireEvent.click(copiedButton);
+  expect(writeText).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
+  expect(screen.getByRole("button", { name: "复制最终回答" })).toBeEnabled();
+});
+
 test("shows streamed commentary trace in the assistant bubble before final text", async () => {
   const user = userEvent.setup();
   const client = createClient({

@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo } from "react";
-import { ChevronDown, ChevronRight, Copy, ListTree, LoaderCircle } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { CheckCheck, ChevronDown, ChevronRight, Copy, ListTree, LoaderCircle } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { delightMotion, delightMotionStagger, premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import type { ChatTraceEvent } from "../services/types";
@@ -17,7 +17,7 @@ type Props = {
   isLoading?: boolean;
   loadError?: string;
   onLoadTrace?: () => void;
-  onCopyFinalAnswer?: () => void | Promise<void>;
+  onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
 };
 
 function describeProcessEvent(event: ChatTraceEvent) {
@@ -51,6 +51,8 @@ function ChatTracePanelInner({
   onCopyFinalAnswer,
 }: Props) {
   const reduceMotion = useReducedMotion();
+  const [copiedFinalAnswer, setCopiedFinalAnswer] = useState(false);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
   const events = trace || [];
   const summary = useMemo(() => ({
     traceCount: typeof traceCount === "number" ? traceCount : events.length,
@@ -67,11 +69,35 @@ function ChatTracePanelInner({
     onLoadTrace();
   }, [expanded, events.length, isLoading, loadError, onLoadTrace, summary.traceCount]);
 
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+  }, []);
+
   if (summary.traceCount <= 0) {
     return null;
   }
 
   const buttonLabel = `${expanded ? "收起" : "展开"}过程详情`;
+  const copyButtonLabel = copiedFinalAnswer ? "已复制最终回答" : "复制最终回答";
+  const handleCopyFinalAnswer = async () => {
+    if (!onCopyFinalAnswer || copiedFinalAnswer) {
+      return;
+    }
+    const copyResult = await onCopyFinalAnswer();
+    if (copyResult === false) {
+      return;
+    }
+    setCopiedFinalAnswer(true);
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopiedFinalAnswer(false);
+      copyFeedbackTimerRef.current = null;
+    }, 2000);
+  };
 
   return (
     <section
@@ -94,15 +120,18 @@ function ChatTracePanelInner({
           {onCopyFinalAnswer ? (
             <button
               type="button"
-              aria-label="复制最终回答"
-              title="复制最终回答"
+              aria-label={copyButtonLabel}
+              title={copyButtonLabel}
+              disabled={copiedFinalAnswer}
               onClick={(event) => {
                 event.stopPropagation();
-                void onCopyFinalAnswer();
+                void handleCopyFinalAnswer();
               }}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-700"
+              className={copiedFinalAnswer
+                ? "inline-flex h-6 w-6 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors disabled:cursor-not-allowed"
+                : "inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-700"}
             >
-              <Copy className="h-3.5 w-3.5" />
+              {copiedFinalAnswer ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             </button>
           ) : null}
           <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">

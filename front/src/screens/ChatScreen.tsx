@@ -614,7 +614,7 @@ type ChatMessageRowProps = {
   onFileLinkClick: (href: string) => void;
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: (messageClientStateKey: string) => void;
-  onCopyFinalAnswer: (text: string) => void;
+  onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -1533,12 +1533,14 @@ export function ChatScreen({
     const clipboard = globalThis.navigator?.clipboard;
     if (!clipboard?.writeText) {
       setError("当前环境不支持剪贴板复制");
-      return;
+      return false;
     }
     try {
       await clipboard.writeText(text);
+      return true;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "复制最终回答失败");
+      return false;
     }
   }, []);
 
