@@ -3,6 +3,10 @@ import type { DebugLaunchField, DebugProfile } from "../services/types";
 export type DebugLaunchFormValue = string | number | boolean | string[] | Record<string, string>;
 export type DebugLaunchForm = Record<string, DebugLaunchFormValue>;
 
+export function launchFormPatch(key: string, value: DebugLaunchFormValue): Partial<DebugLaunchForm> {
+  return { [key]: value };
+}
+
 export function buildDebugLaunchForm(profile: DebugProfile | null): DebugLaunchForm {
   if (!profile) {
     return {};

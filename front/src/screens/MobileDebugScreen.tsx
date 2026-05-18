@@ -16,7 +16,7 @@ import {
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import type { DebugLaunchField, DebugState, DebugVariable, FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { fieldsForProfile } from "../workbench/debugLaunchSchema";
+import { fieldsForProfile, launchFormPatch, type DebugLaunchFormValue } from "../workbench/debugLaunchSchema";
 import { toWorkspaceRelativeSourcePath } from "../workbench/debugSourcePath";
 import { useDebugSession } from "../workbench/useDebugSession";
 
@@ -94,7 +94,7 @@ function MobileLaunchField({
 }: {
   field: DebugLaunchField;
   value: unknown;
-  onChange: (value: unknown) => void;
+  onChange: (value: DebugLaunchFormValue) => void;
 }) {
   if (field.type === "boolean") {
     return (
@@ -317,7 +317,7 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
                     key={field.key}
                     field={field}
                     value={debug.launchForm[field.key]}
-                    onChange={(value) => debug.updateLaunchForm({ [field.key]: value })}
+                    onChange={(value) => debug.updateLaunchForm(launchFormPatch(field.key, value))}
                   />
                 ))}
               </div>

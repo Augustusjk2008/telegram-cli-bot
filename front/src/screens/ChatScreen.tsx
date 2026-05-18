@@ -614,6 +614,7 @@ type ChatMessageRowProps = {
   onFileLinkClick: (href: string) => void;
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: (messageClientStateKey: string) => void;
+  onCopyFinalAnswer: (text: string) => void;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -631,6 +632,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onFileLinkClick,
   onLoadTrace,
   onToggleTracePanel,
+  onCopyFinalAnswer,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
 
@@ -756,6 +758,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             isLoading={Boolean(traceLoadState?.loading)}
             loadError={traceLoadState?.error}
             onLoadTrace={() => void onLoadTrace(item.id)}
+            onCopyFinalAnswer={item.text ? () => onCopyFinalAnswer(item.text) : undefined}
           />
         ) : null}
       </div>
@@ -1524,6 +1527,19 @@ export function ChatScreen({
       delete nextState[messageClientStateKey];
       return nextState;
     });
+  }, []);
+
+  const handleCopyFinalAnswer = useCallback(async (text: string) => {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (!clipboard?.writeText) {
+      setError("当前环境不支持剪贴板复制");
+      return;
+    }
+    try {
+      await clipboard.writeText(text);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "复制最终回答失败");
+    }
   }, []);
 
   const loadMessageTrace = useCallback(async (messageId: string) => {
@@ -2313,6 +2329,7 @@ export function ChatScreen({
                 onFileLinkClick={handleFileLinkClick}
                 onLoadTrace={loadMessageTrace}
                 onToggleTracePanel={handleToggleTracePanel}
+                onCopyFinalAnswer={handleCopyFinalAnswer}
               />
             );
           })}

@@ -254,6 +254,19 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   });
 }
 
+function mockClipboardWrite() {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  return writeText;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   window.localStorage.clear();
@@ -759,6 +772,38 @@ test("streamed trace count grows beyond the first process event", async () => {
 
   expect(await screen.findByText("最终结果")).toBeInTheDocument();
   expect(screen.getByText("2 条过程")).toBeInTheDocument();
+});
+
+test("copies final answer from collapsed trace header without expanding details", async () => {
+  const user = userEvent.setup();
+  const writeText = mockClipboardWrite();
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "最终回答内容",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          trace: [{ kind: "commentary", summary: "过程内容" }],
+          traceCount: 1,
+          toolCallCount: 0,
+          processCount: 1,
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("最终回答内容")).toBeInTheDocument();
+  const toggle = screen.getByRole("button", { name: "展开过程详情" });
+  await user.click(screen.getByRole("button", { name: "复制最终回答" }));
+
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("最终回答内容"));
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("过程内容")).not.toBeInTheDocument();
 });
 
 test("shows streamed commentary trace in the assistant bubble before final text", async () => {

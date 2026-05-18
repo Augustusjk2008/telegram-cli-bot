@@ -3,6 +3,7 @@ import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testin
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import type { DebugProfile } from "../services/types";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DebugPane } from "../workbench/DebugPane";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
@@ -534,7 +535,7 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
 
 test("desktop debug pane renders provider label and schema fields", async () => {
   const user = userEvent.setup();
-  const profile = {
+  const profile: DebugProfile = {
     specVersion: 3,
     providerId: "python-debugpy",
     providerLabel: "Python debugpy",
@@ -557,7 +558,7 @@ test("desktop debug pane renders provider label and schema fields", async () => 
     remoteDir: "",
     remotePort: 0,
     providerConfig: {},
-  } as const;
+  };
 
   render(
     <DebugPane

@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DebugLaunchField, DebugProfile, DebugState, DebugVariable } from "../services/types";
-import { fieldsForProfile, type DebugLaunchForm } from "./debugLaunchSchema";
+import { fieldsForProfile, launchFormPatch, type DebugLaunchForm, type DebugLaunchFormValue } from "./debugLaunchSchema";
 
 type LaunchForm = DebugLaunchForm;
 
@@ -85,7 +85,7 @@ function LaunchFieldControl({
 }: {
   field: DebugLaunchField;
   value: unknown;
-  onChange: (value: unknown) => void;
+  onChange: (value: DebugLaunchFormValue) => void;
 }) {
   if (field.type === "boolean") {
     return (
@@ -361,7 +361,7 @@ export function DebugPane({
                   key={field.key}
                   field={field}
                   value={launchForm[field.key]}
-                  onChange={(value) => onLaunchFormChange({ [field.key]: value })}
+                  onChange={(value) => onLaunchFormChange(launchFormPatch(field.key, value))}
                 />
               ))}
             </div>

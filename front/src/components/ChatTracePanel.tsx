@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo } from "react";
-import { ChevronDown, ChevronRight, ListTree, LoaderCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, ListTree, LoaderCircle } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { delightMotion, delightMotionStagger, premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import type { ChatTraceEvent } from "../services/types";
@@ -17,6 +17,7 @@ type Props = {
   isLoading?: boolean;
   loadError?: string;
   onLoadTrace?: () => void;
+  onCopyFinalAnswer?: () => void | Promise<void>;
 };
 
 function describeProcessEvent(event: ChatTraceEvent) {
@@ -47,6 +48,7 @@ function ChatTracePanelInner({
   isLoading = false,
   loadError = "",
   onLoadTrace,
+  onCopyFinalAnswer,
 }: Props) {
   const reduceMotion = useReducedMotion();
   const events = trace || [];
@@ -76,23 +78,39 @@ function ChatTracePanelInner({
       data-testid={`chat-trace-panel-${messageId}`}
       className="mt-2 rounded-2xl border border-slate-200 bg-slate-50/90 px-3 py-2"
     >
-      <button
-        type="button"
-        aria-label={buttonLabel}
-        aria-expanded={expanded}
-        onClick={onToggleExpanded}
-        className="flex w-full items-center justify-between gap-3 text-left"
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          {expanded ? <ChevronDown className="h-4 w-4 text-slate-500" /> : <ChevronRight className="h-4 w-4 text-slate-500" />}
-          <ListTree className="h-4 w-4 text-slate-500" />
-          <span className="text-sm font-medium text-slate-800">{buttonLabel}</span>
+      <div className="flex w-full items-center justify-between gap-3">
+        <button
+          type="button"
+          aria-label={buttonLabel}
+          aria-expanded={expanded}
+          onClick={onToggleExpanded}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
+          <ListTree className="h-4 w-4 shrink-0 text-slate-500" />
+          <span className="truncate text-sm font-medium text-slate-800">{buttonLabel}</span>
+        </button>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {onCopyFinalAnswer ? (
+            <button
+              type="button"
+              aria-label="复制最终回答"
+              title="复制最终回答"
+              onClick={(event) => {
+                event.stopPropagation();
+                void onCopyFinalAnswer();
+              }}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
+            {summary.processCount} 条过程
+            {summary.toolCallCount > 0 ? ` · ${summary.toolCallCount} 次工具` : ""}
+          </span>
         </span>
-        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
-          {summary.processCount} 条过程
-          {summary.toolCallCount > 0 ? ` · ${summary.toolCallCount} 次工具` : ""}
-        </span>
-      </button>
+      </div>
       <AnimatePresence initial={false}>
         {expanded ? (
           <motion.div
