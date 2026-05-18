@@ -738,15 +738,16 @@ export type PluginUpdateInput = {
   config?: Record<string, unknown>;
 };
 
+export type PluginOpenTarget = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  input: Record<string, unknown>;
+};
+
 export type FileOpenTarget =
-  | { kind: "file" }
-  | {
-      kind: "plugin_view";
-      pluginId: string;
-      viewId: string;
-      title: string;
-      input: Record<string, unknown>;
-    };
+  | { kind: "file"; pluginTargets?: PluginOpenTarget[] }
+  | ({ kind: "plugin_view" } & PluginOpenTarget);
 
 export type WaveformTrackSegment = {
   start: number;

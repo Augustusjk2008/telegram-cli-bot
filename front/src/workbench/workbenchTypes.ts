@@ -1,4 +1,4 @@
-import type { PluginRenderResult } from "../services/types";
+import type { PluginOpenTarget, PluginRenderResult } from "../services/types";
 
 export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
 export type DesktopWorkspaceView = "editor" | "assistant-ops";
@@ -154,6 +154,7 @@ export type EditorTab = {
   content: string;
   savedContent: string;
   kind?: "file" | "git-diff" | "plugin-view";
+  pluginTargets?: PluginOpenTarget[];
   pluginView?: PluginRenderResult;
   pluginInput?: Record<string, unknown>;
   sourcePath?: string;

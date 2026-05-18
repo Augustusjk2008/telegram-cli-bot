@@ -50,6 +50,7 @@ from .view_sessions import (
 
 _payload_bytes = payload_bytes
 _count_tree_nodes = count_tree_nodes
+_EDITABLE_PLUGIN_SOURCE_EXTENSIONS = frozenset({".md", ".mmd", ".mermaid"})
 
 
 class PluginService:
@@ -142,6 +143,24 @@ class PluginService:
 
     def _manifest_payload(self, manifest) -> dict[str, Any]:
         return build_manifest_payload(manifest)
+
+    def _file_target_title(self, path: str) -> str:
+        return Path(str(path or "")).name or str(path or "")
+
+    def _plugin_target_from_resolution(
+        self,
+        path: str,
+        resolution,
+        *,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        _, view = self._get_view_spec(resolution.plugin_id, resolution.view_id)
+        return {
+            "pluginId": resolution.plugin_id,
+            "viewId": resolution.view_id,
+            "title": title if title is not None else (view.title or self._file_target_title(path)),
+            "input": {"path": path},
+        }
 
     async def _invalidate_plugin(self, plugin_id: str, *, dispose_sessions: bool = False) -> None:
         stale_records = self.sessions.clear_plugin(plugin_id)
@@ -356,12 +375,14 @@ class PluginService:
         resolution = self.registry.resolve_file_handler(path)
         if resolution is None:
             return {"kind": "file"}
+        if Path(str(path or "")).suffix.lower() in _EDITABLE_PLUGIN_SOURCE_EXTENSIONS:
+            return {
+                "kind": "file",
+                "pluginTargets": [self._plugin_target_from_resolution(path, resolution)],
+            }
         return {
             "kind": "plugin_view",
-            "pluginId": resolution.plugin_id,
-            "viewId": resolution.view_id,
-            "title": Path(str(path or "")).name or str(path or ""),
-            "input": {"path": path},
+            **self._plugin_target_from_resolution(path, resolution, title=self._file_target_title(path)),
         }
 
     async def render_view(

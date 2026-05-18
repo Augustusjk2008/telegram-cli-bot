@@ -37,6 +37,41 @@ def _copy_plugin(tmp_path: Path) -> Path:
     return plugins_root
 
 
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("design.md", "# 总图\n```mermaid\nflowchart TD\nA --> B\n```\n"),
+        ("design.mmd", "flowchart TD\nA --> B\n"),
+        ("design.mermaid", "flowchart TD\nA --> B\n"),
+    ],
+)
+def test_plugin_service_resolves_mermaid_sources_as_file_with_plugin_target(
+    tmp_path: Path,
+    filename: str,
+    content: str,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    source = repo_root / filename
+    source.write_text(content, encoding="utf-8")
+
+    service = PluginService(repo_root, plugins_root=_copy_plugin(tmp_path))
+
+    target = service.resolve_file_target(str(source))
+
+    assert target == {
+        "kind": "file",
+        "pluginTargets": [
+            {
+                "pluginId": "mermaid-visio",
+                "viewId": "mermaid-visio",
+                "title": "Mermaid 转 Visio",
+                "input": {"path": str(source)},
+            }
+        ],
+    }
+
+
 def test_extracts_raw_mmd_and_markdown_mermaid_blocks() -> None:
     with plugin_backend_path():
         from mermaid_visio.source_extractor import extract_diagrams

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { selectTabsForPersistence } from "./workbenchSession";
 import {
@@ -17,6 +18,13 @@ type Props = {
 function basename(path: string) {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+function clonePluginTargets(pluginTargets?: PluginOpenTarget[]) {
+  return pluginTargets?.map((target) => ({
+    ...target,
+    input: { ...target.input },
+  }));
 }
 
 function createTab(
@@ -212,12 +220,19 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
     setActiveTabPath(path);
   }
 
-  async function openFile(path: string) {
+  async function openFile(path: string, pluginTargets?: PluginOpenTarget[]) {
     if (structureOnly) {
       return;
     }
+    const nextPluginTargets = clonePluginTargets(pluginTargets);
     const existing = tabsRef.current.find((item) => item.path === path);
     if (existing) {
+      setTabs((current) => current.map((item) => item.path === path
+        ? {
+            ...item,
+            pluginTargets: nextPluginTargets,
+          }
+        : item));
       setActiveTabPath(path);
       if (existing.cold || existing.missing) {
         await hydrateTabContent(path);
@@ -230,18 +245,14 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
       createTab(path, "", undefined, {
         loading: true,
         cold: true,
+        pluginTargets: nextPluginTargets,
       }),
     ]);
     setActiveTabPath(path);
     await hydrateTabContent(path);
   }
 
-  async function openPluginView(target: {
-    pluginId: string;
-    viewId: string;
-    title: string;
-    input: Record<string, unknown>;
-  }) {
+  async function openPluginView(target: PluginOpenTarget) {
     const sourcePath = typeof target.input.path === "string" ? target.input.path : undefined;
     const tabPath = `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
     const existing = tabsRef.current.find((item) => item.path === tabPath);

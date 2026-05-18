@@ -1,9 +1,9 @@
 import { clsx } from "clsx";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import { FileEditorSurface } from "../components/FileEditorSurface";
-import type { HostEffect } from "../services/types";
+import type { HostEffect, PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import type { EditorTab } from "./workbenchTypes";
 
@@ -28,12 +28,7 @@ type Props = {
   onRevealInTree: (path: string) => void | Promise<void>;
   onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
   onClosePluginTab?: (path: string) => void | Promise<void>;
-  onReopenPluginView?: (target: {
-    pluginId: string;
-    viewId: string;
-    title: string;
-    input: Record<string, unknown>;
-  }) => Promise<void> | void;
+  onReopenPluginView?: (target: PluginOpenTarget) => Promise<void> | void;
   onNotice?: (message: string) => void;
   focused: boolean;
   onToggleFocus: () => void;
@@ -79,6 +74,10 @@ function diffLineClass(kind: DiffLineKind) {
     return "bg-slate-100 text-slate-600";
   }
   return "text-[var(--text)]";
+}
+
+function pluginTargetLabel(target: PluginOpenTarget) {
+  return target.title.trim() || "Mermaid 转 Visio";
 }
 
 function GitDiffViewer({ content }: { content: string }) {
@@ -154,6 +153,11 @@ export function EditorPane({
   onToggleFocus,
 }: Props) {
   const [menuPath, setMenuPath] = useState("");
+  const [pluginMenuOpen, setPluginMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setPluginMenuOpen(false);
+  }, [activeTabPath]);
 
   if (tabs.length === 0 || !activeTab) {
     return (
@@ -166,6 +170,10 @@ export function EditorPane({
       </div>
     );
   }
+
+  const activePluginTargets = activeTab.kind === "file" ? activeTab.pluginTargets || [] : [];
+  const hasPluginMenu = activePluginTargets.length > 1;
+  const singlePluginTarget = activePluginTargets.length === 1 ? activePluginTargets[0] : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -283,15 +291,68 @@ export function EditorPane({
             );
           })}
         </div>
-        <button
-          type="button"
-          aria-label={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
-          title={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
-          onClick={onToggleFocus}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
-        >
-          {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
+        <div className="relative flex items-center gap-2">
+          {singlePluginTarget ? (
+            <button
+              type="button"
+              onClick={() => {
+                void onReopenPluginView?.(singlePluginTarget);
+              }}
+              disabled={!onReopenPluginView}
+              className="inline-flex h-8 items-center rounded-lg border border-[var(--accent-outline)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pluginTargetLabel(singlePluginTarget)}
+            </button>
+          ) : null}
+          {hasPluginMenu ? (
+            <div className="relative">
+              <button
+                type="button"
+                aria-expanded={pluginMenuOpen}
+                aria-haspopup="menu"
+                aria-label="插件入口"
+                onClick={() => {
+                  setPluginMenuOpen((current) => !current);
+                }}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--accent-outline)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
+              >
+                插件入口
+                <ChevronDown className="h-4 w-4" />
+              </button>
+              {pluginMenuOpen ? (
+                <div
+                  role="menu"
+                  aria-label="插件入口"
+                  className="absolute right-0 top-full z-20 mt-2 min-w-40 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+                >
+                  {activePluginTargets.map((target) => (
+                    <button
+                      key={`${target.pluginId}:${target.viewId}:${target.title}`}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setPluginMenuOpen(false);
+                        void onReopenPluginView?.(target);
+                      }}
+                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      {pluginTargetLabel(target)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            aria-label={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
+            title={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
+            onClick={onToggleFocus}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+          >
+            {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
 
       {activeTab.statusText ? (

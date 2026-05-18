@@ -723,6 +723,56 @@ test("embedded git opens changed file diffs as read-only editor tabs", async () 
   expect(screen.queryByLabelText("文件内容")).not.toBeInTheDocument();
 });
 
+test("desktop workbench keeps file tabs editable when file targets include plugin targets", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "graph TD\nA-->B",
+    mode: "cat",
+    fileSizeBytes: 16,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  });
+  const openPluginView = vi.spyOn(client, "openPluginView");
+  vi.spyOn(client, "resolveFileOpenTarget").mockResolvedValue({
+    kind: "file",
+    pluginTargets: [{
+      pluginId: "mermaid-visio",
+      viewId: "mermaid-visio",
+      title: "Mermaid 转 Visio",
+      input: { path: "README.md" },
+    }],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+
+  await waitFor(() => {
+    expect(readFileFull).toHaveBeenCalledWith("main", "README.md");
+  });
+  expect(openPluginView).not.toHaveBeenCalled();
+  expect(await screen.findByRole("button", { name: "Mermaid 转 Visio" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Mermaid 转 Visio" }));
+
+  await waitFor(() => {
+    expect(openPluginView).toHaveBeenCalledWith("main", "mermaid-visio", "mermaid-visio", { path: "README.md" });
+  });
+});
+
 test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
   const user = userEvent.setup();
 

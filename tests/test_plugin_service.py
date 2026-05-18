@@ -337,7 +337,13 @@ async def test_plugin_service_resolves_vcd_and_writes_audit(tmp_path: Path) -> N
     assert listed[0]["id"] == "vivado-waveform"
 
     target = service.resolve_file_target("waves/demo.vcd")
-    assert target["kind"] == "plugin_view"
+    assert target == {
+        "kind": "plugin_view",
+        "pluginId": "vivado-waveform",
+        "viewId": "waveform",
+        "title": "demo.vcd",
+        "input": {"path": "waves/demo.vcd"},
+    }
     payload = await service.render_view(
         bot_alias="main",
         plugin_id="vivado-waveform",

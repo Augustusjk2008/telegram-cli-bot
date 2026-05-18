@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult, GitTreeStatus, HostEffect, WorkspaceDefinitionItem } from "../services/types";
+import type { FileReadResult, GitTreeStatus, HostEffect, PluginOpenTarget, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { GitScreen } from "../screens/GitScreen";
@@ -607,7 +607,7 @@ export function DesktopWorkbench({
     }
 
     await Promise.allSettled([
-      tabs.openFile(path),
+      tabs.openFile(path, target.pluginTargets),
       fileTree.revealPath(path),
     ]);
     if (line && line > 0) {
@@ -631,12 +631,7 @@ export function DesktopWorkbench({
     });
   }
 
-  async function openPluginViewTab(target: {
-    pluginId: string;
-    viewId: string;
-    title: string;
-    input: Record<string, unknown>;
-  }) {
+  async function openPluginViewTab(target: PluginOpenTarget) {
     await tabs.openPluginView(target);
     const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
     if (sourcePath) {
