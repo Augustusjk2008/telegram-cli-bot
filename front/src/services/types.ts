@@ -916,10 +916,18 @@ export type DocumentTextRun = {
   italic?: boolean;
   underline?: boolean;
   code?: boolean;
+  color?: string;
+  fontSizePx?: number;
 };
 
-export type DocumentImageBlock = {
-  type: "image";
+export type DocumentSlideFrame = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type DocumentSlideImageRef = {
   artifactId: string;
   filename: string;
   contentType: string;
@@ -927,6 +935,52 @@ export type DocumentImageBlock = {
   title?: string;
   widthPx?: number;
   heightPx?: number;
+};
+
+export type DocumentSlideBackground = {
+  color?: string;
+  image?: DocumentSlideImageRef;
+};
+
+export type DocumentSlideParagraph = {
+  runs: DocumentTextRun[];
+  bullet?: string;
+  level?: number;
+  align?: "left" | "center" | "right";
+};
+
+export type DocumentSlideItem =
+  | {
+      type: "text";
+      frame: DocumentSlideFrame;
+      paragraphs: DocumentSlideParagraph[];
+      zIndex?: number;
+    }
+  | {
+      type: "image";
+      frame: DocumentSlideFrame;
+      image: DocumentSlideImageRef;
+      zIndex?: number;
+    }
+  | {
+      type: "table";
+      frame: DocumentSlideFrame;
+      rows: Array<{
+        cells: Array<{
+          runs: DocumentTextRun[];
+        }>;
+      }>;
+      zIndex?: number;
+    }
+  | {
+      type: "unsupported";
+      frame: DocumentSlideFrame;
+      label: string;
+      zIndex?: number;
+    };
+
+export type DocumentImageBlock = DocumentSlideImageRef & {
+  type: "image";
   caption?: string;
 };
 
@@ -946,6 +1000,15 @@ export type DocumentBlock =
       depth?: number;
       marker?: string;
       runs: DocumentTextRun[];
+    }
+  | {
+      type: "slide";
+      slideNumber: number;
+      title?: string;
+      widthPx: number;
+      heightPx: number;
+      background?: DocumentSlideBackground;
+      items: DocumentSlideItem[];
     }
   | DocumentImageBlock
   | {

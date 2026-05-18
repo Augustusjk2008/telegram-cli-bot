@@ -311,6 +311,88 @@ test("plugin view surface renders document image blocks from artifacts", async (
   expect(image).toHaveStyle({ maxWidth: "320px" });
 });
 
+test("plugin view surface renders pptx slide blocks with background, image, text and table", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getPluginArtifactBlob").mockResolvedValue(
+    new Blob(["image"], { type: "image/png" }),
+  );
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:pptx-image"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "pptx-preview",
+        viewId: "document",
+        title: "roadmap.pptx",
+        renderer: "document",
+        mode: "snapshot",
+        payload: {
+          path: "docs/roadmap.pptx",
+          title: "roadmap.pptx",
+          statsText: "1 页 · 1 文本 · 1 图片 · 1 表格",
+          blocks: [
+            {
+              type: "slide",
+              slideNumber: 1,
+              title: "项目路线图",
+              widthPx: 960,
+              heightPx: 540,
+              background: { color: "#1F2937" },
+              items: [
+                {
+                  type: "text",
+                  frame: { x: 48, y: 36, width: 600, height: 80 },
+                  paragraphs: [
+                    { runs: [{ text: "项目路线图", bold: true, color: "#FFFFFF", fontSizePx: 32 }] },
+                  ],
+                  zIndex: 1,
+                },
+                {
+                  type: "image",
+                  frame: { x: 680, y: 48, width: 160, height: 120 },
+                  image: {
+                    artifactId: "artifact-image-1",
+                    filename: "image1.png",
+                    contentType: "image/png",
+                    alt: "系统架构图",
+                  },
+                  zIndex: 2,
+                },
+                {
+                  type: "table",
+                  frame: { x: 80, y: 180, width: 420, height: 160 },
+                  rows: [
+                    { cells: [{ runs: [{ text: "阶段" }] }, { runs: [{ text: "状态" }] }] },
+                    { cells: [{ runs: [{ text: "MVP" }] }, { runs: [{ text: "开发中" }] }] },
+                  ],
+                  zIndex: 3,
+                },
+              ],
+            },
+          ],
+        },
+      }}
+    />,
+  );
+
+  const slide = screen.getByLabelText("幻灯片 1");
+  expect(slide).toBeInTheDocument();
+  expect(screen.getAllByText("项目路线图")).toHaveLength(2);
+  expect(slide.querySelector('[style*="background-color: rgb(31, 41, 55)"]')).not.toBeNull();
+  expect(await screen.findByRole("img", { name: "系统架构图" })).toHaveAttribute("src", "blob:pptx-image");
+  expect(screen.getByText("开发中")).toBeInTheDocument();
+  expect(client.getPluginArtifactBlob).toHaveBeenCalledWith("main", "artifact-image-1");
+});
+
 test("plugin view surface renders hex snapshot views", () => {
   render(
     <PluginViewSurface

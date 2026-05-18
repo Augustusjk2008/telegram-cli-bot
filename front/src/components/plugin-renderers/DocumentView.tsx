@@ -1,6 +1,12 @@
 import { Fragment, useEffect, useState } from "react";
 import type { WebBotClient } from "../../services/webBotClient";
-import type { DocumentBlock, DocumentTextRun, PluginRenderResult } from "../../services/types";
+import type {
+  DocumentBlock,
+  DocumentSlideImageRef,
+  DocumentSlideItem,
+  DocumentTextRun,
+  PluginRenderResult,
+} from "../../services/types";
 
 type Props = {
   botAlias: string;
@@ -24,7 +30,18 @@ function renderRuns(runs: DocumentTextRun[]) {
     if (run.bold) {
       node = <strong>{node}</strong>;
     }
-    return <Fragment key={`${index}-${run.text}`}>{node}</Fragment>;
+    return (
+      <Fragment key={`${index}-${run.text}`}>
+        <span
+          style={{
+            color: run.color,
+            fontSize: run.fontSizePx ? `${run.fontSizePx}px` : undefined,
+          }}
+        >
+          {node}
+        </span>
+      </Fragment>
+    );
   });
 }
 
@@ -48,14 +65,18 @@ function renderHeading(level: DocumentHeadingLevel, runs: DocumentTextRun[], key
   return <h6 key={key} className={className}>{renderRuns(runs)}</h6>;
 }
 
-function DocumentImage({
+function ArtifactImage({
   botAlias,
   client,
-  block,
+  image,
+  className,
+  style,
 }: {
   botAlias: string;
   client: WebBotClient;
-  block: Extract<DocumentBlock, { type: "image" }>;
+  image: DocumentSlideImageRef;
+  className?: string;
+  style?: React.CSSProperties;
 }) {
   const [src, setSrc] = useState("");
   const [error, setError] = useState("");
@@ -65,7 +86,7 @@ function DocumentImage({
     let objectUrl = "";
 
     client
-      .getPluginArtifactBlob(botAlias, block.artifactId)
+      .getPluginArtifactBlob(botAlias, image.artifactId)
       .then((blob) => {
         if (!active) {
           return;
@@ -85,23 +106,42 @@ function DocumentImage({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [block.artifactId, botAlias, client]);
+  }, [botAlias, client, image.artifactId]);
 
   if (error) {
-    return <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
+    return <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>;
   }
   if (!src) {
-    return <div className="text-sm text-[var(--muted)]">图片加载中...</div>;
+    return <div className="text-xs text-[var(--muted)]">图片加载中...</div>;
   }
+  return (
+    <img
+      src={src}
+      alt={image.alt || image.title || image.filename}
+      title={image.title || image.filename}
+      className={className}
+      style={style}
+    />
+  );
+}
 
+function DocumentImage({
+  botAlias,
+  client,
+  block,
+}: {
+  botAlias: string;
+  client: WebBotClient;
+  block: Extract<DocumentBlock, { type: "image" }>;
+}) {
   const width = Number(block.widthPx || 0);
   const height = Number(block.heightPx || 0);
   return (
     <figure className="space-y-2">
-      <img
-        src={src}
-        alt={block.alt || block.title || block.filename}
-        title={block.title || block.filename}
+      <ArtifactImage
+        botAlias={botAlias}
+        client={client}
+        image={block}
         className="max-w-full rounded border border-[var(--border)] bg-[var(--surface)] object-contain"
         style={{
           maxWidth: width > 0 ? `${width}px` : "100%",
@@ -110,6 +150,132 @@ function DocumentImage({
       />
       {block.caption ? <figcaption className="text-xs text-[var(--muted)]">{block.caption}</figcaption> : null}
     </figure>
+  );
+}
+
+function frameStyle(item: DocumentSlideItem): React.CSSProperties {
+  return {
+    left: `${item.frame.x}px`,
+    top: `${item.frame.y}px`,
+    width: `${item.frame.width}px`,
+    height: `${item.frame.height}px`,
+    zIndex: item.zIndex ?? 0,
+  };
+}
+
+function renderSlideText(item: Extract<DocumentSlideItem, { type: "text" }>) {
+  return (
+    <div className="h-full overflow-hidden text-[var(--text)]">
+      {item.paragraphs.map((paragraph, index) => (
+        <p
+          key={index}
+          className="mb-1 whitespace-pre-wrap leading-snug last:mb-0"
+          style={{
+            textAlign: paragraph.align || "left",
+            paddingLeft: `${(paragraph.level || 0) * 18}px`,
+          }}
+        >
+          {paragraph.bullet ? <span className="mr-2 text-[var(--muted)]">{paragraph.bullet}</span> : null}
+          {renderRuns(paragraph.runs)}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function renderSlideTable(item: Extract<DocumentSlideItem, { type: "table" }>) {
+  return (
+    <div className="h-full overflow-hidden rounded border border-black/10 bg-white/85">
+      <table className="h-full w-full table-fixed border-collapse text-[11px]">
+        <tbody>
+          {item.rows.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {row.cells.map((cell, cellIndex) => (
+                <td key={cellIndex} className="border border-black/10 px-1 py-0.5 align-top">
+                  <div className="whitespace-pre-wrap leading-tight">{renderRuns(cell.runs)}</div>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DocumentSlide({
+  botAlias,
+  client,
+  block,
+}: {
+  botAlias: string;
+  client: WebBotClient;
+  block: Extract<DocumentBlock, { type: "slide" }>;
+}) {
+  const backgroundColor = block.background?.color || "#ffffff";
+  return (
+    <section className="space-y-2" aria-label={`幻灯片 ${block.slideNumber}`}>
+      <div className="flex items-center justify-between gap-3 text-xs text-[var(--muted)]">
+        <span>{`幻灯片 ${block.slideNumber}`}</span>
+        {block.title ? <span className="truncate">{block.title}</span> : null}
+      </div>
+      <div className="overflow-auto rounded border border-[var(--border)] bg-[var(--surface-strong)] p-3">
+        <div
+          className="relative overflow-hidden shadow-sm"
+          style={{
+            width: `${block.widthPx}px`,
+            height: `${block.heightPx}px`,
+            backgroundColor,
+          }}
+        >
+          {block.background?.image ? (
+            <ArtifactImage
+              botAlias={botAlias}
+              client={client}
+              image={block.background.image}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : null}
+          {block.items.map((item, index) => {
+            if (item.type === "text") {
+              return (
+                <div key={index} className="absolute overflow-hidden" style={frameStyle(item)}>
+                  {renderSlideText(item)}
+                </div>
+              );
+            }
+            if (item.type === "image") {
+              return (
+                <div key={index} className="absolute overflow-hidden" style={frameStyle(item)}>
+                  <ArtifactImage
+                    botAlias={botAlias}
+                    client={client}
+                    image={item.image}
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+              );
+            }
+            if (item.type === "table") {
+              return (
+                <div key={index} className="absolute overflow-hidden" style={frameStyle(item)}>
+                  {renderSlideTable(item)}
+                </div>
+              );
+            }
+            return (
+              <div
+                key={index}
+                className="absolute flex items-center justify-center rounded border border-dashed border-black/20 bg-white/60 px-2 text-center text-[10px] text-[var(--muted)]"
+                style={frameStyle(item)}
+              >
+                {item.label}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -135,22 +301,30 @@ function renderBlock(block: DocumentBlock, index: number, botAlias: string, clie
   if (block.type === "image") {
     return <DocumentImage key={index} botAlias={botAlias} client={client} block={block} />;
   }
+  if (block.type === "slide") {
+    return <DocumentSlide key={index} botAlias={botAlias} client={client} block={block} />;
+  }
+  if (block.type === "table") {
+    return (
+      <div key={index} className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        <table className="min-w-full border-collapse text-sm">
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-b border-[var(--border)] last:border-b-0">
+                {row.cells.map((cell, cellIndex) => (
+                  <td key={cellIndex} className="align-top border-r border-[var(--border)] px-3 py-2 last:border-r-0">
+                    <div className="whitespace-pre-wrap text-[var(--text)]">{renderRuns(cell.runs)}</div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
   return (
-    <div key={index} className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-      <table className="min-w-full border-collapse text-sm">
-        <tbody>
-          {block.rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-b border-[var(--border)] last:border-b-0">
-              {row.cells.map((cell, cellIndex) => (
-                <td key={cellIndex} className="align-top border-r border-[var(--border)] px-3 py-2 last:border-r-0">
-                  <div className="whitespace-pre-wrap text-[var(--text)]">{renderRuns(cell.runs)}</div>
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <div key={index} className="text-sm text-[var(--muted)]">不支持的文档块</div>
   );
 }
 
