@@ -39,11 +39,14 @@ export function useWaveformViewport({
   const [scrollLeft, setScrollLeft] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(display.trackHeight * 8);
   const [viewportWidth, setViewportWidth] = useState(display.minWaveWidth);
+  const [windowError, setWindowError] = useState("");
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     setWindowData(initialWindow);
     setScrollTop(0);
     setScrollLeft(0);
+    setWindowError("");
   }, [initialWindow]);
 
   useEffect(() => {
@@ -89,6 +92,8 @@ export function useWaveformViewport({
       return;
     }
     const controller = new AbortController();
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     void client.queryPluginViewWindow(
       botAlias,
       pluginId,
@@ -101,12 +106,19 @@ export function useWaveformViewport({
       },
       controller.signal,
     ).then((nextWindow) => {
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setWindowError("");
       setWindowData(nextWindow as WaveformWindowPayload);
     }).catch((error) => {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
       }
-      throw error;
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setWindowError(error instanceof Error ? error.message : "加载窗口失败");
     });
     return () => controller.abort();
   }, [botAlias, client, pluginId, sessionId, visibleSignalsKey, visibleSignalIds, visibleWaveWidth, windowEnd, windowStart]);
@@ -131,6 +143,7 @@ export function useWaveformViewport({
     visibleTracks,
     firstTrackIndex,
     rowHeight,
+    windowError,
     totalTrackCount: summary.signals.length,
     setScrollLeft,
     setScrollTop,

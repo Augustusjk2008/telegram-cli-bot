@@ -18,6 +18,16 @@ let lastBasicSetupRef: unknown;
 const noop = () => {};
 const mockedLoadFileEditorExtensions = vi.mocked(loadFileEditorExtensions);
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock("../utils/fileEditorLanguage", () => ({
   loadFileEditorExtensions: vi.fn(async () => []),
 }));
@@ -588,6 +598,24 @@ test("can load full file content from preview modal", async () => {
   expect(screen.getByText("已加载全文")).toBeInTheDocument();
 });
 
+test("preview download failure shows an error and keeps preview open", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    downloadFile: async () => {
+      throw new Error("下载失败");
+    },
+  });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  expect(await screen.findByRole("dialog", { name: "README.md" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "下载" }));
+
+  expect(await screen.findByText("下载失败")).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "README.md" })).toBeInTheDocument();
+});
+
 test("passes detected file encoding when saving from editor", async () => {
   vi.unstubAllGlobals();
   const user = userEvent.setup();
@@ -702,6 +730,40 @@ test("home button resets the browser directory to the bot working directory", as
   expect(listFilesSpy).toHaveBeenCalledTimes(2);
   expect(await screen.findByText("C:\\workspace\\root")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "打开 root.txt" })).toBeInTheDocument();
+});
+
+test("ignores stale directory listing responses", async () => {
+  const user = userEvent.setup();
+  const initialListing = createDeferred<DirectoryListing>();
+  const latestListing = createDeferred<DirectoryListing>();
+  const listFilesSpy = vi
+    .fn<() => Promise<DirectoryListing>>()
+    .mockReturnValueOnce(initialListing.promise)
+    .mockReturnValueOnce(latestListing.promise);
+
+  render(<FilesScreen botAlias="main" client={createClient({
+    listFiles: listFilesSpy,
+    getCurrentPath: async () => "C:\\workspace\\latest",
+  })} />);
+
+  await user.click(screen.getByRole("button", { name: "Home" }));
+  latestListing.resolve({
+    workingDir: "C:\\workspace\\latest",
+    entries: [{ name: "latest.txt", isDir: false }],
+  });
+
+  expect(await screen.findByText("C:\\workspace\\latest")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开 latest.txt" })).toBeInTheDocument();
+
+  initialListing.resolve({
+    workingDir: "C:\\workspace\\old",
+    entries: [{ name: "old.txt", isDir: false }],
+  });
+
+  await waitFor(() => {
+    expect(screen.getByText("C:\\workspace\\latest")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打开 old.txt" })).not.toBeInTheDocument();
+  });
 });
 
 test("can create a folder from the files screen toolbar", async () => {

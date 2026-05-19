@@ -22,6 +22,7 @@ type Props = {
   session: SessionState | null;
   currentBot: string;
   currentTab: AppTab;
+  allowedTabs?: AppTab[];
   hideOuterChrome: boolean;
   activeScreen: ReactNode;
   viewMode: ViewMode;
@@ -36,6 +37,7 @@ export function MobileShell({
   session,
   currentBot,
   currentTab,
+  allowedTabs,
   hideOuterChrome,
   activeScreen,
   viewMode,
@@ -56,7 +58,11 @@ export function MobileShell({
   ];
   const navItems = isGuest(session)
     ? fullNavItems.filter((item) => item.tab === "chat" || item.tab === "files")
-    : fullNavItems.filter((item) => item.tab !== "plugins" || session?.capabilities.includes("view_plugins"));
+    : fullNavItems.filter((item) => (
+        allowedTabs
+          ? allowedTabs.includes(item.tab)
+          : item.tab !== "plugins" || session?.capabilities.includes("view_plugins")
+      ));
 
   return (
     <div className="flex min-w-0 flex-col h-[100dvh] w-full bg-[var(--bg)] shadow-xl overflow-hidden relative">

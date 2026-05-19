@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { WebBotClient } from "../../services/webBotClient";
 import type {
   WaveformBusStyle,
@@ -527,6 +527,7 @@ export function WaveformView({
     visibleTracks,
     firstTrackIndex,
     rowHeight,
+    windowError,
     totalTrackCount,
     setScrollLeft,
     setScrollTop,
@@ -543,6 +544,31 @@ export function WaveformView({
 
   const beforeSpacerHeight = firstTrackIndex * rowHeight;
   const afterSpacerHeight = Math.max(0, totalTrackCount - firstTrackIndex - visibleTracks.length) * rowHeight;
+  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+    }
+  }, []);
+
+  const scheduleViewportScroll = useCallback((left: number, top: number) => {
+    pendingScrollRef.current = { left, top };
+    if (scrollFrameRef.current !== null) {
+      return;
+    }
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const next = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+      if (!next) {
+        return;
+      }
+      setScrollLeft(next.left);
+      setScrollTop(next.top);
+    });
+  }, [setScrollLeft, setScrollTop]);
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
@@ -588,10 +614,17 @@ export function WaveformView({
         className="min-h-0 flex-1 overflow-auto"
         data-testid="waveform-scroll"
         onScroll={(event) => {
-          setScrollLeft(event.currentTarget.scrollLeft);
-          setScrollTop(Math.max(0, event.currentTarget.scrollTop - (display.showTimeAxis ? display.axisHeight : 0)));
+          scheduleViewportScroll(
+            event.currentTarget.scrollLeft,
+            Math.max(0, event.currentTarget.scrollTop - (display.showTimeAxis ? display.axisHeight : 0)),
+          );
         }}
       >
+        {windowError ? (
+          <div className="sticky top-0 z-40 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            {windowError}
+          </div>
+        ) : null}
         {display.showTimeAxis ? (
           <div
             className="sticky top-0 z-30 grid min-w-max border-b border-[var(--border)]"

@@ -21,6 +21,7 @@ type Props = {
   onClose: () => void;
   initialBots?: BotSummary[];
   onBotsChange?: (bots: BotSummary[]) => void;
+  canManageRegisterCodes?: boolean;
 };
 
 type AdminCenterTab = "users" | "invites" | "updates" | "announcements" | "lan-chat";
@@ -54,6 +55,7 @@ export function AdminCenterScreen({
   onClose,
   initialBots = [],
   onBotsChange,
+  canManageRegisterCodes = true,
 }: Props) {
   const [activeTab, setActiveTab] = useState<AdminCenterTab>("users");
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -88,6 +90,18 @@ export function AdminCenterScreen({
   const [notice, setNotice] = useState("");
 
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
+  const visibleTabs = useMemo<AdminCenterTab[]>(
+    () => (canManageRegisterCodes
+      ? ["users", "invites", "updates", "announcements", "lan-chat"]
+      : ["users", "updates", "announcements", "lan-chat"]),
+    [canManageRegisterCodes],
+  );
+
+  useEffect(() => {
+    if (!visibleTabs.includes(activeTab)) {
+      setActiveTab(visibleTabs[0] || "users");
+    }
+  }, [activeTab, visibleTabs]);
 
   async function loadUsers(nextNotice = "", refresh = false) {
     if (refresh) {
@@ -236,7 +250,7 @@ export function AdminCenterScreen({
   async function refreshActiveTab(nextNotice = "", refresh = false) {
     if (activeTab === "users") {
       await loadUsers(nextNotice, refresh);
-    } else if (activeTab === "invites") {
+    } else if (activeTab === "invites" && canManageRegisterCodes) {
       await loadInvites(nextNotice, refresh);
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
@@ -252,7 +266,7 @@ export function AdminCenterScreen({
       return;
     }
     void refreshActiveTab();
-  }, [activeTab, client, loadedTabs]);
+  }, [activeTab, canManageRegisterCodes, client, loadedTabs]);
 
   const appendUpdateLog = (message?: string) => {
     if (!message) {
@@ -519,7 +533,7 @@ export function AdminCenterScreen({
         </header>
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          {(["users", "invites", "updates", "announcements", "lan-chat"] as AdminCenterTab[]).map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab}
               type="button"

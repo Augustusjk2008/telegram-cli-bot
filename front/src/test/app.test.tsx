@@ -140,6 +140,52 @@ test("guest login trims member-only navigation", async () => {
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
 });
 
+test("mobile navigation only shows capability-allowed tabs for members", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    ...SUPER_ADMIN_SESSION,
+    capabilities: [
+      "view_bots",
+      "view_file_tree",
+      "view_chat_history",
+      "chat_send",
+    ],
+  });
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "limited");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Git" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "插件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+});
+
+test("admin ops can open admin center without invite-code permission", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    ...SUPER_ADMIN_SESSION,
+    capabilities: SUPER_ADMIN_SESSION.capabilities.filter((capability) => capability !== "manage_register_codes"),
+  });
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "127.0.0.1");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "管理中心" }));
+
+  expect(await screen.findByRole("heading", { name: "管理中心" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "用户权限" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "邀请码" })).not.toBeInTheDocument();
+});
+
 test("forced desktop mode mounts the desktop shell instead of the mobile bottom navigation", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();

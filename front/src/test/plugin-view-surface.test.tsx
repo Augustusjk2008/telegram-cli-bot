@@ -538,6 +538,56 @@ test("plugin view surface queries the horizontally visible time window", async (
   });
 });
 
+test("plugin view surface keeps waveform data and shows local error when a window request fails", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "queryPluginViewWindow").mockRejectedValue(new Error("波形窗口失败"));
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "vivado-waveform",
+        viewId: "waveform",
+        title: "long.vcd",
+        renderer: "waveform",
+        mode: "session",
+        sessionId: "waveform-error-session",
+        summary: {
+          path: "waves/long.vcd",
+          timescale: "1us",
+          startTime: 0,
+          endTime: 1600,
+          display: {
+            defaultZoom: 1,
+            zoomLevels: [1],
+            showTimeAxis: true,
+            busStyle: "cross",
+            labelWidth: 180,
+            minWaveWidth: 800,
+            pixelsPerTime: 1,
+            axisHeight: 42,
+            trackHeight: 64,
+          },
+          signals: [{ signalId: "tb.clk", label: "tb.clk", width: 1, kind: "scalar" }],
+          defaultSignalIds: ["tb.clk"],
+        },
+        initialWindow: {
+          startTime: 0,
+          endTime: 120,
+          tracks: [
+            { signalId: "tb.clk", label: "tb.clk", width: 1, segments: [{ start: 0, end: 120, value: "0" }] },
+          ],
+        },
+      }}
+    />,
+  );
+
+  expect(screen.getByText("tb.clk")).toBeInTheDocument();
+  expect(await screen.findByText("波形窗口失败")).toBeInTheDocument();
+  expect(screen.getByText("tb.clk")).toBeInTheDocument();
+});
+
 test("plugin view surface renders dense LOD segments as activity bands with labels above the band", () => {
   const client = new MockWebBotClient();
   render(
@@ -854,6 +904,49 @@ test("plugin view surface ignores stale table window responses", async () => {
     expect(screen.getByText("rx_data")).toBeInTheDocument();
     expect(screen.queryByText("ctrl_state")).toBeNull();
   });
+});
+
+test("plugin view surface keeps table data and shows local error when a window request fails", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "queryPluginViewWindow").mockRejectedValue(new Error("窗口加载失败"));
+
+  render(
+    <PluginViewSurface
+      botAlias="main"
+      client={client}
+      view={{
+        pluginId: "timing-report",
+        viewId: "timing-table",
+        title: "timing.rpt",
+        renderer: "table",
+        mode: "session",
+        sessionId: "timing-session-error",
+        summary: {
+          columns: [
+            { id: "endpoint", title: "Endpoint" },
+            { id: "slack", title: "Slack", kind: "number", align: "right" },
+          ],
+          totalRows: 3,
+          defaultPageSize: 2,
+        },
+        initialWindow: {
+          offset: 0,
+          limit: 2,
+          totalRows: 3,
+          rows: [
+            { id: "path-1", cells: { endpoint: "rx_data", slack: -0.132 } },
+          ],
+        },
+      }}
+    />,
+  );
+
+  expect(screen.getByText("rx_data")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "下一页" }));
+
+  expect(await screen.findByText("窗口加载失败")).toBeInTheDocument();
+  expect(screen.getByText("rx_data")).toBeInTheDocument();
 });
 
 test("plugin view surface loads tree children on demand", async () => {

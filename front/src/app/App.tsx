@@ -276,6 +276,7 @@ export function App() {
   const canViewPlugins = hasCapability(session, "view_plugins");
   const canUseSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "admin_ops");
+  const canOpenAdminCenter = hasCapability(session, "admin_ops");
   const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
   const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots, botActivityOverrides), [botActivityOverrides, bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
@@ -384,32 +385,36 @@ export function App() {
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [client, isLoggedIn]);
 
+  const allowedTabs = useMemo(() => {
+    const nextTabs: AppTab[] = ["chat", "files"];
+    if (canUseDebug) {
+      nextTabs.push("debug");
+    }
+    if (canUseTerminal) {
+      nextTabs.push("terminal");
+    }
+    if (canUseGit) {
+      nextTabs.push("git");
+    }
+    if (canViewPlugins) {
+      nextTabs.push("plugins");
+    }
+    if (canUseSettings) {
+      nextTabs.push("settings");
+    }
+    return nextTabs;
+  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, canViewPlugins]);
+
   useEffect(() => {
     if (!isLoggedIn) {
       return;
-    }
-    const allowedTabs: AppTab[] = ["chat", "files"];
-    if (canUseDebug) {
-      allowedTabs.push("debug");
-    }
-    if (canUseTerminal) {
-      allowedTabs.push("terminal");
-    }
-    if (canUseGit) {
-      allowedTabs.push("git");
-    }
-    if (canViewPlugins) {
-      allowedTabs.push("plugins");
-    }
-    if (canUseSettings) {
-      allowedTabs.push("settings");
     }
     if (!allowedTabs.includes(currentTab)) {
       setCurrentTab("chat");
       setIsChatImmersive(false);
       setIsTerminalImmersive(false);
     }
-  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, canViewPlugins, currentTab, isLoggedIn]);
+  }, [allowedTabs, currentTab, isLoggedIn]);
 
   useEffect(() => {
     storeViewMode(viewMode);
@@ -491,11 +496,11 @@ export function App() {
   }, [currentBot, currentTab, isLoggedIn, showAdminCenter, showBotManager]);
 
   useEffect(() => {
-    if (canManageRegisterCodes || !showAdminCenter) {
+    if (canOpenAdminCenter || !showAdminCenter) {
       return;
     }
     setShowAdminCenter(false);
-  }, [canManageRegisterCodes, showAdminCenter]);
+  }, [canOpenAdminCenter, showAdminCenter]);
 
   useEffect(() => {
     storeUnreadBots(unreadBots);
@@ -731,7 +736,7 @@ export function App() {
     );
   }
 
-  if (showAdminCenter && canManageRegisterCodes) {
+  if (showAdminCenter && canOpenAdminCenter) {
     return (
       <>
         <AdminCenterScreen
@@ -739,6 +744,7 @@ export function App() {
           onClose={() => setShowAdminCenter(false)}
           initialBots={bots}
           onBotsChange={setBots}
+          canManageRegisterCodes={canManageRegisterCodes}
         />
         {announcementDialog}
       </>
@@ -895,7 +901,7 @@ export function App() {
           setIsChatImmersive(false);
           setIsTerminalImmersive(false);
         }}
-        showInviteManager={canManageRegisterCodes}
+        showInviteManager={canOpenAdminCenter}
         inviteManagerActive={showAdminCenter}
         onOpenInviteManager={() => {
           openAdminCenter();
@@ -916,7 +922,7 @@ export function App() {
           setIsChatImmersive(false);
           setIsTerminalImmersive(false);
         }}
-        showInviteManager={canManageRegisterCodes}
+        showInviteManager={canOpenAdminCenter}
         inviteManagerActive={showAdminCenter}
         onOpenInviteManager={() => {
           openAdminCenter();
@@ -1023,6 +1029,7 @@ export function App() {
           session={session}
           currentBot={currentBot}
           currentTab={currentTab}
+          allowedTabs={allowedTabs}
           hideOuterChrome={hideOuterChrome}
           activeScreen={activeScreen}
           viewMode={viewMode}

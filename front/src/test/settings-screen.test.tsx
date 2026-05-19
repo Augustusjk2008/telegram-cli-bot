@@ -184,6 +184,30 @@ test("settings can browse and pick a workdir before saving", async () => {
   expect(client.browserPath).toBe("C:\\workspace");
 });
 
+test("settings directory picker shows restore failures and stays open", async () => {
+  const user = userEvent.setup();
+  const client = new SettingsDirectoryPickerClient();
+  const changeDirectory = vi.spyOn(client, "changeDirectory").mockImplementation(async (_botAlias, path) => {
+    if (path === "C:\\workspace") {
+      throw new Error("恢复失败");
+    }
+    return SettingsDirectoryPickerClient.prototype.changeDirectory.call(client, _botAlias, path);
+  });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByLabelText("工作目录")).toHaveValue("C:\\workspace");
+  await user.click(screen.getByRole("button", { name: "浏览工作目录" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
+  await user.click(within(dialog).getByRole("button", { name: "进入目录 repos" }));
+  await user.click(await within(dialog).findByRole("button", { name: "使用当前目录" }));
+
+  expect(await within(dialog).findByText("恢复失败")).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "选择工作目录" })).toBeInTheDocument();
+  expect(changeDirectory).toHaveBeenCalledWith("main", "C:\\workspace");
+});
+
 test("settings screen asks for confirmation before resetting the current workdir conversation", async () => {
   const user = userEvent.setup();
   const updateBotWorkdir = vi.fn()

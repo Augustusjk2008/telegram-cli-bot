@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, FilePlus, FolderPlus, House, Upload } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { FileEditorSurface } from "../components/FileEditorSurface";
@@ -81,21 +81,31 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
+  const listingRequestSeqRef = useRef(0);
 
   async function loadListing(targetPath?: string) {
+    const requestSeq = listingRequestSeqRef.current + 1;
+    listingRequestSeqRef.current = requestSeq;
     setLoading(true);
     setError("");
     try {
       const listing = structureOnly
         ? await client.listFiles(botAlias, targetPath || currentPath || await client.getCurrentPath(botAlias))
         : await client.listFiles(botAlias);
+      if (requestSeq !== listingRequestSeqRef.current) {
+        return;
+      }
       setCurrentPath(listing.workingDir);
       setFiles(listing.entries);
       setIsVirtualRoot(Boolean(listing.isVirtualRoot));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载目录失败");
+      if (requestSeq === listingRequestSeqRef.current) {
+        setError(err instanceof Error ? err.message : "加载目录失败");
+      }
     } finally {
-      setLoading(false);
+      if (requestSeq === listingRequestSeqRef.current) {
+        setLoading(false);
+      }
     }
   }
 
@@ -520,7 +530,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           statusText={previewStatusText}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
-          onDownload={() => void client.downloadFile(botAlias, previewName)}
+          onDownload={() => void handleDownloadEntry({ name: previewName, isDir: false })}
         />
       ) : null}
       {!structureOnly && showCreateFileDialog ? (

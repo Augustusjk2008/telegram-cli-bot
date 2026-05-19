@@ -47,28 +47,31 @@ export function DirectoryPickerDialog({
 
   async function restoreOriginalPath() {
     if (restoredRef.current) {
-      return;
+      return true;
     }
     restoredRef.current = true;
 
     const originPath = originPathRef.current;
     if (!originPath) {
-      return;
+      return true;
     }
 
     try {
       if (originWasVirtualRootRef.current) {
         const driveRootMatch = currentPathRef.current.match(/^[A-Za-z]:\\/);
         if (!driveRootMatch) {
-          return;
+          return true;
         }
         await client.changeDirectory(botAlias, driveRootMatch[0]);
         await client.changeDirectory(botAlias, "..");
-        return;
+        return true;
       }
       await client.changeDirectory(botAlias, originPath);
-    } catch {
-      return;
+      return true;
+    } catch (nextError) {
+      restoredRef.current = false;
+      setError(getErrorMessage(nextError, "恢复工作目录失败"));
+      return false;
     }
   }
 
@@ -113,7 +116,11 @@ export function DirectoryPickerDialog({
 
   async function closeDialog(pickedPath?: string) {
     setBusy(true);
-    await restoreOriginalPath();
+    const restored = await restoreOriginalPath();
+    if (!restored) {
+      setBusy(false);
+      return;
+    }
     if (pickedPath) {
       onPick(pickedPath);
     }

@@ -59,6 +59,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
   const [offset, setOffset] = useState(Number(initialWindow.offset || 0));
   const [sort, setSort] = useState<TableSort | undefined>(initialWindow.appliedSort);
   const [query, setQuery] = useState("");
+  const [windowError, setWindowError] = useState("");
   const deferredQuery = useDeferredValue(query);
   const requestIdRef = useRef(0);
   const pageSize = Math.max(1, Number(initialWindow.limit || summary.defaultPageSize || 100));
@@ -71,6 +72,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
     setOffset(Number(initialWindow.offset || 0));
     setSort(initialWindow.appliedSort);
     setQuery("");
+    setWindowError("");
   }, [initialWindow, session?.sessionId]);
 
   useEffect(() => {
@@ -96,13 +98,17 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
         return;
       }
       startTransition(() => {
+        setWindowError("");
         setWindowState(payload as TableWindowPayload);
       });
     }).catch((error) => {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
       }
-      throw error;
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setWindowError(error instanceof Error ? error.message : "加载窗口失败");
     });
     return () => controller.abort();
   }, [botAlias, client, deferredQuery, offset, pageSize, session, sort, view.pluginId]);
@@ -115,6 +121,11 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
         <div className="text-sm text-[var(--muted)]">
           第 {pageIndex}/{pageCount} 页 · 共 {totalRows} 行
         </div>
+        {windowError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {windowError}
+          </div>
+        ) : null}
         {session ? (
           <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
             搜索
