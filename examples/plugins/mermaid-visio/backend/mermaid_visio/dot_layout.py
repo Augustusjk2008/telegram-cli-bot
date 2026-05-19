@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
+from .graphviz_runtime import resolve_dot_path
 from .models import FlowchartIR, LayoutEdge, LayoutNode, LayoutResult, PluginConfig
 
 RANKDIR = {"TD": "TB", "TB": "TB", "BT": "BT", "LR": "LR", "RL": "RL"}
@@ -43,9 +44,10 @@ def build_dot(ir: FlowchartIR) -> str:
 
 
 def run_graphviz_plain(dot: str, config: PluginConfig) -> LayoutResult:
+    dot_path = resolve_dot_path(config)
     try:
         completed = subprocess.run(
-            [config.dot_path, "-Tplain"],
+            [dot_path, "-Tplain"],
             input=dot,
             text=True,
             capture_output=True,
@@ -55,7 +57,7 @@ def run_graphviz_plain(dot: str, config: PluginConfig) -> LayoutResult:
     except subprocess.TimeoutExpired as exc:
         raise LayoutTimeout(f"Graphviz 超时: {config.graphviz_timeout_seconds}s") from exc
     except OSError as exc:
-        raise RuntimeError(f"Graphviz 不可用: {config.dot_path}") from exc
+        raise RuntimeError(f"Graphviz 不可用: {dot_path}") from exc
     if completed.returncode != 0:
         raise RuntimeError(f"Graphviz 失败: {completed.stderr.strip()}")
     return parse_plain(completed.stdout)

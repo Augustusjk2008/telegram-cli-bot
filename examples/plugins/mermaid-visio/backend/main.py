@@ -8,6 +8,7 @@ from typing import Any
 from mermaid_visio.artifact_packager import package_results
 from mermaid_visio.export_actions import export_selected
 from mermaid_visio.flowchart_parser import parse_flowchart
+from mermaid_visio.graphviz_runtime import graphviz_status, install_graphviz_runtime
 from mermaid_visio.host_rpc import emit, read_workspace_text, write_artifact
 from mermaid_visio.models import DiagramStatus, PluginConfig
 from mermaid_visio.normalizer import normalize_ir
@@ -30,7 +31,13 @@ def plugin_config(context: dict[str, Any]) -> PluginConfig:
     return PluginConfig.from_payload(dict(((context.get("plugin") or {}).get("config") or {})))
 
 
-def table_summary(statuses: list[DiagramStatus]) -> dict[str, Any]:
+def table_summary(statuses: list[DiagramStatus], config: PluginConfig) -> dict[str, Any]:
+    status = graphviz_status(config)
+    actions = [
+        {"id": "export-all", "label": "全部导出 VSDX", "target": "plugin", "location": "toolbar", "variant": "primary"}
+    ]
+    if status["installAvailable"]:
+        actions.append({"id": "install-graphviz", "label": "安装/更新 Graphviz 运行时", "target": "plugin", "location": "toolbar"})
     return {
         "columns": [
             {"id": "title", "title": "图"},
@@ -43,7 +50,8 @@ def table_summary(statuses: list[DiagramStatus]) -> dict[str, Any]:
         ],
         "totalRows": len(statuses),
         "defaultPageSize": max(1, min(50, len(statuses) or 1)),
-        "actions": [{"id": "export-all", "label": "全部导出 VSDX", "target": "plugin", "location": "toolbar", "variant": "primary"}],
+        "actions": actions,
+        "meta": {"graphviz": status},
     }
 
 
@@ -85,7 +93,7 @@ def open_view(input_payload: dict[str, Any], context: dict[str, Any]) -> dict[st
         "title": Path(path).name,
         "mode": "session",
         "sessionId": session_id,
-        "summary": table_summary(statuses),
+        "summary": table_summary(statuses, config),
         "initialWindow": {"offset": 0, "limit": len(statuses), "totalRows": len(statuses), "rows": table_rows(statuses)},
     }
 
@@ -109,6 +117,12 @@ def invoke_action(params: dict[str, Any]) -> dict[str, Any]:
     config: PluginConfig = session["config"]
     action_id = str(params.get("actionId") or "")
     payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
+    if action_id == "install-graphviz":
+        result = install_graphviz_runtime(config)
+        return {
+            "message": str(result.get("message") or ""),
+            "refresh": "view" if result.get("ok") else "session",
+        }
     selected = statuses
     if action_id == "export-one":
         row_id = str(payload.get("rowId") or "")

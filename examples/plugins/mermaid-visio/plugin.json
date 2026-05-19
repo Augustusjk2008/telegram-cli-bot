@@ -14,7 +14,11 @@
     "maxEdgesPerDiagram": 400,
     "layoutEngine": "auto",
     "allowSimpleLayoutFallback": true,
-    "dotPath": "dot"
+    "dotPath": "dot",
+    "bundledGraphvizEnabled": true,
+    "graphvizRuntimeVersion": "",
+    "graphvizRuntimeUrl": "",
+    "graphvizRuntimeSha256": ""
   },
   "configSchema": {
     "title": "Mermaid Visio Settings",
@@ -58,6 +62,27 @@
               { "value": "graphviz", "label": "Graphviz" },
               { "value": "simple", "label": "简单布局" }
             ]
+          },
+          {
+            "key": "bundledGraphvizEnabled",
+            "label": "优先使用插件内 Graphviz",
+            "type": "boolean",
+            "default": true,
+            "description": "启用后优先使用插件 vendor 目录里的 dot.exe。"
+          },
+          {
+            "key": "graphvizRuntimeUrl",
+            "label": "Graphviz 运行时下载地址",
+            "type": "string",
+            "default": "",
+            "description": "留空表示不显示安装动作；填入 zip URL 后可从插件页安装。"
+          },
+          {
+            "key": "graphvizRuntimeSha256",
+            "label": "Graphviz 运行时 SHA256",
+            "type": "string",
+            "default": "",
+            "description": "必须与下载包匹配，否则拒绝安装。"
           }
         ]
       }

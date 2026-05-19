@@ -559,6 +559,12 @@ class PluginService:
             payload=dict(payload or {}),
         )
         normalized = self._normalize_action_result(result)
+        if session_id and normalized.get("refresh") == "view":
+            self.sessions.remove(session_id)
+            try:
+                await self.runtime.dispose_view(bot_alias, manifest, session_id)
+            except Exception:
+                pass
         self._record_audit(
             event="invoke_action",
             plugin_id=plugin_id,

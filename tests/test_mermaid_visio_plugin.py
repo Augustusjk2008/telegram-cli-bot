@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import shutil
 import subprocess
@@ -132,6 +133,151 @@ style A fill:#fff,stroke:#333,color:#111
     assert ir.nodes["A"].style["fill"] == "#fff"
 
 
+def test_plugin_config_parses_bundled_graphviz_fields() -> None:
+    with plugin_backend_path():
+        from mermaid_visio.models import PluginConfig
+
+        config = PluginConfig.from_payload(
+            {
+                "bundledGraphvizEnabled": False,
+                "graphvizRuntimeVersion": "12.2.1",
+                "graphvizRuntimeUrl": "https://example.invalid/graphviz.zip",
+                "graphvizRuntimeSha256": "ABCDEF",
+            }
+        )
+
+    assert config.bundled_graphviz_enabled is False
+    assert config.graphviz_runtime_version == "12.2.1"
+    assert config.graphviz_runtime_url == "https://example.invalid/graphviz.zip"
+    assert config.graphviz_runtime_sha256 == "abcdef"
+
+
+def test_graphviz_runtime_resolves_vendor_dot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with plugin_backend_path():
+        from mermaid_visio import graphviz_runtime
+        from mermaid_visio.models import PluginConfig
+
+        vendor_root = tmp_path / "vendor" / "graphviz" / "win-x64"
+        dot = vendor_root / "bin" / "dot.exe"
+        dot.parent.mkdir(parents=True)
+        dot.write_text("fake", encoding="utf-8")
+        monkeypatch.setattr(graphviz_runtime, "WINDOWS_RUNTIME_DIR", vendor_root)
+
+        assert graphviz_runtime.resolve_dot_path(PluginConfig()) == str(dot)
+        assert graphviz_runtime.graphviz_status(PluginConfig())["vendorInstalled"] is True
+
+
+def test_graphviz_runtime_install_rejects_hash_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = tmp_path / "runtime.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("Graphviz/bin/dot.exe", "fake")
+
+    with plugin_backend_path():
+        from mermaid_visio import graphviz_runtime
+        from mermaid_visio.models import PluginConfig
+
+        runtime_dir = tmp_path / "vendor" / "graphviz" / "win-x64"
+        existing_dot = runtime_dir / "bin" / "dot.exe"
+        existing_dot.parent.mkdir(parents=True)
+        existing_dot.write_text("old", encoding="utf-8")
+        monkeypatch.setattr(graphviz_runtime, "PLUGIN_ROOT", tmp_path)
+        monkeypatch.setattr(graphviz_runtime, "WINDOWS_RUNTIME_DIR", runtime_dir)
+        config = PluginConfig(
+            graphviz_runtime_url=archive.as_uri(),
+            graphviz_runtime_sha256="0" * 64,
+        )
+        result = graphviz_runtime.install_graphviz_runtime(config)
+
+    assert result["ok"] is False
+    assert "校验失败" in result["message"]
+    assert existing_dot.read_text(encoding="utf-8") == "old"
+
+
+def test_graphviz_runtime_install_rejects_zip_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = tmp_path / "runtime.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("../evil.txt", "bad")
+        package.writestr("Graphviz/bin/dot.exe", "fake")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    with plugin_backend_path():
+        from mermaid_visio import graphviz_runtime
+        from mermaid_visio.models import PluginConfig
+
+        runtime_dir = tmp_path / "vendor" / "graphviz" / "win-x64"
+        monkeypatch.setattr(graphviz_runtime, "PLUGIN_ROOT", tmp_path)
+        monkeypatch.setattr(graphviz_runtime, "WINDOWS_RUNTIME_DIR", runtime_dir)
+
+        result = graphviz_runtime.install_graphviz_runtime(
+            PluginConfig(graphviz_runtime_url=archive.as_uri(), graphviz_runtime_sha256=digest)
+        )
+
+    assert result["ok"] is False
+    assert "越界路径" in result["message"]
+    assert not (tmp_path / "evil.txt").exists()
+    assert not runtime_dir.exists()
+
+
+def test_graphviz_runtime_install_replaces_existing_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = tmp_path / "runtime.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("Graphviz/bin/dot.exe", "new")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    with plugin_backend_path():
+        from mermaid_visio import graphviz_runtime
+        from mermaid_visio.models import PluginConfig
+
+        runtime_dir = tmp_path / "vendor" / "graphviz" / "win-x64"
+        existing_dot = runtime_dir / "bin" / "dot.exe"
+        existing_dot.parent.mkdir(parents=True)
+        existing_dot.write_text("old", encoding="utf-8")
+        monkeypatch.setattr(graphviz_runtime, "PLUGIN_ROOT", tmp_path)
+        monkeypatch.setattr(graphviz_runtime, "WINDOWS_RUNTIME_DIR", runtime_dir)
+        result = graphviz_runtime.install_graphviz_runtime(
+            PluginConfig(graphviz_runtime_url=archive.as_uri(), graphviz_runtime_sha256=digest)
+        )
+
+    assert result["ok"] is True
+    assert existing_dot.read_text(encoding="utf-8") == "new"
+
+
+def test_dot_layout_uses_vendor_dot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with plugin_backend_path():
+        from mermaid_visio import dot_layout, graphviz_runtime
+        from mermaid_visio.dot_layout import build_dot, run_graphviz_plain
+        from mermaid_visio.flowchart_parser import parse_flowchart
+        from mermaid_visio.models import PluginConfig
+
+        vendor_root = tmp_path / "vendor" / "graphviz" / "win-x64"
+        dot = vendor_root / "bin" / "dot.exe"
+        dot.parent.mkdir(parents=True)
+        dot.write_text("fake", encoding="utf-8")
+        monkeypatch.setattr(graphviz_runtime, "WINDOWS_RUNTIME_DIR", vendor_root)
+
+        def fake_run(args, **kwargs):
+            assert args[0] == str(dot)
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=(
+                    "graph 1 3 2\n"
+                    "node A 1 1.5 1.2 0.5 A solid box black lightgrey\n"
+                    "node B 2 0.5 1.2 0.5 B solid box black lightgrey\n"
+                    "edge A B 2 1 1.5 2 0.5 solid black\n"
+                    "stop\n"
+                ),
+                stderr="",
+            )
+
+        monkeypatch.setattr(dot_layout.subprocess, "run", fake_run)
+        ir = parse_flowchart("flowchart TD\nA --> B\n")
+        layout = run_graphviz_plain(build_dot(ir), PluginConfig())
+
+    assert layout.nodes["A"].x == 1
+    assert layout.edges["e1"].points == [(1.0, 1.5), (2.0, 0.5)]
+
+
 def test_vsdx_writer_creates_visio_zip_with_page_shapes(tmp_path: Path) -> None:
     with plugin_backend_path():
         from mermaid_visio.converter import convert_source_to_vsdx
@@ -228,6 +374,90 @@ def test_export_selected_marks_budget_exhaustion_without_calling_worker() -> Non
     assert result.error == "批量转换预算耗尽"
     assert calls == []
     assert status.status == "error"
+
+
+@pytest.mark.asyncio
+async def test_plugin_summary_exposes_graphviz_install_action(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    source = repo_root / "demo.mmd"
+    source.write_text("flowchart TD\nA --> B\n", encoding="utf-8")
+    plugins_root = _copy_plugin(tmp_path)
+    manifest_path = plugins_root / "mermaid-visio" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["config"]["graphvizRuntimeUrl"] = "file:///tmp/graphviz.zip"
+    manifest["config"]["graphvizRuntimeSha256"] = "1" * 64
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    opened = await service.open_view(
+        bot_alias="main",
+        plugin_id="mermaid-visio",
+        view_id="mermaid-visio",
+        input_payload={"path": str(source)},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    actions = opened["summary"]["actions"]
+    assert any(action["id"] == "install-graphviz" for action in actions)
+    assert opened["summary"]["meta"]["graphviz"]["installAvailable"] is True
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_installs_graphviz_runtime_from_local_zip(tmp_path: Path) -> None:
+    archive = tmp_path / "graphviz.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("Graphviz/bin/dot.exe", "fake dot")
+        package.writestr("Graphviz/LICENSE.txt", "Graphviz license")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    source = repo_root / "demo.mmd"
+    source.write_text("flowchart TD\nA --> B\n", encoding="utf-8")
+    plugins_root = _copy_plugin(tmp_path)
+    manifest_path = plugins_root / "mermaid-visio" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["config"]["graphvizRuntimeUrl"] = archive.as_uri()
+    manifest["config"]["graphvizRuntimeSha256"] = digest
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    opened = await service.open_view(
+        bot_alias="main",
+        plugin_id="mermaid-visio",
+        view_id="mermaid-visio",
+        input_payload={"path": str(source)},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+    result = await service.invoke_action(
+        bot_alias="main",
+        plugin_id="mermaid-visio",
+        view_id="mermaid-visio",
+        session_id=opened["sessionId"],
+        action_id="install-graphviz",
+        payload={},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    vendor_root = plugins_root / "mermaid-visio" / "vendor" / "graphviz" / "win-x64"
+    assert result["message"] == "Graphviz 运行时已安装"
+    assert (vendor_root / "bin" / "dot.exe").is_file()
+    assert (vendor_root / "MERMAID_VISIO_GRAPHVIZ_NOTICE.txt").is_file()
+
+    reopened = await service.open_view(
+        bot_alias="main",
+        plugin_id="mermaid-visio",
+        view_id="mermaid-visio",
+        input_payload={"path": str(source)},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    assert reopened["sessionId"] != opened["sessionId"]
+    assert reopened["summary"]["meta"]["graphviz"]["vendorInstalled"] is True
+    assert reopened["summary"]["meta"]["graphviz"]["resolvedDotPath"] == str(vendor_root / "bin" / "dot.exe")
+    await service.shutdown()
 
 
 @pytest.mark.asyncio
