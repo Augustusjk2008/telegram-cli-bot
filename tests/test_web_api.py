@@ -468,7 +468,8 @@ def test_cluster_prompt_includes_run_id():
     assert "messages" in prompt
     assert "kind=progress" in prompt
     assert "kind=final" in prompt
-    assert "不会返回事件和工具调用" in prompt
+    assert "返回事件和工具调用" in prompt
+    assert "不返回事件和工具调用" in prompt or "不会返回事件和工具调用" in prompt
     assert "wait_agent_messages" in prompt
     assert "阻塞等待" in prompt
 
