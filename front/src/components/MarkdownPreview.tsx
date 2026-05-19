@@ -1,4 +1,5 @@
 import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { CheckCheck, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
 import rehypeKatex from "rehype-katex";
 import ReactMarkdown from "react-markdown";
@@ -122,6 +123,10 @@ type MarkdownCodeProps = ComponentPropsWithoutRef<"code"> & {
   isChat: boolean;
 };
 
+type MarkdownPreChildProps = ComponentPropsWithoutRef<"code"> & {
+  "data-mermaid-wrapper"?: boolean | string;
+};
+
 function MarkdownCode({ className, children, node: _node, isChat, ...props }: MarkdownCodeProps) {
   const codeText = stringifyCodeChildren(children).replace(/\n$/, "");
   if (className?.includes("language-mermaid")) {
@@ -157,18 +162,74 @@ function MarkdownPre({
   children: ReactNode;
   isChat: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
   const childNodes = Children.toArray(children);
   const firstChild = childNodes[0];
+  const firstChildElement = isValidElement<MarkdownPreChildProps>(firstChild) ? firstChild : null;
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+  }, []);
 
   if (
     childNodes.length === 1
-    && isValidElement(firstChild)
-    && Boolean(firstChild.props["data-mermaid-wrapper"])
+    && firstChildElement
+    && Boolean(firstChildElement.props["data-mermaid-wrapper"])
   ) {
     return <>{firstChild}</>;
   }
 
-  return <pre className={isChat ? "min-w-0 overflow-x-auto" : "my-4 min-w-0 overflow-x-auto"}>{children}</pre>;
+  const codeText = childNodes.length === 1 && firstChildElement
+    ? stringifyCodeChildren(firstChildElement.props.children).replace(/\n$/, "")
+    : stringifyCodeChildren(children).replace(/\n$/, "");
+
+  if (firstChildElement?.props.className?.includes("language-mermaid")) {
+    return <MermaidDiagram code={codeText} isChat={isChat} />;
+  }
+
+  const copyButtonLabel = copied ? "已复制代码块" : "复制代码块";
+  const handleCopyCode = async () => {
+    if (copied || !navigator.clipboard?.writeText) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(codeText);
+    setCopied(true);
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      copyFeedbackTimerRef.current = null;
+    }, 2000);
+  };
+
+  return (
+    <div className={isChat ? "group relative min-w-0 overflow-hidden rounded-xl bg-[var(--code-bg)]" : "group relative my-4 min-w-0 overflow-hidden rounded-xl bg-[var(--code-bg)]"}>
+      <button
+        type="button"
+        aria-label={copyButtonLabel}
+        title={copyButtonLabel}
+        disabled={copied}
+        onClick={() => {
+          void handleCopyCode();
+        }}
+        className={copied
+          ? "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-emerald-300/70 bg-emerald-50 text-emerald-600 transition-colors disabled:cursor-not-allowed"
+          : "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-white/10 text-slate-200 opacity-0 transition-colors hover:bg-white/20 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"}
+      >
+        {copied ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+      <pre className="min-w-0 overflow-x-auto">
+        <code className="block bg-transparent px-4 py-3 pr-12 font-mono text-[13px] leading-6 text-[var(--code-text)]">
+          {codeText}
+        </code>
+      </pre>
+    </div>
+  );
 }
 
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: MarkdownContentProps) {

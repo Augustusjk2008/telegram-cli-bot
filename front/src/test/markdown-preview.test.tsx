@@ -19,7 +19,17 @@ vi.mock("mermaid", () => ({
 afterEach(() => {
   mermaidInitializeMock.mockClear();
   mermaidRenderMock.mockClear();
+  vi.restoreAllMocks();
 });
+
+function mockClipboardWrite() {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  return writeText;
+}
 
 test("renders latex formulas with katex markup", () => {
   const { container } = render(
@@ -51,6 +61,33 @@ test("renders mermaid code fences as svg diagrams", async () => {
   expect(mermaidInitializeMock).toHaveBeenCalledTimes(1);
   expect(mermaidRenderMock).toHaveBeenCalledWith(expect.stringMatching(/^mermaid-/), "graph TD\nA-->B");
   expect(container.querySelector("[data-mermaid-diagram='true']")?.innerHTML).toContain("<svg");
+  expect(screen.queryByRole("button", { name: "复制代码块" })).not.toBeInTheDocument();
+});
+
+test("copies fenced code blocks", async () => {
+  const user = userEvent.setup();
+  const writeText = mockClipboardWrite();
+
+  render(
+    <MarkdownPreview
+      content={[
+        "```powershell",
+        "python -m pytest tests -q",
+        "```",
+      ].join("\n")}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "复制代码块" }));
+
+  expect(writeText).toHaveBeenCalledWith("python -m pytest tests -q");
+  expect(screen.getByRole("button", { name: "已复制代码块" })).toBeDisabled();
+});
+
+test("does not add copy buttons to inline code", () => {
+  render(<MarkdownPreview content={"运行 `python -m bot` 启动。"} />);
+
+  expect(screen.queryByRole("button", { name: "复制代码块" })).not.toBeInTheDocument();
 });
 
 test("routes local file links through onFileLinkClick", async () => {
