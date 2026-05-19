@@ -4,13 +4,14 @@
 直接导入 bot.utils 中的真实函数进行测试
 """
 
-from unittest.mock import patch
-
 import pytest
+
+from unittest.mock import patch
 
 from bot.utils import (
     check_auth,
     is_dangerous_command,
+    split_command_argv,
     is_safe_filename,
     split_text_into_chunks,
     truncate_for_markdown,
@@ -58,6 +59,32 @@ class TestIsDangerousCommand:
         assert is_dangerous_command("echo `rm file`") is False
         assert is_dangerous_command("echo $(rm file)") is False
         assert is_dangerous_command("echo hello&&rm file") is False
+
+
+class TestSplitCommandArgv:
+    """测试 split_command_argv"""
+
+    def test_split_command_argv_strips_quotes(self):
+        assert split_command_argv('python -c "print(1)"') == ["python", "-c", "print(1)"]
+
+    def test_split_command_argv_keeps_shell_metacharacters_as_plain_args(self):
+        assert split_command_argv('echo hello ; whoami') == ["echo", "hello", ";", "whoami"]
+
+    def test_split_command_argv_rejects_empty_command(self):
+        with pytest.raises(ValueError):
+            split_command_argv("   ")
+
+    def test_split_command_argv_preserves_unquoted_windows_path(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("bot.utils.os.name", "nt")
+        assert split_command_argv(r"C:\tools\foo.exe --bar") == [r"C:\tools\foo.exe", "--bar"]
+
+    def test_split_command_argv_unquotes_windows_tokens(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("bot.utils.os.name", "nt")
+        assert split_command_argv(r'"C:\Program Files\Git\bin\bash.exe" -lc "echo hi"') == [
+            r"C:\Program Files\Git\bin\bash.exe",
+            "-lc",
+            "echo hi",
+        ]
 
 
 class TestIsSafeFilename:

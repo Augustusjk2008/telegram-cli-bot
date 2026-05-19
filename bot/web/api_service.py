@@ -127,7 +127,7 @@ from bot.sessions import (
     update_bot_working_dir,
 )
 from bot.updater import download_latest_update
-from bot.utils import is_dangerous_command
+from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
@@ -2128,26 +2128,30 @@ def get_history_trace(
     return data
 
 
-def reset_user_session(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
     state_path = None
-    if profile.bot_mode == "assistant":
+    if profile.bot_mode == "assistant" and normalized_agent_id == "main":
         state_path = Path(profile.working_dir) / ".assistant" / "state" / "users" / f"{user_id}.json"
 
     with sessions_lock:
-        session = sessions.get((bot_id, user_id))
+        session = sessions.get((bot_id, user_id, normalized_agent_id))
 
     if session is None:
         if profile.bot_mode == "assistant" and (state_path is None or not state_path.exists()):
-            return {"reset": reset_session(bot_id, user_id)}
-        session = get_session_for_alias(manager, alias, user_id)
+            return {"reset": reset_session(bot_id, user_id, agent_id=normalized_agent_id)}
+        if normalized_agent_id == "main":
+            session = get_session_for_alias(manager, alias, user_id)
+        else:
+            _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
     else:
         session = align_session_paths(session, profile.working_dir, profile.bot_mode)
 
     _get_chat_history_service(session).reset_active_conversation(profile, session)
-    removed = reset_session(bot_id, user_id)
-    if profile.bot_mode == "assistant" and state_path is not None and state_path.exists():
+    removed = reset_session(bot_id, user_id, agent_id=normalized_agent_id)
+    if profile.bot_mode == "assistant" and normalized_agent_id == "main" and state_path is not None and state_path.exists():
         home = bootstrap_assistant_home(profile.working_dir)
         removed = clear_assistant_runtime_state(home, user_id) or removed
     return {"reset": removed}
@@ -2181,8 +2185,12 @@ def _finish_stale_cluster_run_if_idle(alias: str, user_id: int) -> str | None:
     return active_run.run_id
 
 
-def kill_user_process(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
+def kill_user_process(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+    if normalized_agent_id == "main":
+        session = get_session_for_alias(manager, alias, user_id)
+    else:
+        _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
     with session._lock:
         is_processing = bool(session.is_processing)
         process = session.process
@@ -3397,6 +3405,9 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
 
             if not drained:
                 await asyncio.sleep(0.05)
+    except Exception:
+        _terminate_process_sync(process)
+        raise
     except asyncio.CancelledError:
         _terminate_process_sync(process)
         raise
@@ -3489,22 +3500,24 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
 
             if not drained:
                 await asyncio.sleep(0.05)
+        waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+        returncode = _resolve_process_returncode(process, waited_returncode)
+        if done_terminate_started_at is not None:
+            returncode = 0
+
+        raw_output = "".join(chunks)
+        final_text, parsed_thread_id = parse_codex_json_output(raw_output)
+        error_text = _extract_codex_error_detail(raw_output) if returncode != 0 else None
+        final_text = error_text or candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
+        if not final_text:
+            final_text = msg("chat", "no_output")
+        return final_text, thread_id or parsed_thread_id, returncode
+    except Exception:
+        _terminate_process_sync(process)
+        raise
     except asyncio.CancelledError:
         _terminate_process_sync(process)
         raise
-
-    waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
-    returncode = _resolve_process_returncode(process, waited_returncode)
-    if done_terminate_started_at is not None:
-        returncode = 0
-
-    raw_output = "".join(chunks)
-    final_text, parsed_thread_id = parse_codex_json_output(raw_output)
-    error_text = _extract_codex_error_detail(raw_output) if returncode != 0 else None
-    final_text = error_text or candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
-    if not final_text:
-        final_text = msg("chat", "no_output")
-    return final_text, thread_id or parsed_thread_id, returncode
 
 
 async def _communicate_claude_process(
@@ -3919,6 +3932,11 @@ async def _stream_cli_chat(
                 if process.poll() is None:
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
+            except Exception:
+                persistence_buffer.flush()
+                if process.poll() is None:
+                    await loop.run_in_executor(None, _terminate_process_sync, process)
+                raise
             finally:
                 with session._lock:
                     session.process = None
@@ -4273,6 +4291,10 @@ async def run_cli_chat(
                 else:
                     response, returncode = await _communicate_process(process)
                     response = response.strip() or msg("chat", "no_output")
+            except Exception:
+                if process.poll() is None:
+                    _terminate_process_sync(process)
+                raise
             finally:
                 with session._lock:
                     session.process = None
@@ -4570,36 +4592,40 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
         _raise(400, "empty_command", msg("shell", "usage"))
     if is_dangerous_command(cmd):
         _raise(400, "dangerous_command", msg("shell", "dangerous"))
+    try:
+        argv = split_command_argv(cmd)
+    except ValueError:
+        _raise(400, "empty_command", msg("shell", "usage"))
 
     session = get_session_for_alias(manager, alias, user_id)
-
-    def run_sync() -> subprocess.CompletedProcess:
-        return subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=session.working_dir,
+    try:
+        process = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=session.working_dir,
+            ),
             timeout=60,
         )
-
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(None, run_sync)
-    except subprocess.TimeoutExpired:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+    except asyncio.TimeoutError:
+        if "process" in locals() and process.returncode is None:
+            process.kill()
+            await process.wait()
         _raise(408, "shell_timeout", "命令执行超时 (60秒)")
     except Exception as exc:
         _raise(500, "shell_failed", str(exc))
 
-    output = strip_ansi_escape(result.stdout or "")
-    stderr = strip_ansi_escape(result.stderr or "")
+    output = strip_ansi_escape((stdout or b"").decode("utf-8", errors="replace") if isinstance(stdout, bytes) else (stdout or ""))
+    stderr = strip_ansi_escape((stderr or b"").decode("utf-8", errors="replace") if isinstance(stderr, bytes) else (stderr or ""))
     if stderr:
         output += f"\n\n[stderr]\n{stderr}"
     output = output or msg("shell", "no_output")
     return {
         "command": cmd,
         "output": output,
-        "returncode": result.returncode,
+        "returncode": process.returncode,
         "working_dir": session.working_dir,
     }
 

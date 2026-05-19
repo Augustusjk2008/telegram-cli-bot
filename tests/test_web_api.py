@@ -64,6 +64,7 @@ from bot.web.api_service import (
     list_conversations,
     list_agents,
     list_bots,
+    execute_shell_command,
     copy_path,
     create_text_file,
     delete_chat_attachment,
@@ -5456,6 +5457,32 @@ async def test_run_cli_chat_passes_hidden_process_kwargs_to_popen(web_manager: M
     hidden_mock.assert_called_once_with()
     assert popen_mock.call_args.kwargs["creationflags"] == 123
 
+
+@pytest.mark.asyncio
+async def test_communicate_codex_process_parse_error_terminates_process():
+    state = {"terminated": False}
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = MagicMock()
+            self.stdout.readline.side_effect = ['{"type":"thread.started","thread_id":"thread-1"}\n', ""]
+            self.stdout.read.return_value = ""
+
+        def poll(self):
+            return 0
+
+    def fake_terminate(process):
+        state["terminated"] = True
+        process.returncode = -9
+
+    with patch("bot.web.api_service.parse_codex_json_output", side_effect=RuntimeError("parse boom")), \
+         patch("bot.web.api_service._terminate_process_sync", side_effect=fake_terminate):
+        with pytest.raises(RuntimeError, match="parse boom"):
+            await api_service._communicate_codex_process(FakeProcess())
+
+    assert state["terminated"] is True
+
 @pytest.mark.asyncio
 async def test_communicate_process_waits_without_forced_timeout():
     class FakeProcess:
@@ -5559,6 +5586,70 @@ async def test_communicate_codex_process_prefers_plain_error_output_over_preview
     assert output == "Traceback: upstream request failed"
     assert thread_id == "thread-stuck"
     assert returncode == 1
+
+
+@pytest.mark.asyncio
+async def test_communicate_codex_process_reader_error_terminates_process():
+    state = {"terminated": False}
+
+    class FakeStdout:
+        def readline(self):
+            raise RuntimeError("reader boom")
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_terminate(process):
+        state["terminated"] = True
+        process.returncode = -9
+
+    with patch("bot.web.api_service._terminate_process_sync", side_effect=fake_terminate):
+        with pytest.raises(RuntimeError, match="reader boom"):
+            await api_service._communicate_codex_process(FakeProcess())
+
+    assert state["terminated"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_reader_error_terminates_process(web_manager: MultiBotManager):
+    state = {"terminated": False}
+
+    class FakeStdout:
+        def readline(self):
+            raise RuntimeError("reader boom")
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.stdin = None
+            self.returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_terminate(process):
+        state["terminated"] = True
+        process.returncode = -9
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()), \
+         patch("bot.web.api_service._terminate_process_sync", side_effect=fake_terminate):
+        with pytest.raises(RuntimeError, match="reader boom"):
+            _ = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    assert state["terminated"] is True
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_compiles_assistant_prompt_before_building_command(
@@ -6668,6 +6759,25 @@ def test_kill_user_process_marks_stop_requested_and_preserves_running_reply(web_
     terminate_process.assert_called_once_with(process)
 
 
+def test_kill_user_process_supports_child_agent(web_manager: MultiBotManager):
+    web_manager.main_profile.agents = [AgentProfile(id="reviewer", name="代码审查")]
+    reviewer = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")[2]
+    process = MagicMock()
+    process.poll.return_value = None
+
+    with reviewer._lock:
+        reviewer.process = process
+        reviewer.is_processing = True
+        reviewer.stop_requested = False
+
+    with patch("bot.web.api_service._terminate_process_sync") as terminate_process:
+        result = kill_user_process(web_manager, "main", 1001, agent_id="reviewer")
+
+    assert result["killed"] is True
+    assert reviewer.stop_requested is True
+    terminate_process.assert_called_once_with(process)
+
+
 def test_kill_user_process_clears_stale_processing_without_process(
     web_manager: MultiBotManager,
     tmp_path: Path,
@@ -6720,6 +6830,19 @@ def test_kill_user_process_clears_stale_processing_for_exited_process(
     assert session.stop_requested is False
 
 
+def test_reset_user_session_supports_child_agent(web_manager: MultiBotManager):
+    web_manager.main_profile.agents = [AgentProfile(id="reviewer", name="代码审查")]
+    reviewer = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")[2]
+    reviewer.codex_session_id = "thread-review"
+
+    result = api_service.reset_user_session(web_manager, "main", 1001, agent_id="reviewer")
+
+    assert result["reset"] is True
+    with api_service.sessions_lock:
+        bot_id = resolve_session_bot_id(web_manager, "main")
+        assert (bot_id, 1001, "reviewer") not in api_service.sessions
+
+
 def test_kill_user_process_finishes_stale_cluster_run_without_pending_tasks(
     web_manager: MultiBotManager,
 ):
@@ -6763,6 +6886,101 @@ def test_get_processing_sessions_handles_agent_scoped_sessions(web_manager: Mult
             "message_count": session.message_count,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_shell_command_uses_exec_argv_without_shell(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return ("stdout", "stderr")
+
+    async def fake_create_subprocess_exec(*argv, **kwargs):
+        captured["argv"] = list(argv)
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(api_service.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = await execute_shell_command(web_manager, "main", 1001, 'python -c "print(1)"')
+
+    assert result["command"] == 'python -c "print(1)"'
+    assert result["returncode"] == 0
+    assert result["output"] == "stdout\n\n[stderr]\nstderr"
+    assert captured["argv"] == ["python", "-c", "print(1)"]
+    assert "shell" not in captured["kwargs"]
+    assert captured["kwargs"]["cwd"] == web_manager.main_profile.working_dir
+
+
+@pytest.mark.asyncio
+async def test_execute_shell_command_timeout_kills_process(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    state = {"killed": False, "waited": False}
+
+    class FakeProcess:
+        returncode = None
+
+        async def communicate(self):
+            raise asyncio.TimeoutError()
+
+        def kill(self):
+            state["killed"] = True
+            self.returncode = -9
+
+        async def wait(self):
+            state["waited"] = True
+            return self.returncode
+
+    async def fake_create_subprocess_exec(*_argv, **_kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(api_service.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    with pytest.raises(WebApiError) as exc_info:
+        await execute_shell_command(web_manager, "main", 1001, "python -c \"print(1)\"")
+
+    assert exc_info.value.status == 408
+    assert exc_info.value.code == "shell_timeout"
+    assert state["killed"] is True
+    assert state["waited"] is True
+
+
+@pytest.mark.asyncio
+async def test_post_reset_passes_agent_id_from_body(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+    request = MagicMock()
+    request.content_length = 1
+    request.query = {}
+
+    with patch.object(server, "_with_capability", AsyncMock(return_value=AuthContext(user_id=1001, token_used=False))), \
+         patch.object(server, "_manager_alias", return_value="main"), \
+         patch.object(server, "_parse_json", AsyncMock(return_value={"agent_id": "reviewer"})), \
+         patch("bot.web.server.reset_user_session", return_value={"reset": True}) as reset_mock:
+        response = await server.post_reset(request)
+
+    payload = json.loads(response.text)
+    assert payload["data"]["reset"] is True
+    reset_mock.assert_called_once_with(server.manager, "main", 1001, agent_id="reviewer")
+
+
+@pytest.mark.asyncio
+async def test_post_kill_passes_agent_id_from_body(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+    request = MagicMock()
+    request.content_length = 1
+    request.query = {}
+
+    with patch.object(server, "_with_capability", AsyncMock(return_value=AuthContext(user_id=1001, token_used=False))), \
+         patch.object(server, "_manager_alias", return_value="main"), \
+         patch.object(server, "_parse_json", AsyncMock(return_value={"agent_id": "reviewer"})), \
+         patch("bot.web.server.kill_user_process", return_value={"killed": True}) as kill_mock:
+        response = await server.post_kill(request)
+
+    payload = json.loads(response.text)
+    assert payload["data"]["killed"] is True
+    kill_mock.assert_called_once_with(server.manager, "main", 1001, agent_id="reviewer")
 
 def test_codex_status_event_skips_json_meta_preview():
     event = _build_stream_status_event(

@@ -1733,12 +1733,16 @@ class WebApiServer:
     async def post_reset(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": reset_user_session(self.manager, alias, auth.user_id)})
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
+        return _json({"ok": True, "data": reset_user_session(self.manager, alias, auth.user_id, agent_id=agent_id)})
 
     async def post_kill(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": kill_user_process(self.manager, alias, auth.user_id)})
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
+        return _json({"ok": True, "data": kill_user_process(self.manager, alias, auth.user_id, agent_id=agent_id)})
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)

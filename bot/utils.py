@@ -1,6 +1,8 @@
 """与业务逻辑无关的通用工具函数"""
 
 import logging
+import os
+import shlex
 from typing import List, Optional
 
 from bot.config import ALLOWED_USER_IDS, DANGEROUS_COMMANDS
@@ -21,6 +23,21 @@ def is_dangerous_command(command: str) -> bool:
 
     dangerous_patterns = []
     return any(pattern in command_lower for pattern in dangerous_patterns)
+
+
+def split_command_argv(command: str) -> List[str]:
+    raw = str(command or "").strip()
+    if os.name == "nt":
+        argv = shlex.split(raw, posix=False)
+        argv = [
+            item[1:-1] if len(item) >= 2 and item[0] == item[-1] and item[0] in {'"', "'"} else item
+            for item in argv
+        ]
+    else:
+        argv = shlex.split(raw, posix=True)
+    if not argv:
+        raise ValueError("empty command")
+    return argv
 
 
 def truncate_for_markdown(text: str, max_len: int = 3900) -> str:
