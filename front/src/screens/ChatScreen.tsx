@@ -76,6 +76,12 @@ type PendingChatAttachment = ChatAttachmentUploadResult & {
   id: string;
 };
 
+type QueuedChatMessage = {
+  text: string;
+  attachments: PendingChatAttachment[];
+  sendOptions?: ChatSendOptions;
+};
+
 type ParsedUserAttachment = {
   filename: string;
   savedPath: string;
@@ -358,6 +364,46 @@ function buildComposedMessageText(text: string, attachments: PendingChatAttachme
     return `${trimmedText}\n\n${attachmentBlock}`;
   }
   return trimmedText || attachmentBlock;
+}
+
+function mergeAgentMentions(left: AgentMention[] = [], right: AgentMention[] = []) {
+  const seen = new Set<string>();
+  const result: AgentMention[] = [];
+  for (const mention of [...left, ...right]) {
+    if (!mention.agentId || seen.has(mention.agentId)) {
+      continue;
+    }
+    seen.add(mention.agentId);
+    result.push(mention);
+  }
+  return result;
+}
+
+function mergeQueuedChatMessage(current: QueuedChatMessage | null, incoming: QueuedChatMessage): QueuedChatMessage {
+  if (!current) {
+    return incoming;
+  }
+
+  const currentText = current.text.trim();
+  const incomingText = incoming.text.trim();
+  const text = currentText && incomingText
+    ? `${currentText}\n\n${incomingText}`
+    : currentText || incomingText;
+  const currentOptions = current.sendOptions;
+  const incomingOptions = incoming.sendOptions;
+  const sendOptions = (currentOptions || incomingOptions)
+    ? {
+      ...currentOptions,
+      ...incomingOptions,
+      mentions: mergeAgentMentions(currentOptions?.mentions, incomingOptions?.mentions),
+    }
+    : undefined;
+
+  return {
+    text,
+    attachments: [...current.attachments, ...incoming.attachments],
+    sendOptions,
+  };
 }
 
 function isAbsoluteAttachmentPath(path: string) {
@@ -796,6 +842,7 @@ export function ChatScreen({
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
+  const [queuedMessage, setQueuedMessage] = useState<QueuedChatMessage | null>(null);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [previewName, setPreviewName] = useState("");
   const [previewContent, setPreviewContent] = useState("");
@@ -833,6 +880,7 @@ export function ChatScreen({
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
   const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
+  const queuedMessageRef = useRef<QueuedChatMessage | null>(null);
   const agentsRef = useRef<AgentSummary[]>(fallbackAgents());
   const activeAgentIdRef = useRef(activeAgentId);
   const assistantPollTimerRef = useRef<number | null>(null);
@@ -862,6 +910,8 @@ export function ChatScreen({
     setClusterTaskStatus(null);
     setClusterTaskError("");
     clusterRunIdRef.current = "";
+    setQueuedMessage(null);
+    queuedMessageRef.current = null;
     const storedAgentId = readStoredAgentId(botAlias);
     setActiveAgentId(storedAgentId);
     activeAgentIdRef.current = storedAgentId;
@@ -905,6 +955,10 @@ export function ChatScreen({
   useEffect(() => {
     pendingCronRunsRef.current = pendingCronRuns;
   }, [pendingCronRuns]);
+
+  useEffect(() => {
+    queuedMessageRef.current = queuedMessage;
+  }, [queuedMessage]);
 
   useEffect(() => {
     agentsRef.current = agents;
@@ -1226,6 +1280,8 @@ export function ChatScreen({
     setBotOverview(null);
     setPendingCronRuns([]);
     setPendingAttachments([]);
+    setQueuedMessage(null);
+    queuedMessageRef.current = null;
     setUploadingAttachments(false);
     setDeletedAttachmentKeys({});
     setDeletingAttachmentKeys({});
@@ -1634,6 +1690,8 @@ export function ChatScreen({
       clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
+      setQueuedMessage(null);
+      queuedMessageRef.current = null;
       setItems(data.messages);
       setConversations((prev) => prev.map((item) => ({ ...item, active: item.id === conversationId })));
       setHistoryPanelOpen(false);
@@ -1666,6 +1724,8 @@ export function ChatScreen({
       clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
+      setQueuedMessage(null);
+      queuedMessageRef.current = null;
       setItems(data.messages);
       setConversations((prev) => [data.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
@@ -1696,6 +1756,8 @@ export function ChatScreen({
     setExpandedTracePanels({});
     setTraceLoadState({});
     setPendingAttachments([]);
+    setQueuedMessage(null);
+    queuedMessageRef.current = null;
     setHistoryPanelOpen(false);
     setIsStreaming(false);
     setStreamMode("");
@@ -1986,6 +2048,15 @@ export function ChatScreen({
       setStreamMode("");
       setStreamStartedAtMs(null);
       emitBotActivityForActiveAgent("idle");
+      const nextQueuedMessage = queuedMessageRef.current;
+      if (nextQueuedMessage) {
+        setQueuedMessage(null);
+        queuedMessageRef.current = null;
+        void sendMessageInternal(nextQueuedMessage.text, {
+          attachments: nextQueuedMessage.attachments,
+          sendOptions: nextQueuedMessage.sendOptions,
+        });
+      }
     }
   }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
 
@@ -1996,11 +2067,33 @@ export function ChatScreen({
       return;
     }
     const clusterSend = clusterMode || mentions.length > 0;
+    const sendOptions = clusterSend ? { cluster: true, mentions } : undefined;
+    if (isStreamingRef.current) {
+      const nextQueuedMessage: QueuedChatMessage = {
+        text: text.trim(),
+        attachments: pendingAttachments,
+        sendOptions,
+      };
+      if (!buildComposedMessageText(nextQueuedMessage.text, nextQueuedMessage.attachments)) {
+        return;
+      }
+      setError("");
+      setQueuedMessage((current) => {
+        const merged = mergeQueuedChatMessage(current, nextQueuedMessage);
+        queuedMessageRef.current = merged;
+        return merged;
+      });
+      if (pendingAttachments.length > 0) {
+        setPendingAttachments([]);
+      }
+      setComposerPulseKey((value) => value + 1);
+      return;
+    }
     setComposerPulseKey((value) => value + 1);
     await sendMessageInternal(text, {
       attachments: pendingAttachments,
       clearPendingAttachments: true,
-      sendOptions: clusterSend ? { cluster: true, mentions } : undefined,
+      sendOptions,
     });
   }, [botOverview?.cluster?.enabled, pendingAttachments, sendMessageInternal]);
 
@@ -2377,6 +2470,14 @@ export function ChatScreen({
         {chatMutationsDisabled ? (
           <p className="px-4 pt-3 text-xs text-[var(--muted)]">只读模式</p>
         ) : null}
+        {queuedMessage ? (
+          <div className="mx-3 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <div className="font-medium">排队中</div>
+            <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
+              {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
+            </div>
+          </div>
+        ) : null}
         <ChatComposer
           key={`composer-${composerPulseKey}`}
           onSend={handleSend}
@@ -2386,7 +2487,7 @@ export function ChatScreen({
           pulse={composerPulseKey > 0}
           agents={clusterAgents}
           clusterMode={clusterMode}
-          disabled={chatMutationsDisabled || isStreaming || loading}
+          disabled={chatMutationsDisabled || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
           placeholder={clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}

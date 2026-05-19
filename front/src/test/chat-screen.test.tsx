@@ -1640,6 +1640,58 @@ test("shows waiting time while a reply is still pending", async () => {
   }, { timeout: 3000 });
 }, 8000);
 
+test("queues and merges messages typed while a reply is streaming", async () => {
+  const user = userEvent.setup();
+  let resolveFirst: ((message: ChatMessage) => void) | null = null;
+  const sendMessage = vi.fn((
+    _botAlias: string,
+    text: string,
+    _onChunk: (chunk: string) => void,
+  ) => {
+    if (sendMessage.mock.calls.length === 1) {
+      return new Promise<ChatMessage>((resolve) => {
+        resolveFirst = resolve;
+      });
+    }
+    return Promise.resolve({
+      id: "assistant-queued",
+      role: "assistant",
+      text: `已处理 ${text}`,
+      createdAt: new Date().toISOString(),
+      state: "done" as const,
+    });
+  });
+  const client = createClient({ sendMessage: sendMessage as never });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "第一条");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(screen.getByRole("textbox")).toBeEnabled();
+  await user.type(screen.getByRole("textbox"), "第二条");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.type(screen.getByRole("textbox"), "第三条");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("排队中")).toBeInTheDocument();
+  expect(screen.getByText("排队中").parentElement).toHaveTextContent("第二条");
+  expect(screen.getByText("排队中").parentElement).toHaveTextContent("第三条");
+
+  resolveFirst?.({
+    id: "assistant-first",
+    role: "assistant",
+    text: "第一条完成",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  });
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+  expect(sendMessage.mock.calls[1][1]).toBe("第二条\n\n第三条");
+  expect(await screen.findByText(/已处理 第二条/)).toBeInTheDocument();
+  expect(screen.queryByText("排队中")).not.toBeInTheDocument();
+});
+
 test("recovers from a stalled sse completion by syncing finished history", async () => {
   vi.useFakeTimers();
   const getBotOverview = vi.fn(async () => ({
