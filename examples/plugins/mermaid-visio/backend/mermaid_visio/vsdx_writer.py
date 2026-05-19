@@ -10,6 +10,10 @@ from .models import FlowchartIR, LayoutNode, LayoutResult
 CORE_NS = "http://schemas.microsoft.com/office/visio/2011/1/core"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+DEFAULT_FONT = "Microsoft YaHei"
+DEFAULT_TEXT_COLOR = "#111827"
+DEFAULT_FILL = "#ffffff"
+DEFAULT_STROKE = "#333333"
 
 
 def write_vsdx(ir: FlowchartIR, layout: LayoutResult, output_path: Path) -> None:
@@ -41,7 +45,7 @@ def _page_xml(ir: FlowchartIR, layout: LayoutResult, page_width: float, page_hei
         layout_edge = layout.edges.get(edge.id)
         if layout_edge is None:
             continue
-        chunks.append(_edge_shape_xml(shape_id, layout_edge.points, edge.kind))
+        chunks.append(_edge_shape_xml(shape_id, layout_edge.points, edge.kind, edge.arrow))
         shape_id += 1
     for node_id, node in ir.nodes.items():
         layout_node = layout.nodes[node_id]
@@ -67,8 +71,9 @@ def _page_xml(ir: FlowchartIR, layout: LayoutResult, page_width: float, page_hei
 
 
 def _node_shape_xml(shape_id: int, label: str, kind: str, node: LayoutNode, style: dict[str, str]) -> str:
-    fill = style.get("fill", "#ffffff")
-    stroke = style.get("stroke", "#333333")
+    fill = style.get("fill", DEFAULT_FILL)
+    stroke = style.get("stroke", DEFAULT_STROKE)
+    text_color = style.get("color", DEFAULT_TEXT_COLOR)
     return (
         f'    <Shape ID="{shape_id}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">\n'
         f'      <Cell N="PinX" V="{_num(node.x)}"/>\n'
@@ -77,15 +82,17 @@ def _node_shape_xml(shape_id: int, label: str, kind: str, node: LayoutNode, styl
         f'      <Cell N="Height" V="{_num(node.height)}"/>\n'
         f'      <Cell N="LocPinX" V="{_num(node.width / 2)}"/>\n'
         f'      <Cell N="LocPinY" V="{_num(node.height / 2)}"/>\n'
-        f'      <Cell N="FillForegnd" V="{escape(fill)}"/>\n'
-        f'      <Cell N="LineColor" V="{escape(stroke)}"/>\n'
+        f'      {_color_cell("FillForegnd", fill)}\n'
+        f'      {_color_cell("LineColor", stroke)}\n'
+        f'{_character_xml(text_color)}\n'
+        f'{_paragraph_xml()}\n'
         f'{_geometry_xml(_relative_points(kind))}\n'
-        f'      <Text>{escape(label)}</Text>\n'
+        f'      {_text_xml(label)}\n'
         "    </Shape>"
     )
 
 
-def _edge_shape_xml(shape_id: int, points: list[tuple[float, float]], kind: str) -> str:
+def _edge_shape_xml(shape_id: int, points: list[tuple[float, float]], kind: str, arrow: str) -> str:
     if len(points) < 2:
         points = [(0.0, 0.0), (0.1, 0.1)]
     min_x = min(point[0] for point in points)
@@ -99,6 +106,7 @@ def _edge_shape_xml(shape_id: int, points: list[tuple[float, float]], kind: str)
     rel_points = [((x - min_x) / width, (y - min_y) / height) for x, y in points]
     line_pattern = "2" if kind == "dotted" else "1"
     line_weight = "0.025" if kind == "thick" else "0.0125"
+    end_arrow = "4" if arrow == "end" else "0"
     return (
         f'    <Shape ID="{shape_id}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">\n'
         f'      <Cell N="PinX" V="{_num(pin_x)}"/>\n'
@@ -109,6 +117,8 @@ def _edge_shape_xml(shape_id: int, points: list[tuple[float, float]], kind: str)
         f'      <Cell N="LocPinY" V="{_num(height / 2)}"/>\n'
         f'      <Cell N="LinePattern" V="{line_pattern}"/>\n'
         f'      <Cell N="LineWeight" V="{line_weight}"/>\n'
+        '      <Cell N="BeginArrow" V="0"/>\n'
+        f'      <Cell N="EndArrow" V="{end_arrow}"/>\n'
         f'{_geometry_xml(rel_points, no_fill=True)}\n'
         "    </Shape>"
     )
@@ -129,10 +139,12 @@ def _group_shape_xml(shape_id: int, label: str, nodes: list[LayoutNode]) -> str:
         f'      <Cell N="Height" V="{_num(height)}"/>\n'
         f'      <Cell N="LocPinX" V="{_num(width / 2)}"/>\n'
         f'      <Cell N="LocPinY" V="{_num(height / 2)}"/>\n'
-        '      <Cell N="FillForegnd" V="#f8fafc"/>\n'
-        '      <Cell N="LineColor" V="#94a3b8"/>\n'
+        f'      {_color_cell("FillForegnd", "#f8fafc")}\n'
+        f'      {_color_cell("LineColor", "#94a3b8")}\n'
+        f'{_character_xml("#475569")}\n'
+        f'{_paragraph_xml()}\n'
         f'{_geometry_xml(_relative_points("process"))}\n'
-        f'      <Text>{escape(label)}</Text>\n'
+        f'      {_text_xml(label)}\n'
         "    </Shape>"
     )
 
@@ -149,13 +161,42 @@ def _text_shape_xml(shape_id: int, label: str, x: float, y: float) -> str:
         '      <Cell N="LocPinY" V="0.125"/>\n'
         '      <Cell N="FillPattern" V="0"/>\n'
         '      <Cell N="LinePattern" V="0"/>\n'
+        f'{_character_xml(DEFAULT_TEXT_COLOR)}\n'
+        f'{_paragraph_xml()}\n'
         f'{_geometry_xml(_relative_points("process"), no_fill=True, no_line=True)}\n'
-        f'      <Text>{escape(label)}</Text>\n'
+        f'      {_text_xml(label)}\n'
         "    </Shape>"
     )
 
 
+def _relative_points(kind: str) -> list[tuple[float, float]]:
+    if kind == "decision":
+        return [(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5), (0.5, 0)]
+    if kind == "circle":
+        return [(0.5, 0), (0.85, 0.15), (1, 0.5), (0.85, 0.85), (0.5, 1), (0.15, 0.85), (0, 0.5), (0.15, 0.15), (0.5, 0)]
+    if kind in {"terminator", "database"}:
+        return []
+    return [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]
+
+
 def _geometry_xml(points: list[tuple[float, float]], *, no_fill: bool = False, no_line: bool = False) -> str:
+    if not points:
+        rows = [
+            '      <Section N="Geometry" IX="0">',
+            f'        <Cell N="NoFill" V="{1 if no_fill else 0}"/>',
+            f'        <Cell N="NoLine" V="{1 if no_line else 0}"/>',
+            '        <Cell N="NoShow" V="0"/>',
+            '        <Row T="Ellipse" IX="1">',
+            '          <Cell N="X" V="0.5"/>',
+            '          <Cell N="Y" V="0.5"/>',
+            '          <Cell N="A" V="0"/>',
+            '          <Cell N="B" V="0.5"/>',
+            '          <Cell N="C" V="0.5"/>',
+            '          <Cell N="D" V="0"/>',
+            "        </Row>",
+            "      </Section>",
+        ]
+        return "\n".join(rows)
     rows = [
         '      <Section N="Geometry" IX="0">',
         f'        <Cell N="NoFill" V="{1 if no_fill else 0}"/>',
@@ -172,12 +213,60 @@ def _geometry_xml(points: list[tuple[float, float]], *, no_fill: bool = False, n
     return "\n".join(rows)
 
 
-def _relative_points(kind: str) -> list[tuple[float, float]]:
-    if kind == "decision":
-        return [(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5), (0.5, 0)]
-    if kind == "circle":
-        return [(0.5, 0), (0.85, 0.15), (1, 0.5), (0.85, 0.85), (0.5, 1), (0.15, 0.85), (0, 0.5), (0.15, 0.15), (0.5, 0)]
-    return [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]
+def _character_xml(color: str) -> str:
+    return "\n".join([
+        '      <Section N="Character">',
+        '        <Row IX="0">',
+        f'          <Cell N="Font" V="{escape(DEFAULT_FONT)}"/>',
+        f'          <Cell N="AsianFont" V="{escape(DEFAULT_FONT)}"/>',
+        f'          <Cell N="ComplexScriptFont" V="{escape(DEFAULT_FONT)}"/>',
+        f'          {_color_cell("Color", color)}',
+        '          <Cell N="Size" V="0.1666666666666667"/>',
+        "        </Row>",
+        "      </Section>",
+    ])
+
+
+def _paragraph_xml() -> str:
+    return "\n".join([
+        '      <Section N="Paragraph">',
+        '        <Row IX="0">',
+        '          <Cell N="HorzAlign" V="1"/>',
+        '          <Cell N="Bullet" V="0"/>',
+        "        </Row>",
+        "      </Section>",
+    ])
+
+
+def _text_xml(label: str) -> str:
+    return f"<Text><cp IX=\"0\"/><pp IX=\"0\"/>{escape(label)}</Text>"
+
+
+def _color_cell(name: str, value: str) -> str:
+    fallback = {
+        "FillForegnd": DEFAULT_FILL,
+        "LineColor": DEFAULT_STROKE,
+        "Color": DEFAULT_TEXT_COLOR,
+    }.get(name, DEFAULT_TEXT_COLOR)
+    color = _normalize_hex_color(value, fallback)
+    red = int(color[1:3], 16)
+    green = int(color[3:5], 16)
+    blue = int(color[5:7], 16)
+    return f'<Cell N="{name}" V="{color}" F="THEMEGUARD(RGB({red},{green},{blue}))"/>'
+
+
+def _normalize_hex_color(value: str, fallback: str) -> str:
+    text = str(value or "").strip()
+    if text.startswith("#") and len(text) == 4:
+        chars = text[1:]
+        text = "#" + "".join(char * 2 for char in chars)
+    if len(text) == 6 and not text.startswith("#"):
+        text = f"#{text}"
+    if len(text) == 7 and text.startswith("#"):
+        hex_digits = text[1:]
+        if all(char in "0123456789abcdefABCDEF" for char in hex_digits):
+            return f"#{hex_digits.lower()}"
+    return fallback
 
 
 def _midpoint(points: list[tuple[float, float]]) -> tuple[float, float]:

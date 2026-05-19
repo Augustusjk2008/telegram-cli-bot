@@ -139,7 +139,16 @@ def test_vsdx_writer_creates_visio_zip_with_page_shapes(tmp_path: Path) -> None:
 
         output = tmp_path / "demo.vsdx"
         warnings = convert_source_to_vsdx(
-            DiagramSource("diagram-1", "demo", "flowchart TD\nA[开始] --> B{判断}\n", 1, "demo.vsdx"),
+            DiagramSource(
+                "diagram-1",
+                "demo",
+                "flowchart TD\n"
+                "A[开始] --> B{判断}\n"
+                "B --> C[(归档)]\n"
+                "style A fill:#eef6ff,stroke:#2563eb,color:#111827\n",
+                1,
+                "demo.vsdx",
+            ),
             PluginConfig(layout_engine="simple"),
             output,
         )
@@ -148,10 +157,22 @@ def test_vsdx_writer_creates_visio_zip_with_page_shapes(tmp_path: Path) -> None:
     with zipfile.ZipFile(output) as archive:
         names = set(archive.namelist())
         page_xml = archive.read("visio/pages/page1.xml").decode("utf-8")
+        document_xml = archive.read("visio/document.xml").decode("utf-8")
     assert "[Content_Types].xml" in names
     assert "visio/document.xml" in names
     assert "开始" in page_xml
     assert "判断" in page_xml
+    assert "归档" in page_xml
+    assert '<cp IX="0"/><pp IX="0"/>开始' in page_xml
+    assert '<Cell N="Font" V="Microsoft YaHei"/>' in page_xml
+    assert '<Cell N="AsianFont" V="Microsoft YaHei"/>' in page_xml
+    assert '<Cell N="ComplexScriptFont" V="Microsoft YaHei"/>' in page_xml
+    assert '<Cell N="FillForegnd" V="#eef6ff" F="THEMEGUARD(RGB(238,246,255))"/>' in page_xml
+    assert '<Cell N="LineColor" V="#2563eb" F="THEMEGUARD(RGB(37,99,235))"/>' in page_xml
+    assert '<Cell N="Color" V="#111827" F="THEMEGUARD(RGB(17,24,39))"/>' in page_xml
+    assert '<Cell N="EndArrow" V="4"/>' in page_xml
+    assert 'Row T="Ellipse"' in page_xml
+    assert 'NameU="Microsoft YaHei"' in document_xml
     assert warnings == ["已使用简单布局"]
 
 

@@ -1,0 +1,10 @@
+flowchart TD
+    Start([开始]) --> Input[接收用户请求]
+    Input --> Validate{参数有效?}
+    Validate -->|是| Plan[生成执行计划]
+    Validate -->|否| Reject[返回校验错误]
+    Plan --> Run[执行任务]
+    Run --> Collect[收集结果]
+    Collect --> Done([完成])
+    Reject --> Input
+

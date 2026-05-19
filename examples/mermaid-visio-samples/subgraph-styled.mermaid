@@ -1,0 +1,19 @@
+flowchart LR
+    subgraph Client[客户端]
+        User[用户] --> UI[Web 工作台]
+    end
+
+    subgraph Server[后端服务]
+        API[Web API] --> Queue[(任务队列)]
+        Queue ==> Worker[插件运行时]
+        Worker -.-> Audit[审计日志]
+    end
+
+    UI -->|提交转换| API
+    Worker -->|产物| Artifact[(临时产物)]
+    Artifact --> UI
+
+    style UI fill:#eef6ff,stroke:#2563eb,color:#111827
+    style Worker fill:#ecfdf3,stroke:#16a34a,color:#052e16
+    style Audit fill:#fff7ed,stroke:#ea580c,color:#431407
+
