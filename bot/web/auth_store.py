@@ -112,6 +112,7 @@ class WebAccount:
     username: str
     role: str
     disabled: bool = False
+    session_user_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -171,9 +172,11 @@ class WebAuthStore:
             hashed_password = self._hash_password(resolved_password, salt, _PBKDF2_ITERATIONS)
             account_id = f"member_{secrets.token_hex(8)}"
             created_at = _utc_now()
+            session_user_id = self._new_session_user_id(user_items)
             user_items.append(
                 {
                     "account_id": account_id,
+                    "session_user_id": session_user_id,
                     "username_key": self._stable_lookup_key(normalized_username),
                     "username_enc": self._encrypt_text(resolved_username),
                     "role": ROLE_MEMBER,
@@ -202,6 +205,7 @@ class WebAuthStore:
                 username=resolved_username,
                 role=ROLE_MEMBER,
                 disabled=False,
+                session_user_id=session_user_id,
             )
         )
 
@@ -211,7 +215,8 @@ class WebAuthStore:
 
         with self._lock:
             users_data = self._read_json(self.users_path)
-            user_item = self._find_user_item(self._items(users_data), normalized_username)
+            user_items = self._items(users_data)
+            user_item = self._find_user_item(user_items, normalized_username)
             if user_item is None:
                 self._raise(401, "invalid_credentials", "用户名或密码错误")
             if bool(user_item.get("disabled")):
@@ -225,6 +230,9 @@ class WebAuthStore:
             expected = self._hash_password(resolved_password, bytes.fromhex(salt_hex), iterations)
             if not secrets.compare_digest(expected, hash_hex):
                 self._raise(401, "invalid_credentials", "用户名或密码错误")
+            if not isinstance(user_item.get("session_user_id"), int):
+                user_item["session_user_id"] = self._new_session_user_id(user_items)
+                self._write_json(self.users_path, users_data)
 
         return self._issue_session(self._account_from_item(user_item))
 
@@ -435,6 +443,7 @@ class WebAuthStore:
                 username=username,
                 role=ROLE_MEMBER,
                 disabled=False,
+                session_user_id=None,
             ),
             capabilities=LOCAL_ADMIN_CAPABILITIES,
         )
@@ -445,6 +454,7 @@ class WebAuthStore:
             username="guest",
             role=ROLE_GUEST,
             disabled=False,
+            session_user_id=None,
         )
 
     def _normalize_username(self, username: str) -> str:
@@ -479,7 +489,20 @@ class WebAuthStore:
             username=self._read_username_from_item(item),
             role=str(item.get("role") or ROLE_MEMBER),
             disabled=bool(item.get("disabled")),
+            session_user_id=item.get("session_user_id") if isinstance(item.get("session_user_id"), int) else None,
         )
+
+    def _new_session_user_id(self, user_items: list[dict[str, Any]]) -> int:
+        used = {
+            int(item["session_user_id"])
+            for item in user_items
+            if isinstance(item.get("session_user_id"), int)
+        }
+        used.update({-1, -2})
+        while True:
+            candidate = -int.from_bytes(secrets.token_bytes(4), "big")
+            if candidate != 0 and candidate not in used:
+                return candidate
 
     def _find_user_item(self, items: list[dict[str, Any]], normalized_username: str) -> dict[str, Any] | None:
         expected_key = self._stable_lookup_key(normalized_username)
