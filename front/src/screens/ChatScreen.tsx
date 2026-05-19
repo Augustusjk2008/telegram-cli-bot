@@ -890,9 +890,18 @@ export function ChatScreen({
   const clusterTaskPollTimerRef = useRef<number | null>(null);
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
+  const previousBotAliasRef = useRef(botAlias);
   const hasActivatedRef = useRef(false);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient } | null>(null);
   const isSseStreaming = () => streamModeRef.current === "sse";
+
+  useLayoutEffect(() => {
+    if (previousBotAliasRef.current === botAlias) {
+      return;
+    }
+    previousBotAliasRef.current = botAlias;
+    assistantSendVersionRef.current += 1;
+  }, [botAlias]);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;

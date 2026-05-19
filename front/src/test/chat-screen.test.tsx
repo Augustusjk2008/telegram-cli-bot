@@ -1093,6 +1093,63 @@ test("switching bots resets chat history instead of mixing conversations", async
   expect(screen.queryByText("main-history")).not.toBeInTheDocument();
 });
 
+test("switching bots ignores stale streaming completion from the previous bot", async () => {
+  const user = userEvent.setup();
+  let resolveMainSend: ((message: ChatMessage) => void) | null = null;
+  const sendMessage = vi.fn((botAlias: string) => {
+    if (botAlias === "main") {
+      return new Promise<ChatMessage>((resolve) => {
+        resolveMainSend = resolve;
+      });
+    }
+    return Promise.resolve({
+      id: `${botAlias}-reply`,
+      role: "assistant",
+      text: `${botAlias}-reply`,
+      createdAt: new Date().toISOString(),
+      state: "done" as const,
+    });
+  });
+  const client = createClient({
+    listMessages: async (botAlias: string): Promise<ChatMessage[]> => (
+      botAlias === "main"
+        ? []
+        : [{
+          id: "team2-1",
+          role: "assistant",
+          text: "team2-history",
+          createdAt: new Date().toISOString(),
+          state: "done",
+        }]
+    ),
+    sendMessage: sendMessage as never,
+  });
+
+  const { rerender } = render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "main-question");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(await screen.findByText("正在输出...")).toBeInTheDocument();
+
+  rerender(<ChatScreen botAlias="team2" client={client} />);
+  expect(await screen.findByText("team2-history")).toBeInTheDocument();
+
+  resolveMainSend?.({
+    id: "main-final",
+    role: "assistant",
+    text: "main-final",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  });
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("team2-history")).toBeInTheDocument();
+  expect(screen.queryByText("main-final")).not.toBeInTheDocument();
+});
+
 test("chat screen hides agent switcher when there are no child agents", async () => {
   const listAgents = vi.fn(async () => ({
     items: [
@@ -1690,6 +1747,88 @@ test("queues and merges messages typed while a reply is streaming", async () => 
   expect(sendMessage.mock.calls[1][1]).toBe("第二条\n\n第三条");
   expect(await screen.findByText(/已处理 第二条/)).toBeInTheDocument();
   expect(screen.queryByText("排队中")).not.toBeInTheDocument();
+});
+
+test("previous bot reply does not drain queued messages from the next bot", async () => {
+  const user = userEvent.setup();
+  let resolveMainSend: ((message: ChatMessage) => void) | null = null;
+  const sendMessage = vi.fn((botAlias: string, text: string) => {
+    if (botAlias === "main") {
+      return new Promise<ChatMessage>((resolve) => {
+        resolveMainSend = resolve;
+      });
+    }
+    return Promise.resolve({
+      id: `${botAlias}-reply`,
+      role: "assistant",
+      text: `${botAlias}:${text}`,
+      createdAt: new Date().toISOString(),
+      state: "done" as const,
+    });
+  });
+  const client = createClient({
+    getBotOverview: async (botAlias: string): Promise<BotOverview> => (
+      botAlias === "main"
+        ? {
+          alias: "main",
+          cliType: "codex",
+          status: "running",
+          workingDir: "C:\\workspace",
+          isProcessing: false,
+        }
+        : {
+          alias: "team2",
+          cliType: "codex",
+          status: "busy",
+          workingDir: "C:\\team2",
+          isProcessing: true,
+        }
+    ),
+    listMessages: async (botAlias: string): Promise<ChatMessage[]> => (
+      botAlias === "main"
+        ? []
+        : [{
+          id: "team2-streaming",
+          role: "assistant",
+          text: "team2-processing",
+          createdAt: new Date().toISOString(),
+          state: "streaming",
+        }]
+    ),
+    sendMessage: sendMessage as never,
+  });
+
+  const { rerender } = render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "main-question");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(sendMessage.mock.calls[0][0]).toBe("main");
+
+  rerender(<ChatScreen botAlias="team2" client={client} />);
+  expect(await screen.findByText("team2-processing")).toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "team2-queued");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("排队中")).toBeInTheDocument();
+
+  resolveMainSend?.({
+    id: "main-final",
+    role: "assistant",
+    text: "main-final",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  });
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("排队中")).toBeInTheDocument();
+  expect(screen.queryByText("main-final")).not.toBeInTheDocument();
 });
 
 test("recovers from a stalled sse completion by syncing finished history", async () => {
