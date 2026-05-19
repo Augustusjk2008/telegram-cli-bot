@@ -26,6 +26,26 @@ def _windows_release_assets() -> list[dict[str, str]]:
     ]
 
 
+def _write_distribution_marker(
+    archive: zipfile.ZipFile,
+    *,
+    package_kind: str = "installer",
+    platform: str = "windows-x64",
+    version: str = "1.0.1",
+) -> None:
+    archive.writestr(
+        ".distribution.json",
+        json.dumps(
+            {
+                "packageKind": package_kind,
+                "platform": platform,
+                "version": version,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
 def test_get_update_status_defaults_to_current_version(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
@@ -265,6 +285,7 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
 
     package_path = tmp_path / "release.zip"
     with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive)
         archive.writestr("README.md", "# updated\n")
         archive.writestr(".env", "WEB_API_TOKEN=replace-me\n")
         archive.writestr(".web_admin_settings.json", "{\"bad\":true}")
@@ -301,6 +322,7 @@ def test_apply_pending_update_builds_frontend_before_clearing_pending(monkeypatc
 
     package_path = tmp_path / "release.zip"
     with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive)
         archive.writestr("README.md", "# updated\n")
 
     current_settings = app_settings._load_settings()
@@ -333,6 +355,7 @@ def test_apply_pending_update_keeps_pending_update_when_frontend_build_fails(mon
 
     package_path = tmp_path / "release.zip"
     with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive)
         archive.writestr("README.md", "# updated\n")
 
     current_settings = app_settings._load_settings()
@@ -350,6 +373,39 @@ def test_apply_pending_update_keeps_pending_update_when_frontend_build_fails(mon
     assert result["reason"] == "frontend_build_failed"
     assert saved_settings["pending_update_version"] == "1.0.1"
     assert "npm run build failed" in saved_settings["update_last_error"]
+
+
+def test_apply_pending_update_rolls_back_files_when_frontend_build_fails(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    target = repo_root / "bot" / "version.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VERSION = 'old'\n", encoding="utf-8")
+
+    package_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive, version="2.0.0")
+        archive.writestr("bot/version.py", "VERSION = 'new'\n")
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = "2.0.0"
+    current_settings["pending_update_path"] = str(package_path)
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    monkeypatch.setattr(updater, "_build_updated_frontend", lambda path: (False, "npm run build failed"))
+
+    result = updater.apply_pending_update(repo_root)
+
+    assert result["applied"] is False
+    assert result["reason"] == "frontend_build_failed"
+    assert target.read_text(encoding="utf-8") == "VERSION = 'old'\n"
+    saved_settings = app_settings._load_settings()
+    assert saved_settings["pending_update_version"] == "2.0.0"
+    assert saved_settings["pending_update_path"] == str(package_path)
 
 
 def test_apply_pending_update_handles_invalid_package(monkeypatch, tmp_path: Path):
@@ -438,6 +494,7 @@ def test_prepare_offline_update_sets_pending_update(monkeypatch, tmp_path: Path)
     repo_root.mkdir()
     package = tmp_path / "offline.zip"
     with zipfile.ZipFile(package, "w") as archive:
+        _write_distribution_marker(archive, version="1.2.3")
         archive.writestr("bot/version.py", "APP_VERSION = '1.2.3'\n")
 
     status = updater.prepare_offline_update(repo_root, package, version="1.2.3", log_callback=lambda _line: None)
@@ -445,3 +502,22 @@ def test_prepare_offline_update_sets_pending_update(monkeypatch, tmp_path: Path)
     assert status["pending_update_version"] == "1.2.3"
     assert status["pending_update_path"] == str(package)
     assert status["pending_update_package_kind"] == updater.detect_update_package_kind(repo_root)
+
+
+def test_prepare_offline_update_rejects_wrong_package_kind(monkeypatch, tmp_path: Path):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    package = tmp_path / "offline.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr(
+            ".distribution.json",
+            json.dumps({"packageKind": "portable", "platform": "windows-x64"}, ensure_ascii=False),
+        )
+        archive.writestr("bot/version.py", "APP_VERSION = '1.2.3'\n")
+
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda root=None: "installer")
+
+    with pytest.raises(RuntimeError, match="包类型"):
+        updater.prepare_offline_update(repo_root, package, version="1.2.3")

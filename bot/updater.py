@@ -194,23 +194,34 @@ def download_latest_update(
 def list_offline_update_packages(repo_root: Path | None = None) -> dict[str, Any]:
     root = Path(repo_root or Path.cwd()).resolve()
     artifacts_dir = root / ".release-local" / "artifacts"
-    package_kind = detect_update_package_kind(root)
     items: list[dict[str, Any]] = []
     if artifacts_dir.exists():
         for path in sorted(artifacts_dir.iterdir(), key=lambda item: item.name.lower()):
             if not path.is_file() or not (_is_zip_package(path) or _is_tar_gz_package(path)):
                 continue
             size = path.stat().st_size
+            version = ""
+            package_kind = ""
+            valid = True
+            error = ""
+            try:
+                distribution = _read_package_distribution_from_package(path)
+                package_kind = distribution.get("package_kind") or ""
+                version = distribution.get("version") or ""
+                _validate_package_distribution(root, distribution, package_name=path.name)
+            except Exception as exc:
+                valid = False
+                error = str(exc)
             items.append(
                 {
                     "name": path.name,
                     "path": str(path),
                     "size": size,
                     "size_bytes": size,
-                    "version": "",
+                    "version": version,
                     "package_kind": package_kind,
-                    "valid": True,
-                    "error": "",
+                    "valid": valid,
+                    "error": error,
                 }
             )
     return {"artifacts_dir": str(artifacts_dir), "items": items}
@@ -231,16 +242,22 @@ def prepare_offline_update(
     if not package.exists():
         raise RuntimeError(f"更新包不存在: {package}")
     _validate_package_file(package)
-    package_kind = detect_update_package_kind(root)
+    distribution = _read_package_distribution_from_package(package)
+    _validate_package_distribution(root, distribution, package_name=package.name)
+    package_kind = distribution.get("package_kind") or detect_update_package_kind(root)
+    package_version = _normalize_tag_name(distribution.get("version"))
     settings = app_settings._load_settings()
     settings["pending_update_version"] = (
         _normalize_tag_name(version)
+        or package_version
         or _normalize_tag_name(settings.get("last_available_version"))
         or "offline"
     )
     settings["pending_update_path"] = str(package)
     settings["pending_update_notes"] = "离线更新包"
-    settings["pending_update_platform"] = _pending_update_platform(package_kind)
+    settings["pending_update_platform"] = (
+        str(distribution.get("platform") or "").strip() or _pending_update_platform(package_kind)
+    )
     settings["pending_update_package_kind"] = package_kind
     settings["update_last_error"] = ""
     app_settings._save_settings(settings)
@@ -308,39 +325,57 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
             "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
         }
 
-    extracted_files = 0
-    for relative_path, data in package_entries:
-        if _is_protected_update_path(relative_path):
-            continue
-
-        _emit_apply_log(log_callback, f"正在更新: {relative_path}")
-        target_path = repo_root / relative_path
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(data)
-        extracted_files += 1
-
-    _emit_apply_log(log_callback, "正在重建前端资源...")
-    build_success, build_output = _build_updated_frontend(repo_root)
-    if not build_success:
-        settings["update_last_error"] = build_output
+    try:
+        distribution = _read_package_distribution_from_entries(package_entries, package_name=package_path.name)
+        _validate_package_distribution(repo_root, distribution, package_name=package_path.name)
+    except Exception as exc:
+        settings["update_last_error"] = str(exc)
+        _clear_pending_update(settings)
         app_settings._save_settings(settings)
+        _emit_apply_log(log_callback, settings["update_last_error"])
+        return {
+            "applied": False,
+            "reason": "invalid_package",
+            "package_path": str(package_path),
+            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+        }
+
+    write_plan = _build_update_write_plan(repo_root, package_entries)
+    backups = _backup_update_targets(write_plan)
+    extracted_files = 0
+    try:
+        for target_path, relative_path, data in write_plan:
+            _emit_apply_log(log_callback, f"正在更新: {relative_path}")
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(data)
+            extracted_files += 1
+
+        _emit_apply_log(log_callback, "正在重建前端资源...")
+        build_success, build_output = _build_updated_frontend(repo_root)
+        if not build_success:
+            _restore_update_targets(backups)
+            settings["update_last_error"] = build_output
+            app_settings._save_settings(settings)
+            if build_output:
+                for line in str(build_output).splitlines():
+                    if line.strip():
+                        _emit_apply_log(log_callback, line)
+            return {
+                "applied": False,
+                "reason": "frontend_build_failed",
+                "frontend_built": False,
+                "files_written": extracted_files,
+                "package_path": str(package_path),
+                "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+            }
         if build_output:
             for line in str(build_output).splitlines():
                 if line.strip():
                     _emit_apply_log(log_callback, line)
-        return {
-            "applied": False,
-            "reason": "frontend_build_failed",
-            "frontend_built": False,
-            "files_written": extracted_files,
-            "package_path": str(package_path),
-            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        }
-    if build_output:
-        for line in str(build_output).splitlines():
-            if line.strip():
-                _emit_apply_log(log_callback, line)
-    _emit_apply_log(log_callback, "前端资源重建完成。")
+        _emit_apply_log(log_callback, "前端资源重建完成。")
+    except Exception:
+        _restore_update_targets(backups)
+        raise
 
     _clear_pending_update(settings)
     settings["update_last_error"] = ""
@@ -662,6 +697,95 @@ def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
         except (OSError, tarfile.TarError) as exc:
             raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
     raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
+
+
+def _read_package_distribution_from_package(package_path: Path) -> dict[str, str]:
+    entries = _iter_package_entries(package_path)
+    return _read_package_distribution_from_entries(entries, package_name=package_path.name)
+
+
+def _read_package_distribution_from_entries(
+    package_entries: list[tuple[str, bytes]],
+    *,
+    package_name: str,
+) -> dict[str, str]:
+    raw_bytes = next((data for relative_path, data in package_entries if relative_path == DISTRIBUTION_MARKER_FILE), None)
+    if raw_bytes is None:
+        raise RuntimeError(f"更新包缺少分发标记: {package_name}")
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"更新包分发标记无效: {package_name}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"更新包分发标记无效: {package_name}")
+    return {
+        "package_kind": _normalize_update_package_kind(payload.get("packageKind") or payload.get("package_kind")),
+        "platform": str(payload.get("platform") or "").strip(),
+        "version": _normalize_tag_name(payload.get("version")),
+    }
+
+
+def _expected_distribution_platform(package_kind: str) -> str:
+    if package_kind in {WINDOWS_INSTALLER_PACKAGE_KIND, WINDOWS_PORTABLE_PACKAGE_KIND}:
+        return "windows-x64"
+    if package_kind == LINUX_PACKAGE_KIND:
+        return "linux-x64"
+    return ""
+
+
+def _validate_package_distribution(
+    repo_root: Path,
+    distribution: dict[str, str],
+    *,
+    package_name: str,
+) -> None:
+    package_kind = _normalize_update_package_kind(distribution.get("package_kind"))
+    if not package_kind:
+        raise RuntimeError(f"更新包缺少有效包类型: {package_name}")
+    expected_kind = detect_update_package_kind(repo_root)
+    if expected_kind and package_kind != expected_kind:
+        raise RuntimeError(
+            f"更新包类型不匹配: 当前安装为 {_format_update_package_kind(expected_kind)}，更新包为 {_format_update_package_kind(package_kind)}"
+        )
+    platform = str(distribution.get("platform") or "").strip()
+    expected_platform = _expected_distribution_platform(package_kind)
+    if expected_platform and platform and platform != expected_platform:
+        raise RuntimeError(
+            f"更新包平台不匹配: 期望 {expected_platform}，实际 {platform}"
+        )
+
+
+def _build_update_write_plan(
+    repo_root: Path,
+    package_entries: list[tuple[str, bytes]],
+) -> list[tuple[Path, str, bytes]]:
+    plan: list[tuple[Path, str, bytes]] = []
+    for relative_path, data in package_entries:
+        if _is_protected_update_path(relative_path):
+            continue
+        plan.append((repo_root / relative_path, relative_path, data))
+    return plan
+
+
+def _backup_update_targets(
+    write_plan: list[tuple[Path, str, bytes]],
+) -> dict[Path, bytes | None]:
+    backups: dict[Path, bytes | None] = {}
+    for target_path, _relative_path, _data in write_plan:
+        if target_path in backups:
+            continue
+        backups[target_path] = target_path.read_bytes() if target_path.exists() else None
+    return backups
+
+
+def _restore_update_targets(backups: dict[Path, bytes | None]) -> None:
+    for target_path, original_bytes in backups.items():
+        if original_bytes is None:
+            if target_path.exists():
+                target_path.unlink()
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(original_bytes)
 
 
 def _iter_zip_entries(package_path: Path) -> list[tuple[str, bytes]]:
