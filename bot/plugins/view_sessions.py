@@ -120,8 +120,15 @@ class PluginViewSessionStore:
         )
 
     @staticmethod
-    def build_identity_key(bot_alias: str, source_identity: str) -> str:
-        return _stable_json({"botAlias": bot_alias, "sourceIdentity": source_identity})
+    def build_identity_key(bot_alias: str, plugin_id: str, view_id: str, source_identity: str) -> str:
+        return _stable_json(
+            {
+                "botAlias": bot_alias,
+                "pluginId": plugin_id,
+                "viewId": view_id,
+                "sourceIdentity": source_identity,
+            }
+        )
 
     def get_cached(self, cache_key: str) -> PluginViewSessionRecord | None:
         return self._records_by_cache_key.get(cache_key)
@@ -133,7 +140,7 @@ class PluginViewSessionStore:
         return self._records_by_session.get(session_id)
 
     def replace(self, record: PluginViewSessionRecord) -> PluginViewSessionRecord | None:
-        identity_key = self.build_identity_key(record.bot_alias, record.source_identity)
+        identity_key = self.build_identity_key(record.bot_alias, record.plugin_id, record.view_id, record.source_identity)
         stale = self._records_by_identity.get(identity_key)
         if stale is not None:
             self.remove(stale.session_id)
@@ -155,7 +162,7 @@ class PluginViewSessionStore:
             return None
         cache_key = self.build_cache_key(record.bot_alias, record.plugin_id, record.view_id, record.source_fingerprint)
         self._records_by_cache_key.pop(cache_key, None)
-        identity_key = self.build_identity_key(record.bot_alias, record.source_identity)
+        identity_key = self.build_identity_key(record.bot_alias, record.plugin_id, record.view_id, record.source_identity)
         current = self._records_by_identity.get(identity_key)
         if current is not None and current.session_id == session_id:
             self._records_by_identity.pop(identity_key, None)

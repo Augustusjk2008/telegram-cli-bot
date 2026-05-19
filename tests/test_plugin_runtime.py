@@ -524,3 +524,30 @@ async def test_runtime_stops_idle_plugin_processes(tmp_path: Path) -> None:
     assert stopped == 1
     assert runtime.active_process_count() == 0
     await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_ensure_process_dedupes_concurrent_first_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugins_root = tmp_path / "plugins"
+    _write_echo_plugin(plugins_root)
+    manifest = PluginRegistry(plugins_root).discover()["echo-wave"]
+    runtime = PluginRuntime(workspace_root_for=lambda _alias: tmp_path)
+
+    spawn_calls = 0
+    original_spawn = runtime._spawn_process
+
+    async def fake_spawn(bot_alias: str, current_manifest):
+        nonlocal spawn_calls
+        spawn_calls += 1
+        await asyncio.sleep(0.05)
+        return await original_spawn(bot_alias, current_manifest)
+
+    monkeypatch.setattr(runtime, "_spawn_process", fake_spawn)
+
+    await asyncio.gather(
+        runtime.render_view("main", manifest, "waveform", {"path": "waves/a.vcd"}),
+        runtime.render_view("main", manifest, "waveform", {"path": "waves/a.vcd"}),
+    )
+
+    assert spawn_calls == 1
+    await runtime.shutdown()

@@ -59,6 +59,7 @@ class PluginRuntime:
         self._idle_timeout_seconds = idle_timeout_seconds
         self._processes: dict[tuple[str, str], _PluginProcess] = {}
         self._manifests: dict[tuple[str, str], PluginManifest] = {}
+        self._process_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def active_process_count(self) -> int:
         return sum(1 for wrapped in self._processes.values() if wrapped.process.returncode is None)
@@ -277,7 +278,12 @@ class PluginRuntime:
         existing = self._processes.get(key)
         if existing is not None and existing.process.returncode is None:
             return existing
-        return await self._spawn_process(bot_alias, manifest)
+        lock = self._process_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            existing = self._processes.get(key)
+            if existing is not None and existing.process.returncode is None:
+                return existing
+            return await self._spawn_process(bot_alias, manifest)
 
     async def _call(self, bot_alias: str, manifest: PluginManifest, method: str, params: dict[str, Any]) -> dict[str, Any]:
         wrapped = await self._ensure_process(bot_alias, manifest)

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from bot.plugins.service import PluginService
-from bot.plugins.view_sessions import build_source_fingerprint
+from bot.plugins.view_sessions import PluginViewSessionRecord, PluginViewSessionStore, build_source_fingerprint
 
 
 def test_build_source_fingerprint_can_skip_file_content_hash(tmp_path: Path) -> None:
@@ -18,6 +19,33 @@ def test_build_source_fingerprint_can_skip_file_content_hash(tmp_path: Path) -> 
 
     assert '"size":2048' in fingerprint
     assert '"sha256":""' in fingerprint
+
+
+def test_view_sessions_keep_same_source_for_different_plugins() -> None:
+    store = PluginViewSessionStore()
+    first = PluginViewSessionRecord(
+        bot_alias="main",
+        plugin_id="waveform",
+        view_id="main",
+        session_id="sess-1",
+        renderer="waveform",
+        source_identity='{"path":"a.vcd"}',
+        source_fingerprint="finger-1",
+        resolved_input={"path": "a.vcd"},
+        opened_payload={"sessionId": "sess-1"},
+    )
+    second = replace(
+        first,
+        plugin_id="table",
+        session_id="sess-2",
+        renderer="table",
+        opened_payload={"sessionId": "sess-2"},
+    )
+
+    assert store.replace(first) is None
+    assert store.replace(second) is None
+    assert store.get("sess-1") == first
+    assert store.get("sess-2") == second
 
 
 def _write_wave_plugin(root: Path) -> None:
@@ -251,6 +279,7 @@ for line in sys.stdin:
                 "result": {
                     "message": "已导出",
                     "refresh": "session",
+                    "closeSession": bool(params["payload"].get("closeSession")),
                     "hostEffects": [
                         {
                             "type": "download_artifact",
@@ -556,6 +585,49 @@ async def test_plugin_service_invokes_action_and_reads_bot_scoped_artifact(tmp_p
     assert artifact.path.read_text(encoding="utf-8") == "path,slack\npath-1,0.1\n"
     with pytest.raises(KeyError, match="未知插件产物"):
         service.get_artifact(bot_alias="lab", artifact_id=effect["artifactId"])
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_invoke_action_close_session_disposes_and_removes_session(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    report = repo_root / "reports" / "timing.rpt"
+    report.parent.mkdir(parents=True)
+    report.write_text("path,slack\npath-1,0.1\n", encoding="utf-8")
+    plugins_root = tmp_path / "home" / ".tcb" / "plugins"
+    plugins_root.mkdir(parents=True)
+    _write_timing_report_plugin(plugins_root)
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    opened = await service.open_view(
+        bot_alias="main",
+        plugin_id="timing-report",
+        view_id="timing-table",
+        input_payload={"path": str(report)},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    result = await service.invoke_action(
+        bot_alias="main",
+        plugin_id="timing-report",
+        view_id="timing-table",
+        session_id=opened["sessionId"],
+        action_id="export-all",
+        payload={"path": str(report), "closeSession": True},
+        audit_context={"account_id": "member_1", "bot_alias": "main"},
+    )
+
+    assert result["closeSession"] is True
+    assert service.sessions.get_optional(opened["sessionId"]) is None
+    with pytest.raises(KeyError, match="未知插件会话"):
+        await service.get_view_window(
+            bot_alias="main",
+            plugin_id="timing-report",
+            session_id=opened["sessionId"],
+            request_payload={"offset": 0, "limit": 2},
+            audit_context={"account_id": "member_1", "bot_alias": "main"},
+        )
     await service.shutdown()
 
 
