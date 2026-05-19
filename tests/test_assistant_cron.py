@@ -8,7 +8,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from bot.assistant.cron.service import AssistantCronService
-from bot.assistant.cron.store import append_job_run_audit, load_job_runtime_state, read_job_run_audit, save_job_runtime_state
+from bot.assistant.cron.store import (
+    append_job_run_audit,
+    load_job_runtime_state,
+    read_job_run_audit,
+    save_job_runtime_state,
+)
 from bot.assistant.cron.types import AssistantCronJob, AssistantCronJobState
 from bot.assistant.home import bootstrap_assistant_home
 
@@ -38,6 +43,12 @@ class _BlockingAssistantRuntimeCoordinator(_FakeAssistantRuntimeCoordinator):
     async def wait_for_run(self, run_id: str):
         await self.release.wait()
         return {"run_id": run_id, "elapsed_seconds": 0}
+
+
+class _NeverFinishesAssistantRuntimeCoordinator(_FakeAssistantRuntimeCoordinator):
+    async def wait_for_run(self, run_id: str):
+        await asyncio.sleep(3600)
+        return {"run_id": run_id}
 
 
 def _build_assistant_cron_job(job_id: str, prompt: str, *, misfire_policy: str = "skip") -> AssistantCronJob:
@@ -338,3 +349,110 @@ async def test_new_run_clears_previous_started_at_before_watch_updates(tmp_path:
     assert state.last_started_at == enqueued_at.isoformat()
     assert records[-1]["started_at"] == enqueued_at.isoformat()
     assert records[-1]["elapsed_seconds"] == 125
+
+
+@pytest.mark.asyncio
+async def test_delete_job_removes_definition_state_and_audit(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path)
+    coordinator = _FakeAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+    )
+    job = _build_assistant_cron_job("nightly", "hello")
+
+    await service.save_job(job)
+    await service.run_job_now(job.id)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    deleted = await service.delete_job(job.id)
+
+    assert deleted is True
+    assert not (home.root / "automation" / "jobs" / f"{job.id}.yaml").exists()
+    assert not (home.root / "state" / "cron" / f"{job.id}.json").exists()
+    assert not (home.root / "audit" / "cron" / f"{job.id}.jsonl").exists()
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_deleted_running_job_does_not_recreate_state(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path)
+    coordinator = _BlockingAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+    )
+    job = _build_assistant_cron_job("slow_job", "hello")
+
+    await service.save_job(job)
+    await service.run_job_now(job.id)
+    await asyncio.sleep(0)
+    deleted = await service.delete_job(job.id)
+    coordinator.release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert deleted is True
+    assert not (home.root / "state" / "cron" / f"{job.id}.json").exists()
+    assert not (home.root / "audit" / "cron" / f"{job.id}.jsonl").exists()
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_cron_execution_timeout_marks_run_timed_out(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path)
+    coordinator = _NeverFinishesAssistantRuntimeCoordinator()
+    service = AssistantCronService(
+        assistant_home=home,
+        bot_alias="assistant1",
+        coordinator=coordinator,
+    )
+    job = AssistantCronJob.from_dict(
+        {
+            "id": "timeout_job",
+            "enabled": True,
+            "title": "测试任务",
+            "schedule": {
+                "type": "daily",
+                "time": "12:00",
+                "timezone": "Asia/Shanghai",
+                "misfire_policy": "skip",
+            },
+            "task": {"prompt": "hello"},
+            "execution": {"timeout_seconds": 1},
+        }
+    )
+
+    await service.save_job(job)
+    result = await service.run_job_now(job.id)
+    assert result["status"] == "queued"
+
+    await asyncio.sleep(1.2)
+    await asyncio.sleep(0)
+
+    state = load_job_runtime_state(home, job.id)
+    records = read_job_run_audit(home, job.id)
+
+    assert state.last_status == "error"
+    assert "超时" in state.last_error
+    assert records[-1]["timed_out"] is True
+    assert "超时" in records[-1]["error"]
+    await service.stop()
+
+
+def test_upsert_job_run_audit_appends_and_reader_returns_latest(tmp_path: Path):
+    from bot.assistant.cron.store import upsert_job_run_audit
+
+    home = bootstrap_assistant_home(tmp_path)
+
+    upsert_job_run_audit(home, "nightly", {"run_id": "r1", "status": "running"})
+    upsert_job_run_audit(home, "nightly", {"run_id": "r1", "status": "completed"})
+
+    raw_lines = (home.root / "audit" / "cron" / "nightly.jsonl").read_text(encoding="utf-8").splitlines()
+    records = read_job_run_audit(home, "nightly")
+
+    assert len(raw_lines) == 2
+    assert records == [{"run_id": "r1", "status": "completed"}]

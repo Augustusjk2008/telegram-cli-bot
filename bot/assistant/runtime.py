@@ -31,6 +31,7 @@ class AssistantRunRequest:
     job_title: str | None = None
     scheduled_at: str | None = None
     enqueued_at: str | None = None
+    timeout_seconds: int | None = None
 
 
 @dataclass
@@ -245,7 +246,7 @@ class AssistantRuntimeCoordinator:
                     if run.mode == "stream":
                         await self._run_stream_request(run)
                     else:
-                        result = await self._result_executor(run.request)
+                        result = await self._run_result_request(run)
                         run.status = "completed"
                         if not run.future.done():
                             run.future.set_result(result)
@@ -282,6 +283,16 @@ class AssistantRuntimeCoordinator:
             if current_run is not None and not current_run.future.done():
                 self._fail_run(current_run, _RUNTIME_STOPPED_MESSAGE)
             raise
+
+    async def _run_result_request(self, run: _QueuedRun) -> dict[str, Any]:
+        timeout_seconds = run.request.timeout_seconds
+        coro = self._result_executor(run.request)
+        if timeout_seconds is None or int(timeout_seconds) <= 0:
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, timeout=float(timeout_seconds))
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"assistant run timed out after {int(timeout_seconds)}s") from exc
 
     async def _run_stream_request(self, run: _QueuedRun) -> None:
         if self._stream_executor is None:

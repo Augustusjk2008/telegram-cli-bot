@@ -11,6 +11,8 @@ from bot.config import WEB_DEFAULT_USER_ID
 from bot.assistant.cron.store import (
     append_job_run_audit,
     delete_job_definition,
+    delete_job_run_audit,
+    delete_job_runtime_state,
     list_job_definitions,
     load_job_runtime_state,
     save_job_definition,
@@ -46,8 +48,10 @@ class AssistantCronService:
         self._jobs_dirty = True
         self._states_dirty: set[str] = set()
         self._watch_tasks: set[asyncio.Task[None]] = set()
+        self._watch_tasks_by_job_id: dict[str, set[asyncio.Task[None]]] = {}
         self._loop_task: asyncio.Task[None] | None = None
         self._reload_event = asyncio.Event()
+        self._deleted_job_ids: set[str] = set()
 
     def _loop_time(self) -> float:
         try:
@@ -98,11 +102,14 @@ class AssistantCronService:
     async def delete_job(self, job_id: str) -> bool:
         removed = delete_job_definition(self.assistant_home, job_id)
         if removed:
+            self._deleted_job_ids.add(job_id)
             self._jobs_dirty = True
             self._cached_jobs = [job for job in self._cached_jobs if job.id != job_id]
             self._cached_states.pop(job_id, None)
             self._states_loaded_at.pop(job_id, None)
             self._states_dirty.discard(job_id)
+            delete_job_runtime_state(self.assistant_home, job_id)
+            delete_job_run_audit(self.assistant_home, job_id)
         return removed
 
     @staticmethod
@@ -144,13 +151,30 @@ class AssistantCronService:
             return False
         return bool(checker(run_id))
 
-    def _schedule_watch_task(self, job_id: str, run_id: str, trigger_source: str) -> None:
+    def _schedule_watch_task(
+        self,
+        job_id: str,
+        run_id: str,
+        trigger_source: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
         task = asyncio.create_task(
-            self._watch_run(job_id, run_id, trigger_source),
+            self._watch_run(job_id, run_id, trigger_source, timeout_seconds=timeout_seconds),
             name=f"assistant-cron-watch-{job_id}",
         )
         self._watch_tasks.add(task)
-        task.add_done_callback(self._watch_tasks.discard)
+        self._watch_tasks_by_job_id.setdefault(job_id, set()).add(task)
+
+        def _cleanup(done_task: asyncio.Task[None]) -> None:
+            self._watch_tasks.discard(done_task)
+            tasks = self._watch_tasks_by_job_id.get(job_id)
+            if tasks is None:
+                return
+            tasks.discard(done_task)
+            if not tasks:
+                self._watch_tasks_by_job_id.pop(job_id, None)
+
+        task.add_done_callback(_cleanup)
 
     async def _recover_startup_state(self) -> None:
         now = self.now_func()
@@ -170,7 +194,12 @@ class AssistantCronService:
             return state
 
         if self._coordinator_has_run(run_id):
-            self._schedule_watch_task(job.id, run_id, state.last_trigger_source or "schedule")
+            self._schedule_watch_task(
+                job.id,
+                run_id,
+                state.last_trigger_source or "schedule",
+                timeout_seconds=job.execution.timeout_seconds,
+            )
             return state
 
         finished_at = now.isoformat()
@@ -251,6 +280,7 @@ class AssistantCronService:
             await asyncio.gather(loop_task, return_exceptions=True)
         watch_tasks = list(self._watch_tasks)
         self._watch_tasks.clear()
+        self._watch_tasks_by_job_id.clear()
         if watch_tasks:
             if cancel_watch_tasks:
                 for task in watch_tasks:
@@ -258,6 +288,7 @@ class AssistantCronService:
             await asyncio.gather(*watch_tasks, return_exceptions=True)
 
     async def save_job(self, job: AssistantCronJob) -> AssistantCronJob:
+        self._deleted_job_ids.discard(job.id)
         save_job_definition(self.assistant_home, job)
         self._jobs_dirty = True
         state = self._load_state_if_needed(job.id, force=True)
@@ -378,6 +409,7 @@ class AssistantCronService:
             job_title=job.title,
             scheduled_at=scheduled_at.isoformat(),
             enqueued_at=self.now_func().isoformat(),
+            timeout_seconds=job.execution.timeout_seconds,
         )
         result = await self.coordinator.submit_background(request)
         next_state = AssistantCronJobState.from_dict(
@@ -415,16 +447,34 @@ class AssistantCronService:
             },
         )
 
-        self._schedule_watch_task(job.id, request.run_id, trigger_source)
+        self._schedule_watch_task(
+            job.id,
+            request.run_id,
+            trigger_source,
+            timeout_seconds=job.execution.timeout_seconds,
+        )
         return {
             **result,
             "task_mode": job.task.mode,
             "deliver_mode": job.task.deliver_mode,
         }
 
-    async def _watch_run(self, job_id: str, run_id: str, trigger_source: str) -> None:
+    async def _watch_run(
+        self,
+        job_id: str,
+        run_id: str,
+        trigger_source: str,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> None:
         try:
-            result = await self.coordinator.wait_for_run(run_id)
+            wait_coro = self.coordinator.wait_for_run(run_id)
+            if timeout_seconds is not None and int(timeout_seconds) > 0:
+                result = await asyncio.wait_for(wait_coro, timeout=float(timeout_seconds))
+            else:
+                result = await wait_coro
+            if job_id in self._deleted_job_ids:
+                return
             now = self.now_func().isoformat()
             state = self._load_state_if_needed(job_id, force=True)
             started_at = state.last_started_at or state.last_enqueued_at
@@ -468,11 +518,14 @@ class AssistantCronService:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except asyncio.TimeoutError as exc:
+            if job_id in self._deleted_job_ids:
+                return
             now = self.now_func().isoformat()
             state = self._load_state_if_needed(job_id, force=True)
             started_at = state.last_started_at or state.last_enqueued_at
             elapsed_seconds = self._elapsed_seconds(started_at, now)
+            error_text = f"cron 执行超时: {run_id}"
             self._save_state(
                 job_id,
                 AssistantCronJobState.from_dict(
@@ -484,7 +537,7 @@ class AssistantCronService:
                         "last_started_at": started_at,
                         "last_finished_at": now,
                         "last_status": "error",
-                        "last_error": str(exc),
+                        "last_error": error_text,
                         "last_trigger_source": trigger_source,
                     }
                 ),
@@ -503,10 +556,55 @@ class AssistantCronService:
                     "status": "error",
                     "elapsed_seconds": elapsed_seconds,
                     "queue_wait_seconds": 0,
-                    "timed_out": False,
+                    "timed_out": True,
                     "prompt_excerpt": self._excerpt(""),
                     "output_excerpt": "",
-                    "error": str(exc),
+                    "error": error_text,
+                },
+            )
+        except Exception as exc:
+            if job_id in self._deleted_job_ids:
+                return
+            now = self.now_func().isoformat()
+            state = self._load_state_if_needed(job_id, force=True)
+            started_at = state.last_started_at or state.last_enqueued_at
+            elapsed_seconds = self._elapsed_seconds(started_at, now)
+            timed_out = "timed out" in str(exc).lower() or "超时" in str(exc)
+            error_text = f"cron 执行超时: {exc}" if timed_out else str(exc)
+            self._save_state(
+                job_id,
+                AssistantCronJobState.from_dict(
+                    {
+                        **state.to_dict(),
+                        "pending_run_id": "",
+                        "pending_scheduled_at": "",
+                        "current_run_id": "",
+                        "last_started_at": started_at,
+                        "last_finished_at": now,
+                        "last_status": "error",
+                        "last_error": error_text,
+                        "last_trigger_source": trigger_source,
+                    }
+                ),
+            )
+            upsert_job_run_audit(
+                self.assistant_home,
+                job_id,
+                {
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "trigger_source": trigger_source,
+                    "scheduled_at": state.pending_scheduled_at or state.last_scheduled_at,
+                    "enqueued_at": state.last_enqueued_at,
+                    "started_at": started_at,
+                    "finished_at": now,
+                    "status": "error",
+                    "elapsed_seconds": elapsed_seconds,
+                    "queue_wait_seconds": 0,
+                    "timed_out": timed_out,
+                    "prompt_excerpt": self._excerpt(""),
+                    "output_excerpt": "",
+                    "error": error_text,
                 },
             )
 

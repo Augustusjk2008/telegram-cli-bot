@@ -117,22 +117,11 @@ def upsert_job_run_audit(home: AssistantHome, job_id: str, record: dict[str, Any
     if not run_id:
         raise ValueError("audit record 缺少 run_id")
 
-    records = read_job_run_audit(home, job_id)
-    replaced = False
-    for index, existing in enumerate(records):
-        if str(existing.get("run_id") or "").strip() == run_id:
-            records[index] = dict(record)
-            replaced = True
-            break
-    if not replaced:
-        records.append(dict(record))
-
     path = _audit_path(home, job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for item in records:
-            handle.write(json.dumps(item, ensure_ascii=False))
-            handle.write("\n")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(dict(record), ensure_ascii=False))
+        handle.write("\n")
 
 
 def delete_job_run_audit(home: AssistantHome, job_id: str) -> bool:
@@ -147,11 +136,19 @@ def read_job_run_audit(home: AssistantHome, job_id: str, *, limit: int | None = 
     path = _audit_path(home, job_id)
     if not path.exists():
         return []
-    records = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    folded: dict[str, dict[str, Any]] = {}
+    ordered_run_ids: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        run_id = str(record.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        if run_id not in folded:
+            ordered_run_ids.append(run_id)
+        folded[run_id] = record
+    records = [folded[run_id] for run_id in ordered_run_ids]
     if limit is not None:
         return records[-limit:]
     return records
