@@ -245,11 +245,18 @@ def reset_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
 
 
 def clear_bot_sessions(bot_id: int):
+    targets: list[UserSession] = []
     with sessions_lock:
         keys = [k for k in sessions if k[0] == bot_id]
         for key in keys:
-            sessions[key].terminate_process()
-            del sessions[key]
+            targets.append(sessions.pop(key))
+
+    for session in targets:
+        try:
+            session.terminate_process()
+        except Exception as exc:
+            logger.warning("终止会话进程失败 bot=%s user=%s error=%s", bot_id, session.user_id, exc)
+
     # 清除持久化存储
     remove_all_sessions_for_bot(bot_id)
 
@@ -296,22 +303,26 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
     
     返回更新的会话数量
     """
-    updated_count = 0
+    targets: list[UserSession] = []
     with sessions_lock:
         for session in sessions.values():
             if session.bot_alias == bot_alias:
-                session.working_dir = working_dir
-                session.browse_dir = working_dir
-                session.codex_session_id = None
-                session.claude_session_id = None
-                session.kimi_session_id = None
-                session.claude_session_initialized = False
-                session.active_conversation_id = None
-                session.agent_prompt_hash_seen = None
-                session.session_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0)) + 1
-                session.persist()
-                updated_count += 1
-    return updated_count
+                targets.append(session)
+
+    for session in targets:
+        with session._lock:
+            session.working_dir = working_dir
+            session.browse_dir = working_dir
+            session.codex_session_id = None
+            session.claude_session_id = None
+            session.kimi_session_id = None
+            session.claude_session_initialized = False
+            session.active_conversation_id = None
+            session.agent_prompt_hash_seen = None
+            session.session_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0)) + 1
+        session.persist()
+
+    return len(targets)
 
 
 def align_session_paths(session: UserSession, default_working_dir: str, bot_mode: str) -> UserSession:
@@ -338,14 +349,18 @@ def align_session_paths(session: UserSession, default_working_dir: str, bot_mode
 
 def update_bot_alias(old_alias: str, new_alias: str) -> int:
     """更新指定 bot 的所有会话别名。"""
-    updated_count = 0
+    targets: list[UserSession] = []
     with sessions_lock:
         for session in sessions.values():
             if session.bot_alias == old_alias:
-                session.bot_alias = new_alias
-                session.persist()
-                updated_count += 1
-    return updated_count
+                targets.append(session)
+
+    for session in targets:
+        with session._lock:
+            session.bot_alias = new_alias
+        session.persist()
+
+    return len(targets)
 
 
 def rekey_bot_sessions(old_bot_id: int, new_bot_id: int, *, old_alias: str, new_alias: str) -> int:
@@ -383,7 +398,10 @@ def save_all_sessions():
     
     用于程序正常退出时保存状态
     """
+    targets: list[UserSession] = []
     with sessions_lock:
-        for session in sessions.values():
-            session.persist()
+        targets = list(sessions.values())
+
+    for session in targets:
+        session.persist()
     logger.info("已保存所有会话到持久化存储")

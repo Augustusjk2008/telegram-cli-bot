@@ -7,6 +7,7 @@ Bot 管理器测试
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -388,6 +389,71 @@ class TestManagerLoadSave:
 
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert data["bots"][0]["alias"] == "team1"
+
+    @pytest.mark.asyncio
+    async def test_rename_bot_does_not_hold_global_lock_during_session_persist(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        workdir = temp_dir / "repo"
+        workdir.mkdir()
+        manager.managed_profiles["sub1"] = BotProfile(
+            alias="sub1",
+            token="tok1",
+            cli_type="claude",
+            cli_path="claude",
+            working_dir=str(workdir),
+        )
+        manager.applications["sub1"] = MagicMock()
+        manager.applications["sub1"].bot_data = {"bot_id": 123, "bot_alias": "sub1"}
+        manager.bot_id_to_alias[123] = "sub1"
+
+        renamed = get_or_create_session(123, "sub1", 456, default_working_dir=str(workdir))
+        other_dir = temp_dir / "other"
+        other_dir.mkdir()
+
+        entered = threading.Event()
+        release = threading.Event()
+        access_finished = threading.Event()
+        access_state: dict[str, object] = {}
+
+        def slow_persist():
+            entered.set()
+            release.wait(timeout=2)
+
+        renamed.persist = slow_persist  # type: ignore[method-assign]
+
+        done = threading.Event()
+
+        def rename_job():
+            try:
+                asyncio.run(manager.rename_bot("sub1", "team1"))
+            finally:
+                done.set()
+
+        worker = threading.Thread(target=rename_job)
+        worker.start()
+
+        assert entered.wait(timeout=1)
+
+        def access_job():
+            try:
+                session = get_or_create_session(2, "other", 999, default_working_dir=str(other_dir))
+                access_state["working_dir"] = session.working_dir
+            finally:
+                access_finished.set()
+
+        accessor = threading.Thread(target=access_job)
+        accessor.start()
+
+        assert access_finished.wait(timeout=0.3), "无关 session 访问被全局锁阻塞"
+        assert access_state["working_dir"] == str(other_dir)
+
+        release.set()
+        assert done.wait(timeout=1)
+        worker.join(timeout=1)
+        accessor.join(timeout=1)
 
     def test_load_assistant_profile_syncs_prompt_files_from_dedicated_template(self, temp_dir: Path):
         storage = temp_dir / "bots.json"

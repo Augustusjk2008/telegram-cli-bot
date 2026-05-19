@@ -5,6 +5,7 @@
 """
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -17,6 +18,7 @@ from bot.sessions import (
     get_or_create_session,
     is_bot_processing,
     reset_session,
+    save_all_sessions,
     sessions,
     sessions_lock,
     update_bot_working_dir,
@@ -141,6 +143,135 @@ class TestClearBotSessions:
 
         assert session.working_dir == str(new_dir)
         assert session.kimi_session_id is None
+
+    def test_clear_bot_sessions_does_not_hold_global_lock_during_terminate(self, temp_dir: Path):
+        target = get_session(1, "main", 100, str(temp_dir))
+        other_dir = temp_dir / "other"
+        other_dir.mkdir()
+        entered = threading.Event()
+        release = threading.Event()
+        done = threading.Event()
+        access_finished = threading.Event()
+        access_state: dict[str, object] = {}
+
+        def slow_terminate():
+            entered.set()
+            release.wait(timeout=2)
+
+        target.terminate_process = slow_terminate  # type: ignore[method-assign]
+
+        def clear_job():
+            clear_bot_sessions(1)
+            done.set()
+
+        worker = threading.Thread(target=clear_job)
+        worker.start()
+        assert entered.wait(timeout=1)
+
+        def access_job():
+            try:
+                session = get_session(2, "sub", 200, str(other_dir))
+                access_state["working_dir"] = session.working_dir
+            finally:
+                access_finished.set()
+
+        accessor = threading.Thread(target=access_job)
+        accessor.start()
+
+        assert access_finished.wait(timeout=0.3), "无关 session 访问被全局锁阻塞"
+        assert access_state["working_dir"] == str(other_dir)
+
+        release.set()
+        assert done.wait(timeout=1)
+        worker.join(timeout=1)
+        accessor.join(timeout=1)
+
+    def test_update_workdir_does_not_hold_global_lock_during_persist(self, temp_dir: Path):
+        target = get_session(1, "main", 100, str(temp_dir))
+        target.bot_alias = "main"
+        other_dir = temp_dir / "other"
+        new_dir = temp_dir / "new"
+        other_dir.mkdir()
+        new_dir.mkdir()
+        entered = threading.Event()
+        release = threading.Event()
+        done = threading.Event()
+        access_finished = threading.Event()
+        access_state: dict[str, object] = {}
+
+        def slow_persist():
+            entered.set()
+            release.wait(timeout=2)
+
+        target.persist = slow_persist  # type: ignore[method-assign]
+
+        def update_job():
+            update_bot_working_dir("main", str(new_dir))
+            done.set()
+
+        worker = threading.Thread(target=update_job)
+        worker.start()
+        assert entered.wait(timeout=1)
+
+        def access_job():
+            try:
+                session = get_session(2, "sub", 200, str(other_dir))
+                access_state["working_dir"] = session.working_dir
+            finally:
+                access_finished.set()
+
+        accessor = threading.Thread(target=access_job)
+        accessor.start()
+
+        assert access_finished.wait(timeout=0.3), "无关 session 访问被全局锁阻塞"
+        assert access_state["working_dir"] == str(other_dir)
+
+        release.set()
+        assert done.wait(timeout=1)
+        worker.join(timeout=1)
+        accessor.join(timeout=1)
+
+    def test_save_all_sessions_does_not_hold_global_lock_during_persist(self, temp_dir: Path):
+        target = get_session(1, "main", 100, str(temp_dir))
+        other_dir = temp_dir / "other"
+        other_dir.mkdir()
+        entered = threading.Event()
+        release = threading.Event()
+        done = threading.Event()
+        access_finished = threading.Event()
+        access_state: dict[str, object] = {}
+
+        def slow_persist():
+            entered.set()
+            release.wait(timeout=2)
+
+        target.persist = slow_persist  # type: ignore[method-assign]
+
+        def save_job():
+            save_all_sessions()
+            done.set()
+
+        worker = threading.Thread(target=save_job)
+        worker.start()
+        assert entered.wait(timeout=1)
+
+        def access_job():
+            try:
+                session = get_session(2, "sub", 200, str(other_dir))
+                access_state["working_dir"] = session.working_dir
+            finally:
+                access_finished.set()
+
+        accessor = threading.Thread(target=access_job)
+        accessor.start()
+
+        assert access_finished.wait(timeout=0.3), "无关 session 访问被全局锁阻塞"
+        assert access_state["working_dir"] == str(other_dir)
+
+        release.set()
+        assert done.wait(timeout=1)
+        worker.join(timeout=1)
+        accessor.join(timeout=1)
 
 
 class TestIsBotProcessing:
