@@ -69,9 +69,13 @@ async def test_repo_outline_open_children_file_symbols_and_search(tmp_path: Path
     assert opened["renderer"] == "tree"
     assert opened["initialWindow"]["op"] == "children"
     assert any(node["label"] == "README.md" for node in opened["initialWindow"]["nodes"])
-    assert any(node["label"] == "run_cli_chat" and node["kind"] == "function" for node in symbols["nodes"])
+    api_node = next(node for node in symbols["nodes"] if node["label"] == "ApiService")
+    assert api_node["kind"] == "class"
+    assert api_node["children"][0]["label"] == "run_cli_chat"
+    assert api_node["children"][0]["kind"] == "method"
     assert search["nodes"][0]["label"] == "api_service.py"
     assert search["nodes"][0]["children"][0]["label"] == "run_cli_chat"
+    assert search["nodes"][0]["children"][0]["kind"] == "method"
 
     await service.shutdown()
 

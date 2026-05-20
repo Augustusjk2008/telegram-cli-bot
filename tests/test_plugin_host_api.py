@@ -65,8 +65,15 @@ async def test_host_workspace_outline_returns_file_symbols(tmp_path: Path) -> No
     assert result == {
         "path": "src/app.py",
         "items": [
-            {"name": "App", "kind": "class", "line": 1},
-            {"name": "run", "kind": "function", "line": 2},
+            {
+                "name": "App",
+                "kind": "class",
+                "line": 1,
+                "level": 1,
+                "children": [
+                    {"name": "run", "kind": "method", "line": 2, "level": 2, "children": []},
+                ],
+            },
         ],
     }
 
@@ -91,7 +98,7 @@ async def test_host_workspace_outline_accepts_backslash_relative_paths(tmp_path:
     )
 
     assert result["path"] == "src/app.py"
-    assert result["items"] == [{"name": "run", "kind": "function", "line": 1}]
+    assert result["items"] == [{"name": "run", "kind": "function", "line": 1, "level": 1, "children": []}]
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,51 @@ const KIND_LABEL: Record<WorkspaceOutlineItem["kind"], string> = {
   heading: "标题",
 };
 
+function OutlineItems({
+  items,
+  depth,
+  activeFilePath,
+  onOpenFile,
+}: {
+  items: WorkspaceOutlineItem[];
+  depth: number;
+  activeFilePath: string;
+  onOpenFile: (path: string, line?: number) => void | Promise<void>;
+}) {
+  return (
+    <>
+      {items.map((item, index) => {
+        const children = Array.isArray(item.children) ? item.children : [];
+        const itemDepth = typeof item.level === "number" && item.level > 0
+          ? Math.max(depth, item.level - 1)
+          : depth;
+        return (
+          <div key={`${item.kind}:${item.name}:${item.line}:${itemDepth}:${index}`}>
+            <button
+              type="button"
+              aria-label={`${item.name} ${item.kind} 第 ${item.line} 行`}
+              onClick={() => void onOpenFile(activeFilePath, item.line)}
+              className="flex w-full min-w-0 items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[var(--surface-strong)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+              style={{ paddingLeft: `${12 + itemDepth * 14}px` }}
+            >
+              <span className="min-w-0 truncate text-sm text-[var(--text)]">{item.name}</span>
+              <span className="shrink-0 text-xs text-[var(--muted)]">{KIND_LABEL[item.kind]} · {item.line}</span>
+            </button>
+            {children.length > 0 ? (
+              <OutlineItems
+                items={children}
+                depth={itemDepth + 1}
+                activeFilePath={activeFilePath}
+                onOpenFile={onOpenFile}
+              />
+            ) : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function OutlinePane({ botAlias, client, activeFilePath, onOpenFile }: Props) {
   const [items, setItems] = useState<WorkspaceOutlineItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,18 +117,12 @@ export function OutlinePane({ botAlias, client, activeFilePath, onOpenFile }: Pr
           <div className="px-3 py-3 text-sm text-[var(--muted)]">无符号</div>
         ) : null}
         {!activeFilePath ? <div className="px-3 py-3 text-sm text-[var(--muted)]">未打开文件</div> : null}
-        {items.map((item) => (
-          <button
-            key={`${item.kind}:${item.name}:${item.line}`}
-            type="button"
-            aria-label={`${item.name} ${item.kind} 第 ${item.line} 行`}
-            onClick={() => void onOpenFile(activeFilePath, item.line)}
-            className="flex w-full min-w-0 items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[var(--surface-strong)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
-          >
-            <span className="min-w-0 truncate text-sm text-[var(--text)]">{item.name}</span>
-            <span className="shrink-0 text-xs text-[var(--muted)]">{KIND_LABEL[item.kind]} · {item.line}</span>
-          </button>
-        ))}
+        <OutlineItems
+          items={items}
+          depth={0}
+          activeFilePath={activeFilePath}
+          onOpenFile={onOpenFile}
+        />
       </div>
     </section>
   );

@@ -1196,6 +1196,8 @@ export type WorkspaceOutlineItem = {
   name: string;
   kind: "class" | "function" | "method" | "heading";
   line: number;
+  level?: number;
+  children?: WorkspaceOutlineItem[];
 };
 
 export type WorkspaceOutlineResult = {

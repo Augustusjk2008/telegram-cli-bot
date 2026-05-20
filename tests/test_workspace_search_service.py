@@ -64,16 +64,100 @@ def test_search_workspace_text_ignores_common_heavy_dirs(tmp_path):
     assert result["items"][0]["line"] == 1
 
 
-def test_build_file_outline_returns_python_symbols(tmp_path):
+def test_build_file_outline_returns_python_hierarchy(tmp_path):
     from bot.web.workspace_search_service import build_file_outline
 
-    (tmp_path / "service.py").write_text("class Api:\n    def run(self):\n        pass\n", encoding="utf-8")
+    (tmp_path / "service.py").write_text(
+        "class Api:\n"
+        "    def run(self):\n"
+        "        pass\n"
+        "\n"
+        "def boot():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
 
     result = build_file_outline(tmp_path, "service.py")
 
     assert result["items"] == [
-        {"name": "Api", "kind": "class", "line": 1},
-        {"name": "run", "kind": "function", "line": 2},
+        {
+            "name": "Api",
+            "kind": "class",
+            "line": 1,
+            "level": 1,
+            "children": [
+                {"name": "run", "kind": "method", "line": 2, "level": 2, "children": []},
+            ],
+        },
+        {"name": "boot", "kind": "function", "line": 5, "level": 1, "children": []},
+    ]
+
+
+def test_build_file_outline_returns_markdown_heading_hierarchy(tmp_path):
+    from bot.web.workspace_search_service import build_file_outline
+
+    (tmp_path / "README.md").write_text(
+        "# Intro\n"
+        "text\n"
+        "## Install\n"
+        "### Windows\n"
+        "## Usage\n",
+        encoding="utf-8",
+    )
+
+    result = build_file_outline(tmp_path, "README.md")
+
+    assert result["items"] == [
+        {
+            "name": "Intro",
+            "kind": "heading",
+            "line": 1,
+            "level": 1,
+            "children": [
+                {
+                    "name": "Install",
+                    "kind": "heading",
+                    "line": 3,
+                    "level": 2,
+                    "children": [
+                        {"name": "Windows", "kind": "heading", "line": 4, "level": 3, "children": []},
+                    ],
+                },
+                {"name": "Usage", "kind": "heading", "line": 5, "level": 2, "children": []},
+            ],
+        },
+    ]
+
+
+def test_build_file_outline_returns_generic_class_member_hierarchy(tmp_path):
+    from bot.web.workspace_search_service import build_file_outline
+
+    (tmp_path / "app.ts").write_text(
+        "class Api {\n"
+        "  run() {\n"
+        "    return true;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "function boot() {\n"
+        "  return true;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = build_file_outline(tmp_path, "app.ts")
+
+    assert result["items"] == [
+        {
+            "name": "Api",
+            "kind": "class",
+            "line": 1,
+            "level": 1,
+            "children": [
+                {"name": "run", "kind": "method", "line": 2, "level": 2, "children": []},
+            ],
+        },
+        {"name": "boot", "kind": "function", "line": 7, "level": 1, "children": []},
     ]
 
 
@@ -86,7 +170,7 @@ def test_build_file_outline_accepts_backslash_relative_paths(tmp_path):
     result = build_file_outline(tmp_path, r"src\service.py")
 
     assert result["items"] == [
-        {"name": "run", "kind": "function", "line": 1},
+        {"name": "run", "kind": "function", "line": 1, "level": 1, "children": []},
     ]
 
 

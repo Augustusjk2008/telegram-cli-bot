@@ -3528,9 +3528,53 @@ async def test_workspace_search_routes_use_current_working_directory(
             assert outline_resp.status == 200
             outline_payload = await outline_resp.json()
             assert outline_payload["data"]["items"] == [
-                {"name": "App", "kind": "class", "line": 1},
-                {"name": "run", "kind": "function", "line": 2},
+                {
+                    "name": "App",
+                    "kind": "class",
+                    "line": 1,
+                    "level": 1,
+                    "children": [
+                        {"name": "run", "kind": "method", "line": 2, "level": 2, "children": []},
+                    ],
+                },
             ]
+
+
+@pytest.mark.asyncio
+async def test_workspace_outline_route_returns_nested_items(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    (workspace / "app.py").write_text(
+        "class Api:\n"
+        "    def run(self):\n"
+        "        return True\n",
+        encoding="utf-8",
+    )
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            outline_resp = await client.get("/api/bots/main/workspace/outline?path=app.py")
+
+            assert outline_resp.status == 200
+            outline_payload = await outline_resp.json()
+            assert outline_payload["data"]["items"][0]["children"][0] == {
+                "name": "run",
+                "kind": "method",
+                "line": 2,
+                "level": 2,
+                "children": [],
+            }
 
 
 @pytest.mark.asyncio
@@ -3574,7 +3618,7 @@ async def test_workspace_routes_use_current_file_browser_directory(
             assert outline_resp.status == 200
             outline_payload = await outline_resp.json()
             assert outline_payload["data"]["items"] == [
-                {"name": "run", "kind": "function", "line": 1},
+                {"name": "run", "kind": "function", "line": 1, "level": 1, "children": []},
             ]
 
             assert definition_resp.status == 200

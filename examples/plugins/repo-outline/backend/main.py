@@ -171,7 +171,7 @@ def build_symbol_node(path: str, item: dict[str, Any]) -> dict[str, Any]:
     line = max(1, int(item.get("line") or 1))
     name = str(item.get("name") or "").strip()
     kind = normalize_symbol_kind(item.get("kind"))
-    return {
+    node = {
         "id": f"symbol:{path}:{name}:{line}",
         "label": name,
         "kind": kind,
@@ -187,6 +187,36 @@ def build_symbol_node(path: str, item: dict[str, Any]) -> dict[str, Any]:
             }
         ],
     }
+    children = [
+        build_symbol_node(path, child)
+        for child in list(item.get("children") or [])
+        if isinstance(child, dict) and str(child.get("name") or "").strip()
+    ]
+    if children:
+        node["children"] = children
+        node["hasChildren"] = True
+    return node
+
+
+def count_symbol_nodes(nodes: list[dict[str, Any]]) -> int:
+    total = 0
+    for node in nodes:
+        total += 1
+        children = node.get("children")
+        if isinstance(children, list):
+            total += count_symbol_nodes([child for child in children if isinstance(child, dict)])
+    return total
+
+
+def find_symbol_nodes(nodes: list[dict[str, Any]], keyword: str) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for node in nodes:
+        if keyword in str(node.get("label") or "").lower():
+            matches.append(node)
+        children = node.get("children")
+        if isinstance(children, list):
+            matches.extend(find_symbol_nodes([child for child in children if isinstance(child, dict)], keyword))
+    return matches
 
 
 def update_file_badges(nodes: list[dict[str, Any]], path: str, symbol_count: int) -> None:
@@ -254,7 +284,8 @@ def get_directory_children(session: SessionState, path: str) -> list[dict[str, A
             nodes.append(build_dir_node(relative_path))
             continue
         cached_symbols = session.file_symbols.get(relative_path)
-        nodes.append(build_file_node(relative_path, len(cached_symbols) if cached_symbols is not None else None))
+        symbol_count = count_symbol_nodes(cached_symbols) if cached_symbols is not None else None
+        nodes.append(build_file_node(relative_path, symbol_count))
     session.directory_children[normalized] = nodes
     session.search_cache.clear()
     return nodes
@@ -285,7 +316,7 @@ def get_file_symbols(session: SessionState, path: str) -> list[dict[str, Any]]:
             break
 
     session.file_symbols[normalized] = items
-    sync_cached_file_badges(session, normalized, len(items))
+    sync_cached_file_badges(session, normalized, count_symbol_nodes(items))
     session.search_cache.clear()
     return items
 
@@ -333,13 +364,13 @@ def search_workspace(session: SessionState, query: str) -> dict[str, Any]:
         path_lower = path.lower()
         file_match = keyword in path_lower or keyword in PurePosixPath(path).name.lower()
         symbols = get_file_symbols(session, path)
-        matched_symbols = [symbol for symbol in symbols if keyword in str(symbol.get("label") or "").lower()]
+        matched_symbols = find_symbol_nodes(symbols, keyword)
         if not file_match and not matched_symbols:
             continue
-        file_node = build_file_node(path, len(symbols))
+        file_node = build_file_node(path, count_symbol_nodes(symbols))
         if matched_symbols:
             file_node["children"] = matched_symbols
-            matched_symbol_count += len(matched_symbols)
+            matched_symbol_count += count_symbol_nodes(matched_symbols)
         nodes.append(file_node)
         if len(nodes) >= 200:
             break
@@ -362,7 +393,10 @@ def toolbar_actions() -> list[dict[str, Any]]:
 
 def root_stats(session: SessionState, nodes: list[dict[str, Any]]) -> str:
     visible_files = sum(1 for node in nodes if str(node.get("id") or "").startswith("file:"))
-    visible_symbols = sum(len(session.file_symbols.get(str(node.get("payload", {}).get("path") or ""), [])) for node in nodes)
+    visible_symbols = sum(
+        count_symbol_nodes(session.file_symbols.get(str(node.get("payload", {}).get("path") or ""), []))
+        for node in nodes
+    )
     return stats_text(visible_files, visible_symbols)
 
 

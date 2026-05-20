@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
+import { OutlinePane } from "../workbench/OutlinePane";
 import { SearchPane } from "../workbench/SearchPane";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 
@@ -93,12 +94,20 @@ test("outline pane follows active editor file", async () => {
   });
   vi.spyOn(client, "getWorkspaceOutline").mockResolvedValue({
     items: [
-      { name: "App", kind: "class", line: 1 },
-      { name: "run", kind: "function", line: 2 },
+      {
+        name: "App",
+        kind: "class",
+        line: 1,
+        level: 1,
+        children: [
+          { name: "run", kind: "method", line: 2, level: 2, children: [] },
+        ],
+      },
+      { name: "boot", kind: "function", line: 5, level: 1, children: [] },
     ],
   });
   const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue({
-    content: "class App:\n    def run(self):\n        pass\n",
+    content: "class App:\n    def run(self):\n        pass\n\ndef boot():\n    pass\n",
     mode: "cat",
     fileSizeBytes: 42,
     isFullContent: true,
@@ -114,8 +123,48 @@ test("outline pane follows active editor file", async () => {
   expect(await screen.findByRole("tab", { name: "app.py" })).toBeInTheDocument();
   await user.click(await screen.findByRole("button", { name: "大纲" }));
 
-  expect(await screen.findByRole("button", { name: "run function 第 2 行" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "App class 第 1 行" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "run method 第 2 行" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "boot function 第 5 行" })).toBeInTheDocument();
   expect(client.getWorkspaceOutline).toHaveBeenCalledWith("main", "src/app.py");
+});
+
+test("outline pane opens active file for every nested node", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const onOpenFile = vi.fn();
+
+  vi.spyOn(client, "getWorkspaceOutline").mockResolvedValue({
+    items: [
+      {
+        name: "App",
+        kind: "class",
+        line: 1,
+        level: 1,
+        children: [
+          { name: "run", kind: "method", line: 2, level: 2, children: [] },
+        ],
+      },
+      { name: "boot", kind: "function", line: 5, level: 1, children: [] },
+    ],
+  });
+
+  render(
+    <OutlinePane
+      botAlias="main"
+      client={client}
+      activeFilePath="src/app.py"
+      onOpenFile={onOpenFile}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "App class 第 1 行" }));
+  await user.click(screen.getByRole("button", { name: "run method 第 2 行" }));
+  await user.click(screen.getByRole("button", { name: "boot function 第 5 行" }));
+
+  expect(onOpenFile).toHaveBeenNthCalledWith(1, "src/app.py", 1);
+  expect(onOpenFile).toHaveBeenNthCalledWith(2, "src/app.py", 2);
+  expect(onOpenFile).toHaveBeenNthCalledWith(3, "src/app.py", 5);
 });
 
 test("search pane aborts stale workspace searches", async () => {

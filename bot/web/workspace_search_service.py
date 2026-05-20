@@ -274,34 +274,75 @@ def search_workspace_text(workspace: Path | str, query: str, *, limit: int = 100
     return {"items": items[:safe_limit]}
 
 
+def _outline_item(name: str, kind: str, line: int, *, level: int) -> dict[str, object]:
+    return {
+        "name": name,
+        "kind": kind,
+        "line": int(line),
+        "level": int(level),
+        "children": [],
+    }
+
+
+def _outline_children(item: dict[str, object]) -> list[dict[str, object]]:
+    children = item.get("children")
+    if isinstance(children, list):
+        return children
+    item["children"] = []
+    return item["children"]  # type: ignore[return-value]
+
+
 def _python_outline(content: str) -> list[dict[str, object]]:
     try:
         tree = ast.parse(content)
     except SyntaxError:
         return []
 
+    def convert(node: ast.stmt, *, level: int, parent_kind: str = "") -> dict[str, object] | None:
+        if isinstance(node, ast.ClassDef):
+            item = _outline_item(node.name, "class", node.lineno, level=level)
+            child_parent_kind = "class"
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            kind = "method" if parent_kind == "class" else "function"
+            item = _outline_item(node.name, kind, node.lineno, level=level)
+            child_parent_kind = kind
+        else:
+            return None
+
+        children = _outline_children(item)
+        for child in getattr(node, "body", []):
+            if not isinstance(child, ast.stmt):
+                continue
+            child_item = convert(child, level=level + 1, parent_kind=child_parent_kind)
+            if child_item is not None:
+                children.append(child_item)
+        return item
+
     items: list[dict[str, object]] = []
-
-    def visit(nodes: list[ast.stmt]) -> None:
-        for node in nodes:
-            if isinstance(node, ast.ClassDef):
-                items.append({"name": node.name, "kind": "class", "line": node.lineno})
-                visit(list(node.body))
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                items.append({"name": node.name, "kind": "function", "line": node.lineno})
-                visit(list(node.body))
-
-    visit(list(tree.body))
+    for node in tree.body:
+        item = convert(node, level=1)
+        if item is not None:
+            items.append(item)
     items.sort(key=lambda item: int(item["line"]))
     return items
 
 
 def _markdown_outline(content: str) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
+    stack: list[tuple[int, dict[str, object]]] = []
     for index, line in enumerate(content.splitlines(), start=1):
         match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
-        if match:
-            items.append({"name": match.group(2).strip(), "kind": "heading", "line": index})
+        if not match:
+            continue
+        level = len(match.group(1))
+        item = _outline_item(match.group(2).strip(), "heading", index, level=level)
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        if stack:
+            _outline_children(stack[-1][1]).append(item)
+        else:
+            items.append(item)
+        stack.append((level, item))
     return items
 
 
@@ -313,14 +354,42 @@ def _generic_code_outline(content: str) -> list[dict[str, object]]:
         ("method", re.compile(r"^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{")),
     ]
     items: list[dict[str, object]] = []
+    stack: list[tuple[int, dict[str, object]]] = []
+    brace_depth = 0
+
     for index, line in enumerate(content.splitlines(), start=1):
+        stripped = line.strip()
+        leading_closes = len(stripped) - len(stripped.lstrip("}"))
+        effective_depth = max(0, brace_depth - leading_closes)
+        while stack and effective_depth <= stack[-1][0]:
+            stack.pop()
+
+        matched_kind = ""
+        matched_name = ""
         for kind, pattern in patterns:
             match = pattern.match(line)
-            if match:
-                name = match.group(1)
-                if name not in {"if", "for", "while", "switch", "catch"}:
-                    items.append({"name": name, "kind": kind, "line": index})
+            if not match:
+                continue
+            name = match.group(1)
+            if name in {"if", "for", "while", "switch", "catch"}:
                 break
+            matched_kind = kind
+            matched_name = name
+            break
+
+        if matched_kind and matched_name:
+            parent = stack[-1][1] if stack else None
+            level = len(stack) + 1
+            item = _outline_item(matched_name, matched_kind, index, level=level)
+            if parent is not None and matched_kind in {"method", "function"}:
+                _outline_children(parent).append(item)
+            else:
+                items.append(item)
+            if "{" in line and matched_kind in {"class", "function", "method"}:
+                stack.append((effective_depth, item))
+
+        brace_depth = max(0, brace_depth + line.count("{") - line.count("}"))
+
     return items
 
 
