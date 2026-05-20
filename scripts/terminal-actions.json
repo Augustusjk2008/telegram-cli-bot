@@ -12,16 +12,6 @@
       "enabled": true
     },
     {
-      "id": "Claude",
-      "label": "Claude",
-      "icon": "SquareTerminal",
-      "windowsCommand": "claude",
-      "linuxCommand": "claude",
-      "cwd": ".",
-      "confirm": false,
-      "enabled": true
-    },
-    {
       "id": "Rebuild",
       "label": "重建前端",
       "icon": "Server",
@@ -66,6 +56,16 @@
       "label": "远程操控",
       "icon": "Terminal",
       "windowsCommand": ".\\scripts\\start_todesk_admin.bat",
+      "linuxCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "SyncSourceCodex",
+      "label": "Codex同步",
+      "icon": "RefreshCw",
+      "windowsCommand": ".\\scripts\\codex_sync_current_source_to_backup.bat",
       "linuxCommand": "",
       "cwd": ".",
       "confirm": false,
