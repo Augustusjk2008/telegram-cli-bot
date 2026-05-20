@@ -54,8 +54,16 @@ def _relative_path(root: Path, path: Path) -> str:
     return path.resolve().relative_to(root).as_posix()
 
 
+def normalize_workspace_path_input(path: str) -> str:
+    """Normalize Web workspace paths to slash-separated virtual paths."""
+    text = str(path or "").strip()
+    if "\x00" in text:
+        raise ValueError("路径不合法")
+    return text.replace("\\", "/")
+
+
 def _resolve_workspace_file(root: Path, path: str) -> Path:
-    raw = Path(path)
+    raw = Path(normalize_workspace_path_input(path))
     target = raw if raw.is_absolute() else root / raw
     resolved = target.resolve()
     try:

@@ -122,6 +122,7 @@ from .api_service import (
     uninstall_plugin,
     get_directory_listing,
     get_file_metadata,
+    get_file_browser_directory,
     get_history,
     get_history_delta,
     get_history_trace,
@@ -1680,10 +1681,15 @@ class WebApiServer:
             return _json({"ok": True, "data": data})
         return _json({"ok": True, "data": get_directory_listing(self.manager, alias, auth.user_id, path=target_path)})
 
+    def _workspace_file_root(self, alias: str, auth: WebAuthSession) -> str:
+        if auth.role == ROLE_GUEST:
+            return get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        return get_file_browser_directory(self.manager, alias, auth.user_id)["working_dir"]
+
     async def get_workspace_quick_open(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
-        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        workspace = self._workspace_file_root(alias, auth)
         query = request.query.get("q", "")
         limit = int(request.query.get("limit", "50"))
         loop = asyncio.get_running_loop()
@@ -1696,7 +1702,7 @@ class WebApiServer:
     async def get_workspace_search(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
-        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        workspace = self._workspace_file_root(alias, auth)
         query = request.query.get("q", "")
         limit = int(request.query.get("limit", "100"))
         loop = asyncio.get_running_loop()
@@ -1709,7 +1715,7 @@ class WebApiServer:
     async def get_workspace_outline(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
-        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        workspace = self._workspace_file_root(alias, auth)
         path = request.query.get("path", "")
         return _json({"ok": True, "data": build_file_outline(workspace, path)})
 
@@ -1717,7 +1723,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        workspace = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        workspace = self._workspace_file_root(alias, auth)
         data = resolve_workspace_definition(
             workspace,
             str(body.get("path", "")),

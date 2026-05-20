@@ -520,6 +520,12 @@ def _get_chat_history_service(session: UserSession) -> ChatHistoryService:
     return ChatHistoryService(ChatStore(Path(session.working_dir)))
 
 
+def get_file_browser_directory(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = _require_real_browser_directory(_get_browser_directory(session))
+    return {"working_dir": browser_dir}
+
+
 def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[str, Any]:
     return _get_chat_history_service(session).build_session_snapshot(profile, session)
 

@@ -72,6 +72,94 @@ async def test_host_workspace_outline_returns_file_symbols(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_host_workspace_outline_accepts_backslash_relative_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "app.py").write_text("def run():\n    return True\n", encoding="utf-8")
+    api = PluginHostApi(ArtifactStore(tmp_path / ".artifacts"))
+    context = PluginHostContext(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        workspace_root=workspace,
+    )
+
+    result = await api.dispatch(
+        context,
+        _manifest(workspace_read=True),
+        "host.workspace.outline",
+        {"path": r"src\app.py"},
+    )
+
+    assert result["path"] == "src/app.py"
+    assert result["items"] == [{"name": "run", "kind": "function", "line": 1}]
+
+
+@pytest.mark.asyncio
+async def test_host_workspace_read_text_accepts_backslash_relative_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "app.py").write_text("content\n", encoding="utf-8")
+    api = PluginHostApi(ArtifactStore(tmp_path / ".artifacts"))
+    context = PluginHostContext(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        workspace_root=workspace,
+    )
+
+    result = await api.dispatch(
+        context,
+        _manifest(workspace_read=True),
+        "host.workspace.read_text",
+        {"path": r"src\app.py"},
+    )
+
+    assert result["content"] == "content\n"
+
+
+@pytest.mark.asyncio
+async def test_host_workspace_list_dir_accepts_backslash_relative_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src" / "pkg").mkdir(parents=True)
+    (workspace / "src" / "pkg" / "app.py").write_text("content\n", encoding="utf-8")
+    api = PluginHostApi(ArtifactStore(tmp_path / ".artifacts"))
+    context = PluginHostContext(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        workspace_root=workspace,
+    )
+
+    result = await api.dispatch(
+        context,
+        _manifest(workspace_read=False, workspace_list=True),
+        "host.workspace.list_dir",
+        {"path": r"src\pkg"},
+    )
+
+    assert [item["name"] for item in result["entries"]] == ["app.py"]
+
+
+@pytest.mark.asyncio
+async def test_host_workspace_path_rejects_backslash_traversal(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "outside.py").write_text("def leak():\n    return True\n", encoding="utf-8")
+    api = PluginHostApi(ArtifactStore(tmp_path / ".artifacts"))
+    context = PluginHostContext(
+        bot_alias="main",
+        plugin_id="repo-outline",
+        workspace_root=workspace,
+    )
+
+    with pytest.raises(ValueError, match="路径越界"):
+        await api.dispatch(
+            context,
+            _manifest(workspace_read=True),
+            "host.workspace.read_text",
+            {"path": r"..\outside.py"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_host_workspace_outline_requires_workspace_read(tmp_path: Path) -> None:
     api = PluginHostApi(ArtifactStore(tmp_path / ".artifacts"))
     context = PluginHostContext(

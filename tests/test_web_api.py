@@ -3534,6 +3534,55 @@ async def test_workspace_search_routes_use_current_working_directory(
 
 
 @pytest.mark.asyncio
+async def test_workspace_routes_use_current_file_browser_directory(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workdir = temp_dir / "workdir"
+    browse_dir = temp_dir / "browse"
+    (workdir / "src").mkdir(parents=True)
+    (browse_dir / "src").mkdir(parents=True)
+    (browse_dir / "src" / "main.py").write_text("def run():\n    return True\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workdir)
+    change_working_directory(web_manager, "main", 1001, str(workdir))
+    change_working_directory(web_manager, "main", 1001, str(browse_dir))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            quick_resp = await client.get("/api/bots/main/workspace/quick-open?q=main&limit=5")
+            search_resp = await client.get("/api/bots/main/workspace/search?q=return%20True&limit=5")
+            outline_resp = await client.get("/api/bots/main/workspace/outline?path=src/main.py")
+            definition_resp = await client.post(
+                "/api/bots/main/workspace/resolve-definition",
+                json={"path": "src/main.py", "line": 1, "column": 5, "symbol": "run"},
+            )
+
+            assert quick_resp.status == 200
+            quick_payload = await quick_resp.json()
+            assert quick_payload["data"]["items"][0]["path"] == "src/main.py"
+
+            assert search_resp.status == 200
+            search_payload = await search_resp.json()
+            assert search_payload["data"]["items"][0]["path"] == "src/main.py"
+
+            assert outline_resp.status == 200
+            outline_payload = await outline_resp.json()
+            assert outline_payload["data"]["items"] == [
+                {"name": "run", "kind": "function", "line": 1},
+            ]
+
+            assert definition_resp.status == 200
+            definition_payload = await definition_resp.json()
+            assert definition_payload["data"]["items"][0]["path"] == "src/main.py"
+
+
+@pytest.mark.asyncio
 async def test_workspace_search_route_runs_search_in_executor(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

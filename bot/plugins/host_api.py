@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bot.web.workspace_search_service import build_file_outline
+from bot.web.workspace_search_service import build_file_outline, normalize_workspace_path_input
 
 from .artifacts import ArtifactStore
 from .models import PluginManifest
@@ -19,7 +19,7 @@ class PluginHostPermissionError(RuntimeError):
 
 def resolve_workspace_path(workspace_root: Path, candidate: str) -> Path:
     root = workspace_root.expanduser().resolve()
-    raw = Path(str(candidate or ""))
+    raw = Path(normalize_workspace_path_input(str(candidate or "")))
     resolved = raw.expanduser().resolve() if raw.is_absolute() else (root / raw).resolve()
     if resolved != root and root not in resolved.parents:
         raise ValueError(f"路径越界: {candidate}")

@@ -2,6 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+
+def test_normalize_workspace_path_input_treats_backslashes_as_web_separators():
+    from bot.web.workspace_search_service import normalize_workspace_path_input
+
+    assert normalize_workspace_path_input(r"src\service.py") == "src/service.py"
+
+    with pytest.raises(ValueError, match="路径不合法"):
+        normalize_workspace_path_input("src/\x00/service.py")
+
 
 def test_quick_open_files_ranks_filename_matches_before_path_matches(tmp_path):
     from bot.web.workspace_search_service import quick_open_files
@@ -64,6 +75,30 @@ def test_build_file_outline_returns_python_symbols(tmp_path):
         {"name": "Api", "kind": "class", "line": 1},
         {"name": "run", "kind": "function", "line": 2},
     ]
+
+
+def test_build_file_outline_accepts_backslash_relative_paths(tmp_path):
+    from bot.web.workspace_search_service import build_file_outline
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "service.py").write_text("def run():\n    pass\n", encoding="utf-8")
+
+    result = build_file_outline(tmp_path, r"src\service.py")
+
+    assert result["items"] == [
+        {"name": "run", "kind": "function", "line": 1},
+    ]
+
+
+def test_build_file_outline_rejects_backslash_traversal(tmp_path):
+    from bot.web.workspace_search_service import build_file_outline
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "outside.py").write_text("def leak():\n    pass\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="路径不在工作目录内"):
+        build_file_outline(workspace, r"..\outside.py")
 
 
 def test_quick_open_files_uses_bounded_top_k(tmp_path, monkeypatch):
