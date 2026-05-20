@@ -2693,7 +2693,7 @@ async def test_auth_route_auto_authenticates_loopback_as_admin(web_manager: Mult
 
     assert payload["data"]["username"] == "127.0.0.1"
     assert payload["data"]["account_id"] == "local-admin"
-    assert payload["data"]["user_id"] == -1
+    assert payload["data"]["user_id"] == 1001
     assert payload["data"]["token_protected"] is True
     assert "admin_ops" in payload["data"]["capabilities"]
     assert "manage_register_codes" in payload["data"]["capabilities"]
@@ -2717,7 +2717,7 @@ async def test_auth_route_auto_authenticates_direct_loopback_request(
 
     assert payload["data"]["username"] == "127.0.0.1"
     assert payload["data"]["account_id"] == "local-admin"
-    assert payload["data"]["user_id"] == -1
+    assert payload["data"]["user_id"] == 1001
 
 
 @pytest.mark.asyncio
@@ -3593,7 +3593,7 @@ async def test_history_delta_route_returns_items_after_last_id(
 
     workspace = temp_dir / "workspace"
     workspace.mkdir()
-    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答", user_id=-1)
+    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答", user_id=1001)
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
@@ -3603,7 +3603,7 @@ async def test_history_delta_route_returns_items_after_last_id(
             history_payload = await history_resp.json()
             last_id = history_payload["data"]["items"][-1]["id"]
 
-            _seed_chat_turn(web_manager, workspace, user_text="第二问", assistant_text="增量回复", user_id=-1)
+            _seed_chat_turn(web_manager, workspace, user_text="第二问", assistant_text="增量回复", user_id=1001)
 
             delta_resp = await client.get(f"/api/bots/main/history/delta?after_id={last_id}&limit=10")
             assert delta_resp.status == 200
@@ -3625,8 +3625,8 @@ async def test_history_delta_route_resets_when_after_id_missing(
 
     workspace = temp_dir / "workspace"
     workspace.mkdir()
-    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答", user_id=-1)
-    _seed_chat_turn(web_manager, workspace, user_text="第二问", assistant_text="最新回复", user_id=-1)
+    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答", user_id=1001)
+    _seed_chat_turn(web_manager, workspace, user_text="第二问", assistant_text="最新回复", user_id=1001)
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
@@ -8194,7 +8194,7 @@ async def test_debug_profile_route_returns_service_payload(web_manager: MultiBot
             payload = await resp.json()
 
     assert payload["data"] == fake_profile
-    server._debug_service.get_profile.assert_awaited_once_with("main", -1)
+    server._debug_service.get_profile.assert_awaited_once_with("main", 1001)
 
 @pytest.mark.asyncio
 async def test_debug_state_route_returns_service_payload(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -8223,7 +8223,7 @@ async def test_debug_state_route_returns_service_payload(web_manager: MultiBotMa
             payload = await resp.json()
 
     assert payload["data"] == fake_state
-    server._debug_service.get_state.assert_awaited_once_with("main", -1)
+    server._debug_service.get_state.assert_awaited_once_with("main", 1001)
 
 @pytest.mark.asyncio
 async def test_debug_websocket_forwards_service_events_and_client_messages(
@@ -8252,7 +8252,7 @@ async def test_debug_websocket_forwards_service_events_and_client_messages(
 
     async def fake_handle(alias: str, user_id: int, payload: dict[str, object]) -> None:
         assert alias == "main"
-        assert user_id == -1
+        assert user_id == 1001
         assert payload == {"type": "launch", "payload": {"remoteHost": "192.168.1.29", "remotePort": 1234}}
         queue.put_nowait({"type": "prepareLog", "payload": {"line": "debug.ps1 ready"}})
 
@@ -8275,7 +8275,7 @@ async def test_debug_websocket_forwards_service_events_and_client_messages(
     assert first["type"] == "state"
     assert first["payload"]["phase"] == "preparing"
     assert second == {"type": "prepareLog", "payload": {"line": "debug.ps1 ready"}}
-    server._debug_service.subscribe.assert_awaited_once_with("main", -1)
+    server._debug_service.subscribe.assert_awaited_once_with("main", 1001)
     server._debug_service.handle_ws_message.assert_awaited_once()
 
 @pytest.mark.asyncio
@@ -8368,7 +8368,7 @@ async def test_member_sees_all_bots_but_ungranted_bot_is_read_only(
 
 
 @pytest.mark.asyncio
-async def test_web_member_accounts_use_isolated_runtime_sessions(
+async def test_web_member_accounts_share_default_runtime_session(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8443,21 +8443,19 @@ async def test_web_member_accounts_use_isolated_runtime_sessions(
     assert bob_me.status == 200
     alice_user_id = alice_payload["data"]["user_id"]
     bob_user_id = bob_payload["data"]["user_id"]
-    assert alice_user_id != bob_user_id
-    assert alice_user_id not in {1001, -1, -2}
-    assert bob_user_id not in {1001, -1, -2}
-    assert captured_chat_user_ids == [alice_user_id, bob_user_id]
+    assert alice_user_id == 1001
+    assert bob_user_id == 1001
+    assert captured_chat_user_ids == [1001, 1001]
     assert alice_chat.status == 200
     assert bob_chat.status == 200
-    assert get_session_for_alias(web_manager, "main", alice_user_id).codex_session_id == "thread-alice"
-    assert get_session_for_alias(web_manager, "main", bob_user_id).codex_session_id == "thread-bob"
+    assert get_session_for_alias(web_manager, "main", 1001).codex_session_id == "thread-bob"
     assert alice_cd.status == 200
     assert bob_pwd.status == 200
-    assert bob_pwd_payload["data"]["working_dir"] == web_manager.main_profile.working_dir
+    assert bob_pwd_payload["data"]["working_dir"] == str(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_web_member_reset_and_kill_do_not_cross_account_sessions(
+async def test_web_member_reset_and_kill_use_shared_default_runtime_session(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8487,19 +8485,13 @@ async def test_web_member_reset_and_kill_do_not_cross_account_sessions(
     permissions.set_allowed_bots(bob.account.account_id, ["main"])
     monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
 
-    alice_user_id = alice.account.session_user_id
-    bob_user_id = bob.account.session_user_id
-    assert alice_user_id is not None
-    assert bob_user_id is not None
-    alice_session = get_session_for_alias(web_manager, "main", alice_user_id)
-    bob_session = get_session_for_alias(web_manager, "main", bob_user_id)
-    alice_session.codex_session_id = "thread-alice"
-    bob_session.codex_session_id = "thread-bob"
+    shared_session = get_session_for_alias(web_manager, "main", 1001)
+    shared_session.codex_session_id = "thread-shared"
     bob_process = MagicMock()
     bob_process.poll.return_value = None
-    with bob_session._lock:
-        bob_session.process = bob_process
-        bob_session.is_processing = True
+    with shared_session._lock:
+        shared_session.process = bob_process
+        shared_session.is_processing = True
 
     app = WebApiServer(web_manager)._build_app()
     alice_headers = {"Authorization": f"Bearer {alice.token}", "Host": "example.test"}
@@ -8511,8 +8503,7 @@ async def test_web_member_reset_and_kill_do_not_cross_account_sessions(
 
     assert alice_reset.status == 200
     assert bob_kill.status == 200
-    assert get_session_for_alias(web_manager, "main", bob_user_id).codex_session_id == "thread-bob"
-    assert get_session_for_alias(web_manager, "main", alice_user_id).codex_session_id is None
+    assert get_session_for_alias(web_manager, "main", 1001).codex_session_id is None
     assert bob_process.poll.called is True
 
 

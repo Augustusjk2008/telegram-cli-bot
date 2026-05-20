@@ -26,8 +26,28 @@ def test_register_member_consumes_register_code(tmp_path: Path):
     assert '"alice"' not in users_text
     assert '"INVITE-001"' not in codes_text
     data = json.loads(codes_path.read_text(encoding="utf-8"))
+    users_data = json.loads(users_text)
+    assert "session_user_id" not in users_data["items"][0]
     assert data["items"][0]["used_count"] == 1
     assert data["items"][0]["usage"][0]["used_by_enc"].startswith("v1:")
+
+
+def test_member_login_ignores_legacy_session_user_id(tmp_path: Path):
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    users_path = tmp_path / ".web_users.json"
+    store = WebAuthStore(users_path=users_path, register_codes_path=codes_path)
+    store.register_member("alice", "pw-123", "INVITE-001")
+    users_data = json.loads(users_path.read_text(encoding="utf-8"))
+    users_data["items"][0]["session_user_id"] = -12345
+    users_path.write_text(json.dumps(users_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    session = store.login_member("alice", "pw-123")
+
+    assert session.account.session_user_id is None
 
 
 def test_guest_account_is_builtin_and_never_requires_register_code(tmp_path: Path):

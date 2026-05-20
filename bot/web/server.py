@@ -250,8 +250,6 @@ _WEB_AUTH_STORE = WebAuthStore(
 )
 _BOT_PERMISSION_STORE = BotPermissionStore(_REPO_ROOT / ".web_permissions.json")
 _ANNOUNCEMENT_STORE = AnnouncementStore(_REPO_ROOT / ".web_announcements.json")
-_LOCAL_ADMIN_SESSION_USER_ID = -1
-_GUEST_SESSION_USER_ID = -2
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -370,13 +368,7 @@ def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, 
     return payload
 
 
-def _session_user_id_for_account(account_id: str, session_user_id: int | None = None) -> int:
-    if isinstance(session_user_id, int):
-        return session_user_id
-    if account_id == "local-admin":
-        return _LOCAL_ADMIN_SESSION_USER_ID
-    if account_id == "guest":
-        return _GUEST_SESSION_USER_ID
+def _session_user_id_for_account(_account_id: str, _session_user_id: int | None = None) -> int:
     return WEB_DEFAULT_USER_ID
 
 
@@ -742,7 +734,7 @@ class WebApiServer:
     def _local_admin_auth_context(self) -> AuthContext:
         self._ensure_allowed_user_id(WEB_DEFAULT_USER_ID)
         return AuthContext(
-            user_id=_LOCAL_ADMIN_SESSION_USER_ID,
+            user_id=WEB_DEFAULT_USER_ID,
             token_used=False,
             account_id="local-admin",
             username="127.0.0.1",
