@@ -4,8 +4,8 @@ import asyncio
 import hashlib
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from bot.config import WEB_DEFAULT_USER_ID
 from bot.assistant.cron.store import (
@@ -24,6 +24,15 @@ from bot.assistant.home import AssistantHome
 from bot.assistant.runtime import AssistantRunRequest
 
 
+def _load_timezone(key: str):
+    try:
+        return ZoneInfo(key)
+    except ZoneInfoNotFoundError:
+        if key == "Asia/Shanghai":
+            return timezone(timedelta(hours=8), "Asia/Shanghai")
+        raise
+
+
 class AssistantCronService:
     def __init__(
         self,
@@ -38,7 +47,7 @@ class AssistantCronService:
         self.assistant_home = assistant_home
         self.bot_alias = bot_alias
         self.coordinator = coordinator
-        self.now_func = now_func or (lambda: datetime.now(tz=ZoneInfo("Asia/Shanghai")))
+        self.now_func = now_func or (lambda: datetime.now(tz=_load_timezone("Asia/Shanghai")))
         self.web_user_id = web_user_id
         self._reload_interval_seconds = max(1.0, float(reload_interval_seconds))
         self._cached_jobs: list[AssistantCronJob] = []
@@ -616,7 +625,7 @@ class AssistantCronService:
     def _compute_initial_next_run(self, job: AssistantCronJob, now: datetime) -> datetime:
         if job.schedule.type == "interval":
             return now + timedelta(seconds=job.schedule.every_seconds or 0)
-        tz = ZoneInfo(job.schedule.timezone or "Asia/Shanghai")
+        tz = _load_timezone(job.schedule.timezone or "Asia/Shanghai")
         current = now.astimezone(tz)
         hour, minute = [int(item) for item in (job.schedule.time or "00:00").split(":", maxsplit=1)]
         candidate = current.replace(hour=hour, minute=minute, second=0, microsecond=0)

@@ -31,3 +31,9 @@ def test_portable_build_script_only_copies_tracked_files():
     assert ".distribution.json" in content
     assert "packageKind" in content
     assert 'Write-DistributionMarker -Root $packageRoot -PackageKind "portable" -Platform "windows-x64"' in content
+
+
+def test_windows_portable_dependencies_include_tzdata():
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+
+    assert "tzdata" in requirements

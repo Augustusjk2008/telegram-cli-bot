@@ -1,6 +1,8 @@
+from datetime import timezone
 from pathlib import Path
 
 from bot.web.lan_chat_store import LanChatStore
+from bot.web import lan_chat_types
 from bot.web.lan_chat_types import LAN_CHAT_GROUP_ID, LanChatUser, dm_conversation_id, room_user_id
 
 
@@ -12,6 +14,20 @@ def test_lan_chat_ids_are_stable() -> None:
     assert left == right
     assert left.startswith("dm:")
     assert len(left) == len("dm:") + 16
+
+
+def test_lan_chat_timezone_falls_back_to_china_offset_without_tzdb(monkeypatch) -> None:
+    class MissingZoneInfo:
+        def __init__(self, _key: str) -> None:
+            raise lan_chat_types.ZoneInfoNotFoundError("missing tzdb")
+
+    monkeypatch.setattr(lan_chat_types, "ZoneInfo", MissingZoneInfo)
+
+    tz = lan_chat_types._load_lan_chat_timezone()
+
+    assert tz.utcoffset(None).total_seconds() == 8 * 3600
+    assert tz.tzname(None) == "Asia/Shanghai"
+    assert tz is not timezone.utc
 
 
 def test_lan_chat_store_creates_group_and_messages(tmp_path: Path) -> None:

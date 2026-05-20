@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, TypedDict
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 LAN_CHAT_GROUP_ID = "group:default"
-LAN_CHAT_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _load_lan_chat_timezone():
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+LAN_CHAT_TIMEZONE = _load_lan_chat_timezone()
 
 LanChatMode = Literal["off", "host", "join"]
 LanChatConversationKind = Literal["group", "dm"]

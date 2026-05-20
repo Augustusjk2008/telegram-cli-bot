@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -183,6 +183,22 @@ def test_cron_schedule_accepts_valid_daily_and_interval():
 
     assert daily.schedule.time == "09:30"
     assert interval.schedule.every_seconds == 60
+
+
+def test_cron_timezone_falls_back_to_china_offset_without_tzdb(monkeypatch: pytest.MonkeyPatch):
+    from bot.assistant.cron import service
+
+    class MissingZoneInfo:
+        def __init__(self, _key: str) -> None:
+            raise service.ZoneInfoNotFoundError("missing tzdb")
+
+    monkeypatch.setattr(service, "ZoneInfo", MissingZoneInfo)
+
+    tz = service._load_timezone("Asia/Shanghai")
+
+    assert tz.utcoffset(None).total_seconds() == 8 * 3600
+    assert tz.tzname(None) == "Asia/Shanghai"
+    assert tz is not timezone.utc
 
 
 @pytest.mark.asyncio
