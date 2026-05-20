@@ -793,7 +793,7 @@ async def test_assistant_chat_patch_stream_disconnect_does_not_mark_interrupted(
             "worktree_path": str(home.root / "upgrades" / "worktrees" / proposal["id"]),
             "patch_path": f"upgrades/pending/{proposal['id']}.patch",
             "generated_at": "2026-04-30T00:00:00+00:00",
-            "generated_by": "1001",
+            "generated_by": "-1",
             "generator": {"cli_type": "codex", "cli_path": "codex", "status": "succeeded", "elapsed_seconds": 1},
             "dry_run": {"ok": False, "checked_at": "", "stdout": "", "stderr": "", "patch_path": "", "repo_root": ""},
             "sensitive_hits": [],
@@ -807,7 +807,7 @@ async def test_assistant_chat_patch_stream_disconnect_does_not_mark_interrupted(
         run_id="run_patch_disconnect",
         source="web",
         bot_alias="assistant1",
-        user_id=1001,
+        user_id=-1,
         text="为已批准 proposal 生成 patch",
         visible_text="为已批准 proposal 生成 patch",
         interactive=True,
@@ -897,14 +897,14 @@ async def test_admin_assistant_memory_search_defaults_to_authenticated_user(
     home = bootstrap_assistant_home(workdir)
     AssistantMemoryStore(home).upsert(
         MemoryRecordInput(
-            user_id=2002,
+            user_id=-1,
             scope="user",
             kind="semantic",
             source_type="test",
-            source_ref="case_2002",
-            title="用户 2002 偏好",
-            summary="只属于 2002 的记忆",
-            body="- only-user-2002",
+            source_ref="case_local_admin",
+            title="local-admin 偏好",
+            summary="只属于 local-admin 的记忆",
+            body="- only-local-admin",
             tags=[],
             entity_keys=[],
         )
@@ -914,10 +914,10 @@ async def test_admin_assistant_memory_search_defaults_to_authenticated_user(
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             default_resp = await client.get(
-                "/api/admin/bots/assistant1/assistant/memory/search?query=only-user-2002"
+                "/api/admin/bots/assistant1/assistant/memory/search?query=only-local-admin"
             )
             forced_resp = await client.get(
-                "/api/admin/bots/assistant1/assistant/memory/search?query=only-user-2002&user_id=1001"
+                "/api/admin/bots/assistant1/assistant/memory/search?query=only-local-admin&user_id=1001"
             )
 
             assert default_resp.status == 200
