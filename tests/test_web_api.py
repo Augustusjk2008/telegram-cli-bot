@@ -7397,6 +7397,101 @@ async def test_stream_cli_chat_codex_final_event_terminates_hanging_process(web_
     assert done_event["returncode"] == 0
     fake_process.terminate.assert_called_once()
 
+
+class BlockingAfterFinalStdout:
+    def __init__(self):
+        self.closed = threading.Event()
+        self._lines = [
+            '{"type":"thread.started","thread_id":"thread-final"}\n',
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+        ]
+
+    def readline(self):
+        if self._lines:
+            return self._lines.pop(0)
+        self.closed.wait(30)
+        return ""
+
+    def read(self):
+        return ""
+
+    def close(self):
+        self.closed.set()
+
+
+class FakeCodexProcessWithBlockingStdout:
+    def __init__(self):
+        self.stdout = BlockingAfterFinalStdout()
+        self.stdin = None
+        self.returncode = None
+        self.terminate = MagicMock(side_effect=self._terminate)
+
+    def _terminate(self):
+        self.returncode = 0
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("codex", timeout or 0)
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_codex_final_event_finishes_when_stdout_never_eofs(
+    web_manager: MultiBotManager,
+):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = FakeCodexProcessWithBlockingStdout()
+
+    async def collect_events():
+        events = []
+        async for event in _stream_cli_chat(web_manager, "main", 1001, "hello"):
+            events.append(event)
+            if event["type"] == "done":
+                break
+        return events
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service.CODEX_DONE_QUIET_SECONDS", 0.0):
+        events = await asyncio.wait_for(collect_events(), timeout=2)
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["output"] == "完成回复"
+    assert done_event["returncode"] == 0
+    assert fake_process.stdout.closed.is_set()
+    fake_process.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_codex_final_event_finishes_when_stdout_never_eofs(
+    web_manager: MultiBotManager,
+):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = FakeCodexProcessWithBlockingStdout()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service.CODEX_DONE_QUIET_SECONDS", 0.0):
+        result = await asyncio.wait_for(
+            run_cli_chat(web_manager, "main", 1001, "hello"),
+            timeout=2,
+        )
+
+    assert result["output"] == "完成回复"
+    assert result["returncode"] == 0
+    assert fake_process.stdout.closed.is_set()
+    fake_process.terminate.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_suggests_new_conversation_for_codex_resume_upstream_error(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"

@@ -218,6 +218,7 @@ _WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WORKDIR_CHANGE_REQUIRES_RESET = "workdir_change_requires_reset"
 WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
+CODEX_TERMINATE_GRACE_SECONDS = 1.0
 @dataclass
 class CliAttemptState:
     """单次 CLI 尝试的会话状态。"""
@@ -3363,6 +3364,16 @@ def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0
         pass
 
 
+def _close_process_stdout(process: Any) -> None:
+    stdout = getattr(process, "stdout", None)
+    if stdout is None:
+        return
+    try:
+        stdout.close()
+    except Exception:
+        pass
+
+
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
     stdout = getattr(process, "stdout", None)
     if stdout is None or not hasattr(stdout, "readline"):
@@ -3439,6 +3450,7 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
     candidate_seen_at: Optional[float] = None
     done_terminate_started_at: Optional[float] = None
     done_force_killed = False
+    done_stdout_closed = False
 
     def read_stdout() -> None:
         try:
@@ -3487,22 +3499,23 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
                     )
 
             now = loop.time()
-            if (
-                candidate_seen_at is not None
-                and done_terminate_started_at is None
-                and process.poll() is None
-                and (now - candidate_seen_at) >= CODEX_DONE_QUIET_SECONDS
-            ):
-                done_terminate_started_at = now
-                process.terminate()
-            elif (
-                done_terminate_started_at is not None
-                and not done_force_killed
-                and process.poll() is None
-                and (now - done_terminate_started_at) >= 1.0
-            ):
-                done_force_killed = True
-                await loop.run_in_executor(None, _terminate_process_sync, process)
+            if candidate_seen_at is not None and (now - candidate_seen_at) >= CODEX_DONE_QUIET_SECONDS:
+                if process.poll() is not None and output_queue.empty():
+                    if not done_stdout_closed:
+                        _close_process_stdout(process)
+                        done_stdout_closed = True
+                    break
+                if done_terminate_started_at is None and process.poll() is None:
+                    done_terminate_started_at = now
+                    process.terminate()
+                elif (
+                    done_terminate_started_at is not None
+                    and not done_force_killed
+                    and process.poll() is None
+                    and (now - done_terminate_started_at) >= CODEX_TERMINATE_GRACE_SECONDS
+                ):
+                    done_force_killed = True
+                    await loop.run_in_executor(None, _terminate_process_sync, process)
 
             if not drained:
                 await asyncio.sleep(0.05)
@@ -3782,6 +3795,7 @@ async def _stream_cli_chat(
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
+            done_stdout_closed = False
             codex_done_candidate: Optional[str] = None
             codex_done_seen_at: Optional[float] = None
             trace_state = create_stream_trace_state(cli_type)
@@ -3896,10 +3910,22 @@ async def _stream_cli_chat(
                         done_terminate_started_at is not None
                         and not done_force_killed
                         and process.poll() is None
-                        and (loop.time() - done_terminate_started_at) >= 1.0
+                        and (loop.time() - done_terminate_started_at) >= CODEX_TERMINATE_GRACE_SECONDS
                     ):
                         done_force_killed = True
                         await loop.run_in_executor(None, _terminate_process_sync, process)
+
+                    if (
+                        cli_type == "codex"
+                        and codex_done_seen_at is not None
+                        and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
+                        and process.poll() is not None
+                        and output_queue.empty()
+                    ):
+                        if not done_stdout_closed:
+                            _close_process_stdout(process)
+                            done_stdout_closed = True
+                        break
 
                     if claude_collector is not None:
                         status_event = {
