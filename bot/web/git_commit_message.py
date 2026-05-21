@@ -9,6 +9,7 @@ from typing import Any
 from bot.cli_params import get_default_params, get_params_schema, normalize_cli_model_options
 from bot.config import CLI_MODEL_OPTIONS
 from bot.models import BotProfile, GitCommitMessageCliConfig
+from bot.prompts import render_prompt
 
 DIFF_CHAR_LIMIT = 40 * 1024
 COMMIT_MESSAGE_RE = re.compile(r"<COMMIT_MESSAGE>\s*(.*?)\s*</COMMIT_MESSAGE>", re.S)
@@ -35,27 +36,12 @@ def build_commit_message_prompt(
 ) -> str:
     draft_notice = "" if use_staged_diff else "注意：当前无 staged 改动，本次仅基于未暂存/未跟踪内容生成草稿。\n"
     truncate_notice = "注意：Git diff 已截断。\n" if diff_truncated else ""
-    return (
-        "你是 Git commit message 生成器。\n"
-        "只根据下面 Git diff 和状态生成 commit message。\n"
-        "不要修改文件，不要执行命令，不要解释。\n"
-        "输出必须只包含一个完整标签块：\n\n"
-        "<COMMIT_MESSAGE>\n"
-        "type(scope): subject\n\n"
-        "body\n"
-        "</COMMIT_MESSAGE>\n\n"
-        "要求：\n"
-        "- subject 使用 Conventional Commits 风格但都写成中文\n"
-        "- subject 不超过 100 字\n"
-        "- body 可省略；若有多项改动，用 2-5 条 bullet\n"
-        "- 不要使用 Markdown 代码块\n"
-        "- 不要包含标签外文本\n\n"
-        f"{draft_notice}"
-        f"{truncate_notice}"
-        "Git 状态：\n"
-        f"{status_text.strip() or '(empty)'}\n\n"
-        "Git diff：\n"
-        f"{diff_text.strip() or '(empty)'}\n"
+    return render_prompt(
+        "git_commit_message",
+        draft_notice=draft_notice,
+        truncate_notice=truncate_notice,
+        status_text=status_text.strip() or "(empty)",
+        diff_text=diff_text.strip() or "(empty)",
     )
 
 

@@ -2,21 +2,12 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 import { AssistantOpsScreen } from "../screens/AssistantOpsScreen";
-import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { CreateAssistantCronJobInput } from "../services/types";
-
-async function buildAssistantClient() {
-  const client = new MockWebBotClient();
-  await client.addBot({
-    alias: "assistant1",
-    botMode: "assistant",
-    cliType: "codex",
-    cliPath: "codex",
-    workingDir: "C:\\workspace\\assistant1",
-    avatarName: "avatar_01.png",
-  });
-  return client;
-}
+import {
+  assistantProposalIds,
+  assistantProposalTitles,
+  buildAssistantClient,
+} from "./fixtures/assistantOps";
 
 test("assistant ops screen approves, generates patch, dry-runs and applies proposal", async () => {
   const user = userEvent.setup();
@@ -26,9 +17,9 @@ test("assistant ops screen approves, generates patch, dry-runs and applies propo
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
   expect(await screen.findByRole("heading", { name: "Assistant 运维台" })).toBeInTheDocument();
-  expect(await screen.findByText("补 memory index 审计")).toBeInTheDocument();
+  expect(await screen.findByText(assistantProposalTitles.syncMemoryIndex)).toBeInTheDocument();
 
-  await user.click(screen.getByText("补 memory index 审计"));
+  await user.click(screen.getByText(assistantProposalTitles.syncMemoryIndex));
   await user.click(await screen.findByRole("button", { name: "批准" }));
 
   expect(await screen.findByText("proposal 已批准")).toBeInTheDocument();
@@ -40,13 +31,13 @@ test("assistant ops screen approves, generates patch, dry-runs and applies propo
     expect(dispatchSpy).toHaveBeenCalled();
   });
   await act(async () => {
-    await client.generateAssistantProposalPatch("assistant1", "pr_sync_memory_index", {
+    await client.generateAssistantProposalPatch("assistant1", assistantProposalIds.syncMemoryIndex, {
       targetAlias: "main",
     });
     window.dispatchEvent(new CustomEvent("assistant-proposal-patch-completed", {
       detail: {
         botAlias: "assistant1",
-        proposalId: "pr_sync_memory_index",
+        proposalId: assistantProposalIds.syncMemoryIndex,
         ok: true,
         targetAlias: "main",
         summary: "patch 已生成\n目标工程: main",
@@ -80,7 +71,7 @@ test("assistant ops screen dispatches patch request to chat and shows completion
 
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
-  await user.click(await screen.findByText("补 memory index 审计"));
+  await user.click(await screen.findByText(assistantProposalTitles.syncMemoryIndex));
   await user.click(await screen.findByRole("button", { name: "批准" }));
   await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
   dispatchSpy.mockClear();
@@ -91,18 +82,18 @@ test("assistant ops screen dispatches patch request to chat and shows completion
     .find((value) => value instanceof CustomEvent && value.type === "assistant-proposal-patch-requested") as CustomEvent | undefined;
   expect(requestEvent?.detail).toMatchObject({
     botAlias: "assistant1",
-    proposalId: "pr_sync_memory_index",
+    proposalId: assistantProposalIds.syncMemoryIndex,
     targetAlias: "main",
   });
 
   await act(async () => {
-    await client.generateAssistantProposalPatch("assistant1", "pr_sync_memory_index", {
+    await client.generateAssistantProposalPatch("assistant1", assistantProposalIds.syncMemoryIndex, {
       targetAlias: "main",
     });
     window.dispatchEvent(new CustomEvent("assistant-proposal-patch-completed", {
       detail: {
         botAlias: "assistant1",
-        proposalId: "pr_sync_memory_index",
+        proposalId: assistantProposalIds.syncMemoryIndex,
         ok: true,
         targetAlias: "main",
         summary: "patch 已生成\n目标工程: main\n变更文件: 2",
@@ -121,7 +112,7 @@ test("assistant ops blocks dirty upgrade target and shows paths", async () => {
 
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
-  await user.click(await screen.findByText("补 memory index 审计"));
+  await user.click(await screen.findByText(assistantProposalTitles.syncMemoryIndex));
   await user.click(await screen.findByRole("button", { name: "批准" }));
   await user.selectOptions(await screen.findByLabelText("目标工程"), "assistant1");
 
@@ -152,7 +143,7 @@ test("assistant ops screen rejects chat patch request while chat is busy", async
 
   render(<AssistantOpsScreen botAlias="assistant1" client={client} chatBusy />);
 
-  await user.click(await screen.findByText("补 memory index 审计"));
+  await user.click(await screen.findByText(assistantProposalTitles.syncMemoryIndex));
   await user.click(await screen.findByRole("button", { name: "批准" }));
   await user.selectOptions(await screen.findByLabelText("目标工程"), "main");
   dispatchSpy.mockClear();
@@ -245,7 +236,7 @@ test("assistant ops disables apply when detail says patch is not applyable", asy
 
   render(<AssistantOpsScreen botAlias="assistant1" client={client} />);
 
-  await screen.findByText("补 memory index 审计");
+  await screen.findByText(assistantProposalTitles.syncMemoryIndex);
   await waitFor(() => {
     expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
   });

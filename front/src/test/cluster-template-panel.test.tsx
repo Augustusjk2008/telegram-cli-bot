@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ClusterTemplatePanel } from "../components/ClusterTemplatePanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { DEFAULT_CLUSTER_PANEL_JSON } from "./fixtures/cluster";
 
 test("cluster template panel previews and applies a template after confirmation", async () => {
   const user = userEvent.setup();
@@ -30,13 +31,9 @@ test("cluster template panel previews llm json bundle", async () => {
   render(<ClusterTemplatePanel botAlias="main" client={client} canManage onApplied={() => {}} />);
 
   await user.click(await screen.findByRole("button", { name: "JSON 配置" }));
-  fireEvent.change(screen.getByLabelText("集群 JSON 配置"), { target: { value: JSON.stringify({
-    id: "custom",
-    name: "自定义",
-    description: "测试",
-    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "snapshot_diff", maxParallelAgents: 1, defaultTimeoutSeconds: 600, modelTiers: { low: "", medium: "", high: "" } },
-    agents: [{ id: "tester", name: "测试", systemPrompt: "跑测试", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 600 } }],
-  }) } });
+  fireEvent.change(screen.getByLabelText("集群 JSON 配置"), {
+    target: { value: JSON.stringify(DEFAULT_CLUSTER_PANEL_JSON) },
+  });
   await user.click(screen.getByRole("button", { name: "预览 JSON 配置" }));
 
   await waitFor(() => {

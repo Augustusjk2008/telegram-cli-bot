@@ -152,10 +152,19 @@ import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
+import { createMockAssistantOpsState } from "../mocks/assistantOpsData";
+import {
+  findMockClusterTemplate,
+  listMockClusterTemplateSummaries,
+} from "../mocks/clusterTemplates";
 import {
   DEMO_MAIN_WORKDIR,
   DEMO_TEAM_WORKDIR,
 } from "../mocks/demoEnvironment";
+import {
+  buildMockPlanExecutionMessage,
+  MOCK_PLAN_PATH,
+} from "../mocks/planModeData";
 import { APP_VERSION } from "../theme";
 
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
@@ -315,52 +324,6 @@ function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): Gi
     schema: { ...payload.schema },
   };
 }
-const DEFAULT_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
-  {
-    id: "full_test",
-    name: "全量测试集群",
-    description: "并行运行测试、失败归因和回归复核。",
-    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "snapshot_diff", maxParallelAgents: 3, defaultTimeoutSeconds: 900, modelTiers: { low: "", medium: "", high: "" } },
-    agents: [
-      { id: "tester", name: "测试专家", systemPrompt: "负责完整执行测试命令，记录失败用例、错误堆栈和复现步骤。只报告事实，不修改代码。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "failure-analyst", name: "失败分析", systemPrompt: "负责分析测试失败根因，区分产品缺陷、测试陈旧和环境问题。输出原因、证据和建议处理方式。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "regression-reviewer", name: "回归复核", systemPrompt: "负责复核修复是否覆盖原问题，检查相关回归风险和必要测试范围。只读工作区。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-    ],
-  },
-  {
-    id: "code_review",
-    name: "代码审查集群",
-    description: "并行做代码审查、安全审查和测试规划。",
-    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "snapshot_diff", maxParallelAgents: 3, defaultTimeoutSeconds: 900, modelTiers: { low: "", medium: "", high: "" } },
-    agents: [
-      { id: "reviewer", name: "代码审查", systemPrompt: "负责审查代码正确性、边界条件、可维护性和回归风险。按严重程度输出发现。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "security-reviewer", name: "安全审查", systemPrompt: "负责检查权限、输入校验、路径处理、命令执行和敏感信息风险。只报告可证实问题。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "test-planner", name: "测试规划", systemPrompt: "负责识别需要新增或调整的测试，给出具体测试文件、用例名和验证命令。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-    ],
-  },
-  {
-    id: "feature_dev",
-    name: "功能开发集群",
-    description: "实现、测试和审查并行协作。",
-    cluster: { enabled: true, writePolicy: "selected_agents", conflictPolicy: "snapshot_diff", maxParallelAgents: 3, defaultTimeoutSeconds: 1200, modelTiers: { low: "", medium: "", high: "" } },
-    agents: [
-      { id: "implementer", name: "实现专家", systemPrompt: "负责在明确文件范围内实现功能。修改前说明写入范围，修改后列出变更文件和验证结果。", enabled: true, cluster: { allowCluster: true, allowWrite: true, sessionPolicy: "fork", timeoutSeconds: 1200 } },
-      { id: "tester", name: "测试专家", systemPrompt: "负责执行相关测试、补充测试建议和归因失败。默认不修改代码。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "reviewer", name: "代码审查", systemPrompt: "负责审查实现结果，重点检查行为回归、接口一致性和缺失验证。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-    ],
-  },
-  {
-    id: "research_plan",
-    name: "调研规划集群",
-    description: "资料整理、架构分析和风险评估。",
-    cluster: { enabled: true, writePolicy: "main_only", conflictPolicy: "warn_only", maxParallelAgents: 3, defaultTimeoutSeconds: 900, modelTiers: { low: "", medium: "", high: "" } },
-    agents: [
-      { id: "researcher", name: "资料整理", systemPrompt: "负责收集项目内相关文件、接口和已有约束，输出事实清单和引用位置。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "architect", name: "架构分析", systemPrompt: "负责拆解方案边界、数据流和模块职责，指出替代方案和权衡。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-      { id: "risk-reviewer", name: "风险评估", systemPrompt: "负责识别实现风险、测试风险、迁移风险和运维风险，输出优先级。", enabled: true, cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 } },
-    ],
-  },
-];
 
 function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
   if (typeof localStorage === "undefined") {
@@ -2165,247 +2128,36 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private ensureAssistantOpsState(botAlias: string) {
+    const state = createMockAssistantOpsState(botAlias);
     if (!this.assistantProposals.has(botAlias)) {
-      const proposals: AssistantProposal[] = [
-        {
-          id: "pr_sync_memory_index",
-          kind: "code",
-          title: "补 memory index 审计",
-          body: "- 为 recall 路径补独立 audit\n- 保留现有行为",
-          status: "proposed",
-          createdAt: "2026-04-28T08:30:00+08:00",
-        },
-        {
-          id: "pr_apply_upgrade_guard",
-          kind: "rule",
-          title: "apply 前强校验 approved",
-          body: "- apply 前要求 proposal=approved\n- 失败写 last-error audit",
-          status: "approved",
-          createdAt: "2026-04-28T09:00:00+08:00",
-          reviewedBy: "127.0.0.1",
-          reviewedAt: "2026-04-28T09:10:00+08:00",
-        },
-      ];
-      this.assistantProposals.set(botAlias, proposals);
-      this.assistantProposalDiffs.set(
-        this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"),
-        [
-          "diff --git a/bot/assistant_upgrade.py b/bot/assistant_upgrade.py",
-          "@@ -10,3 +10,7 @@",
-          " def apply_upgrade(...):",
-          "-    return run_patch()",
-          "+    assert proposal.status == 'approved'",
-          "+    return run_patch()",
-          "+",
-          "+def dry_run_upgrade(...):",
-          "+    return check_patch()",
-          "",
-          "diff --git a/tests/test_assistant_upgrade.py b/tests/test_assistant_upgrade.py",
-          "@@ -1,2 +1,6 @@",
-          "+def test_apply_requires_approved():",
-          "+    assert True",
-          "",
-        ].join("\n"),
-      );
-      this.assistantProposalPatchDiffs.set(
-        this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"),
-        this.assistantProposalDiffs.get(this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard")) || "",
-      );
-      this.assistantProposalPatchMetadata.set(this.assistantProposalKey(botAlias, "pr_apply_upgrade_guard"), {
-        id: "pr_apply_upgrade_guard",
-        proposalId: "pr_apply_upgrade_guard",
-        state: "approved",
-        targetAlias: "main",
-        targetWorkingDir: "C:\\workspace\\main",
-        targetRepoRoot: "C:\\workspace\\main",
-        baseCommit: "a1b2c3d4",
-        worktreePath: "C:\\workspace\\.assistant\\upgrades\\worktrees\\pr_apply_upgrade_guard",
-        patchPath: "upgrades/approved/pr_apply_upgrade_guard.patch",
-        generatedAt: "2026-04-28T09:05:00+08:00",
-        generatedBy: "127.0.0.1",
-        approvedBy: "127.0.0.1",
-        approvedAt: "2026-04-28T09:10:00+08:00",
-        generator: {
-          cliType: "codex",
-          cliPath: "codex",
-          status: "succeeded",
-          elapsedSeconds: 8,
-        },
-        dryRun: {
-          ok: false,
-          checkedAt: "",
-          stdout: "",
-          stderr: "",
-          patchPath: "upgrades/approved/pr_apply_upgrade_guard.patch",
-          repoRoot: "C:\\workspace\\main",
-        },
-        sensitiveHits: [],
-        changedFiles: [
-          "bot/assistant_upgrade.py",
-          "tests/test_assistant_upgrade.py",
-        ],
-        additions: 6,
-        deletions: 1,
-      });
-      this.assistantProposalDiffs.set(
-        this.assistantProposalKey(botAlias, "pr_sync_memory_index"),
-        [
-          "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py",
-          "@@ -20,3 +20,8 @@",
-          " def recall_assistant_memories(...):",
-          "+    emit_audit('memory_recall')",
-          "+    return []",
-          "",
-          "diff --git a/bot/assistant_memory_store.py b/bot/assistant_memory_store.py",
-          "@@ -40,2 +40,5 @@",
-          "+def record_recall_trace(...):",
-          "+    return None",
-          "",
-        ].join("\n"),
-      );
+      this.assistantProposals.set(botAlias, structuredClone(state.proposals));
+    }
+    for (const [proposalId, diffText] of Object.entries(state.proposalDiffs)) {
+      const key = this.assistantProposalKey(botAlias, proposalId);
+      if (!this.assistantProposalDiffs.has(key)) {
+        this.assistantProposalDiffs.set(key, diffText);
+      }
+    }
+    for (const [proposalId, diffText] of Object.entries(state.proposalPatchDiffs)) {
+      const key = this.assistantProposalKey(botAlias, proposalId);
+      if (!this.assistantProposalPatchDiffs.has(key)) {
+        this.assistantProposalPatchDiffs.set(key, diffText);
+      }
+    }
+    for (const [proposalId, metadata] of Object.entries(state.proposalPatchMetadata)) {
+      const key = this.assistantProposalKey(botAlias, proposalId);
+      if (!this.assistantProposalPatchMetadata.has(key)) {
+        this.assistantProposalPatchMetadata.set(key, structuredClone(metadata));
+      }
     }
     if (!this.assistantMemories.has(botAlias)) {
-      this.assistantMemories.set(botAlias, [
-        {
-          id: "mem_pref_cn_short",
-          kind: "semantic",
-          scope: "user",
-          title: "回复偏好",
-          summary: "默认简短中文",
-          body: "- 默认简短中文\n- 少解释",
-          score: 0.96,
-          sourceType: "chat",
-          sourceRef: "capture_1",
-          updatedAt: "2026-04-28T08:00:00+08:00",
-        },
-        {
-          id: "mem_incident_cron",
-          kind: "episodic",
-          scope: "project",
-          title: "cron 根因",
-          summary: "pending_run_id 残留",
-          body: "- pending_run_id 残留\n- 重启丢队列",
-          score: 0.82,
-          sourceType: "dream",
-          sourceRef: "dream_1",
-          updatedAt: "2026-04-28T07:40:00+08:00",
-        },
-        {
-          id: "mem_playbook_release",
-          kind: "procedural",
-          scope: "global",
-          title: "发版惯例",
-          summary: "先 dry-run 再 apply",
-          body: "- 先 dry-run\n- 冲突先停\n- 审计必留",
-          score: 0.74,
-          sourceType: "manual",
-          sourceRef: "kb_release",
-          updatedAt: "2026-04-27T09:30:00+08:00",
-          invalidatedAt: "2026-04-27T10:00:00+08:00",
-        },
-      ]);
+      this.assistantMemories.set(botAlias, structuredClone(state.memories));
     }
     if (!this.assistantMemoryEvalReports.has(botAlias)) {
-      this.assistantMemoryEvalReports.set(botAlias, [
-        {
-          reportPath: `.assistant/evals/memory/20260428T020000Z.json`,
-          createdAt: "2026-04-28T10:00:00+08:00",
-          metrics: {
-            hitAt5: 1,
-            staleRecallRate: 0,
-          },
-          rows: [
-            {
-              query: "默认简短中文",
-              promptBlock: "<ASSISTANT_MEMORY_RECALL>\n1. [semantic/user] 回复偏好: 默认简短中文\n</ASSISTANT_MEMORY_RECALL>",
-              hit: true,
-              stale: false,
-              auditPath: ".assistant/audit/memory/20260428T020000Z-1001.json",
-            },
-          ],
-        },
-      ]);
+      this.assistantMemoryEvalReports.set(botAlias, structuredClone(state.evalReports));
     }
     if (!this.assistantPerfRecords.has(botAlias)) {
-      this.assistantPerfRecords.set(botAlias, [
-        {
-          runId: "run_perf_1",
-          createdAt: "2026-04-28T10:10:00+08:00",
-          botAlias,
-          source: "web",
-          taskMode: "standard",
-          interactive: true,
-          userId: 1001,
-          status: "completed",
-          stageDurations: {
-            syncMs: 18,
-            indexMs: 11,
-            recallMs: 24,
-            cliMs: 1320,
-            dbMs: 17,
-            traceMs: 42,
-            pluginMs: 0,
-          },
-          elapsedMs: 1445,
-          promptChars: 1280,
-          outputChars: 640,
-          traceCount: 7,
-          toolCallCount: 2,
-          processCount: 3,
-        },
-        {
-          runId: "run_perf_2",
-          createdAt: "2026-04-28T10:16:00+08:00",
-          botAlias,
-          source: "cron",
-          taskMode: "dream",
-          interactive: false,
-          userId: 1001,
-          status: "failed",
-          stageDurations: {
-            syncMs: 24,
-            indexMs: 18,
-            recallMs: 31,
-            cliMs: 2480,
-            dbMs: 20,
-            traceMs: 16,
-            pluginMs: 0,
-          },
-          elapsedMs: 2688,
-          promptChars: 860,
-          outputChars: 0,
-          traceCount: 5,
-          toolCallCount: 1,
-          processCount: 2,
-          error: "CLI timeout",
-        },
-        {
-          runId: "run_perf_3",
-          createdAt: "2026-04-28T10:20:00+08:00",
-          botAlias,
-          source: "web",
-          taskMode: "standard",
-          interactive: true,
-          userId: 1002,
-          status: "failed",
-          stageDurations: {
-            syncMs: 12,
-            indexMs: 15,
-            recallMs: 28,
-            cliMs: 980,
-            dbMs: 12,
-            traceMs: 120,
-            pluginMs: 85,
-          },
-          elapsedMs: 1320,
-          promptChars: 1140,
-          outputChars: 120,
-          traceCount: 8,
-          toolCallCount: 4,
-          processCount: 3,
-          error: "plugin render failed",
-        },
-      ]);
+      this.assistantPerfRecords.set(botAlias, structuredClone(state.perfRecords));
     }
     if (!this.assistantAdminAudit.has(botAlias)) {
       this.assistantAdminAudit.set(botAlias, []);
@@ -2929,16 +2681,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getClusterTemplates(_botAlias: string): Promise<ClusterTemplateListResult> {
-    return {
-      templates: DEFAULT_CLUSTER_TEMPLATES.map((item): ClusterTemplateSummary => ({
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        agentCount: item.agents.length,
-        writeAgentCount: item.agents.filter((agent) => agent.cluster.allowWrite).length,
-        maxParallelAgents: item.cluster.maxParallelAgents,
-      })),
-    };
+    return { templates: listMockClusterTemplateSummaries() };
   }
 
   async getClusterBundleSchema(_botAlias: string): Promise<ClusterBundleSchemaResult> {
@@ -3003,11 +2746,11 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private findTemplate(templateId: string): ClusterConfigBundle {
-    const found = DEFAULT_CLUSTER_TEMPLATES.find((item) => item.id === templateId);
+    const found = findMockClusterTemplate(templateId);
     if (!found) {
       throw new WebApiClientError("集群模板不存在", { status: 404, code: "cluster_template_not_found" });
     }
-    return structuredClone(found);
+    return found;
   }
 
   private coerceBundle(raw: unknown): ClusterConfigBundle {
@@ -3170,20 +2913,12 @@ export class MockWebBotClient implements WebBotClient {
     const conversationResult = await this.createConversation(botAlias, input.title || "执行方案", {
       agentId: input.agentId,
     });
-    const planPath = "docs/plan/2026-05-21-1010-plan.md";
+    const planPath = MOCK_PLAN_PATH;
     return {
       planPath,
       conversation: conversationResult.conversation,
       messages: conversationResult.messages,
-      executionMessage: [
-        `请按方案执行。方案文件：${planPath}`,
-        "",
-        "要求：",
-        "- 先阅读方案和相关代码",
-        "- 按方案实施",
-        "- 不要回到 Plan Mode",
-        "- 完成后运行必要验证",
-      ].join("\n"),
+      executionMessage: buildMockPlanExecutionMessage(planPath),
     };
   }
 

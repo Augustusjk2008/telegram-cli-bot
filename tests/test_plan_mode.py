@@ -42,6 +42,7 @@ def test_build_plan_mode_prompt_uses_plan_draft_protocol_without_file_instructio
     assert "</PLAN_DRAFT>" in prompt
     assert "不要修改文件" in prompt
     assert "不要创建文件" in prompt
+    assert "会改变项目状态的命令" in prompt
     assert "docs/plan" not in prompt
 
 
@@ -80,6 +81,7 @@ def test_build_plan_execution_prompt_references_saved_plan():
 
     assert "请按方案执行" in prompt
     assert "docs/plan/2026-05-21-1010-plan-mode.md" in prompt
+    assert "先阅读方案和相关代码" in prompt
     assert "不要回到 Plan Mode" in prompt
 
 

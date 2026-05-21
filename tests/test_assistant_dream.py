@@ -67,6 +67,7 @@ def test_prepare_dream_prompt_uses_recent_history_and_captures(temp_dir: Path):
     assert "不要输出 JSON" in prepared.prompt_text
     assert "<DREAM_SUMMARY>" in prepared.prompt_text
     assert "程序会把这些块组装回原协议对象" in prepared.prompt_text
+    assert "working_memory 只接受 current_goal/open_loops/user_prefs/recent_summary 四类内容" in prepared.prompt_text
     assert prepared.context_stats["history_count"] == 1
     assert prepared.context_stats["capture_count"] == 1
 

@@ -61,6 +61,7 @@ def test_build_compaction_memory_block_includes_quiet_maintenance_and_proposals_
     assert "不要创建任意新的 working 记忆文件" in block
     assert "不要在回复中主动提及" in block
     assert ".assistant/proposals" in block
+    assert "当前待压缩 captures: 1" in block
 
 
 def test_finalize_compaction_writes_changed_audit_when_working_files_change(tmp_path):

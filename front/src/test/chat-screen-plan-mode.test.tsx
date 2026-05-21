@@ -1,10 +1,17 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
+import { buildMockPlanExecutionMessage, createMockPlanExecuteResult, MOCK_PLAN_MARKDOWN, wrapPlanDraft } from "../mocks/planModeData";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ConversationSelectResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { createMainAgent } from "./fixtures/agents";
+import {
+  createClusterConfig,
+  createClusterOverview as createClusterOverviewFixture,
+} from "./fixtures/cluster";
+import { createAssistantMessage, createConversation } from "./fixtures/conversations";
 
 type PlanClient = WebBotClient & {
   executePlan?: (botAlias: string, input: { content: string; title?: string; agentId?: string }) => Promise<{
@@ -26,48 +33,21 @@ function createOverview(): BotOverview {
 }
 
 function createClusterOverview(): BotOverview {
-  return {
-    ...createOverview(),
-    cluster: {
-      enabled: true,
-      writePolicy: "main_only",
+  return createClusterOverviewFixture({
+    alias: "main",
+    cliType: "codex",
+    workingDir: "C:\\workspace",
+    isProcessing: false,
+    cluster: createClusterConfig({
       conflictPolicy: "warn_only",
       maxParallelAgents: 2,
       defaultTimeoutSeconds: 120,
-      modelTiers: { low: "", medium: "", high: "" },
-    },
-    agents: [
-      {
-        id: "main",
-        name: "主 agent",
-        systemPrompt: "",
-        enabled: true,
-        isMain: true,
-      },
-    ],
-  };
+    }),
+    agents: [createMainAgent()],
+  });
 }
 
-function createConversation(id: string, title: string) {
-  const now = new Date().toISOString();
-  return {
-    id,
-    title,
-    lastMessagePreview: "",
-    messageCount: 0,
-    pinned: false,
-    active: true,
-    status: "active",
-    botAlias: "main",
-    botMode: "cli",
-    cliType: "codex",
-    workingDir: "C:\\workspace",
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function createClient(overrides: Record<string, unknown> = {}): PlanClient {
+function createClient(overrides: Partial<PlanClient> = {}): PlanClient {
   const client = new MockWebBotClient();
   return Object.assign(client, {
     getBotOverview: async () => createOverview(),
@@ -77,11 +57,11 @@ function createClient(overrides: Record<string, unknown> = {}): PlanClient {
       items: [],
     }),
     createConversation: async () => ({
-      conversation: createConversation("conv-new", "新会话"),
+      conversation: createConversation({ id: "conv-new", title: "新会话" }),
       messages: [],
     }),
     selectConversation: async () => ({
-      conversation: createConversation("conv-selected", "旧会话"),
+      conversation: createConversation({ id: "conv-selected", title: "旧会话" }),
       messages: [],
     }),
     ...overrides,
@@ -108,13 +88,7 @@ test("restores enabled plan mode after remount", async () => {
 
 test("sends chat with plan task mode when plan mode is active", async () => {
   const user = userEvent.setup();
-  const sendMessage = vi.fn(async () => ({
-    id: "assistant-plan",
-    role: "assistant" as const,
-    text: "先确认范围",
-    createdAt: new Date().toISOString(),
-    state: "done" as const,
-  }));
+  const sendMessage = vi.fn(async () => createAssistantMessage("先确认范围", { id: "assistant-plan" }));
   const client = createClient({ sendMessage });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -139,14 +113,9 @@ test("shows execute and edit actions for final plan drafts", async () => {
   const user = userEvent.setup();
   const client = createClient({
     sendMessage: async (_botAlias: string, _text: string, onChunk: (chunk: string) => void) => {
-      onChunk("<PLAN_DRAFT>\n# 方案\n- 改 A\n</PLAN_DRAFT>");
-      return {
-        id: "assistant-plan",
-        role: "assistant" as const,
-        text: "<PLAN_DRAFT>\n# 方案\n- 改 A\n</PLAN_DRAFT>",
-        createdAt: new Date().toISOString(),
-        state: "done" as const,
-      };
+      const draft = wrapPlanDraft(MOCK_PLAN_MARKDOWN);
+      onChunk(draft);
+      return createAssistantMessage(draft, { id: "assistant-plan" });
     },
   });
 
@@ -165,26 +134,12 @@ test("shows execute and edit actions for final plan drafts", async () => {
 test("execute plan creates a fresh conversation and auto-sends execution prompt", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn()
-    .mockResolvedValueOnce({
-      id: "assistant-plan",
-      role: "assistant" as const,
-      text: "<PLAN_DRAFT>\n# 方案\n- 改 A\n</PLAN_DRAFT>",
-      createdAt: new Date().toISOString(),
-      state: "done" as const,
-    })
-    .mockResolvedValueOnce({
-      id: "assistant-done",
-      role: "assistant" as const,
-      text: "已执行",
-      createdAt: new Date().toISOString(),
-      state: "done" as const,
-    });
-  const executePlan = vi.fn(async () => ({
-    planPath: "docs/plan/2026-05-21-1010-plan.md",
-    conversation: createConversation("conv-exec", "执行方案"),
-    messages: [],
-    executionMessage: "请按方案执行。方案文件：docs/plan/2026-05-21-1010-plan.md",
-  }));
+    .mockResolvedValueOnce(createAssistantMessage(wrapPlanDraft(MOCK_PLAN_MARKDOWN), { id: "assistant-plan" }))
+    .mockResolvedValueOnce(createAssistantMessage("已执行", { id: "assistant-done" }));
+  const executePlan = vi.fn(async () => createMockPlanExecuteResult(
+    createConversation({ id: "conv-exec", title: "执行方案" }),
+    { executionMessage: buildMockPlanExecutionMessage() },
+  ));
   const client = createClient({ sendMessage, executePlan });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -196,7 +151,7 @@ test("execute plan creates a fresh conversation and auto-sends execution prompt"
 
   await waitFor(() => {
     expect(executePlan).toHaveBeenCalledWith("main", expect.objectContaining({
-      content: "# 方案\n- 改 A",
+      content: MOCK_PLAN_MARKDOWN,
     }));
   });
   await waitFor(() => {
@@ -214,26 +169,11 @@ test("execute plan creates a fresh conversation and auto-sends execution prompt"
 test("execute plan keeps cluster enabled but leaves plan mode", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn()
-    .mockResolvedValueOnce({
-      id: "assistant-plan",
-      role: "assistant" as const,
-      text: "<PLAN_DRAFT>\n# 方案\n- 改 A\n</PLAN_DRAFT>",
-      createdAt: new Date().toISOString(),
-      state: "done" as const,
-    })
-    .mockResolvedValueOnce({
-      id: "assistant-done",
-      role: "assistant" as const,
-      text: "已执行",
-      createdAt: new Date().toISOString(),
-      state: "done" as const,
-    });
-  const executePlan = vi.fn(async () => ({
-    planPath: "docs/plan/2026-05-21-1010-plan.md",
-    conversation: createConversation("conv-exec", "执行方案"),
-    messages: [],
-    executionMessage: "请按方案执行。方案文件：docs/plan/2026-05-21-1010-plan.md",
-  }));
+    .mockResolvedValueOnce(createAssistantMessage(wrapPlanDraft(MOCK_PLAN_MARKDOWN), { id: "assistant-plan" }))
+    .mockResolvedValueOnce(createAssistantMessage("已执行", { id: "assistant-done" }));
+  const executePlan = vi.fn(async () => createMockPlanExecuteResult(
+    createConversation({ id: "conv-exec", title: "执行方案" }),
+  ));
   const client = createClient({
     getBotOverview: async () => createClusterOverview(),
     sendMessage,

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RealWebBotClient } from "../services/realWebBotClient";
+import {
+  createClusterBundleDiff,
+  createClusterStatus,
+  createClusterTask,
+  createClusterTaskStatus,
+  createClusterTemplateBundle,
+} from "./fixtures/cluster";
 
 describe("RealWebBotClient", () => {
   const fetchMock = vi.fn();
@@ -51,22 +58,40 @@ describe("RealWebBotClient", () => {
   });
 
   test("cluster setup endpoints map snake case responses", async () => {
+    const statusData = createClusterStatus({
+      mcp: {
+        serverName: "tcb-cluster",
+        activeCliType: "kimi",
+        runtime: { state: "runtime_ready", message: "运行态可用" },
+        codex: { state: "not_checked", message: "未使用" },
+        claude: { state: "not_checked", message: "未使用" },
+        kimi: { state: "installed", message: "已安装" },
+      },
+      modelTiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
+      agents: [{ id: "reviewer", name: "代码审查", enabled: true, allowCluster: true, allowWrite: false }],
+    });
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({
         ok: true,
         data: {
-          enabled: true,
-          model_tiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
+          enabled: statusData.enabled,
+          model_tiers: statusData.modelTiers,
           mcp: {
-            server_name: "tcb-cluster",
-            active_cli_type: "kimi",
-            runtime: { state: "runtime_ready", message: "运行态可用" },
-            codex: { state: "not_checked", message: "未使用" },
-            claude: { state: "not_checked", message: "未使用" },
-            kimi: { state: "installed", message: "已安装" },
+            server_name: statusData.mcp.serverName,
+            active_cli_type: statusData.mcp.activeCliType,
+            runtime: statusData.mcp.runtime,
+            codex: statusData.mcp.codex,
+            claude: statusData.mcp.claude,
+            kimi: statusData.mcp.kimi,
           },
-          agents: [{ id: "reviewer", name: "代码审查", enabled: true, allow_cluster: true, allow_write: false }],
+          agents: statusData.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            enabled: agent.enabled,
+            allow_cluster: agent.allowCluster,
+            allow_write: agent.allowWrite,
+          })),
         },
       }),
     });
@@ -85,6 +110,26 @@ describe("RealWebBotClient", () => {
   });
 
   test("cluster template endpoints map preview and apply results", async () => {
+    const bundle = createClusterTemplateBundle({
+      description: "跑测试",
+      agents: [{
+        id: "tester",
+        name: "测试专家",
+        systemPrompt: "跑测试",
+        enabled: true,
+        cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 },
+      }],
+    });
+    const diff = createClusterBundleDiff(bundle, {
+      deleteAgents: [],
+      createAgents: ["tester"],
+      updateAgents: [],
+      clusterChanges: {},
+      overwritesAgents: true,
+    });
+    const status = createClusterStatus({
+      agents: [{ id: "tester", name: "测试专家", enabled: true, allowCluster: true, allowWrite: false }],
+    });
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -109,13 +154,37 @@ describe("RealWebBotClient", () => {
         ok: true,
         data: {
           bundle: {
-            id: "full_test",
-            name: "全量测试集群",
-            description: "跑测试",
-            cluster: { enabled: true, write_policy: "main_only", conflict_policy: "snapshot_diff", max_parallel_agents: 3, default_timeout_seconds: 900, model_tiers: { low: "", medium: "", high: "" } },
-            agents: [{ id: "tester", name: "测试专家", system_prompt: "跑测试", enabled: true, cluster: { allow_cluster: true, allow_write: false, session_policy: "ephemeral", timeout_seconds: 900 } }],
+            id: bundle.id,
+            name: bundle.name,
+            description: bundle.description,
+            cluster: {
+              enabled: bundle.cluster.enabled,
+              write_policy: bundle.cluster.writePolicy,
+              conflict_policy: bundle.cluster.conflictPolicy,
+              max_parallel_agents: bundle.cluster.maxParallelAgents,
+              default_timeout_seconds: bundle.cluster.defaultTimeoutSeconds,
+              model_tiers: bundle.cluster.modelTiers,
+            },
+            agents: bundle.agents.map((agent) => ({
+              id: agent.id,
+              name: agent.name,
+              system_prompt: agent.systemPrompt,
+              enabled: agent.enabled,
+              cluster: {
+                allow_cluster: agent.cluster.allowCluster,
+                allow_write: agent.cluster.allowWrite,
+                session_policy: agent.cluster.sessionPolicy,
+                timeout_seconds: agent.cluster.timeoutSeconds,
+              },
+            })),
           },
-          diff: { delete_agents: [], create_agents: ["tester"], update_agents: [], cluster_changes: {}, overwrites_agents: true },
+          diff: {
+            delete_agents: diff.deleteAgents,
+            create_agents: diff.createAgents,
+            update_agents: diff.updateAgents,
+            cluster_changes: diff.clusterChanges,
+            overwrites_agents: diff.overwritesAgents,
+          },
         },
       }),
     }).mockResolvedValueOnce({
@@ -123,27 +192,76 @@ describe("RealWebBotClient", () => {
       json: async () => ({
         ok: true,
         data: {
-          cluster: { enabled: true, write_policy: "main_only", conflict_policy: "snapshot_diff", max_parallel_agents: 3, default_timeout_seconds: 900, model_tiers: { low: "", medium: "", high: "" } },
-          agents: [{ id: "tester", name: "测试专家", system_prompt: "跑测试", enabled: true, is_main: false, cluster: { allow_cluster: true, allow_write: false, session_policy: "ephemeral", timeout_seconds: 900 } }],
-          bundle: {
-            id: "full_test",
-            name: "全量测试集群",
-            description: "跑测试",
-            cluster: { enabled: true, write_policy: "main_only", conflict_policy: "snapshot_diff", max_parallel_agents: 3, default_timeout_seconds: 900, model_tiers: { low: "", medium: "", high: "" } },
-            agents: [{ id: "tester", name: "测试专家", system_prompt: "跑测试", enabled: true, cluster: { allow_cluster: true, allow_write: false, session_policy: "ephemeral", timeout_seconds: 900 } }],
+          cluster: {
+            enabled: bundle.cluster.enabled,
+            write_policy: bundle.cluster.writePolicy,
+            conflict_policy: bundle.cluster.conflictPolicy,
+            max_parallel_agents: bundle.cluster.maxParallelAgents,
+            default_timeout_seconds: bundle.cluster.defaultTimeoutSeconds,
+            model_tiers: bundle.cluster.modelTiers,
           },
-          diff: { delete_agents: [], create_agents: ["tester"], update_agents: [], cluster_changes: {}, overwrites_agents: true },
-          status: {
-            enabled: true,
-            model_tiers: { low: "", medium: "", high: "" },
-            mcp: {
-              server_name: "tcb-cluster",
-              active_cli_type: "codex",
-              runtime: { state: "runtime_ready", message: "运行态可用" },
-              codex: { state: "installed", message: "已安装" },
-              claude: { state: "not_checked", message: "未使用" },
+          agents: bundle.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            system_prompt: agent.systemPrompt,
+            enabled: agent.enabled,
+            is_main: false,
+            cluster: {
+              allow_cluster: agent.cluster.allowCluster,
+              allow_write: agent.cluster.allowWrite,
+              session_policy: agent.cluster.sessionPolicy,
+              timeout_seconds: agent.cluster.timeoutSeconds,
             },
-            agents: [{ id: "tester", name: "测试专家", enabled: true, allow_cluster: true, allow_write: false }],
+          })),
+          bundle: {
+            id: bundle.id,
+            name: bundle.name,
+            description: bundle.description,
+            cluster: {
+              enabled: bundle.cluster.enabled,
+              write_policy: bundle.cluster.writePolicy,
+              conflict_policy: bundle.cluster.conflictPolicy,
+              max_parallel_agents: bundle.cluster.maxParallelAgents,
+              default_timeout_seconds: bundle.cluster.defaultTimeoutSeconds,
+              model_tiers: bundle.cluster.modelTiers,
+            },
+            agents: bundle.agents.map((agent) => ({
+              id: agent.id,
+              name: agent.name,
+              system_prompt: agent.systemPrompt,
+              enabled: agent.enabled,
+              cluster: {
+                allow_cluster: agent.cluster.allowCluster,
+                allow_write: agent.cluster.allowWrite,
+                session_policy: agent.cluster.sessionPolicy,
+                timeout_seconds: agent.cluster.timeoutSeconds,
+              },
+            })),
+          },
+          diff: {
+            delete_agents: diff.deleteAgents,
+            create_agents: diff.createAgents,
+            update_agents: diff.updateAgents,
+            cluster_changes: diff.clusterChanges,
+            overwrites_agents: diff.overwritesAgents,
+          },
+          status: {
+            enabled: status.enabled,
+            model_tiers: status.modelTiers,
+            mcp: {
+              server_name: status.mcp.serverName,
+              active_cli_type: status.mcp.activeCliType,
+              runtime: status.mcp.runtime,
+              codex: status.mcp.codex,
+              claude: status.mcp.claude,
+            },
+            agents: status.agents.map((agent) => ({
+              id: agent.id,
+              name: agent.name,
+              enabled: agent.enabled,
+              allow_cluster: agent.allowCluster,
+              allow_write: agent.allowWrite,
+            })),
           },
         },
       }),
@@ -169,6 +287,21 @@ describe("RealWebBotClient", () => {
   });
 
   test("getClusterTaskStatus maps async task output", async () => {
+    const taskStatus = createClusterTaskStatus({
+      tasks: [
+        createClusterTask({
+          taskId: "clt_1",
+          agentId: "tester",
+          message: "跑测试",
+          status: "completed",
+          output: "3 passed",
+          messages: [
+            { sequence: 1, taskId: "clt_1", agentId: "tester", kind: "progress", content: "开始跑测试", createdAt: "2026-05-06T10:00:01+08:00" },
+            { sequence: 2, taskId: "clt_1", agentId: "tester", kind: "final", content: "测试完成", createdAt: "2026-05-06T10:00:02+08:00" },
+          ],
+        }),
+      ],
+    });
     fetchMock
       .mockResolvedValueOnce({
         ok: true,
@@ -184,48 +317,36 @@ describe("RealWebBotClient", () => {
         json: async () => ({
           ok: true,
           data: {
-            tasks: [
-              {
-                task_id: "clt_1",
-                agent_id: "tester",
-                message: "跑测试",
-                status: "completed",
-                model_tier: "low",
-                timeout_seconds: 900,
-                deadline_exceeded: false,
-                allow_write: false,
-                created_at: "2026-05-06T10:00:00+08:00",
-                started_at: "2026-05-06T10:00:01+08:00",
-                completed_at: "2026-05-06T10:00:02+08:00",
-                message_count: 2,
-                latest_message_sequence: 2,
-                messages: [
-                  {
-                    sequence: 1,
-                    task_id: "clt_1",
-                    agent_id: "tester",
-                    kind: "progress",
-                    content: "开始跑测试",
-                    created_at: "2026-05-06T10:00:01+08:00",
-                  },
-                  {
-                    sequence: 2,
-                    task_id: "clt_1",
-                    agent_id: "tester",
-                    kind: "final",
-                    content: "测试完成",
-                    created_at: "2026-05-06T10:00:02+08:00",
-                  },
-                ],
-                output: "3 passed",
-                error: "",
-              },
-            ],
-            queued_count: 0,
-            running_count: 0,
-            completed_count: 1,
-            failed_count: 0,
-            pending_count: 0,
+            tasks: taskStatus.tasks.map((task) => ({
+              task_id: task.taskId,
+              agent_id: task.agentId,
+              message: task.message,
+              status: task.status,
+              model_tier: task.modelTier,
+              timeout_seconds: task.timeoutSeconds,
+              deadline_exceeded: task.deadlineExceeded,
+              allow_write: task.allowWrite,
+              created_at: task.createdAt,
+              started_at: task.startedAt,
+              completed_at: task.completedAt,
+              message_count: task.messageCount,
+              latest_message_sequence: task.latestMessageSequence,
+              messages: task.messages?.map((message) => ({
+                sequence: message.sequence,
+                task_id: message.taskId,
+                agent_id: message.agentId,
+                kind: message.kind,
+                content: message.content,
+                created_at: message.createdAt,
+              })),
+              output: task.output,
+              error: task.error,
+            })),
+            queued_count: taskStatus.queuedCount,
+            running_count: taskStatus.runningCount,
+            completed_count: taskStatus.completedCount,
+            failed_count: taskStatus.failedCount,
+            pending_count: taskStatus.pendingCount,
           },
         }),
       });
