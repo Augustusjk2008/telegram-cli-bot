@@ -30,6 +30,14 @@ function buildDraftValues(payload: GitCommitMessageCliConfig): DraftValues {
       drafts[key] = Array.isArray(value) ? value.map((item) => String(item)).join("\n") : "";
       continue;
     }
+    if (value == null && field.enum?.includes("none")) {
+      drafts[key] = "none";
+      continue;
+    }
+    if (value == null && field.enum?.includes("default")) {
+      drafts[key] = "default";
+      continue;
+    }
     drafts[key] = value == null ? "" : String(value);
   }
   return drafts;

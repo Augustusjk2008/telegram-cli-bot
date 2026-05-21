@@ -795,7 +795,7 @@ test("git screen saves and resets commit message cli config", async () => {
 
   expect(await screen.findByTestId("git-commit-cli-panel")).toBeInTheDocument();
   expect(screen.getAllByText("Commit Message CLI")).toHaveLength(1);
-  await user.selectOptions(screen.getByLabelText("Commit Message CLI 类型"), "claude");
+  await user.selectOptions(await screen.findByLabelText("Commit Message CLI 类型"), "claude");
   await user.clear(screen.getByLabelText("Commit Message CLI 路径"));
   await user.type(screen.getByLabelText("Commit Message CLI 路径"), "claude-custom");
   await user.selectOptions(screen.getByLabelText("推理努力程度"), "low");
@@ -815,6 +815,75 @@ test("git screen saves and resets commit message cli config", async () => {
   expect(await screen.findByText("Commit Message CLI 已恢复默认值")).toBeInTheDocument();
 });
 
+test("git screen keeps commit message cli model none after saving", async () => {
+  const user = userEvent.setup();
+  const updateGitCommitMessageConfig = vi.fn(
+    async (
+      _botAlias: string,
+      input: Parameters<WebBotClient["updateGitCommitMessageConfig"]>[1],
+    ): Promise<GitCommitMessageCliConfig> => ({
+      cliType: "codex",
+      cliPath: "codex",
+      params: {
+        model: input.params?.model === "none" ? null : input.params?.model,
+      },
+      defaults: {
+        model: "gpt-5.4",
+      },
+      schema: {
+        model: {
+          type: "string" as const,
+          enum: ["gpt-5.5", "gpt-5.4", "none"],
+          description: "模型选择",
+          nullable: true,
+        },
+      },
+    }),
+  );
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitCommitMessageConfig: async (): Promise<GitCommitMessageCliConfig> => ({
+          cliType: "codex",
+          cliPath: "codex",
+          params: {
+            model: "gpt-5.5",
+          },
+          defaults: {
+            model: "gpt-5.4",
+          },
+          schema: {
+            model: {
+              type: "string",
+              enum: ["gpt-5.5", "gpt-5.4", "none"],
+              description: "模型选择",
+              nullable: true,
+            },
+          },
+        }),
+        updateGitCommitMessageConfig,
+      })}
+      sessionCapabilities={["manage_cli_params"]}
+    />,
+  );
+
+  const modelSelect = await screen.findByLabelText("模型选择");
+  await user.selectOptions(modelSelect, "none");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(updateGitCommitMessageConfig).toHaveBeenCalledWith("main", {
+    cliType: "codex",
+    cliPath: "codex",
+    params: {
+      model: "none",
+    },
+  });
+  expect(await screen.findByText("Commit Message CLI 配置已保存")).toBeInTheDocument();
+  expect(screen.getByLabelText("模型选择")).toHaveValue("none");
+});
+
 test("git screen commit message cli config is read-only without permission", async () => {
   render(
     <GitScreen
@@ -825,6 +894,6 @@ test("git screen commit message cli config is read-only without permission", asy
   );
 
   expect(await screen.findByText("当前模式只读")).toBeInTheDocument();
-  expect(screen.getByLabelText("Commit Message CLI 类型")).toBeDisabled();
+  expect(await screen.findByLabelText("Commit Message CLI 类型")).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
 });

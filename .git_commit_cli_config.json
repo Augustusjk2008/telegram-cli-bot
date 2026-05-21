@@ -1,35 +1,33 @@
 {
-  "bots": {
-    "main": {
-      "cli_type": "kimi",
-      "cli_path": "kimi",
-      "cli_params": {
-        "claude": {
-          "yolo": true,
-          "effort": "max",
-          "disable_prompts": true,
-          "stream_json": true,
-          "session_id": null,
-          "model": "claude-opus-4-7",
-          "extra_args": []
-        },
-        "codex": {
-          "yolo": true,
-          "skip_git_check": true,
-          "reasoning_effort": "xhigh",
-          "json_output": true,
-          "model": "gpt-5.5",
-          "extra_args": []
-        },
-        "kimi": {
-          "yolo": true,
-          "stream_json": true,
-          "model": null,
-          "thinking": null,
-          "agent": null,
-          "max_steps_per_turn": null,
-          "extra_args": []
-        }
+  "global": {
+    "cli_type": "kimi",
+    "cli_path": "kimi",
+    "cli_params": {
+      "claude": {
+        "yolo": true,
+        "effort": "max",
+        "disable_prompts": true,
+        "stream_json": true,
+        "session_id": null,
+        "model": "claude-opus-4-7",
+        "extra_args": []
+      },
+      "codex": {
+        "yolo": true,
+        "skip_git_check": true,
+        "reasoning_effort": "xhigh",
+        "json_output": true,
+        "model": "gpt-5.5",
+        "extra_args": []
+      },
+      "kimi": {
+        "yolo": true,
+        "stream_json": true,
+        "model": null,
+        "thinking": null,
+        "agent": null,
+        "max_steps_per_turn": null,
+        "extra_args": []
       }
     }
   }
