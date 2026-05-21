@@ -508,7 +508,20 @@ export type ChatStatusUpdate = {
   clusterRunId?: string;
 };
 
-export type ChatTaskMode = "standard" | "dream" | "proposal_patch";
+export type ChatTaskMode = "standard" | "dream" | "proposal_patch" | "plan";
+
+export type PlanExecuteInput = {
+  content: string;
+  title?: string;
+  agentId?: string;
+};
+
+export type PlanExecuteResult = {
+  planPath: string;
+  conversation: ConversationSummary;
+  messages: ChatMessage[];
+  executionMessage: string;
+};
 
 export type ChatSendOptions = {
   taskMode?: ChatTaskMode;

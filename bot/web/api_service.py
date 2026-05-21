@@ -132,6 +132,12 @@ from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenc
 from bot.web.chat_store import ChatStore
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.native_history_locator import locate_kimi_transcript
+from bot.web.plan_mode import (
+    PLAN_MODE_TASK_MODE,
+    build_plan_execution_prompt,
+    build_plan_mode_prompt,
+    save_execution_plan,
+)
 from bot.web.api_common import (
     AuthContext,
     WebApiError,
@@ -2538,6 +2544,10 @@ def _is_dream_request(request: AssistantRunRequest | None) -> bool:
     return bool(request is not None and request.task_mode == "dream")
 
 
+def _is_plan_request(request: AssistantRunRequest | None) -> bool:
+    return bool(request is not None and request.task_mode == PLAN_MODE_TASK_MODE)
+
+
 def _is_proposal_patch_request(request: AssistantRunRequest | None) -> bool:
     return bool(request is not None and request.task_mode == "proposal_patch")
 
@@ -3656,9 +3666,11 @@ async def _stream_cli_chat(
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
         text = "/" + text[2:]
+    is_plan_mode = _is_plan_request(request)
+    base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run_id)) if is_plan_mode else text
     prompt_text = _apply_cluster_prompt(
         profile,
-        text,
+        base_prompt_text,
         cluster_run_id=cluster_run_id,
         cluster_mentions=cluster_mentions,
     )
@@ -3689,6 +3701,14 @@ async def _stream_cli_chat(
                     cli_type=cli_type,
                 )
             )
+        )
+        if is_plan_mode:
+            prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run_id))
+        prompt_text = _apply_cluster_prompt(
+            profile,
+            prompt_text,
+            cluster_run_id=cluster_run_id,
+            cluster_mentions=cluster_mentions,
         )
     elif agent.id != "main":
         prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
@@ -4179,9 +4199,11 @@ async def run_cli_chat(
         _raise(400, "empty_message", "消息不能为空")
     if text.startswith("//"):
         text = "/" + text[2:]
+    is_plan_mode = _is_plan_request(request)
+    base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run_id)) if is_plan_mode else text
     prompt_text = _apply_cluster_prompt(
         profile,
-        text,
+        base_prompt_text,
         cluster_run_id=cluster_run_id,
         cluster_mentions=cluster_mentions,
     )
@@ -4230,6 +4252,14 @@ async def run_cli_chat(
                     )
                 )
             )
+            if is_plan_mode:
+                prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run_id))
+        prompt_text = _apply_cluster_prompt(
+            profile,
+            prompt_text,
+            cluster_run_id=cluster_run_id,
+            cluster_mentions=cluster_mentions,
+        )
     elif agent.id != "main":
         prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
 
@@ -4521,12 +4551,21 @@ async def run_chat(
                 )
             )
         run_status = "completed"
+        request = build_assistant_run_request(
+            alias,
+            user_id,
+            user_text,
+            task_mode=task_mode,
+            task_payload=task_payload,
+            visible_text=visible_text,
+        )
         try:
             return await run_cli_chat(
                 manager,
                 alias,
                 user_id,
                 user_text,
+                request=request,
                 agent_id=agent_id,
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
@@ -4586,12 +4625,21 @@ async def stream_chat(
                     )
                 )
             run_status = "completed"
+            request = build_assistant_run_request(
+                alias,
+                user_id,
+                user_text,
+                task_mode=task_mode,
+                task_payload=task_payload,
+                visible_text=visible_text,
+            )
             try:
                 async for event in _stream_cli_chat(
                     manager,
                     alias,
                     user_id,
                     user_text,
+                    request=request,
                     agent_id=agent_id,
                     cluster_run_id=cluster_run.run_id if cluster_run else "",
                     cluster_mentions=list(mentions or []),
@@ -4679,9 +4727,34 @@ def build_assistant_run_request(
         text=user_text,
         interactive=True,
         visible_text=visible_text if visible_text is not None else user_text,
-        task_mode=task_mode if task_mode in {"standard", "dream", "proposal_patch"} else "standard",
+        task_mode=task_mode if task_mode in {"standard", "dream", "proposal_patch", PLAN_MODE_TASK_MODE} else "standard",
         task_payload=task_payload,
     )
+
+
+def execute_plan(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    content: str,
+    *,
+    title: str = "",
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    plan_text = str(content or "").strip()
+    if not plan_text:
+        _raise(400, "empty_plan", "方案不能为空")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    saved = save_execution_plan(session.working_dir, plan_text, title=title)
+    conversation_data = create_conversation(manager, alias, user_id, title=title or "执行方案", agent_id=agent_id)
+    execution_message = build_plan_execution_prompt(saved.relative_path)
+    return {
+        "plan_path": saved.relative_path,
+        "conversation": conversation_data["conversation"],
+        "messages": conversation_data["messages"],
+        "execution_message": execution_message,
+        "bot_mode": profile.bot_mode,
+    }
 
 
 def _ensure_proposal_patch_chat_available(

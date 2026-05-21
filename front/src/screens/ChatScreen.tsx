@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { History, LoaderCircle, Maximize2, Minimize2, Network, Paperclip, Plus, Square, Trash2 } from "lucide-react";
+import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Paperclip, Plus, Square, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { AgentSwitcher } from "../components/AgentSwitcher";
 import { BotIdentity } from "../components/BotIdentity";
@@ -11,6 +11,7 @@ import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ChatTracePanel } from "../components/ChatTracePanel";
 import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
+import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AssistantRuntimePendingRun,
@@ -52,6 +53,7 @@ import {
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
+import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
 
 type Props = {
   botAlias: string;
@@ -868,6 +870,9 @@ export function ChatScreen({
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterSaving, setClusterSaving] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
+  const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
+  const [planExecuteError, setPlanExecuteError] = useState("");
   const [composerPulseKey, setComposerPulseKey] = useState(0);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -1824,6 +1829,49 @@ export function ChatScreen({
     }
   }
 
+  async function handleExecutePlan(messageId: string, content: string) {
+    const planContent = content.trim();
+    if (!planContent) {
+      return;
+    }
+    setExecutingPlanMessageId(messageId);
+    setPlanExecuteError("");
+    setConversationLoading(true);
+    setError("");
+    try {
+      const result = await client.executePlan(botAlias, {
+        content: planContent,
+        title: "执行方案",
+        agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
+      });
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      setClusterRunId("");
+      setClusterTaskStatus(null);
+      setClusterTaskError("");
+      clusterRunIdRef.current = "";
+      setExpandedTracePanels({});
+      setTraceLoadState({});
+      setQueuedMessage(null);
+      queuedMessageRef.current = null;
+      setItems(result.messages);
+      setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
+      setHistoryPanelOpen(false);
+      setPlanMode(false);
+      await sendMessageInternal(result.executionMessage, {
+        sendOptions: clusterMode ? { taskMode: "standard", cluster: true } : { taskMode: "standard" },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "执行方案失败";
+      setPlanExecuteError(message);
+      setError(message);
+    } finally {
+      setExecutingPlanMessageId("");
+      setConversationLoading(false);
+    }
+  }
+
   const handleSelectAgent = useCallback((agentId: string) => {
     const normalized = agentId || "main";
     activeAgentIdRef.current = normalized;
@@ -2155,7 +2203,14 @@ export function ChatScreen({
       return;
     }
     const clusterSend = clusterMode || mentions.length > 0;
-    const sendOptions = clusterSend ? { cluster: true, mentions } : undefined;
+    const sendOptions = planMode
+      ? {
+        taskMode: "plan" as const,
+        ...(clusterSend ? { cluster: true, mentions } : {}),
+      }
+      : clusterSend
+        ? { cluster: true, mentions }
+        : undefined;
     if (isStreamingRef.current) {
       const nextQueuedMessage: QueuedChatMessage = {
         text: text.trim(),
@@ -2183,7 +2238,7 @@ export function ChatScreen({
       clearPendingAttachments: true,
       sendOptions,
     });
-  }, [botOverview?.cluster?.enabled, pendingAttachments, sendMessageInternal]);
+  }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal]);
 
   async function handleToggleClusterMode() {
     if (!botOverview?.cluster || clusterSaving) {
@@ -2404,6 +2459,19 @@ export function ChatScreen({
                 {clusterSaving ? "保存中" : (clusterMode ? "集群开" : "集群关")}
               </button>
             ) : null}
+            <button
+              type="button"
+              aria-pressed={planMode}
+              aria-label="计划模式"
+              onClick={() => setPlanMode((value) => !value)}
+              disabled={loading || isStreaming || chatMutationsDisabled}
+              className={planMode
+                ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60"}
+            >
+              <ClipboardList className="h-4 w-4" />
+              计划模式
+            </button>
             {embedded && onToggleFocus ? (
               <button
                 type="button"
@@ -2498,25 +2566,42 @@ export function ChatScreen({
           ) : null}
           {items.map((item) => {
             const messageClientStateKey = getMessageClientStateKey(item);
+            const planDraft = item.role === "assistant" && item.state === "done"
+              ? extractPlanDraft(item.text)
+              : "";
+            const displayItem = planDraft ? { ...item, text: stripPlanDraftTags(item.text) } : item;
             return (
-              <ChatMessageRow
-                key={item.id}
-                item={item}
-                messageClientStateKey={messageClientStateKey}
-                assistantName={assistantName}
-                assistantAvatarName={assistantAvatarName}
-                userAvatarName={userAvatarName}
-                allowTrace={allowTrace}
-                deletedAttachmentKeys={deletedAttachmentKeys}
-                deletingAttachmentKeys={deletingAttachmentKeys}
-                tracePanelExpanded={Boolean(expandedTracePanels[messageClientStateKey])}
-                traceLoadState={traceLoadState[messageClientStateKey]}
-                onDeleteAttachment={handleDeleteAttachment}
-                onFileLinkClick={handleFileLinkClick}
-                onLoadTrace={loadMessageTrace}
-                onToggleTracePanel={handleToggleTracePanel}
-                onCopyFinalAnswer={handleCopyFinalAnswer}
-              />
+              <div key={item.id} className="space-y-1">
+                <ChatMessageRow
+                  item={displayItem}
+                  messageClientStateKey={messageClientStateKey}
+                  assistantName={assistantName}
+                  assistantAvatarName={assistantAvatarName}
+                  userAvatarName={userAvatarName}
+                  allowTrace={allowTrace}
+                  deletedAttachmentKeys={deletedAttachmentKeys}
+                  deletingAttachmentKeys={deletingAttachmentKeys}
+                  tracePanelExpanded={Boolean(expandedTracePanels[messageClientStateKey])}
+                  traceLoadState={traceLoadState[messageClientStateKey]}
+                  onDeleteAttachment={handleDeleteAttachment}
+                  onFileLinkClick={handleFileLinkClick}
+                  onLoadTrace={loadMessageTrace}
+                  onToggleTracePanel={handleToggleTracePanel}
+                  onCopyFinalAnswer={handleCopyFinalAnswer}
+                />
+                {planDraft ? (
+                  <div className="flex justify-start">
+                    <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
+                      <PlanDraftCard
+                        content={planDraft}
+                        executing={executingPlanMessageId === item.id}
+                        error={executingPlanMessageId === item.id ? "" : planExecuteError}
+                        onExecute={(content) => void handleExecutePlan(item.id, content)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             );
           })}
           {clusterTaskStatus ? (

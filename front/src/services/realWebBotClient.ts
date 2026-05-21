@@ -88,6 +88,8 @@ import type {
   ClusterTemplateListResult,
   ClusterTemplateSummary,
   ConversationListResult,
+  PlanExecuteInput,
+  PlanExecuteResult,
   ConversationSelectResult,
   ConversationSummary,
   CreateBotInput,
@@ -266,6 +268,13 @@ type RawConversationSummary = {
   active?: boolean;
   created_at?: string;
   updated_at?: string;
+};
+
+type RawPlanExecuteResult = {
+  plan_path?: string;
+  conversation: RawConversationSummary;
+  messages: RawHistoryItem[];
+  execution_message?: string;
 };
 
 type RawChatTraceEvent = {
@@ -3190,6 +3199,29 @@ export class RealWebBotClient implements WebBotClient {
     return {
       conversation: mapConversationSummary(data.conversation),
       messages: data.messages.map((item, index) => mapChatMessage(item, index)),
+    };
+  }
+
+  async executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult> {
+    const data = await this.requestJson<RawPlanExecuteResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/plans/execute`,
+      {
+        method: "POST",
+        headers: this.headers({
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          content: input.content,
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.agentId ? { agent_id: input.agentId } : {}),
+        }),
+      },
+    );
+    return {
+      planPath: String(data.plan_path || ""),
+      conversation: mapConversationSummary(data.conversation),
+      messages: (data.messages || []).map((item, index) => mapChatMessage(item, index)),
+      executionMessage: String(data.execution_message || ""),
     };
   }
 

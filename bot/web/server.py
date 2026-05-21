@@ -108,6 +108,7 @@ from .api_service import (
     change_working_directory,
     create_agent,
     create_conversation,
+    execute_plan,
     create_directory,
     create_text_file,
     copy_path,
@@ -1809,6 +1810,21 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         return _json({"ok": True, "data": create_conversation(self.manager, alias, auth.user_id, str(body.get("title") or ""), agent_id=agent_id)})
+
+    async def post_plan_execute_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        agent_id = self._request_agent_id(request, body)
+        data = execute_plan(
+            self.manager,
+            alias,
+            auth.user_id,
+            str(body.get("content") or ""),
+            title=str(body.get("title") or ""),
+            agent_id=agent_id,
+        )
+        return _json({"ok": True, "data": data})
 
     async def post_conversation_select_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)

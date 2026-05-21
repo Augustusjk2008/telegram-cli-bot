@@ -44,6 +44,8 @@ import type {
   AgentSummary,
   ChatSendOptions,
   ConversationListResult,
+  PlanExecuteInput,
+  PlanExecuteResult,
   ConversationSelectResult,
   ConversationSummary,
   CreateAssistantCronJobInput,
@@ -3147,6 +3149,27 @@ export class MockWebBotClient implements WebBotClient {
     return { conversation, messages: [] };
   }
 
+  async executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult> {
+    const conversationResult = await this.createConversation(botAlias, input.title || "执行方案", {
+      agentId: input.agentId,
+    });
+    const planPath = "docs/plan/2026-05-21-1010-plan.md";
+    return {
+      planPath,
+      conversation: conversationResult.conversation,
+      messages: conversationResult.messages,
+      executionMessage: [
+        `请按方案执行。方案文件：${planPath}`,
+        "",
+        "要求：",
+        "- 先阅读方案和相关代码",
+        "- 按方案实施",
+        "- 不要回到 Plan Mode",
+        "- 完成后运行必要验证",
+      ].join("\n"),
+    };
+  }
+
   async selectConversation(botAlias: string, conversationId: string, options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
     const agentId = options.agentId || "main";
     const key = this.getConversationKey(botAlias, agentId);
@@ -3408,6 +3431,34 @@ export class MockWebBotClient implements WebBotClient {
             callId: "call_git_worktree_add",
           }],
         },
+      };
+      this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
+      return assistantMessage;
+    }
+
+    if (options?.taskMode === "plan") {
+      const summary = [
+        "<PLAN_DRAFT>",
+        "# 执行方案",
+        "",
+        "## 目标",
+        `- 处理：${text.trim() || "当前任务"}`,
+        "",
+        "## 步骤",
+        "- 梳理相关代码和状态",
+        "- 实施最小改动",
+        "- 跑必要验证",
+        "</PLAN_DRAFT>",
+      ].join("\n");
+      onChunk(summary);
+      onStatus?.({ elapsedSeconds: 1 });
+      const assistantMessage: ChatMessage = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: summary,
+        createdAt: new Date().toISOString(),
+        elapsedSeconds: 1,
+        state: "done",
       };
       this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
       return assistantMessage;

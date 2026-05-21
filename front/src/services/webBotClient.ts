@@ -84,6 +84,8 @@ import type {
   ClusterTaskStatus,
   ClusterTemplateListResult,
   ConversationListResult,
+  PlanExecuteInput,
+  PlanExecuteResult,
   ConversationSelectResult,
   HistoryDeltaResult,
   PublicHostInfo,
@@ -155,6 +157,7 @@ export interface WebBotClient {
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
   createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
   selectConversation(botAlias: string, conversationId: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
+  executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: AgentScopedOptions): Promise<HistoryDeltaResult>;
   getMessageTrace(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTraceDetails>;

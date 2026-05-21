@@ -8696,6 +8696,30 @@ async def test_web_member_reset_and_kill_use_shared_default_runtime_session(
 
 
 @pytest.mark.asyncio
+async def test_plan_execute_endpoint_returns_plan_path(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.post(
+                "/api/bots/main/plans/execute",
+                json={"content": "# 方案\n\n- step", "title": "Plan Mode"},
+            )
+            payload = await response.json()
+
+    assert response.status == 200
+    assert payload["ok"] is True
+    assert payload["data"]["plan_path"].startswith("docs/plan/")
+
+
+@pytest.mark.asyncio
 async def test_member_create_bot_quota_and_auto_grant(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

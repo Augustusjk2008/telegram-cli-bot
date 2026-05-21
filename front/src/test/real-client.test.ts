@@ -4,6 +4,16 @@ import { RealWebBotClient } from "../services/realWebBotClient";
 describe("RealWebBotClient", () => {
   const fetchMock = vi.fn();
 
+  function jsonOk(data: unknown) {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data,
+      }),
+    };
+  }
+
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -291,6 +301,58 @@ describe("RealWebBotClient", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
     expect(body.cluster).toBe(true);
     expect(body.mentions[0]).toMatchObject({ agent_id: "reviewer", label: "代码审查" });
+  });
+
+  test("executePlan posts plan content and maps execution payload", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      plan_path: "docs/plan/2026-05-21-1010-plan-mode.md",
+      conversation: {
+        id: "conv-plan",
+        title: "Plan Mode",
+        last_message_preview: "",
+        message_count: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        bot_alias: "main",
+        bot_mode: "cli",
+        cli_type: "codex",
+        agent_id: "reviewer",
+        working_dir: "C:\\workspace",
+        created_at: "2026-05-21T10:10:00",
+        updated_at: "2026-05-21T10:10:00",
+      },
+      messages: [],
+      execution_message: "请按方案执行。方案文件：docs/plan/2026-05-21-1010-plan-mode.md",
+    }));
+
+    const client = new RealWebBotClient() as RealWebBotClient & {
+      executePlan: (botAlias: string, input: { content: string; title?: string; agentId?: string }) => Promise<{
+        planPath: string;
+        conversation: { id: string };
+        executionMessage: string;
+      }>;
+    };
+    const result = await client.executePlan("main", {
+      content: "# 方案",
+      title: "Plan Mode",
+      agentId: "reviewer",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/plans/execute",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "# 方案",
+          title: "Plan Mode",
+          agent_id: "reviewer",
+        }),
+      }),
+    );
+    expect(result.planPath).toBe("docs/plan/2026-05-21-1010-plan-mode.md");
+    expect(result.conversation.id).toBe("conv-plan");
+    expect(result.executionMessage).toContain("请按方案执行");
   });
 
   test("login posts username/password and maps account session fields", async () => {

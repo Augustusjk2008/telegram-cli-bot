@@ -25,7 +25,7 @@ class AssistantRunRequest:
     interactive: bool
     visible_text: str | None = None
     context_user_id: int | None = None
-    task_mode: Literal["standard", "dream", "proposal_patch"] = "standard"
+    task_mode: Literal["standard", "dream", "proposal_patch", "plan"] = "standard"
     task_payload: dict[str, Any] | None = None
     job_id: str | None = None
     job_title: str | None = None
@@ -48,7 +48,7 @@ class AssistantRuntimePendingRunSnapshot:
     run_id: str
     source: RunSource
     status: Literal["queued", "running"]
-    task_mode: Literal["standard", "dream", "proposal_patch"]
+    task_mode: Literal["standard", "dream", "proposal_patch", "plan"]
     interactive: bool
     job_id: str = ""
     job_title: str = ""
