@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from bot.cli import (
+    build_cli_command,
+    parse_claude_stream_json_output,
+    parse_codex_json_output,
+    parse_kimi_stream_json_output,
+    resolve_cli_executable,
+)
+from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.app_settings import get_git_proxy_config_args
 from bot.manager import MultiBotManager
-from .api_service import WebApiError, get_profile_or_raise
+from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
+from .api_common import WebApiError, get_profile_or_raise
+from .git_commit_message import (
+    build_commit_message_prompt,
+    build_git_commit_cli_config,
+    extract_commit_message,
+    truncate_diff_text,
+)
 
 
 class GitCommandError(RuntimeError):
@@ -105,6 +122,53 @@ def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subproce
         output = (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
         raise GitCommandError(output)
     return result
+
+
+def _build_git_commit_cli_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    if sys.platform == "win32":
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+    return env
+
+
+def _terminate_process_sync(process: subprocess.Popen) -> None:
+    try:
+        if process.poll() is None:
+            terminate_process_tree_sync(process)
+    except Exception:
+        pass
+
+
+async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
+    try:
+        output, _ = await asyncio.to_thread(process.communicate)
+    except Exception:
+        _terminate_process_sync(process)
+        raise
+    return str(output or ""), int(process.returncode or 0)
+
+
+def _start_cli_process(
+    cmd: list[str],
+    *,
+    use_stdin: bool,
+    cwd: str,
+    env: dict[str, str],
+) -> subprocess.Popen:
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE if use_stdin else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=cwd,
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+        **build_hidden_process_kwargs(),
+    )
 
 
 def _resolve_repo_root(working_dir: str) -> Optional[str]:
@@ -543,6 +607,146 @@ def _require_repo_root(manager: MultiBotManager, alias: str, user_id: int) -> tu
     if not repo_root:
         _raise(409, "not_git_repo", "当前目录不在 Git 仓库中")
     return working_dir, repo_root
+
+
+def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
+    staged_stat = _run_git(repo_root, ["diff", "--cached", "--stat"], check=False).stdout or ""
+    staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
+    unstaged_stat = _run_git(repo_root, ["diff", "--stat"], check=False).stdout or ""
+    unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
+    status_text = _run_git(repo_root, ["status", "--short"], check=False).stdout or ""
+
+    use_staged_diff = bool(staged_diff.strip())
+    selected_diff = staged_diff if use_staged_diff else "\n".join(
+        part for part in [unstaged_stat.strip(), unstaged_diff.strip()] if part
+    )
+    truncated_diff, diff_truncated = truncate_diff_text(selected_diff)
+
+    return {
+        "status_text": status_text,
+        "diff_text": truncated_diff,
+        "use_staged_diff": use_staged_diff,
+        "diff_truncated": diff_truncated,
+    }
+
+
+def get_git_commit_message_cli_config(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    config = manager.get_git_commit_cli_config(alias)
+    return build_git_commit_cli_config(profile, config)
+
+
+async def update_git_commit_message_cli_config(
+    manager: MultiBotManager,
+    alias: str,
+    *,
+    cli_type: Any = None,
+    cli_path: Any = None,
+    key: Any = None,
+    value: Any = None,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    current = manager.get_git_commit_cli_config(alias)
+    next_cli_type = str(cli_type or current.cli_type or profile.cli_type).strip().lower()
+    next_cli_path = str(cli_path if cli_path is not None else current.cli_path).strip()
+    next_params = CliParamsConfig.from_dict(current.cli_params.to_dict())
+
+    key_text = str(key or "").strip()
+    if key_text:
+        try:
+            coerced_value = coerce_param_value(next_cli_type, key_text, value)
+        except ValueError as exc:
+            _raise(400, "invalid_param_value", str(exc))
+        next_params.set_param(next_cli_type, key_text, coerced_value)
+
+    try:
+        await manager.set_git_commit_cli_config(
+            alias,
+            cli_type=next_cli_type,
+            cli_path=next_cli_path,
+            cli_params=next_params,
+        )
+    except ValueError as exc:
+        _raise(400, "invalid_git_commit_cli_config", str(exc))
+    return get_git_commit_message_cli_config(manager, alias)
+
+
+async def reset_git_commit_message_cli_config(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    await manager.reset_git_commit_cli_config(alias)
+    return get_git_commit_message_cli_config(manager, alias)
+
+
+async def generate_git_commit_message(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    _working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    profile = get_profile_or_raise(manager, alias)
+    cli_config = manager.get_git_commit_cli_config(alias)
+    cli_type = str(cli_config.cli_type or "").strip().lower()
+    cli_path = str(cli_config.cli_path or "").strip()
+    resolved_cli = resolve_cli_executable(cli_path, repo_root)
+    if not resolved_cli:
+        _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
+
+    context = _read_git_commit_message_context(repo_root)
+    prompt_text = build_commit_message_prompt(**context)
+    env = _build_git_commit_cli_env()
+    try:
+        cmd, use_stdin = build_cli_command(
+            cli_type=cli_type,
+            resolved_cli=resolved_cli,
+            user_text=prompt_text,
+            env=env,
+            params_config=cli_config.cli_params,
+            session_id=None,
+            resume_session=False,
+            json_output=True,
+            working_dir=repo_root,
+        )
+    except ValueError as exc:
+        _raise(400, "invalid_git_commit_cli_command", str(exc))
+
+    try:
+        process = _start_cli_process(
+            cmd,
+            use_stdin=use_stdin,
+            cwd=repo_root,
+            env=env,
+        )
+    except FileNotFoundError:
+        _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
+
+    if use_stdin:
+        try:
+            assert process.stdin is not None
+            process.stdin.write(prompt_text + "\n")
+            process.stdin.flush()
+            process.stdin.close()
+        except (BrokenPipeError, OSError) as exc:
+            process.wait()
+            _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
+
+    try:
+        raw_output, returncode = await asyncio.wait_for(_communicate_process(process), timeout=120)
+    except TimeoutError:
+        _terminate_process_sync(process)
+        _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
+
+    if cli_type == "codex":
+        response_text, _ = parse_codex_json_output(raw_output)
+    elif cli_type == "claude":
+        response_text, _ = parse_claude_stream_json_output(raw_output)
+    elif cli_type == "kimi":
+        response_text = parse_kimi_stream_json_output(raw_output)
+    else:
+        response_text = raw_output.strip()
+
+    if returncode != 0:
+        detail = response_text.strip() or raw_output.strip() or "CLI 执行失败"
+        _raise(400, "git_commit_message_failed", detail)
+
+    message = extract_commit_message(response_text)
+    if not message:
+        _raise(400, "git_commit_message_parse_failed", "未提取到 commit message")
+    return {"message": message}
 
 
 def list_git_branches(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

@@ -211,7 +211,9 @@ from .git_service import (
     discard_git_paths,
     drop_git_stash,
     fetch_git_remote,
+    generate_git_commit_message,
     get_git_blame,
+    get_git_commit_message_cli_config,
     get_git_diff,
     get_git_identity_config,
     get_git_overview,
@@ -222,10 +224,12 @@ from .git_service import (
     pop_git_stash,
     pull_git_remote,
     push_git_remote,
+    reset_git_commit_message_cli_config,
     stage_git_paths,
     stash_git_changes,
     switch_git_branch,
     unstage_git_paths,
+    update_git_commit_message_cli_config,
     update_git_identity_config,
 )
 from .workspace_search_service import (
@@ -2019,6 +2023,37 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_git_identity_config(self.manager, alias, auth.user_id)})
+
+    async def get_git_commit_message_config_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_git_commit_message_cli_config(self.manager, alias)})
+
+    async def patch_git_commit_message_config_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await update_git_commit_message_cli_config(
+            self.manager,
+            alias,
+            cli_type=body.get("cli_type"),
+            cli_path=body.get("cli_path"),
+            key=body.get("key"),
+            value=body.get("value"),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def post_git_commit_message_config_reset_view(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        alias = self._manager_alias(request)
+        data = await reset_git_commit_message_cli_config(self.manager, alias)
+        return _json({"ok": True, "data": data})
+
+    async def post_git_commit_message_generate_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        data = await generate_git_commit_message(self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def put_git_identity_view(self, request: web.Request) -> web.Response:
         base_auth = await self._with_auth(request)

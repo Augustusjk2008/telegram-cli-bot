@@ -58,6 +58,9 @@ import type {
   GitActionResult,
   GitBlamePayload,
   GitBranchList,
+  GitCommitMessageCliConfig,
+  GitCommitMessageCliConfigUpdateInput,
+  GitCommitMessageGenerateResult,
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
@@ -259,6 +262,10 @@ export interface WebBotClient {
   getGitBlame(botAlias: string, path: string): Promise<GitBlamePayload>;
   getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig>;
   updateGitIdentityConfig(botAlias: string, input: { scope: GitIdentityScope; name: string; email: string }): Promise<GitIdentityConfig>;
+  getGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig>;
+  updateGitCommitMessageConfig(botAlias: string, input: GitCommitMessageCliConfigUpdateInput): Promise<GitCommitMessageCliConfig>;
+  resetGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig>;
+  generateGitCommitMessage(botAlias: string): Promise<GitCommitMessageGenerateResult>;
   getLanChatConfig(): Promise<LanChatConfig>;
   updateLanChatConfig(input: LanChatConfigInput): Promise<LanChatConfig>;
   getLanChatStatus(): Promise<LanChatStatus>;

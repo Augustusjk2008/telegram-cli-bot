@@ -107,11 +107,33 @@ function activeAgentStorageKey(botAlias: string) {
   return `tcb.activeAgent.${botAlias}`;
 }
 
+function planModeStorageKey(botAlias: string) {
+  return `tcb.planMode.${botAlias}`;
+}
+
 function readStoredAgentId(botAlias: string) {
   if (typeof window === "undefined") {
     return "main";
   }
   return window.localStorage.getItem(activeAgentStorageKey(botAlias)) || "main";
+}
+
+function readStoredPlanMode(botAlias: string) {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(planModeStorageKey(botAlias)) === "1";
+}
+
+function writeStoredPlanMode(botAlias: string, enabled: boolean) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (enabled) {
+    window.localStorage.setItem(planModeStorageKey(botAlias), "1");
+    return;
+  }
+  window.localStorage.removeItem(planModeStorageKey(botAlias));
 }
 
 function agentOptions(agentId?: string) {
@@ -870,7 +892,7 @@ export function ChatScreen({
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterSaving, setClusterSaving] = useState(false);
-  const [planMode, setPlanMode] = useState(false);
+  const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias));
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
   const [composerPulseKey, setComposerPulseKey] = useState(0);
@@ -906,12 +928,21 @@ export function ChatScreen({
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient } | null>(null);
   const isSseStreaming = () => streamModeRef.current === "sse";
 
+  const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
+    setPlanModeState((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      writeStoredPlanMode(previousBotAliasRef.current, next);
+      return next;
+    });
+  }, []);
+
   useLayoutEffect(() => {
     if (previousBotAliasRef.current === botAlias) {
       return;
     }
     previousBotAliasRef.current = botAlias;
     assistantSendVersionRef.current += 1;
+    setPlanModeState(readStoredPlanMode(botAlias));
   }, [botAlias]);
 
   useEffect(() => {
@@ -2466,7 +2497,7 @@ export function ChatScreen({
               onClick={() => setPlanMode((value) => !value)}
               disabled={loading || isStreaming || chatMutationsDisabled}
               className={planMode
-                ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 text-sm font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
                 : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60"}
             >
               <ClipboardList className="h-4 w-4" />

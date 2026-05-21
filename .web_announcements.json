@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-20T16:02:51+08:00",
+  "updated_at": "2026-05-21T14:53:24+08:00",
   "items": [
     {
       "id": "ann-2026-05-13-16-01",
@@ -183,16 +183,26 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ann-2026-05-21-13-50",
+      "published_at": "2026-05-21T13:50:00+08:00",
+      "publisher": "CLI Bridge",
+      "title": "版本更新公告 v1.2.9 + v1.2.10",
+      "category": "feature",
+      "severity": "info",
+      "summary": "Plan Mode 现已加入！",
+      "sections": []
     }
   ],
   "reads": {
     "local-admin": {
-      "last_seen_id": "ann-2026-05-20-12-43",
-      "seen_at": "2026-05-20T16:02:51+08:00"
+      "last_seen_id": "ann-2026-05-21-13-50",
+      "seen_at": "2026-05-21T13:50:29+08:00"
     },
     "member_5f14dc11d7239710": {
-      "last_seen_id": "ann-2026-05-20-12-43",
-      "seen_at": "2026-05-20T12:50:49+08:00"
+      "last_seen_id": "ann-2026-05-21-13-50",
+      "seen_at": "2026-05-21T14:53:24+08:00"
     },
     "guest": {
       "last_seen_id": "ann-2026-05-13-16-01",

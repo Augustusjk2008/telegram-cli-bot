@@ -816,6 +816,7 @@ export function DesktopWorkbench({
           botAvatarName={botAvatarName}
           client={client}
           embedded
+          sessionCapabilities={sessionCapabilities}
           onOpenDiff={openGitDiffInEditor}
           onOverviewChange={(overview) => {
             setGitBranchName(overview?.repoFound ? overview.currentBranch : "");

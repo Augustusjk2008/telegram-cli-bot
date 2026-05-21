@@ -1538,6 +1538,24 @@ export type GitIdentityConfig = {
   local: GitIdentity;
 };
 
+export type GitCommitMessageCliConfig = {
+  cliType: CliType;
+  cliPath: string;
+  params: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  schema: Record<string, CliParamField>;
+};
+
+export type GitCommitMessageCliConfigUpdateInput = Partial<{
+  cliType: CliType;
+  cliPath: string;
+  params: Record<string, unknown>;
+}>;
+
+export type GitCommitMessageGenerateResult = {
+  message: string;
+};
+
 export type GitProxySettings = {
   address: string;
   port: string;

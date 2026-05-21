@@ -83,6 +83,9 @@ import type {
   GitActionResult,
   GitBlamePayload,
   GitBranchList,
+  GitCommitMessageCliConfig,
+  GitCommitMessageCliConfigUpdateInput,
+  GitCommitMessageGenerateResult,
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
@@ -297,6 +300,17 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
         description: "额外参数",
       },
     },
+  };
+}
+
+function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): GitCommitMessageCliConfig {
+  const payload = buildMockCliParams(cliType);
+  return {
+    cliType: payload.cliType,
+    cliPath: cliPath?.trim() || defaultCliPathForType(payload.cliType),
+    params: { ...payload.params },
+    defaults: { ...payload.defaults },
+    schema: { ...payload.schema },
   };
 }
 const DEFAULT_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
@@ -1183,6 +1197,7 @@ export class MockWebBotClient implements WebBotClient {
     ],
   ]);
   private gitIdentityConfigs = new Map<string, GitIdentityConfig>();
+  private gitCommitMessageConfigs = new Map<string, GitCommitMessageCliConfig>();
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -4842,6 +4857,68 @@ export class MockWebBotClient implements WebBotClient {
     return next;
   }
 
+  async getGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig> {
+    const cached = this.gitCommitMessageConfigs.get(botAlias);
+    if (cached) {
+      return {
+        ...cached,
+        params: { ...cached.params },
+        defaults: { ...cached.defaults },
+        schema: { ...cached.schema },
+      };
+    }
+    const bot = this.getBotSummary(botAlias);
+    return buildMockGitCommitMessageConfig(bot.cliType, bot.cliPath);
+  }
+
+  async updateGitCommitMessageConfig(
+    botAlias: string,
+    input: GitCommitMessageCliConfigUpdateInput,
+  ): Promise<GitCommitMessageCliConfig> {
+    const current = await this.getGitCommitMessageConfig(botAlias);
+    const nextCliType = input.cliType || current.cliType;
+    const base = buildMockGitCommitMessageConfig(nextCliType, input.cliPath || current.cliPath);
+    const next: GitCommitMessageCliConfig = {
+      ...base,
+      cliPath: input.cliPath !== undefined ? input.cliPath.trim() || defaultCliPathForType(nextCliType) : base.cliPath,
+      params: {
+        ...base.params,
+        ...current.params,
+        ...(input.params || {}),
+      },
+    };
+    this.gitCommitMessageConfigs.set(botAlias, next);
+    return {
+      ...next,
+      params: { ...next.params },
+      defaults: { ...next.defaults },
+      schema: { ...next.schema },
+    };
+  }
+
+  async resetGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig> {
+    const bot = this.getBotSummary(botAlias);
+    const next = buildMockGitCommitMessageConfig(bot.cliType, bot.cliPath);
+    this.gitCommitMessageConfigs.set(botAlias, next);
+    return {
+      ...next,
+      params: { ...next.params },
+      defaults: { ...next.defaults },
+      schema: { ...next.schema },
+    };
+  }
+
+  async generateGitCommitMessage(botAlias: string): Promise<GitCommitMessageGenerateResult> {
+    const overview = await this.getGitOverview(botAlias);
+    const firstChanged = overview.changedFiles[0]?.path || "repo";
+    const scope = firstChanged.includes("/")
+      ? firstChanged.split("/")[0]
+      : firstChanged.replace(/\.[^.]+$/, "") || "repo";
+    return {
+      message: `feat(${scope}): update changed files`,
+    };
+  }
+
   async getLanChatConfig(): Promise<LanChatConfig> {
     return { ...this.lanChatConfig };
   }
@@ -5782,6 +5859,7 @@ export class MockWebBotClient implements WebBotClient {
     this.moveAgentScopedKeys(this.activeConversationByBot, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
     this.moveKey(this.gitIdentityConfigs, botAlias, alias);
+    this.moveKey(this.gitCommitMessageConfigs, botAlias, alias);
     this.moveKey(this.assistantCronJobs, botAlias, alias);
     this.moveKey(this.assistantProposals, botAlias, alias);
     this.moveKey(this.assistantMemories, botAlias, alias);
@@ -5840,6 +5918,7 @@ export class MockWebBotClient implements WebBotClient {
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);
     this.gitIdentityConfigs.delete(botAlias);
+    this.gitCommitMessageConfigs.delete(botAlias);
     this.assistantCronJobs.delete(botAlias);
     this.assistantProposals.delete(botAlias);
     this.assistantMemories.delete(botAlias);

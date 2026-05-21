@@ -2365,6 +2365,177 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("git commit message config and generate map backend payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            cli_type: "claude",
+            cli_path: "claude-custom",
+            params: {
+              reasoning_effort: "high",
+              extra_args: ["--dangerously-skip-permissions"],
+            },
+            defaults: {
+              reasoning_effort: "medium",
+              extra_args: [],
+            },
+            schema: {
+              reasoning_effort: {
+                type: "string",
+                enum: ["high", "medium", "low"],
+                description: "推理努力程度",
+              },
+              extra_args: {
+                type: "string_list",
+                description: "额外参数",
+              },
+            },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            cli_type: "codex",
+            cli_path: "codex",
+            params: {
+              reasoning_effort: "low",
+            },
+            defaults: {
+              reasoning_effort: "medium",
+            },
+            schema: {
+              reasoning_effort: {
+                type: "string",
+                enum: ["high", "medium", "low"],
+                description: "推理努力程度",
+              },
+            },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            cli_type: "codex",
+            cli_path: "codex",
+            params: {
+              reasoning_effort: "medium",
+            },
+            defaults: {
+              reasoning_effort: "medium",
+            },
+            schema: {
+              reasoning_effort: {
+                type: "string",
+                enum: ["high", "medium", "low"],
+                description: "推理努力程度",
+              },
+            },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            message: "feat(git): add generated commit message flow",
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const config = await client.getGitCommitMessageConfig("main");
+    const updated = await client.updateGitCommitMessageConfig("main", {
+      cliType: "codex",
+      cliPath: "codex",
+      params: {
+        reasoning_effort: "low",
+      },
+    });
+    const reset = await client.resetGitCommitMessageConfig("main");
+    const generated = await client.generateGitCommitMessage("main");
+
+    expect(config).toEqual({
+      cliType: "claude",
+      cliPath: "claude-custom",
+      params: {
+        reasoning_effort: "high",
+        extra_args: ["--dangerously-skip-permissions"],
+      },
+      defaults: {
+        reasoning_effort: "medium",
+        extra_args: [],
+      },
+      schema: {
+        reasoning_effort: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    });
+    expect(updated.cliType).toBe("codex");
+    expect(updated.params.reasoning_effort).toBe("low");
+    expect(reset.params.reasoning_effort).toBe("medium");
+    expect(generated.message).toBe("feat(git): add generated commit message flow");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/git/commit-message/config",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main/git/commit-message/config",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          cli_type: "codex",
+          cli_path: "codex",
+          params: {
+            reasoning_effort: "low",
+          },
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/bots/main/git/commit-message/config/reset",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/bots/main/git/commit-message/generate",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+  });
+
   test("sendMessage forwards status events before final output", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

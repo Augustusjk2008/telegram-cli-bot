@@ -46,6 +46,9 @@ import type {
   GitActionResult,
   GitBlamePayload,
   GitBranchList,
+  GitCommitMessageCliConfig,
+  GitCommitMessageCliConfigUpdateInput,
+  GitCommitMessageGenerateResult,
   GitCommitSummary,
   GitDiffPayload,
   GitIdentityConfig,
@@ -676,6 +679,18 @@ type RawGitIdentityConfig = {
   repo_path?: string;
   global?: RawGitIdentity;
   local?: RawGitIdentity;
+};
+
+type RawGitCommitMessageCliConfig = {
+  cli_type?: CliType;
+  cli_path?: string;
+  params?: Record<string, unknown>;
+  defaults?: Record<string, unknown>;
+  schema?: RawCliParamsPayload["schema"];
+};
+
+type RawGitCommitMessageGenerateResult = {
+  message?: string;
 };
 
 type RawGitProxySettings = {
@@ -2065,6 +2080,27 @@ function mapGitIdentityConfig(raw: RawGitIdentityConfig): GitIdentityConfig {
       name: raw.local?.name || "",
       email: raw.local?.email || "",
     },
+  };
+}
+
+function defaultCliPathForType(cliType: CliType) {
+  return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
+}
+
+function mapGitCommitMessageCliConfig(raw: RawGitCommitMessageCliConfig): GitCommitMessageCliConfig {
+  const cliType = raw.cli_type === "claude" || raw.cli_type === "kimi" ? raw.cli_type : "codex";
+  return {
+    cliType,
+    cliPath: raw.cli_path || defaultCliPathForType(cliType),
+    params: raw.params || {},
+    defaults: raw.defaults || {},
+    schema: raw.schema || {},
+  };
+}
+
+function mapGitCommitMessageGenerateResult(raw: RawGitCommitMessageGenerateResult): GitCommitMessageGenerateResult {
+  return {
+    message: raw.message || "",
   };
 }
 
@@ -4321,6 +4357,54 @@ export class RealWebBotClient implements WebBotClient {
       }),
     });
     return mapGitIdentityConfig(data);
+  }
+
+  async getGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig> {
+    const data = await this.requestJson<RawGitCommitMessageCliConfig>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/commit-message/config`,
+    );
+    return mapGitCommitMessageCliConfig(data);
+  }
+
+  async updateGitCommitMessageConfig(
+    botAlias: string,
+    input: GitCommitMessageCliConfigUpdateInput,
+  ): Promise<GitCommitMessageCliConfig> {
+    const data = await this.requestJson<RawGitCommitMessageCliConfig>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/commit-message/config`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...(input.cliType ? { cli_type: input.cliType } : {}),
+          ...(input.cliPath !== undefined ? { cli_path: input.cliPath } : {}),
+          ...(input.params ? { params: input.params } : {}),
+        }),
+      },
+    );
+    return mapGitCommitMessageCliConfig(data);
+  }
+
+  async resetGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig> {
+    const data = await this.requestJson<RawGitCommitMessageCliConfig>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/commit-message/config/reset`,
+      {
+        method: "POST",
+      },
+    );
+    return mapGitCommitMessageCliConfig(data);
+  }
+
+  async generateGitCommitMessage(botAlias: string): Promise<GitCommitMessageGenerateResult> {
+    const data = await this.requestJson<RawGitCommitMessageGenerateResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/commit-message/generate`,
+      {
+        method: "POST",
+      },
+    );
+    return mapGitCommitMessageGenerateResult(data);
   }
 
   async getLanChatConfig(): Promise<LanChatConfig> {

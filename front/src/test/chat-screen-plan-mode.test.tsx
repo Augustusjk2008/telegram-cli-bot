@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ConversationSelectResult } from "../services/types";
@@ -87,6 +87,24 @@ function createClient(overrides: Record<string, unknown> = {}): PlanClient {
     ...overrides,
   }) as PlanClient;
 }
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
+test("restores enabled plan mode after remount", async () => {
+  const user = userEvent.setup();
+  const client = createClient();
+  const view = render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "计划模式" }));
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "true");
+
+  view.unmount();
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "true");
+});
 
 test("sends chat with plan task mode when plan mode is active", async () => {
   const user = userEvent.setup();

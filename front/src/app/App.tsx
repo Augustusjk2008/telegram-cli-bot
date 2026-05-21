@@ -844,7 +844,13 @@ export function App() {
   } else if (currentTab === "git" && canUseGit) {
     activeScreen = (
       <div className="absolute inset-0">
-        <GitScreen key={`git-${currentBot}`} botAlias={currentBot} botAvatarName={currentBotSummary?.avatarName} client={client} />
+        <GitScreen
+          key={`git-${currentBot}`}
+          botAlias={currentBot}
+          botAvatarName={currentBotSummary?.avatarName}
+          client={client}
+          sessionCapabilities={session?.capabilities}
+        />
       </div>
     );
   } else if (currentTab === "plugins" && canViewPlugins) {

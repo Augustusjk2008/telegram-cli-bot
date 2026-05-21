@@ -27,6 +27,30 @@ SESSION_PERSIST_DEBOUNCE_SECONDS = 0.25
 
 
 @dataclass
+class GitCommitMessageCliConfig:
+    """Git commit message 生成专用 CLI 配置。"""
+
+    cli_type: str = CLI_TYPE
+    cli_path: str = CLI_PATH
+    cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cli_type": self.cli_type,
+            "cli_path": self.cli_path,
+            "cli_params": self.cli_params.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GitCommitMessageCliConfig":
+        return cls(
+            cli_type=str(data.get("cli_type", CLI_TYPE) or CLI_TYPE),
+            cli_path=str(data.get("cli_path", CLI_PATH) or CLI_PATH),
+            cli_params=CliParamsConfig.from_dict(data.get("cli_params")),
+        )
+
+
+@dataclass
 class AgentProfile:
     """Bot 内部的 CLI 子 agent 配置。"""
 
@@ -76,6 +100,7 @@ class BotProfile:
     bot_mode: str = "cli"  # "cli" | "assistant"
     avatar_name: str = ""
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
+    git_commit_cli_config: Optional[GitCommitMessageCliConfig] = None
     agents: List[AgentProfile] = field(default_factory=list)
     cluster: BotClusterConfig = field(default_factory=BotClusterConfig)
 

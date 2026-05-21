@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -15,11 +16,11 @@ from bot.assistant.docs import sync_managed_prompt_files
 from bot.assistant.home import bootstrap_assistant_home
 from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
-from bot.cli_params import coerce_param_value
+from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
-from bot.models import AgentProfile, BotProfile
+from bot.models import AgentProfile, BotProfile, GitCommitMessageCliConfig
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
@@ -41,6 +42,7 @@ class MultiBotManager:
         self.storage_file = Path(storage_file)
         self.repo_root = self.storage_file.resolve().parent
         self.app_settings_file = self.repo_root / ".web_admin_settings.json"
+        self.git_commit_cli_config_file = self.repo_root / ".git_commit_cli_config.json"
         self.plugin_service = PluginService(
             self.repo_root,
             workspace_root_for=lambda alias: Path(
@@ -61,6 +63,7 @@ class MultiBotManager:
         self._load_profiles()
         self._apply_persisted_main_profile()
         self._apply_persisted_avatar_names()
+        self._apply_persisted_git_commit_cli_configs()
 
     @staticmethod
     def _bootstrap_and_sync_assistant_home(working_dir: str) -> None:
@@ -87,6 +90,61 @@ class MultiBotManager:
 
     def _persist_main_profile(self) -> None:
         persist_main_profile(self.main_profile, self.app_settings_file)
+
+    def _load_git_commit_cli_config_store(self) -> dict[str, dict[str, Any]]:
+        try:
+            raw = self.git_commit_cli_config_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except FileNotFoundError:
+            return {}
+        except Exception as exc:
+            logger.warning("读取 Git commit CLI 配置失败: %s", exc)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        items = data.get("bots")
+        if not isinstance(items, dict):
+            return {}
+        return {
+            str(alias or "").strip().lower(): value
+            for alias, value in items.items()
+            if isinstance(value, dict) and str(alias or "").strip()
+        }
+
+    def _save_git_commit_cli_config_store(self, items: dict[str, dict[str, Any]]) -> None:
+        payload = {
+            "bots": {
+                alias: value
+                for alias, value in sorted(items.items())
+                if isinstance(value, dict)
+            }
+        }
+        self.git_commit_cli_config_file.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _apply_persisted_git_commit_cli_configs(self) -> None:
+        items = self._load_git_commit_cli_config_store()
+        for alias, data in items.items():
+            target = self.main_profile if alias == self.main_profile.alias else self.managed_profiles.get(alias)
+            if target is None:
+                continue
+            try:
+                target.git_commit_cli_config = GitCommitMessageCliConfig.from_dict(data)
+            except Exception as exc:
+                logger.warning("加载 Git commit CLI 配置失败 alias=%s error=%s", alias, exc)
+
+    def _persist_git_commit_cli_config(self, alias: str, config: GitCommitMessageCliConfig | None) -> None:
+        normalized_alias = str(alias or "").strip().lower()
+        if not normalized_alias:
+            return
+        items = self._load_git_commit_cli_config_store()
+        if config is None:
+            items.pop(normalized_alias, None)
+        else:
+            items[normalized_alias] = config.to_dict()
+        self._save_git_commit_cli_config_store(items)
 
     def get_profile(self, alias: str) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
@@ -156,6 +214,16 @@ class MultiBotManager:
         if profile.bot_mode != "cli":
             raise ValueError("仅 CLI Bot 支持 agent")
         return profile
+
+    def get_git_commit_cli_config(self, alias: str) -> GitCommitMessageCliConfig:
+        profile = self.get_profile(alias)
+        if profile.git_commit_cli_config is not None:
+            return GitCommitMessageCliConfig.from_dict(profile.git_commit_cli_config.to_dict())
+        return GitCommitMessageCliConfig(
+            cli_type=profile.cli_type,
+            cli_path=profile.cli_path,
+            cli_params=CliParamsConfig.from_dict(profile.cli_params.to_dict()),
+        )
 
     def _persist_profile_agents(self, profile: BotProfile) -> None:
         if profile.alias == self.main_profile.alias:
@@ -459,6 +527,7 @@ class MultiBotManager:
             await self._stop_application(normalized_alias)
             del self.managed_profiles[normalized_alias]
             app_settings.remove_bot_avatar_name(normalized_alias, self.app_settings_file)
+            self._persist_git_commit_cli_config(normalized_alias, None)
             self._save_profiles()
             await self._ensure_assistant_services()
 
@@ -540,6 +609,10 @@ class MultiBotManager:
 
             update_bot_alias(normalized_alias, normalized_new_alias)
             app_settings.rename_bot_avatar_name(normalized_alias, normalized_new_alias, self.app_settings_file)
+            config = profile.git_commit_cli_config
+            self._persist_git_commit_cli_config(normalized_alias, None)
+            if config is not None:
+                self._persist_git_commit_cli_config(normalized_new_alias, config)
             self._save_profiles()
             await self._ensure_assistant_services()
             return profile
@@ -591,6 +664,46 @@ class MultiBotManager:
                 self._persist_main_profile()
             else:
                 self._save_profiles()
+
+    async def set_git_commit_cli_config(
+        self,
+        alias: str,
+        *,
+        cli_type: str | None = None,
+        cli_path: str | None = None,
+        cli_params: CliParamsConfig | None = None,
+    ) -> GitCommitMessageCliConfig:
+        normalized_alias = str(alias or "").strip().lower()
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            current = profile.git_commit_cli_config or GitCommitMessageCliConfig(
+                cli_type=profile.cli_type,
+                cli_path=profile.cli_path,
+                cli_params=CliParamsConfig.from_dict(profile.cli_params.to_dict()),
+            )
+            next_config = GitCommitMessageCliConfig(
+                cli_type=validate_cli_type(cli_type or current.cli_type or profile.cli_type),
+                cli_path=str(cli_path if cli_path is not None else current.cli_path or profile.cli_path).strip(),
+                cli_params=cli_params or current.cli_params,
+            )
+            if not next_config.cli_path:
+                raise ValueError("cli_path 不能为空")
+            if resolve_cli_executable(next_config.cli_path, profile.working_dir) is None:
+                raise ValueError(
+                    f"未找到 CLI 可执行文件: {next_config.cli_path} "
+                    f"(请填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
+                )
+            profile.git_commit_cli_config = next_config
+            self._persist_git_commit_cli_config(normalized_alias, next_config)
+            return GitCommitMessageCliConfig.from_dict(next_config.to_dict())
+
+    async def reset_git_commit_cli_config(self, alias: str) -> GitCommitMessageCliConfig:
+        normalized_alias = str(alias or "").strip().lower()
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            profile.git_commit_cli_config = None
+            self._persist_git_commit_cli_config(normalized_alias, None)
+            return self.get_git_commit_cli_config(normalized_alias)
 
     def get_status_lines(self) -> List[str]:
         lines: List[str] = []

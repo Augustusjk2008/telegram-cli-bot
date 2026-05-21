@@ -11,6 +11,8 @@ import type {
   CliParamsPayload,
   DirectoryListing,
   GitActionResult,
+  GitCommitMessageCliConfig,
+  GitCommitMessageGenerateResult,
   GitIdentityConfig,
   GitOverview,
   SessionState,
@@ -128,6 +130,79 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       repoPath: "C:\\workspace\\repo",
       global: input.scope === "global" ? { name: input.name, email: input.email } : { name: "Global User", email: "global@example.com" },
       local: input.scope === "local" ? { name: input.name, email: input.email } : { name: "", email: "" },
+    }),
+    getGitCommitMessageConfig: async (): Promise<GitCommitMessageCliConfig> => ({
+      cliType: "codex",
+      cliPath: "codex",
+      params: {
+        reasoning_effort: "high",
+        extra_args: [],
+      },
+      defaults: {
+        reasoning_effort: "medium",
+        extra_args: [],
+      },
+      schema: {
+        reasoning_effort: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    }),
+    updateGitCommitMessageConfig: async (_botAlias, input): Promise<GitCommitMessageCliConfig> => ({
+      cliType: input.cliType || "codex",
+      cliPath: input.cliPath || "codex",
+      params: {
+        reasoning_effort: "high",
+        extra_args: [],
+        ...(input.params || {}),
+      },
+      defaults: {
+        reasoning_effort: "medium",
+        extra_args: [],
+      },
+      schema: {
+        reasoning_effort: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    }),
+    resetGitCommitMessageConfig: async (): Promise<GitCommitMessageCliConfig> => ({
+      cliType: "codex",
+      cliPath: "codex",
+      params: {
+        reasoning_effort: "medium",
+        extra_args: [],
+      },
+      defaults: {
+        reasoning_effort: "medium",
+        extra_args: [],
+      },
+      schema: {
+        reasoning_effort: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        extra_args: {
+          type: "string_list",
+          description: "额外参数",
+        },
+      },
+    }),
+    generateGitCommitMessage: async (): Promise<GitCommitMessageGenerateResult> => ({
+      message: "feat(git): add generated commit message flow",
     }),
     updateBotWorkdir: async () => ({
       alias: "main",
@@ -615,4 +690,135 @@ test("git screen loads blame for a changed file", async () => {
   expect(blamePanel).not.toBeNull();
   expect(within(blamePanel as HTMLElement).getByText("abcdef0")).toBeInTheDocument();
   expect(within(blamePanel as HTMLElement).getByText("before")).toBeInTheDocument();
+});
+
+test("git screen generates commit message into textarea", async () => {
+  const user = userEvent.setup();
+  const generateGitCommitMessage = vi.fn(async () => ({
+    message: "feat(git): add generated commit message flow",
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ generateGitCommitMessage })}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "生成 commit message" }));
+
+  expect(generateGitCommitMessage).toHaveBeenCalledWith("main");
+  expect(await screen.findByText("已生成提交说明")).toBeInTheDocument();
+  expect(screen.getByLabelText("commit message")).toHaveValue("feat(git): add generated commit message flow");
+});
+
+test("git screen shows generate error", async () => {
+  const user = userEvent.setup();
+  const generateGitCommitMessage = vi.fn(async () => {
+    throw new Error("生成失败");
+  });
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ generateGitCommitMessage })}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "生成 commit message" }));
+
+  expect(await screen.findByText("生成失败")).toBeInTheDocument();
+});
+
+test("git screen saves and resets commit message cli config", async () => {
+  const user = userEvent.setup();
+  const updateGitCommitMessageConfig = vi.fn(async (_botAlias, input) => ({
+    cliType: input.cliType || "claude",
+    cliPath: input.cliPath || "claude",
+    params: {
+      reasoning_effort: "low",
+      extra_args: [],
+      ...(input.params || {}),
+    },
+    defaults: {
+      reasoning_effort: "medium",
+      extra_args: [],
+    },
+    schema: {
+      reasoning_effort: {
+        type: "string",
+        enum: ["high", "medium", "low"],
+        description: "推理努力程度",
+      },
+      extra_args: {
+        type: "string_list",
+        description: "额外参数",
+      },
+    },
+  }));
+  const resetGitCommitMessageConfig = vi.fn(async () => ({
+    cliType: "codex",
+    cliPath: "codex",
+    params: {
+      reasoning_effort: "medium",
+      extra_args: [],
+    },
+    defaults: {
+      reasoning_effort: "medium",
+      extra_args: [],
+    },
+    schema: {
+      reasoning_effort: {
+        type: "string",
+        enum: ["high", "medium", "low"],
+        description: "推理努力程度",
+      },
+      extra_args: {
+        type: "string_list",
+        description: "额外参数",
+      },
+    },
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ updateGitCommitMessageConfig, resetGitCommitMessageConfig })}
+      sessionCapabilities={["manage_cli_params"]}
+    />,
+  );
+
+  expect(await screen.findByTestId("git-commit-cli-panel")).toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("Commit Message CLI 类型"), "claude");
+  await user.clear(screen.getByLabelText("Commit Message CLI 路径"));
+  await user.type(screen.getByLabelText("Commit Message CLI 路径"), "claude-custom");
+  await user.selectOptions(screen.getByLabelText("推理努力程度"), "low");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(updateGitCommitMessageConfig).toHaveBeenCalledWith("main", {
+    cliType: "claude",
+    cliPath: "claude-custom",
+    params: {
+      reasoning_effort: "low",
+    },
+  });
+  expect(await screen.findByText("Commit Message CLI 配置已保存")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "恢复默认" }));
+  expect(resetGitCommitMessageConfig).toHaveBeenCalledWith("main");
+  expect(await screen.findByText("Commit Message CLI 已恢复默认值")).toBeInTheDocument();
+});
+
+test("git screen commit message cli config is read-only without permission", async () => {
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient()}
+      sessionCapabilities={["git_ops"]}
+    />,
+  );
+
+  expect(await screen.findByText("当前模式只读")).toBeInTheDocument();
+  expect(screen.getByLabelText("Commit Message CLI 类型")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
 });

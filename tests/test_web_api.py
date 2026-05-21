@@ -92,7 +92,9 @@ from bot.web.git_service import (
     discard_all_git_changes,
     discard_git_paths,
     drop_git_stash,
+    generate_git_commit_message,
     get_git_blame,
+    get_git_commit_message_cli_config,
     get_git_diff,
     get_git_identity_config,
     get_git_overview,
@@ -100,9 +102,15 @@ from bot.web.git_service import (
     init_git_repository,
     list_git_branches,
     list_git_stashes,
+    reset_git_commit_message_cli_config,
     stage_git_paths,
     switch_git_branch,
+    update_git_commit_message_cli_config,
     update_git_identity_config,
+)
+from bot.web.git_commit_message import (
+    build_commit_message_prompt,
+    extract_commit_message,
 )
 from bot.web.native_history_locator import LocatedTranscript
 from bot.assistant.proposals import create_proposal
@@ -2416,6 +2424,245 @@ def _init_git_repo(repo_dir: Path):
     _run_git_command(repo_dir, "config", "user.name", "Web Bot Test")
     _run_git_command(repo_dir, "config", "user.email", "web-bot@example.com")
 
+
+def test_extract_commit_message_reads_tag_block():
+    text = "x\n<COMMIT_MESSAGE>\nfeat(git): add helper\n\n- item\n</COMMIT_MESSAGE>\ny"
+    assert extract_commit_message(text) == "feat(git): add helper\n\n- item"
+
+
+def test_extract_commit_message_normalizes_escaped_newlines():
+    text = '<COMMIT_MESSAGE>\\nfeat(git): add helper\\n\\n- item\\n</COMMIT_MESSAGE>'
+    assert extract_commit_message(text) == "feat(git): add helper\n\n- item"
+
+
+def test_extract_commit_message_returns_empty_when_missing_tag():
+    assert extract_commit_message("feat: plain") == ""
+
+
+def test_build_commit_message_prompt_marks_draft_when_unstaged_only():
+    prompt = build_commit_message_prompt(
+        status_text=" M tracked.txt",
+        diff_text="diff --git a/tracked.txt b/tracked.txt",
+        use_staged_diff=False,
+        diff_truncated=False,
+    )
+    assert "仅基于未暂存/未跟踪内容生成草稿" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_uses_staged_diff_and_no_session_reuse(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    captured: dict[str, Any] = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["user_text"] = kwargs["user_text"]
+        captured["session_id"] = kwargs["session_id"]
+        captured["resume_session"] = kwargs["resume_session"]
+        return ["codex"], False
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = (
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>\\nfeat(git): staged change\\n</COMMIT_MESSAGE>"}}',
+        None,
+    )
+    fake_process.returncode = 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        result = await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert result["message"] == "feat(git): staged change"
+    assert captured["session_id"] is None
+    assert captured["resume_session"] is False
+    assert "--cached" not in captured["user_text"]
+    assert "diff --git a/tracked.txt b/tracked.txt" in captured["user_text"]
+    session = get_session_for_alias(web_manager, "main", 1001)
+    assert session.codex_session_id is None
+    assert session.history == []
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_uses_unstaged_draft_when_no_staged(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    captured: dict[str, Any] = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["user_text"] = kwargs["user_text"]
+        return ["codex"], False
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = (
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>\\nfix(git): draft\\n</COMMIT_MESSAGE>"}}',
+        None,
+    )
+    fake_process.returncode = 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        result = await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert result["message"] == "fix(git): draft"
+    assert "仅基于未暂存/未跟踪内容生成草稿" in captured["user_text"]
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_sets_utf8_python_env_for_kimi_on_windows(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    web_manager.main_profile.cli_type = "kimi"
+    web_manager.main_profile.cli_path = "kimi"
+    web_manager.main_profile.working_dir = str(repo_dir)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["build"] = kwargs["env"].copy()
+        return ["kimi"], False
+
+    def fake_start_cli_process(cmd, *, use_stdin, cwd, env):
+        captured["start"] = env.copy()
+        return fake_process
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = (
+        '{"role":"assistant","content":[{"type":"text","text":"<COMMIT_MESSAGE>\\nfix(git): utf8 env\\n</COMMIT_MESSAGE>"}]}',
+        None,
+    )
+    fake_process.returncode = 0
+
+    with patch("sys.platform", "win32"), \
+         patch("bot.web.git_service.resolve_cli_executable", return_value="kimi"), \
+         patch("bot.web.git_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.git_service._start_cli_process", side_effect=fake_start_cli_process):
+        result = await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert result["message"] == "fix(git): utf8 env"
+    assert captured["build"]["PYTHONIOENCODING"] == "utf-8"
+    assert captured["build"]["PYTHONUTF8"] == "1"
+    assert captured["start"]["PYTHONIOENCODING"] == "utf-8"
+    assert captured["start"]["PYTHONUTF8"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_raises_parse_failed_when_missing_tag(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("x\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = ('{"type":"item.completed","item":{"type":"assistant_message","text":"plain"}}', None)
+    fake_process.returncode = 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        with pytest.raises(WebApiError) as error:
+            await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert error.value.code == "git_commit_message_parse_failed"
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_raises_failed_on_cli_error(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("x\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = ('{"type":"error","message":"boom"}', None)
+    fake_process.returncode = 1
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        with pytest.raises(WebApiError) as error:
+            await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert error.value.code == "git_commit_message_failed"
+
+
+@pytest.mark.asyncio
+async def test_git_commit_message_config_service_get_patch_reset(web_manager: MultiBotManager):
+    payload = get_git_commit_message_cli_config(web_manager, "main")
+    assert payload["cli_type"] == "codex"
+    assert payload["cli_path"] == "codex"
+
+    with patch("bot.manager.resolve_cli_executable", return_value="claude"):
+        updated = await update_git_commit_message_cli_config(
+            web_manager,
+            "main",
+            cli_type="claude",
+            cli_path="claude",
+        )
+        updated = await update_git_commit_message_cli_config(
+            web_manager,
+            "main",
+            cli_type="claude",
+            key="model",
+            value="claude-opus-4-7",
+        )
+
+    assert updated["cli_type"] == "claude"
+    assert updated["params"]["model"] == "claude-opus-4-7"
+
+    reset = await reset_git_commit_message_cli_config(web_manager, "main")
+    assert reset["cli_type"] == "codex"
+    assert reset["cli_path"] == "codex"
+
 def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -3453,6 +3700,67 @@ async def test_git_identity_route_requires_admin_for_global_scope(
     assert local_resp.status == 200
     assert global_resp.status == 403
     assert global_payload["error"]["code"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_git_commit_message_routes_config_and_generate(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = (
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>\\nfeat(git): api generate\\n</COMMIT_MESSAGE>"}}',
+        None,
+    )
+    fake_process.returncode = 0
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            config_resp = await client.get("/api/bots/main/git/commit-message/config")
+            config_payload = await config_resp.json()
+
+            with patch("bot.manager.resolve_cli_executable", return_value="claude"):
+                patch_resp = await client.patch(
+                    "/api/bots/main/git/commit-message/config",
+                    json={"cli_type": "claude", "cli_path": "claude"},
+                )
+                patch_payload = await patch_resp.json()
+
+            with patch("bot.web.git_service.resolve_cli_executable", return_value="claude"), \
+                 patch("bot.web.git_service.build_cli_command", return_value=(["claude"], False)), \
+                 patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+                generate_resp = await client.post("/api/bots/main/git/commit-message/generate")
+                generate_payload = await generate_resp.json()
+
+            reset_resp = await client.post("/api/bots/main/git/commit-message/config/reset")
+            reset_payload = await reset_resp.json()
+
+    assert config_resp.status == 200
+    assert config_payload["data"]["cli_type"] == "codex"
+    assert patch_resp.status == 200
+    assert patch_payload["data"]["cli_type"] == "claude"
+    assert generate_resp.status == 200
+    assert generate_payload["data"]["message"] == "feat(git): api generate"
+    assert reset_resp.status == 200
+    assert reset_payload["data"]["cli_type"] == "codex"
 
 @pytest.mark.asyncio
 async def test_file_routes_serialize_last_modified_ns_as_string(

@@ -12,16 +12,19 @@ import {
   GitBranch,
   GitFork,
   GitPullRequest,
+  LoaderCircle,
   Minus,
   Plus,
   RefreshCw,
   Save,
   SendHorizontal,
+  Sparkles,
   Trash2,
   UploadCloud,
   UserRound,
 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
+import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   GitBlamePayload,
@@ -40,6 +43,7 @@ type Props = {
   embedded?: boolean;
   onOpenDiff?: (path: string, staged: boolean) => void | Promise<void>;
   onOverviewChange?: (overview: GitOverview | null) => void;
+  sessionCapabilities?: string[];
 };
 
 type GitFileGroupKey = "staged" | "unstaged" | "untracked";
@@ -125,6 +129,7 @@ export function GitScreen({
   embedded = false,
   onOpenDiff,
   onOverviewChange,
+  sessionCapabilities = [],
 }: Props) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -147,6 +152,9 @@ export function GitScreen({
   const [identityName, setIdentityName] = useState("");
   const [identityEmail, setIdentityEmail] = useState("");
   const [identityLoading, setIdentityLoading] = useState(false);
+  const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
+  const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
+  const isGeneratingCommitMessage = actionLoading === "generate-commit-message";
   const groups = useMemo(() => groupedFiles(overview), [overview]);
   const changeGroups = useMemo(
     () => ([
@@ -368,6 +376,21 @@ export function GitScreen({
       setNotice(identityScope === "local" ? "当前仓库 Git 用户已保存" : "全局 Git 用户已保存");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存 Git 用户失败");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  async function generateCommitMessage() {
+    setActionLoading("generate-commit-message");
+    setError("");
+    setNotice("");
+    try {
+      const result = await client.generateGitCommitMessage(botAlias);
+      setCommitMessage(result.message);
+      setNotice("已生成提交说明");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "生成提交说明失败");
     } finally {
       setActionLoading("");
     }
@@ -823,6 +846,21 @@ export function GitScreen({
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">提交更改</h2>
+                    <button
+                      type="button"
+                      aria-label="生成 commit message"
+                      title="生成 commit message"
+                      onClick={() => void generateCommitMessage()}
+                      disabled={actionLoading !== "" || overview.isClean}
+                      className={buttonClass()}
+                    >
+                      {isGeneratingCommitMessage ? (
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                      生成
+                    </button>
                   </div>
                   <div className={sectionBodyClass()}>
                     <textarea
@@ -830,6 +868,7 @@ export function GitScreen({
                       onChange={(event) => setCommitMessage(event.target.value)}
                       rows={5}
                       placeholder="输入 commit message"
+                      aria-label="commit message"
                       className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
                   </div>
@@ -908,84 +947,104 @@ export function GitScreen({
           ) : null}
 
           {!loading ? (
-            <section
-              data-testid="git-identity-panel"
-              className={sectionClass("space-y-3")}
-            >
-              <div className={sectionHeaderClass("gap-3")}>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <UserRound className="h-4 w-4 text-[var(--accent)]" />
-                    <h2 className="text-sm font-semibold">Git 用户</h2>
+            <div className={sectionStackClass()}>
+              <section
+                data-testid="git-identity-panel"
+                className={sectionClass("space-y-3")}
+              >
+                <div className={sectionHeaderClass("gap-3")}>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <UserRound className="h-4 w-4 text-[var(--accent)]" />
+                      <h2 className="text-sm font-semibold">Git 用户</h2>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-[var(--muted)]">
+                      {identityScope === "local" ? identityConfig?.repoPath || "当前仓库" : "全局配置"}
+                    </p>
                   </div>
-                  <p className="mt-1 truncate text-xs text-[var(--muted)]">
-                    {identityScope === "local" ? identityConfig?.repoPath || "当前仓库" : "全局配置"}
-                  </p>
+                  <button type="button" onClick={() => void loadIdentityConfig(identityScope)} className={buttonClass()}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    刷新
+                  </button>
                 </div>
-                <button type="button" onClick={() => void loadIdentityConfig(identityScope)} className={buttonClass()}>
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  刷新
-                </button>
-              </div>
 
-              {identityLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 Git 用户...</p> : null}
+                {identityLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 Git 用户...</p> : null}
 
-              <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                <button
-                  type="button"
-                  onClick={() => selectIdentityScope("global")}
-                  className={clsx(buttonClass(identityScope === "global" ? "primary" : "plain"), "min-w-20")}
-                >
-                  全局
-                </button>
-                <button
-                  type="button"
-                  onClick={() => selectIdentityScope("local")}
-                  disabled={!identityConfig?.repoFound}
-                  className={clsx(buttonClass(identityScope === "local" ? "primary" : "plain"), "min-w-24")}
-                >
-                  当前仓库
-                </button>
-              </div>
+                <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                  <button
+                    type="button"
+                    onClick={() => selectIdentityScope("global")}
+                    className={clsx(buttonClass(identityScope === "global" ? "primary" : "plain"), "min-w-20")}
+                  >
+                    全局
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectIdentityScope("local")}
+                    disabled={!identityConfig?.repoFound}
+                    className={clsx(buttonClass(identityScope === "local" ? "primary" : "plain"), "min-w-24")}
+                  >
+                    当前仓库
+                  </button>
+                </div>
 
-              <div className={sectionBodyClass("grid gap-2 md:grid-cols-2")}>
-                <label className="space-y-1">
-                  <span className="text-xs font-medium text-[var(--muted)]">用户名</span>
-                  <input
-                    aria-label="Git 用户名"
-                    value={identityName}
-                    onChange={(event) => setIdentityName(event.target.value)}
-                    placeholder="Your Name"
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                <div className={sectionBodyClass("grid gap-2 md:grid-cols-2")}>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium text-[var(--muted)]">用户名</span>
+                    <input
+                      aria-label="Git 用户名"
+                      value={identityName}
+                      onChange={(event) => setIdentityName(event.target.value)}
+                      placeholder="Your Name"
+                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium text-[var(--muted)]">邮箱</span>
+                    <input
+                      aria-label="Git 邮箱"
+                      value={identityEmail}
+                      onChange={(event) => setIdentityEmail(event.target.value)}
+                      placeholder="you@example.com"
+                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                    />
+                  </label>
+                </div>
+
+                <div className={sectionBodyClass("flex flex-wrap items-center justify-between gap-2")}>
+                  <p className="text-xs text-[var(--muted)]">
+                    {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void saveGitIdentity()}
+                    disabled={actionLoading !== "" || identityLoading || !identityName.trim() || !identityEmail.trim()}
+                    className={buttonClass("primary")}
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
+                  </button>
+                </div>
+              </section>
+
+              <section className={sectionClass("space-y-3")}>
+                <div className={sectionHeaderClass("gap-3")}>
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold">Commit Message CLI</h2>
+                    <p className="mt-1 truncate text-xs text-[var(--muted)]">
+                      {canManageCliParams ? "可单独配置生成提交说明的 CLI" : "当前模式只读"}
+                    </p>
+                  </div>
+                </div>
+                <div className={sectionBodyClass("pb-3")}>
+                  <GitCommitCliConfigPanel
+                    botAlias={botAlias}
+                    client={client}
+                    canManage={canManageCliParams}
                   />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-xs font-medium text-[var(--muted)]">邮箱</span>
-                  <input
-                    aria-label="Git 邮箱"
-                    value={identityEmail}
-                    onChange={(event) => setIdentityEmail(event.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-              </div>
-
-              <div className={sectionBodyClass("flex flex-wrap items-center justify-between gap-2")}>
-                <p className="text-xs text-[var(--muted)]">
-                  {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void saveGitIdentity()}
-                  disabled={actionLoading !== "" || identityLoading || !identityName.trim() || !identityEmail.trim()}
-                  className={buttonClass("primary")}
-                >
-                  <Save className="h-3.5 w-3.5" />
-                  {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
-                </button>
-              </div>
-            </section>
+                </div>
+              </section>
+            </div>
           ) : null}
         </div>
       </section>
