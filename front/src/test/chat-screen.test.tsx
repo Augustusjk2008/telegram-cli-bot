@@ -851,6 +851,7 @@ test("copy final answer button shows success feedback and locks briefly", async 
 
 test("shows streamed commentary trace in the assistant bubble before final text", async () => {
   const user = userEvent.setup();
+  let resolveMessage: (message: ChatMessage) => void = () => undefined;
   const client = createClient({
     sendMessage: async (
       _botAlias: string,
@@ -860,15 +861,7 @@ test("shows streamed commentary trace in the assistant bubble before final text"
       onTrace,
     ) => new Promise<ChatMessage>((resolve) => {
       onTrace?.({ kind: "commentary", summary: "正在分析需求" } as never);
-      window.setTimeout(() => {
-        resolve({
-          id: "assistant-final",
-          role: "assistant",
-          text: "最终结果",
-          createdAt: new Date().toISOString(),
-          state: "done",
-        });
-      }, 50);
+      resolveMessage = resolve;
     }),
   });
 
@@ -879,6 +872,15 @@ test("shows streamed commentary trace in the assistant bubble before final text"
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   expect(await screen.findByText("正在分析需求")).toBeInTheDocument();
+  await act(async () => {
+    resolveMessage({
+      id: "assistant-final",
+      role: "assistant",
+      text: "最终结果",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
   expect(await screen.findByText("最终结果")).toBeInTheDocument();
 });
 
@@ -2153,22 +2155,16 @@ test("does not force-scroll to the bottom once the user scrolls away during stre
     value: scrollSpy,
   });
 
+  let emitSecondPreview: () => void = () => undefined;
+  let resolveMessage: (message: ChatMessage) => void = () => undefined;
   const client = createClient({
     sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void, onStatus) =>
       new Promise<ChatMessage>((resolve) => {
         onStatus?.({ previewText: "第一段预览" });
-        window.setTimeout(() => {
+        emitSecondPreview = () => {
           onStatus?.({ previewText: "第二段预览" });
-        }, 80);
-        window.setTimeout(() => {
-          resolve({
-            id: "assistant-final",
-            role: "assistant",
-            text: "最终结果",
-            createdAt: new Date().toISOString(),
-            state: "done",
-          });
-        }, 160);
+        };
+        resolveMessage = resolve;
       }),
   });
 
@@ -2203,6 +2199,20 @@ test("does not force-scroll to the bottom once the user scrolls away during stre
     scrollTop = 400;
     fireEvent.wheel(scrollContainer);
     fireEvent.scroll(scrollContainer);
+
+    await act(async () => {
+      emitSecondPreview();
+    });
+    expect(await screen.findByText("第二段预览")).toBeInTheDocument();
+    await act(async () => {
+      resolveMessage({
+        id: "assistant-final",
+        role: "assistant",
+        text: "最终结果",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      });
+    });
 
     expect(await screen.findByText("最终结果")).toBeInTheDocument();
     expect(scrollSpy).not.toHaveBeenCalled();

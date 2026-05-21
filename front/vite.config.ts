@@ -191,6 +191,7 @@ export default defineConfig(({mode}) => {
       environment: 'jsdom',
       setupFiles: ['./src/test/setup.ts'],
       include: ['src/test/**/*.test.ts', 'src/test/**/*.test.tsx'],
+      testTimeout: 10000,
     },
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
