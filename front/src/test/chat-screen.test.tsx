@@ -2201,6 +2201,7 @@ test("does not force-scroll to the bottom once the user scrolls away during stre
 
     scrollSpy.mockClear();
     scrollTop = 400;
+    fireEvent.wheel(scrollContainer);
     fireEvent.scroll(scrollContainer);
 
     expect(await screen.findByText("最终结果")).toBeInTheDocument();
@@ -2269,6 +2270,206 @@ test("scrolls back to the bottom when a hidden chat screen becomes visible again
   await waitFor(() => {
     expect(scrollTop).toBe(2200);
   });
+});
+
+test("keeps a cached chat screen pinned when reveal layout settles after the first frame", async () => {
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+  const frameCallbacks: FrameRequestCallback[] = [];
+  Object.defineProperty(window, "requestAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    },
+  });
+  Object.defineProperty(window, "cancelAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: vi.fn(),
+  });
+
+  const messages: ChatMessage[] = Array.from({ length: 24 }, (_, index) => ({
+    id: `message-${index}`,
+    role: index % 2 === 0 ? "user" : "assistant",
+    text: `消息 ${index}`,
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => messages,
+  });
+
+  function Harness({ visible }: { visible: boolean }) {
+    return (
+      <div className={visible ? "block" : "hidden"}>
+        <ChatScreen botAlias="main" client={client} isVisible={visible} />
+      </div>
+    );
+  }
+
+  try {
+    const { rerender } = render(<Harness visible />);
+    expect(await screen.findByText("消息 23")).toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId("chat-scroll-container");
+    let scrollTop = 0;
+    let stableLayout = true;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: {
+        configurable: true,
+        get: () => (stableLayout ? 2200 : 1200),
+      },
+      clientHeight: {
+        configurable: true,
+        get: () => 600,
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+
+    scrollTop = 100;
+    fireEvent.scroll(scrollContainer);
+
+    rerender(<Harness visible={false} />);
+    stableLayout = false;
+    rerender(<Harness visible />);
+
+    await waitFor(() => {
+      expect(scrollTop).toBe(1200);
+    });
+    stableLayout = true;
+
+    while (frameCallbacks.length > 0) {
+      const callback = frameCallbacks.shift();
+      callback?.(performance.now());
+      if (scrollTop === 2200) {
+        break;
+      }
+    }
+
+    expect(scrollTop).toBe(2200);
+  } finally {
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: originalRequestAnimationFrame,
+    });
+    Object.defineProperty(window, "cancelAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: originalCancelAnimationFrame,
+    });
+  }
+});
+
+test("keeps reveal auto-scroll alive when layout emits a scroll event during quick bot switching", async () => {
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+  const frameCallbacks = new Map<number, FrameRequestCallback>();
+  let nextFrameId = 1;
+  Object.defineProperty(window, "requestAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: (callback: FrameRequestCallback) => {
+      const frameId = nextFrameId;
+      nextFrameId += 1;
+      frameCallbacks.set(frameId, callback);
+      return frameId;
+    },
+  });
+  Object.defineProperty(window, "cancelAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: (frameId: number) => {
+      frameCallbacks.delete(frameId);
+    },
+  });
+
+  const messages: ChatMessage[] = Array.from({ length: 24 }, (_, index) => ({
+    id: `quick-switch-message-${index}`,
+    role: index % 2 === 0 ? "user" : "assistant",
+    text: `快速切换消息 ${index}`,
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => messages,
+  });
+
+  function Harness({ visible }: { visible: boolean }) {
+    return (
+      <div className={visible ? "block" : "hidden"}>
+        <ChatScreen botAlias="main" client={client} isVisible={visible} />
+      </div>
+    );
+  }
+
+  try {
+    const { rerender } = render(<Harness visible />);
+    expect(await screen.findByText("快速切换消息 23")).toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId("chat-scroll-container");
+    let scrollTop = 0;
+    let stableLayout = true;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: {
+        configurable: true,
+        get: () => (stableLayout ? 2200 : 1200),
+      },
+      clientHeight: {
+        configurable: true,
+        get: () => 600,
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+
+    scrollTop = 100;
+    fireEvent.scroll(scrollContainer);
+
+    rerender(<Harness visible={false} />);
+    stableLayout = false;
+    rerender(<Harness visible />);
+
+    await waitFor(() => {
+      expect(scrollTop).toBe(1200);
+    });
+
+    stableLayout = true;
+    scrollTop = 100;
+    fireEvent.scroll(scrollContainer);
+
+    while (frameCallbacks.size > 0) {
+      const [frameId, callback] = Array.from(frameCallbacks.entries())[0];
+      frameCallbacks.delete(frameId);
+      callback(performance.now());
+    }
+
+    expect(scrollTop).toBe(2200);
+  } finally {
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: originalRequestAnimationFrame,
+    });
+    Object.defineProperty(window, "cancelAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: originalCancelAnimationFrame,
+    });
+  }
 });
 
 test("keeps a newly visible chat screen pinned when rendered content grows", async () => {

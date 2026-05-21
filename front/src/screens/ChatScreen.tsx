@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { History, LoaderCircle, Maximize2, Minimize2, Network, Paperclip, Plus, Square, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { AgentSwitcher } from "../components/AgentSwitcher";
@@ -93,6 +93,9 @@ const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
+const REVEAL_SCROLL_MAX_FRAMES = 6;
+const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
+const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 
 function fallbackAgents(): AgentSummary[] {
   return [{ id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true }];
@@ -888,6 +891,9 @@ export function ChatScreen({
   const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
+  const revealScrollFrameRef = useRef<number | null>(null);
+  const revealScrollAttemptsRef = useRef(0);
+  const userScrollIntentRef = useRef(false);
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const previousBotAliasRef = useRef(botAlias);
@@ -938,12 +944,20 @@ export function ChatScreen({
     streamModeRef.current = streamMode;
   }, [streamMode]);
 
+  const cancelRevealScroll = useCallback(() => {
+    if (revealScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current);
+      revealScrollFrameRef.current = null;
+    }
+  }, []);
+
   useEffect(() => () => {
+    cancelRevealScroll();
     if (clusterTaskPollTimerRef.current !== null) {
       window.clearTimeout(clusterTaskPollTimerRef.current);
       clusterTaskPollTimerRef.current = null;
     }
-  }, []);
+  }, [cancelRevealScroll]);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -1473,6 +1487,7 @@ export function ChatScreen({
   const lastItem = items[items.length - 1];
 
   const scrollToBottom = useCallback(() => {
+    userScrollIntentRef.current = false;
     if (scrollContainerRef.current) {
       try {
         scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
@@ -1483,15 +1498,59 @@ export function ChatScreen({
     if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
       bottomAnchorRef.current.scrollIntoView({ block: "end" });
     }
+    userScrollIntentRef.current = false;
   }, []);
+
+  const isNearScrollBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return true;
+    }
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= REVEAL_SCROLL_BOTTOM_THRESHOLD_PX;
+  }, []);
+
+  const scheduleRevealScroll = useCallback(() => {
+    if (!isVisibleRef.current) {
+      return;
+    }
+    if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
+      return;
+    }
+    if (revealScrollFrameRef.current !== null) {
+      return;
+    }
+
+    revealScrollFrameRef.current = window.requestAnimationFrame(() => {
+      revealScrollFrameRef.current = null;
+      if (!isVisibleRef.current || loadingRef.current) {
+        return;
+      }
+      if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
+        return;
+      }
+
+      scrollToBottom();
+      if (isNearScrollBottom() || revealScrollAttemptsRef.current >= REVEAL_SCROLL_MAX_FRAMES - 1) {
+        forceAutoScrollRef.current = false;
+        revealScrollAttemptsRef.current = 0;
+        return;
+      }
+
+      revealScrollAttemptsRef.current += 1;
+      scheduleRevealScroll();
+    });
+  }, [isNearScrollBottom, scrollToBottom]);
 
   useEffect(() => {
     if (!isVisible) {
+      cancelRevealScroll();
       return;
     }
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
-  }, [isVisible]);
+    revealScrollAttemptsRef.current = 0;
+    scheduleRevealScroll();
+  }, [cancelRevealScroll, isVisible, scheduleRevealScroll]);
 
   useEffect(() => {
     if (!isVisible || loading) {
@@ -1501,8 +1560,8 @@ export function ChatScreen({
       return;
     }
     scrollToBottom();
-    forceAutoScrollRef.current = false;
-  }, [isVisible, isStreaming, lastItem?.id, lastItem?.state, lastItem?.text, loading, items.length, scrollToBottom]);
+    scheduleRevealScroll();
+  }, [isVisible, isStreaming, lastItem?.id, lastItem?.state, lastItem?.text, loading, items.length, scheduleRevealScroll, scrollToBottom]);
 
   useEffect(() => {
     if (!isVisible || loading || typeof window.ResizeObserver !== "function") {
@@ -1518,13 +1577,13 @@ export function ChatScreen({
         return;
       }
       scrollToBottom();
-      forceAutoScrollRef.current = false;
+      scheduleRevealScroll();
     });
     observer.observe(content);
     return () => {
       observer.disconnect();
     };
-  }, [isVisible, loading, scrollToBottom]);
+  }, [isVisible, loading, scheduleRevealScroll, scrollToBottom]);
 
   function updateAutoScrollStickiness() {
     const container = scrollContainerRef.current;
@@ -1533,6 +1592,26 @@ export function ChatScreen({
     }
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
+    if (shouldStickToBottomRef.current) {
+      userScrollIntentRef.current = false;
+      return;
+    }
+    if (userScrollIntentRef.current) {
+      forceAutoScrollRef.current = false;
+      revealScrollAttemptsRef.current = 0;
+      cancelRevealScroll();
+      userScrollIntentRef.current = false;
+    }
+  }
+
+  function markUserScrollIntent() {
+    userScrollIntentRef.current = true;
+  }
+
+  function handleScrollKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (USER_SCROLL_KEYS.has(event.key)) {
+      markUserScrollIntent();
+    }
   }
 
   const loadPreview = useCallback(async (name: string, mode: "preview" | "full") => {
@@ -2398,6 +2477,9 @@ export function ChatScreen({
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
         onScroll={updateAutoScrollStickiness}
+        onWheel={markUserScrollIntent}
+        onTouchMove={markUserScrollIntent}
+        onKeyDown={handleScrollKeyDown}
         className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4" : "flex-1 overflow-y-auto p-4"}
       >
         <div ref={scrollContentRef} className="space-y-4">
