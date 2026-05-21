@@ -1028,14 +1028,6 @@ export function GitScreen({
               </section>
 
               <section className={sectionClass("space-y-3")}>
-                <div className={sectionHeaderClass("gap-3")}>
-                  <div className="min-w-0">
-                    <h2 className="text-sm font-semibold">Commit Message CLI</h2>
-                    <p className="mt-1 truncate text-xs text-[var(--muted)]">
-                      {canManageCliParams ? "可单独配置生成提交说明的 CLI" : "当前模式只读"}
-                    </p>
-                  </div>
-                </div>
                 <div className={sectionBodyClass("pb-3")}>
                   <GitCommitCliConfigPanel
                     botAlias={botAlias}

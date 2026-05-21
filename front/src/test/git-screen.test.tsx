@@ -732,31 +732,36 @@ test("git screen shows generate error", async () => {
 
 test("git screen saves and resets commit message cli config", async () => {
   const user = userEvent.setup();
-  const updateGitCommitMessageConfig = vi.fn(async (_botAlias, input) => ({
-    cliType: input.cliType || "claude",
-    cliPath: input.cliPath || "claude",
-    params: {
-      reasoning_effort: "low",
-      extra_args: [],
-      ...(input.params || {}),
-    },
-    defaults: {
-      reasoning_effort: "medium",
-      extra_args: [],
-    },
-    schema: {
-      reasoning_effort: {
-        type: "string",
-        enum: ["high", "medium", "low"],
-        description: "推理努力程度",
+  const updateGitCommitMessageConfig = vi.fn(
+    async (
+      _botAlias: string,
+      input: Parameters<WebBotClient["updateGitCommitMessageConfig"]>[1],
+    ): Promise<GitCommitMessageCliConfig> => ({
+      cliType: input.cliType || "claude",
+      cliPath: input.cliPath || "claude",
+      params: {
+        reasoning_effort: "low",
+        extra_args: [],
+        ...(input.params || {}),
       },
-      extra_args: {
-        type: "string_list",
-        description: "额外参数",
+      defaults: {
+        reasoning_effort: "medium",
+        extra_args: [],
       },
-    },
-  }));
-  const resetGitCommitMessageConfig = vi.fn(async () => ({
+      schema: {
+        reasoning_effort: {
+          type: "string" as const,
+          enum: ["high", "medium", "low"],
+          description: "推理努力程度",
+        },
+        extra_args: {
+          type: "string_list" as const,
+          description: "额外参数",
+        },
+      },
+    }),
+  );
+  const resetGitCommitMessageConfig = vi.fn(async (): Promise<GitCommitMessageCliConfig> => ({
     cliType: "codex",
     cliPath: "codex",
     params: {
@@ -769,12 +774,12 @@ test("git screen saves and resets commit message cli config", async () => {
     },
     schema: {
       reasoning_effort: {
-        type: "string",
+        type: "string" as const,
         enum: ["high", "medium", "low"],
         description: "推理努力程度",
       },
       extra_args: {
-        type: "string_list",
+        type: "string_list" as const,
         description: "额外参数",
       },
     },
@@ -789,6 +794,7 @@ test("git screen saves and resets commit message cli config", async () => {
   );
 
   expect(await screen.findByTestId("git-commit-cli-panel")).toBeInTheDocument();
+  expect(screen.getAllByText("Commit Message CLI")).toHaveLength(1);
   await user.selectOptions(screen.getByLabelText("Commit Message CLI 类型"), "claude");
   await user.clear(screen.getByLabelText("Commit Message CLI 路径"));
   await user.type(screen.getByLabelText("Commit Message CLI 路径"), "claude-custom");

@@ -693,10 +693,17 @@ class TestManagerValidation:
         assert restored.main_profile.cli_params.get_param("codex", "model") is None
 
     @pytest.mark.asyncio
-    async def test_git_commit_cli_config_persists_across_manager_reload(self, temp_dir: Path):
+    async def test_git_commit_cli_config_persists_globally_across_manager_reload(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+        manager.managed_profiles["sub1"] = BotProfile(
+            alias="sub1",
+            token="tok1",
+            cli_type="kimi",
+            cli_path="kimi",
+            working_dir=str(temp_dir),
+        )
 
         with patch("bot.manager.resolve_cli_executable", return_value="claude"):
             config = await manager.set_git_commit_cli_config(
@@ -706,13 +713,19 @@ class TestManagerValidation:
             )
 
         assert config.cli_type == "claude"
+        assert manager.get_git_commit_cli_config("sub1").cli_type == "claude"
+
+        payload = json.loads((temp_dir / ".git_commit_cli_config.json").read_text(encoding="utf-8"))
+        assert payload["global"]["cli_type"] == "claude"
+        assert "bots" not in payload
+
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
         restored_config = restored.get_git_commit_cli_config("main")
         assert restored_config.cli_type == "claude"
         assert restored_config.cli_path == "claude"
 
     @pytest.mark.asyncio
-    async def test_rename_bot_moves_git_commit_cli_config(self, temp_dir: Path):
+    async def test_rename_bot_keeps_global_git_commit_cli_config(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
@@ -730,7 +743,32 @@ class TestManagerValidation:
         await manager.rename_bot("sub1", "team1")
 
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        assert restored.get_git_commit_cli_config("main").cli_type == "claude"
         assert restored.get_git_commit_cli_config("team1").cli_type == "claude"
+
+    def test_git_commit_cli_config_migrates_legacy_bot_scoped_store(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        (temp_dir / ".git_commit_cli_config.json").write_text(
+            json.dumps(
+                {
+                    "bots": {
+                        "main": {
+                            "cli_type": "kimi",
+                            "cli_path": "kimi",
+                            "cli_params": {},
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
+
+        config = manager.get_git_commit_cli_config("main")
+        assert config.cli_type == "kimi"
+        assert config.cli_path == "kimi"
 
     @pytest.mark.asyncio
     async def test_main_bot_cluster_config_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):

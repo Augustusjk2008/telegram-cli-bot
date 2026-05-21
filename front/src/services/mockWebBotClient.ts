@@ -57,6 +57,7 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  CliType,
   CliParamsPayload,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
@@ -1197,7 +1198,7 @@ export class MockWebBotClient implements WebBotClient {
     ],
   ]);
   private gitIdentityConfigs = new Map<string, GitIdentityConfig>();
-  private gitCommitMessageConfigs = new Map<string, GitCommitMessageCliConfig>();
+  private gitCommitMessageConfig: GitCommitMessageCliConfig | null = null;
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -4858,7 +4859,8 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig> {
-    const cached = this.gitCommitMessageConfigs.get(botAlias);
+    this.getBotSummary(botAlias);
+    const cached = this.gitCommitMessageConfig;
     if (cached) {
       return {
         ...cached,
@@ -4867,7 +4869,7 @@ export class MockWebBotClient implements WebBotClient {
         schema: { ...cached.schema },
       };
     }
-    const bot = this.getBotSummary(botAlias);
+    const bot = this.getBotSummary("main");
     return buildMockGitCommitMessageConfig(bot.cliType, bot.cliPath);
   }
 
@@ -4887,7 +4889,7 @@ export class MockWebBotClient implements WebBotClient {
         ...(input.params || {}),
       },
     };
-    this.gitCommitMessageConfigs.set(botAlias, next);
+    this.gitCommitMessageConfig = next;
     return {
       ...next,
       params: { ...next.params },
@@ -4897,9 +4899,10 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async resetGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig> {
-    const bot = this.getBotSummary(botAlias);
+    this.getBotSummary(botAlias);
+    const bot = this.getBotSummary("main");
     const next = buildMockGitCommitMessageConfig(bot.cliType, bot.cliPath);
-    this.gitCommitMessageConfigs.set(botAlias, next);
+    this.gitCommitMessageConfig = next;
     return {
       ...next,
       params: { ...next.params },
@@ -5859,7 +5862,6 @@ export class MockWebBotClient implements WebBotClient {
     this.moveAgentScopedKeys(this.activeConversationByBot, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
     this.moveKey(this.gitIdentityConfigs, botAlias, alias);
-    this.moveKey(this.gitCommitMessageConfigs, botAlias, alias);
     this.moveKey(this.assistantCronJobs, botAlias, alias);
     this.moveKey(this.assistantProposals, botAlias, alias);
     this.moveKey(this.assistantMemories, botAlias, alias);
@@ -5918,7 +5920,6 @@ export class MockWebBotClient implements WebBotClient {
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);
     this.gitIdentityConfigs.delete(botAlias);
-    this.gitCommitMessageConfigs.delete(botAlias);
     this.assistantCronJobs.delete(botAlias);
     this.assistantProposals.delete(botAlias);
     this.assistantMemories.delete(botAlias);

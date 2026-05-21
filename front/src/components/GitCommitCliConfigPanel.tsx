@@ -180,7 +180,7 @@ export function GitCommitCliConfigPanel({
         <div>
           <h2 className="text-sm font-semibold">Commit Message CLI</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            生成提交说明专用配置
+            {canManage ? "全局生成提交说明配置" : "当前模式只读"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
