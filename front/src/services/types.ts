@@ -1454,6 +1454,7 @@ export type GitCommitSummary = {
   authorName: string;
   authoredAt: string;
   subject: string;
+  message?: string;
 };
 
 export type GitTreeDecorationKind = "added" | "modified" | "ignored";

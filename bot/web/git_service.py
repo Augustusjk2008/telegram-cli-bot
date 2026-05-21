@@ -338,7 +338,7 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
             "log",
             f"-n{max(1, limit)}",
             "--date=iso",
-            "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s",
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%B%x1e",
         ],
         check=False,
     )
@@ -346,10 +346,13 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
         return []
 
     items: list[dict[str, str]] = []
-    for line in (result.stdout or "").splitlines():
-        if not line.strip():
+    for record in (result.stdout or "").split("\x1e"):
+        record = record.rstrip("\r\n")
+        if not record.strip():
             continue
-        full_hash, short_hash, author_name, authored_at, subject = (line.split("\x1f") + ["", "", "", "", ""])[:5]
+        full_hash, short_hash, author_name, authored_at, subject, message = (
+            record.split("\x1f") + ["", "", "", "", "", ""]
+        )[:6]
         items.append(
             {
                 "hash": full_hash,
@@ -357,6 +360,7 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
                 "author_name": author_name,
                 "authored_at": authored_at,
                 "subject": subject,
+                "message": message,
             }
         )
     return items

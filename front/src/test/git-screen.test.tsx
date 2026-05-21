@@ -54,6 +54,7 @@ function buildRepoOverview(overrides: Partial<GitOverview> = {}): GitOverview {
         authorName: "Web Bot",
         authoredAt: "2026-04-09 21:00:00 +0800",
         subject: "feat: initial commit",
+        message: "feat: initial commit\n\nadd first repo snapshot",
       },
     ],
     ...overrides,
@@ -323,6 +324,10 @@ test("renders git repo summary and changed files", async () => {
   expect(screen.getByText("当前分支")).toBeInTheDocument();
   expect(screen.getByText("tracked.txt")).toBeInTheDocument();
   expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
+  expect(screen.getByText("feat: initial commit")).toHaveAttribute(
+    "title",
+    "feat: initial commit\n\nadd first repo snapshot",
+  );
 });
 
 test("shows init action when current directory is not a git repo", async () => {

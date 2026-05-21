@@ -3017,6 +3017,7 @@ describe("RealWebBotClient", () => {
                 author_name: "Web Bot",
                 authored_at: "2026-04-09 21:00:00 +0800",
                 subject: "feat: initial commit",
+                message: "feat: initial commit\n\nadd first repo snapshot",
               },
             ],
           },
@@ -3038,6 +3039,10 @@ describe("RealWebBotClient", () => {
     expect(overview.repoFound).toBe(true);
     expect(overview.currentBranch).toBe("main");
     expect(overview.changedFiles[0].path).toBe("tracked.txt");
+    expect(overview.recentCommits[0]).toMatchObject({
+      subject: "feat: initial commit",
+      message: "feat: initial commit\n\nadd first repo snapshot",
+    });
   });
 
   test("getGitTreeStatus maps git tree payload", async () => {

@@ -596,6 +596,7 @@ type RawGitCommitSummary = {
   author_name: string;
   authored_at: string;
   subject: string;
+  message?: string;
 };
 
 type RawGitOverview = {
@@ -1980,12 +1981,14 @@ function mapGitChangedFile(raw: RawGitChangedFile) {
 }
 
 function mapGitCommitSummary(raw: RawGitCommitSummary): GitCommitSummary {
+  const subject = raw.subject || "";
   return {
     hash: raw.hash,
     shortHash: raw.short_hash,
     authorName: raw.author_name,
     authoredAt: raw.authored_at,
-    subject: raw.subject,
+    subject,
+    message: raw.message || subject,
   };
 }
 

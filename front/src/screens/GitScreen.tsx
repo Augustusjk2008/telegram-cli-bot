@@ -932,7 +932,9 @@ export function GitScreen({
                       <div data-testid="git-recent-commits-content" className={sectionBodyClass(listClass())}>
                         {overview.recentCommits.map((item) => (
                           <div key={item.hash} className={listRowClass("block px-1.5 py-2")}>
-                            <div className="text-sm font-medium text-[var(--text)]">{item.subject}</div>
+                            <div className="text-sm font-medium text-[var(--text)]" title={item.message || item.subject}>
+                              {item.subject}
+                            </div>
                             <div className="mt-1 text-[11px] text-[var(--muted)]">
                               {item.shortHash} · {item.authorName} · {item.authoredAt}
                             </div>

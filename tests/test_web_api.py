@@ -2676,7 +2676,7 @@ def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir:
     tracked = repo_dir / "tracked.txt"
     tracked.write_text("line 1\n", encoding="utf-8")
     _run_git_command(repo_dir, "add", "tracked.txt")
-    _run_git_command(repo_dir, "commit", "-m", "init")
+    _run_git_command(repo_dir, "commit", "-m", "init", "-m", "detail line 1\ndetail line 2")
 
     tracked.write_text("line 1\nline 2\n", encoding="utf-8")
     (repo_dir / "new.txt").write_text("draft\n", encoding="utf-8")
@@ -2691,6 +2691,7 @@ def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir:
     assert any(item["path"] == "tracked.txt" for item in overview["changed_files"])
     assert any(item["path"] == "new.txt" for item in overview["changed_files"])
     assert overview["recent_commits"][0]["subject"] == "init"
+    assert overview["recent_commits"][0]["message"] == "init\n\ndetail line 1\ndetail line 2"
 
 def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
@@ -2711,8 +2712,14 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
     diff = get_git_diff(web_manager, "main", 1001, "tracked.txt", staged=True)
     assert "+after" in diff["diff"]
 
-    committed = commit_git_changes(web_manager, "main", 1001, "feat: update tracked")
+    committed = commit_git_changes(
+        web_manager,
+        "main",
+        1001,
+        "feat: update tracked\n\nbody line 1\nbody line 2",
+    )
     assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
+    assert committed["recent_commits"][0]["message"] == "feat: update tracked\n\nbody line 1\nbody line 2"
 
 
 def test_discard_git_paths_restores_tracked_and_added_files(web_manager: MultiBotManager, temp_dir: Path):
