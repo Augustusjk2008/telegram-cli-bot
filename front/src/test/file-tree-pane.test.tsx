@@ -117,6 +117,45 @@ test("directory click expands the tree without changing the working directory", 
   expect(changeDirectorySpy).toHaveBeenCalledTimes(callsBeforeToggle);
 });
 
+test("desktop file tree home button resets to the bot working directory", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const getCurrentPathSpy = vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  const changeDirectorySpy = vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  const listFilesSpy = vi
+    .spyOn(client, "listFiles")
+    .mockResolvedValueOnce({
+      workingDir: "/workspace/nested",
+      entries: [{ name: "nested.txt", isDir: false, size: 12 }],
+    })
+    .mockResolvedValueOnce({
+      workingDir: "/workspace",
+      entries: [{ name: "root.txt", isDir: false, size: 12 }],
+    });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByText("/workspace/nested")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Home" }));
+
+  await waitFor(() => {
+    expect(getCurrentPathSpy).toHaveBeenCalledWith("main");
+  });
+  expect(changeDirectorySpy).toHaveBeenCalledWith("main", "/workspace");
+  expect(listFilesSpy).toHaveBeenCalledTimes(2);
+  expect(await screen.findByText("/workspace")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开 root.txt" })).toBeInTheDocument();
+});
+
 test("clicking desktop file tree rows marks exactly one selected row", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

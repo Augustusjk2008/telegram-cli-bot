@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { FilePlus, FolderPlus, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
+import { FilePlus, FolderPlus, House, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
@@ -16,6 +16,7 @@ type Props = {
   onRequestPreview: (path: string) => void;
   onRequestDiff?: (path: string, absolutePath: string) => void | Promise<void>;
   onRequestUpload: (files: File[]) => Promise<void>;
+  onRequestHome: () => Promise<void>;
   gitDecorations: Record<string, GitTreeDecorationKind>;
   onRefreshGitDecorations: () => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
@@ -863,6 +864,7 @@ export function FileTreePane({
   onRequestPreview,
   onRequestDiff,
   onRequestUpload,
+  onRequestHome,
   gitDecorations,
   onRefreshGitDecorations,
   onRequestSetWorkdir,
@@ -1107,6 +1109,15 @@ export function FileTreePane({
     await onRefreshGitDecorations();
   }
 
+  async function handleHome() {
+    setActionError("");
+    try {
+      await onRequestHome();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "返回工作目录失败");
+    }
+  }
+
   function flattenBranch(entries: FileTreeNode[], depth: number): FileTreeVisibleRow[] {
     const rows: FileTreeVisibleRow[] = [];
     for (const entry of entries) {
@@ -1308,6 +1319,15 @@ export function FileTreePane({
               </button>
             </>
           ) : null}
+          <button
+            type="button"
+            aria-label="Home"
+            title="回到工作目录"
+            onClick={() => void handleHome()}
+            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+          >
+            <House className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             aria-label="刷新文件树"

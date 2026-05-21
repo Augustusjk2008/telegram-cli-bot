@@ -31,6 +31,8 @@ from .git_commit_message import (
     truncate_diff_text,
 )
 
+GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
+
 
 class GitCommandError(RuntimeError):
     """Git 命令执行失败。"""
@@ -725,7 +727,10 @@ async def generate_git_commit_message(manager: MultiBotManager, alias: str, user
             _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
 
     try:
-        raw_output, returncode = await asyncio.wait_for(_communicate_process(process), timeout=120)
+        raw_output, returncode = await asyncio.wait_for(
+            _communicate_process(process),
+            timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+        )
     except TimeoutError:
         _terminate_process_sync(process)
         _raise(504, "git_commit_message_timeout", "生成 commit message 超时")

@@ -86,6 +86,7 @@ from bot.web import api_service
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.git_service import (
+    GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
     apply_git_stash,
     commit_git_changes,
     create_git_branch,
@@ -2447,6 +2448,10 @@ def test_build_commit_message_prompt_marks_draft_when_unstaged_only():
         diff_truncated=False,
     )
     assert "仅基于未暂存/未跟踪内容生成草稿" in prompt
+
+
+def test_git_commit_message_generation_timeout_is_long():
+    assert GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS == 30 * 60
 
 
 @pytest.mark.asyncio

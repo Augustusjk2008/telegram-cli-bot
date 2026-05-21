@@ -726,6 +726,15 @@ export function DesktopWorkbench({
     await refreshGitDecorations();
   }
 
+  async function handleFileTreeHome() {
+    const workingDir = await client.getCurrentPath(botAlias);
+    if (!structureOnly) {
+      await client.changeDirectory(botAlias, workingDir);
+    }
+    await fileTree.refreshRoot({ rootPath: workingDir });
+    await refreshGitDecorations();
+  }
+
   function renderSidebarContent() {
     if (structureOnly || activeSidebarView === "files") {
       return (
@@ -753,6 +762,7 @@ export function DesktopWorkbench({
             void openGitDiffInEditor(path, false, gitPath);
           }}
           onRequestUpload={handleUpload}
+          onRequestHome={handleFileTreeHome}
           gitDecorations={gitDecorations}
           onRefreshGitDecorations={refreshGitDecorations}
           onRequestSetWorkdir={(path) => {

@@ -36,7 +36,7 @@ export type UseFileTreeResult = {
   clearSelection: () => void;
   isExpanded: (path: string) => boolean;
   toggleDirectory: (path: string) => Promise<void>;
-  refreshRoot: (options?: { preserveExpandedPaths?: boolean }) => Promise<void>;
+  refreshRoot: (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => Promise<void>;
   restoreExpandedPaths: (paths: string[]) => Promise<void>;
   revealPath: (path: string) => Promise<void>;
   highlightPath: (path: string) => void;
@@ -199,12 +199,12 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     return loadedBranches;
   }, [loadBranch]);
 
-  const refreshRoot = useCallback(async (options?: { preserveExpandedPaths?: boolean }) => {
+  const refreshRoot = useCallback(async (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => {
     const preserveExpandedPaths = options?.preserveExpandedPaths === true;
     setLoading(true);
     setError("");
     try {
-      const listing = await client.listFiles(botAlias);
+      const listing = await client.listFiles(botAlias, options?.rootPath);
       const nextRootPath = listing.workingDir;
       const nextExpandedPaths = preserveExpandedPaths ? expandedPathsRef.current : [];
       const normalizedExpandedPaths = uniqueExpandedPaths(nextExpandedPaths);
