@@ -80,6 +80,23 @@ function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPat
   return relativePath || path;
 }
 
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${value} B`;
+}
+
+function formatDownloadProgress(downloadedBytes: number, totalBytes?: number) {
+  if (typeof totalBytes === "number" && totalBytes > 0) {
+    return `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
+  }
+  return formatBytes(downloadedBytes);
+}
+
 type Props = {
   authToken?: string;
   botAlias: string;
@@ -271,6 +288,7 @@ export function DesktopWorkbench({
       : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
   const canLoadFull = !structureOnly && !isFilePreviewFullyLoaded(previewResult);
   const canEditPreview = !structureOnly && previewResult?.previewKind !== "image";
+  const previewDownloadProgress = fileTree.downloadProgress?.path === previewName ? fileTree.downloadProgress : null;
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
@@ -1148,7 +1166,19 @@ export function DesktopWorkbench({
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
-        rightAction={lanChatDock}
+        rightAction={(
+          <div className="flex items-center gap-2">
+            {fileTree.downloadProgress ? (
+              <span role="status" aria-label="下载进度" className="max-w-[18rem] truncate">
+                下载 {fileTree.downloadProgress.path}
+                {typeof fileTree.downloadProgress.percent === "number"
+                  ? ` ${fileTree.downloadProgress.percent}%`
+                  : ` ${formatDownloadProgress(fileTree.downloadProgress.downloadedBytes, fileTree.downloadProgress.totalBytes)}`}
+              </span>
+            ) : null}
+            {lanChatDock}
+          </div>
+        )}
       />
 
       {!structureOnly ? (
@@ -1183,7 +1213,9 @@ export function DesktopWorkbench({
             closePreview();
             void openWorkspaceFile(nextPath);
           } : undefined}
-          onDownload={() => void client.downloadFile(botAlias, previewName)}
+          onDownload={() => void fileTree.downloadFile(previewName)}
+          downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes) : ""}
+          downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}
 

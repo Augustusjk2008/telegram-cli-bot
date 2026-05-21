@@ -22,6 +22,8 @@ type Props = {
   desktopAnchorRect?: DesktopAnchorRect | null;
   loading?: boolean;
   statusText?: string;
+  downloadProgressText?: string;
+  downloadPercent?: number;
   readOnly?: boolean;
   onClose: () => void;
   onLoadFull?: () => void;
@@ -53,6 +55,8 @@ export function FilePreviewDialog({
   desktopAnchorRect = null,
   loading = false,
   statusText = "",
+  downloadProgressText = "",
+  downloadPercent,
   readOnly = false,
   onClose,
   onLoadFull,
@@ -66,6 +70,7 @@ export function FilePreviewDialog({
   const isHtmlPreview = previewKind === "html";
   const [desktopOffset, setDesktopOffset] = useState({ x: 0, y: 0 });
   const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+  const isDownloading = Boolean(downloadProgressText);
   const dragStateRef = useRef<{
     pointerId: number;
     startX: number;
@@ -241,6 +246,33 @@ export function FilePreviewDialog({
     );
   }
 
+  function renderDownloadProgress() {
+    if (!downloadProgressText) {
+      return null;
+    }
+    return (
+      <div className="min-w-[12rem] text-xs text-[var(--muted)]">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="truncate">{downloadProgressText}</span>
+          {typeof downloadPercent === "number" ? <span className="font-mono">{downloadPercent}%</span> : null}
+        </div>
+        <div
+          role="progressbar"
+          aria-label={`${title} 下载进度`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={typeof downloadPercent === "number" ? downloadPercent : undefined}
+          className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-strong)]"
+        >
+          <div
+            className="h-full rounded-full bg-[var(--accent)] transition-[width]"
+            style={{ width: `${typeof downloadPercent === "number" ? downloadPercent : 100}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (variant === "desktop" && desktopFrame) {
     return (
       <div
@@ -286,6 +318,7 @@ export function FilePreviewDialog({
               {statusText}
             </div>
             <div className="flex justify-end gap-2">
+              {renderDownloadProgress()}
               {!readOnly && mode !== "full" && onLoadFull ? (
                 <button
                   type="button"
@@ -309,9 +342,10 @@ export function FilePreviewDialog({
                 <button
                   type="button"
                   onClick={onDownload}
-                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
+                  disabled={isDownloading}
+                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] disabled:opacity-60"
                 >
-                  下载
+                  {isDownloading ? "下载中..." : "下载"}
                 </button>
               ) : null}
             </div>
@@ -345,6 +379,7 @@ export function FilePreviewDialog({
             {statusText}
           </div>
           <div className="flex justify-end gap-2">
+            {renderDownloadProgress()}
             {!readOnly && mode !== "full" && onLoadFull ? (
               <button
                 type="button"
@@ -368,9 +403,10 @@ export function FilePreviewDialog({
               <button
                 type="button"
                 onClick={onDownload}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
+                disabled={isDownloading}
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] disabled:opacity-60"
               >
-                下载
+                {isDownloading ? "下载中..." : "下载"}
               </button>
             ) : null}
           </div>

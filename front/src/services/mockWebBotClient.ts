@@ -79,6 +79,7 @@ import type {
   FileTreeRevealResult,
   FileCopyResult,
   FileCreateResult,
+  FileDownloadProgress,
   FileEntry,
   FileReadResult,
   GitActionResult,
@@ -4385,7 +4386,9 @@ export class MockWebBotClient implements WebBotClient {
     return;
   }
 
-  async downloadFile(botAlias: string, filename: string): Promise<void> {
+  async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
+    onProgress?.({ downloadedBytes: 0, totalBytes: 1, percent: 0 });
+    onProgress?.({ downloadedBytes: 1, totalBytes: 1, percent: 100 });
     return;
   }
 

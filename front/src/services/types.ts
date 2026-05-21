@@ -582,6 +582,12 @@ export type FileEntry = {
   updatedAt?: string;
 };
 
+export type FileDownloadProgress = {
+  downloadedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+};
+
 export type FileReadMode = "head" | "cat";
 export type FilePreviewKind = "text" | "image" | "html";
 

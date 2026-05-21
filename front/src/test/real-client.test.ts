@@ -2161,6 +2161,53 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("downloadFile reports streamed byte progress", async () => {
+    const progressEvents: Array<{ downloadedBytes: number; totalBytes?: number; percent?: number }> = [];
+    const createObjectURL = vi.fn(() => "blob:download");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({
+          "content-length": "4",
+          "content-type": "text/plain",
+        }),
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2]));
+            controller.enqueue(new Uint8Array([3, 4]));
+            controller.close();
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.restoreSession("secret-token");
+    await client.downloadFile("main", "notes.txt", (event) => {
+      progressEvents.push(event);
+    });
+
+    expect(progressEvents).toEqual([
+      { downloadedBytes: 0, totalBytes: 4, percent: 0 },
+      { downloadedBytes: 2, totalBytes: 4, percent: 50 },
+      { downloadedBytes: 4, totalBytes: 4, percent: 100 },
+    ]);
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:download");
+  });
+
   test("writeFile preserves string file versions in the request body", async () => {
     fetchMock
       .mockResolvedValueOnce({

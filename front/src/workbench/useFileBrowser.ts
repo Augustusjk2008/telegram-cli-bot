@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
-import type { FileCreateResult, FileEntry, FileRenameResult } from "../services/types";
+import type { FileCreateResult, FileDownloadProgress, FileEntry, FileRenameResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
   botAlias: string;
   client: WebBotClient;
+};
+
+export type FileBrowserDownloadProgress = FileDownloadProgress & {
+  filename: string;
 };
 
 export type UseFileBrowserResult = {
@@ -13,6 +17,7 @@ export type UseFileBrowserResult = {
   isVirtualRoot: boolean;
   loading: boolean;
   error: string;
+  downloadProgress: FileBrowserDownloadProgress | null;
   setError: (message: string) => void;
   loadListing: () => Promise<void>;
   goToDirectory: (name: string) => Promise<void>;
@@ -35,6 +40,7 @@ export function useFileBrowser({ botAlias, client }: Props): UseFileBrowserResul
   const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [downloadProgress, setDownloadProgress] = useState<FileBrowserDownloadProgress | null>(null);
 
   async function loadListing() {
     setLoading(true);
@@ -119,12 +125,17 @@ export function useFileBrowser({ botAlias, client }: Props): UseFileBrowserResul
 
   async function downloadEntry(entry: FileEntry) {
     setError("");
+    setDownloadProgress({ filename: entry.name, downloadedBytes: 0 });
     try {
-      await client.downloadFile(botAlias, entry.name);
+      await client.downloadFile(botAlias, entry.name, (progress) => {
+        setDownloadProgress({ filename: entry.name, ...progress });
+      });
     } catch (nextError) {
       const message = getErrorMessage(nextError, "下载文件失败");
       setError(message);
       throw nextError;
+    } finally {
+      setDownloadProgress(null);
     }
   }
 
@@ -160,6 +171,7 @@ export function useFileBrowser({ botAlias, client }: Props): UseFileBrowserResul
     isVirtualRoot,
     loading,
     error,
+    downloadProgress,
     setError,
     loadListing,
     goToDirectory,

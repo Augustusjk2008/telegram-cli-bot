@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, GitActionResult, GitDiffPayload, GitOverview, SessionState, TunnelSnapshot } from "../services/types";
+import type { BotOverview, BotSummary, ChatMessage, ChatTraceDetails, CliParamsPayload, DirectoryListing, FileDownloadProgress, GitActionResult, GitDiffPayload, GitOverview, SessionState, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
@@ -614,6 +614,31 @@ test("preview download failure shows an error and keeps preview open", async () 
 
   expect(await screen.findByText("下载失败")).toBeInTheDocument();
   expect(screen.getByRole("dialog", { name: "README.md" })).toBeInTheDocument();
+});
+
+test("shows visual progress while downloading a file", async () => {
+  const user = userEvent.setup();
+  const deferred = createDeferred<void>();
+  const downloadFile = vi.fn(
+    async (_botAlias: string, _filename: string, onProgress?: (progress: FileDownloadProgress) => void) => {
+      onProgress?.({ downloadedBytes: 0, totalBytes: 512, percent: 0 });
+      onProgress?.({ downloadedBytes: 256, totalBytes: 512, percent: 50 });
+      await deferred.promise;
+    },
+  );
+  const client = createClient({ downloadFile });
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "下载 README.md" }));
+
+  expect(await screen.findByRole("status", { name: "下载进度" })).toBeInTheDocument();
+  expect(screen.getByText("正在下载 README.md")).toBeInTheDocument();
+  expect(screen.getByText("50%")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "README.md 下载进度" })).toHaveAttribute("aria-valuenow", "50");
+
+  deferred.resolve();
+  await waitFor(() => expect(screen.queryByRole("status", { name: "下载进度" })).not.toBeInTheDocument());
 });
 
 test("passes detected file encoding when saving from editor", async () => {

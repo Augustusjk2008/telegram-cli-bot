@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCopyResult, FileCreateResult, FileMoveResult, FileRenameResult } from "../services/types";
+import type { FileCopyResult, FileCreateResult, FileDownloadProgress, FileMoveResult, FileRenameResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
 
@@ -18,6 +18,10 @@ type FileTreeBranchState = {
   error: string;
 };
 
+export type FileTreeDownloadProgress = FileDownloadProgress & {
+  path: string;
+};
+
 export type UseFileTreeResult = {
   rootPath: string;
   loading: boolean;
@@ -27,6 +31,7 @@ export type UseFileTreeResult = {
   expandedPaths: string[];
   highlightedPath: string;
   selectedPath: string;
+  downloadProgress: FileTreeDownloadProgress | null;
   selectPath: (path: string) => void;
   clearSelection: () => void;
   isExpanded: (path: string) => boolean;
@@ -131,6 +136,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   const [branches, setBranches] = useState<Record<string, FileTreeBranchState>>({});
   const [highlightedPath, setHighlightedPath] = useState("");
   const [selectedPath, setSelectedPath] = useState("");
+  const [downloadProgress, setDownloadProgress] = useState<FileTreeDownloadProgress | null>(null);
   const expandedPathsRef = useRef<string[]>([]);
   const selectedPathRef = useRef("");
   const highlightTimerRef = useRef<number | null>(null);
@@ -423,7 +429,17 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   }
 
   async function downloadFile(path: string) {
-    await client.downloadFile(botAlias, path);
+    setDownloadProgress({ path, downloadedBytes: 0 });
+    try {
+      await client.downloadFile(botAlias, path, (progress) => {
+        setDownloadProgress({ path, ...progress });
+      });
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "下载文件失败"));
+      throw nextError;
+    } finally {
+      setDownloadProgress(null);
+    }
   }
 
   return {
@@ -435,6 +451,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     expandedPaths,
     highlightedPath,
     selectedPath,
+    downloadProgress,
     selectPath,
     clearSelection,
     isExpanded: (path: string) => expandedPaths.includes(path),

@@ -110,6 +110,7 @@ import type {
   FileTreeRevealResult,
   FileCopyResult,
   FileCreateResult,
+  FileDownloadProgress,
   FileEntry,
   FileMoveResult,
   FileReadMode,
@@ -2141,6 +2142,63 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
   };
 }
 
+function calculateDownloadPercent(downloadedBytes: number, totalBytes?: number) {
+  if (!totalBytes || totalBytes <= 0) {
+    return undefined;
+  }
+  return Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
+}
+
+function emitFileDownloadProgress(
+  onProgress: ((progress: FileDownloadProgress) => void) | undefined,
+  downloadedBytes: number,
+  totalBytes?: number,
+) {
+  if (!onProgress) {
+    return;
+  }
+  const percent = calculateDownloadPercent(downloadedBytes, totalBytes);
+  onProgress({
+    downloadedBytes,
+    ...(typeof totalBytes === "number" ? { totalBytes } : {}),
+    ...(typeof percent === "number" ? { percent } : {}),
+  });
+}
+
+async function readDownloadBlobWithProgress(
+  response: Response,
+  onProgress?: (progress: FileDownloadProgress) => void,
+): Promise<Blob> {
+  const totalValue = Number(response.headers.get("content-length") || 0);
+  const totalBytes = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : undefined;
+  emitFileDownloadProgress(onProgress, 0, totalBytes);
+
+  if (!response.body) {
+    const blob = await response.blob();
+    emitFileDownloadProgress(onProgress, blob.size, totalBytes || blob.size || undefined);
+    return blob;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let downloadedBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
+    chunks.push(value);
+    downloadedBytes += value.byteLength;
+    emitFileDownloadProgress(onProgress, downloadedBytes, totalBytes);
+  }
+
+  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  return new Blob(chunks, { type: contentType });
+}
+
 function mapAssistantProposal(raw: RawAssistantProposal): AssistantProposal {
   return {
     id: raw.id,
@@ -4002,7 +4060,7 @@ export class RealWebBotClient implements WebBotClient {
     }
   }
 
-  async downloadFile(botAlias: string, filename: string): Promise<void> {
+  async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
     const params = new URLSearchParams({ filename });
     const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`, {
       headers: this.headers(),
@@ -4010,7 +4068,7 @@ export class RealWebBotClient implements WebBotClient {
     if (!response.ok) {
       throw new Error("下载失败");
     }
-    const blob = await response.blob();
+    const blob = await readDownloadBlobWithProgress(response as Response, onProgress);
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = downloadUrl;

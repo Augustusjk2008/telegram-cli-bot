@@ -6,7 +6,7 @@ import { FileList } from "../components/FileList";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileEntry, FileReadResult } from "../services/types";
+import type { FileDownloadProgress, FileEntry, FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
   getFilePreviewStatusText,
@@ -52,6 +52,27 @@ function getParentBrowserPath(path: string) {
   return parts.slice(0, -1).join("/");
 }
 
+type ActiveDownload = FileDownloadProgress & {
+  filename: string;
+};
+
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${value} B`;
+}
+
+function formatDownloadDetail(progress: ActiveDownload) {
+  if (typeof progress.totalBytes === "number" && progress.totalBytes > 0) {
+    return `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+  }
+  return formatBytes(progress.downloadedBytes);
+}
+
 export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotClient(), structureOnly = false }: Props) {
   const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -81,6 +102,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
+  const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
   const listingRequestSeqRef = useRef(0);
 
   async function loadListing(targetPath?: string) {
@@ -197,9 +219,21 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const handleDownloadEntry = async (file: FileEntry) => {
     try {
       setError("");
-      await client.downloadFile(botAlias, file.name);
+      setDownloadProgress({
+        filename: file.name,
+        downloadedBytes: 0,
+        ...(typeof file.size === "number" ? { totalBytes: file.size, percent: 0 } : {}),
+      });
+      await client.downloadFile(botAlias, file.name, (progress) => {
+        setDownloadProgress({
+          filename: file.name,
+          ...progress,
+        });
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "下载文件失败");
+    } finally {
+      setDownloadProgress(null);
     }
   };
 
@@ -227,6 +261,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
   const canEditPreview = previewResult?.previewKind !== "image";
+  const previewDownloadProgress = downloadProgress?.filename === previewName ? downloadProgress : null;
 
   const handleFileClick = async (name: string) => {
     if (structureOnly) {
@@ -495,6 +530,34 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
               {error}
             </div>
           ) : null}
+          {downloadProgress ? (
+            <div
+              role="status"
+              aria-label="下载进度"
+              className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm shadow-sm"
+            >
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate font-medium">正在下载 {downloadProgress.filename}</span>
+                <span className="shrink-0 font-mono text-xs text-[var(--muted)]">
+                  {typeof downloadProgress.percent === "number" ? `${downloadProgress.percent}%` : formatDownloadDetail(downloadProgress)}
+                </span>
+              </div>
+              <div
+                role="progressbar"
+                aria-label={`${downloadProgress.filename} 下载进度`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={typeof downloadProgress.percent === "number" ? downloadProgress.percent : undefined}
+                className="h-2 overflow-hidden rounded-full bg-[var(--surface-strong)]"
+              >
+                <div
+                  className="h-full rounded-full bg-[var(--accent)] transition-[width]"
+                  style={{ width: `${typeof downloadProgress.percent === "number" ? downloadProgress.percent : 100}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted)]">{formatDownloadDetail(downloadProgress)}</div>
+            </div>
+          ) : null}
           {loading ? (
             <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
           ) : (
@@ -531,6 +594,8 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
           onDownload={() => void handleDownloadEntry({ name: previewName, isDir: false })}
+          downloadProgressText={previewDownloadProgress ? formatDownloadDetail(previewDownloadProgress) : ""}
+          downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}
       {!structureOnly && showCreateFileDialog ? (

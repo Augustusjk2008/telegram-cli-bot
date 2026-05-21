@@ -70,6 +70,16 @@
       "cwd": ".",
       "confirm": false,
       "enabled": true
+    },
+    {
+      "id": "restart",
+      "label": "重启程序",
+      "icon": "Terminal",
+      "windowsCommand": "Invoke-RestMethod -Method Post \"http://127.0.0.1:8765/api/admin/restart\" -Headers @{ Authorization = \"Bearer adsadaqda2ii2ijdfq0rj1ejdsad1\" }",
+      "linuxCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }

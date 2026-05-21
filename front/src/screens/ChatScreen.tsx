@@ -29,6 +29,7 @@ import type {
   CliParamsPayload,
   ChatTraceEvent,
   ConversationSummary,
+  FileDownloadProgress,
   FileReadResult,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -88,6 +89,23 @@ type ParsedUserAttachment = {
   filename: string;
   savedPath: string;
 };
+
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${value} B`;
+}
+
+function formatDownloadProgress(progress: FileDownloadProgress) {
+  if (typeof progress.totalBytes === "number" && progress.totalBytes > 0) {
+    return `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+  }
+  return formatBytes(progress.downloadedBytes);
+}
 
 const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
 const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
@@ -876,6 +894,7 @@ export function ChatScreen({
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
+  const [previewDownloadProgress, setPreviewDownloadProgress] = useState<FileDownloadProgress | null>(null);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
@@ -1671,6 +1690,21 @@ export function ChatScreen({
       setPreviewLoading(false);
     }
   }, [botAlias, client]);
+
+  const downloadPreview = useCallback(async () => {
+    if (!previewName) {
+      return;
+    }
+    setPreviewDownloadProgress({ downloadedBytes: 0 });
+    setError("");
+    try {
+      await client.downloadFile(botAlias, previewName, setPreviewDownloadProgress);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "下载文件失败");
+    } finally {
+      setPreviewDownloadProgress(null);
+    }
+  }, [botAlias, client, previewName]);
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
@@ -2716,9 +2750,12 @@ export function ChatScreen({
             setPreviewName("");
             setPreviewContent("");
             setPreviewResult(null);
+            setPreviewDownloadProgress(null);
           }}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-          onDownload={() => void client.downloadFile(botAlias, previewName)}
+          onDownload={() => void downloadPreview()}
+          downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress) : ""}
+          downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}
     </main>
