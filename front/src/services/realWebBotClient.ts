@@ -55,6 +55,7 @@ import type {
   GitIdentityScope,
   GitProxySettings,
   GitOverview,
+  GitSmartCommitJob,
   GitStashList,
   GitTreeStatus,
   BotOverview,
@@ -693,6 +694,17 @@ type RawGitCommitMessageCliConfig = {
 
 type RawGitCommitMessageGenerateResult = {
   message?: string;
+};
+
+type RawGitSmartCommitJob = {
+  job_id?: string;
+  alias?: string;
+  user_id?: number;
+  status?: string;
+  phase?: string;
+  message?: string;
+  error?: string;
+  overview?: RawGitOverview | null;
 };
 
 type RawGitProxySettings = {
@@ -2105,6 +2117,19 @@ function mapGitCommitMessageCliConfig(raw: RawGitCommitMessageCliConfig): GitCom
 function mapGitCommitMessageGenerateResult(raw: RawGitCommitMessageGenerateResult): GitCommitMessageGenerateResult {
   return {
     message: raw.message || "",
+  };
+}
+
+function mapGitSmartCommitJob(raw: RawGitSmartCommitJob): GitSmartCommitJob {
+  return {
+    jobId: raw.job_id || "",
+    alias: raw.alias || "",
+    userId: Number(raw.user_id || 0),
+    status: raw.status || "",
+    phase: raw.phase || "",
+    message: raw.message || "",
+    error: raw.error || "",
+    overview: raw.overview ? mapGitOverview(raw.overview) : null,
   };
 }
 
@@ -4466,6 +4491,27 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapGitCommitMessageGenerateResult(data);
+  }
+
+  async startGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob> {
+    const data = await this.requestJson<RawGitSmartCommitJob>(`/api/bots/${encodeURIComponent(botAlias)}/git/smart-commit`, {
+      method: "POST",
+    });
+    return mapGitSmartCommitJob(data);
+  }
+
+  async getActiveGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob | null> {
+    const data = await this.requestJson<RawGitSmartCommitJob | null>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/smart-commit/active`,
+    );
+    return data ? mapGitSmartCommitJob(data) : null;
+  }
+
+  async getGitSmartCommitJob(botAlias: string, jobId: string): Promise<GitSmartCommitJob> {
+    const data = await this.requestJson<RawGitSmartCommitJob>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/smart-commit/${encodeURIComponent(jobId)}`,
+    );
+    return mapGitSmartCommitJob(data);
   }
 
   async getLanChatConfig(): Promise<LanChatConfig> {

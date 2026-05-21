@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { GitScreen } from "../screens/GitScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
@@ -15,6 +15,7 @@ import type {
   GitCommitMessageGenerateResult,
   GitIdentityConfig,
   GitOverview,
+  GitSmartCommitJob,
   SessionState,
   TunnelSnapshot,
 } from "../services/types";
@@ -57,6 +58,20 @@ function buildRepoOverview(overrides: Partial<GitOverview> = {}): GitOverview {
         message: "feat: initial commit\n\nadd first repo snapshot",
       },
     ],
+    ...overrides,
+  };
+}
+
+function buildSmartCommitJob(overrides: Partial<GitSmartCommitJob> = {}): GitSmartCommitJob {
+  return {
+    jobId: "job-1",
+    alias: "main",
+    userId: 1001,
+    status: "running",
+    phase: "generating",
+    message: "",
+    error: "",
+    overview: null,
     ...overrides,
   };
 }
@@ -205,6 +220,9 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     generateGitCommitMessage: async (): Promise<GitCommitMessageGenerateResult> => ({
       message: "feat(git): add generated commit message flow",
     }),
+    startGitSmartCommit: async (): Promise<GitSmartCommitJob> => buildSmartCommitJob(),
+    getActiveGitSmartCommit: async (): Promise<GitSmartCommitJob | null> => null,
+    getGitSmartCommitJob: async (): Promise<GitSmartCommitJob> => buildSmartCommitJob(),
     updateBotWorkdir: async () => ({
       alias: "main",
       cliType: "codex",
@@ -316,6 +334,11 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     ...overrides,
   });
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 test("renders git repo summary and changed files", async () => {
   render(<GitScreen botAlias="main" client={createClient()} />);
@@ -715,6 +738,188 @@ test("git screen generates commit message into textarea", async () => {
   expect(generateGitCommitMessage).toHaveBeenCalledWith("main");
   expect(await screen.findByText("已生成提交说明")).toBeInTheDocument();
   expect(screen.getByLabelText("commit message")).toHaveValue("feat(git): add generated commit message flow");
+});
+
+test("git screen places smart commit after commit submit button", async () => {
+  render(<GitScreen botAlias="main" client={createClient()} />);
+
+  const panel = await screen.findByTestId("git-commit-panel");
+  const submitButton = within(panel).getByRole("button", { name: "提交更改" });
+  const smartButton = within(panel).getByRole("button", { name: "智能提交" });
+
+  expect(submitButton.compareDocumentPosition(smartButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("git screen starts smart commit, polls phases, refreshes overview and clears textarea", async () => {
+  const realSetTimeout = window.setTimeout.bind(window);
+  vi.spyOn(window, "setTimeout").mockImplementation(((handler: TimerHandler, timeout?: number, ...args: any[]) =>
+    realSetTimeout(handler, timeout === 1000 ? 100 : timeout, ...args)) as typeof window.setTimeout);
+  const generatedMessage = "feat(git): add generated commit message flow";
+  const successOverview = buildRepoOverview({
+    isClean: true,
+    changedFiles: [],
+    recentCommits: [
+      {
+        hash: "123456789abc",
+        shortHash: "1234567",
+        authorName: "Web Bot",
+        authoredAt: "2026-05-21 23:17:00 +0800",
+        subject: generatedMessage,
+        message: generatedMessage,
+      },
+    ],
+  });
+  let overviewState = buildRepoOverview();
+  let pollCount = 0;
+  const getGitOverview = vi.fn(async (): Promise<GitOverview> => overviewState);
+  const startGitSmartCommit = vi.fn(async (): Promise<GitSmartCommitJob> => buildSmartCommitJob());
+  const getGitSmartCommitJob = vi.fn(async (): Promise<GitSmartCommitJob> => {
+    pollCount += 1;
+    if (pollCount === 1) {
+      return buildSmartCommitJob({ phase: "generating", message: generatedMessage });
+    }
+    if (pollCount === 2) {
+      return buildSmartCommitJob({ phase: "staging", message: generatedMessage });
+    }
+    if (pollCount === 3) {
+      return buildSmartCommitJob({ phase: "committing", message: generatedMessage });
+    }
+    overviewState = successOverview;
+    return buildSmartCommitJob({
+      status: "succeeded",
+      phase: "done",
+      message: generatedMessage,
+      overview: successOverview,
+    });
+  });
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview,
+        startGitSmartCommit,
+        getGitSmartCommitJob,
+      })}
+    />,
+  );
+
+  await screen.findByTestId("git-commit-panel");
+  const initialOverviewCalls = getGitOverview.mock.calls.length;
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText("commit message"), "temporary");
+  await user.click(screen.getByRole("button", { name: "智能提交" }));
+
+  expect(startGitSmartCommit).toHaveBeenCalledWith("main");
+  expect(within(screen.getByTestId("git-smart-commit-status")).getByText("生成说明...")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "生成 commit message" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "暂存全部" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "丢弃全部" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "智能提交" })).toBeDisabled();
+  expect(screen.getByLabelText("commit message")).toBeDisabled();
+
+  expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("暂存中...")).toBeInTheDocument();
+  expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("提交中...")).toBeInTheDocument();
+  expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("智能提交完成")).toBeInTheDocument();
+  expect(screen.getAllByText("智能提交完成").length).toBeGreaterThan(0);
+  expect(screen.getByLabelText("commit message")).toHaveValue("");
+  expect(getGitOverview.mock.calls.length).toBeGreaterThan(initialOverviewCalls);
+  expect(getGitSmartCommitJob).toHaveBeenCalledTimes(4);
+  expect(within(screen.getByTestId("git-smart-commit-status")).getByText(generatedMessage)).toBeInTheDocument();
+});
+
+test("git screen restores running smart commit after remount and continues polling", async () => {
+  const realSetTimeout = window.setTimeout.bind(window);
+  vi.spyOn(window, "setTimeout").mockImplementation(((handler: TimerHandler, timeout?: number, ...args: any[]) =>
+    realSetTimeout(handler, timeout === 1000 ? 100 : timeout, ...args)) as typeof window.setTimeout);
+  const generatedMessage = "feat(git): add generated commit message flow";
+  const successOverview = buildRepoOverview({
+    isClean: true,
+    changedFiles: [],
+    recentCommits: [
+      {
+        hash: "123456789abc",
+        shortHash: "1234567",
+        authorName: "Web Bot",
+        authoredAt: "2026-05-21 23:17:00 +0800",
+        subject: generatedMessage,
+        message: generatedMessage,
+      },
+    ],
+  });
+  let overviewState = buildRepoOverview();
+  let activeJob: GitSmartCommitJob | null = null;
+  const getGitOverview = vi.fn(async (): Promise<GitOverview> => overviewState);
+  const getActiveGitSmartCommit = vi.fn(async (): Promise<GitSmartCommitJob | null> => activeJob);
+  const getGitSmartCommitJob = vi.fn(async (): Promise<GitSmartCommitJob> => {
+    overviewState = successOverview;
+    activeJob = buildSmartCommitJob({
+      status: "succeeded",
+      phase: "done",
+      message: generatedMessage,
+      overview: successOverview,
+    });
+    return activeJob;
+  });
+  const client = createClient({
+    getGitOverview,
+    startGitSmartCommit: async (): Promise<GitSmartCommitJob> => {
+      activeJob = buildSmartCommitJob({ phase: "staging", message: generatedMessage });
+      return activeJob;
+    },
+    getActiveGitSmartCommit,
+    getGitSmartCommitJob,
+  });
+
+  const first = render(<GitScreen botAlias="main" client={client} />);
+  await screen.findByTestId("git-commit-panel");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "智能提交" }));
+  expect(await within(screen.getByTestId("git-smart-commit-status")).findByText("暂存中...")).toBeInTheDocument();
+  first.unmount();
+
+  render(<GitScreen botAlias="main" client={client} />);
+  await screen.findByTestId("git-commit-panel");
+  expect(await screen.findByTestId("git-smart-commit-status")).toBeInTheDocument();
+  expect(await screen.findAllByText("智能提交完成")).toHaveLength(2);
+  expect(getActiveGitSmartCommit).toHaveBeenCalledTimes(2);
+});
+
+test("git screen keeps generated message in textarea when smart commit fails", async () => {
+  const realSetTimeout = window.setTimeout.bind(window);
+  vi.spyOn(window, "setTimeout").mockImplementation(((handler: TimerHandler, timeout?: number, ...args: any[]) =>
+    realSetTimeout(handler, timeout === 1000 ? 100 : timeout, ...args)) as typeof window.setTimeout);
+  const generatedMessage = "feat(git): add generated commit message flow";
+  const getGitOverview = vi.fn(async (): Promise<GitOverview> => buildRepoOverview());
+  const startGitSmartCommit = vi.fn(async (): Promise<GitSmartCommitJob> => buildSmartCommitJob());
+  const getGitSmartCommitJob = vi.fn(async (): Promise<GitSmartCommitJob> => buildSmartCommitJob({
+    status: "failed",
+    phase: "done",
+    message: generatedMessage,
+    error: "工作区已变化",
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview,
+        startGitSmartCommit,
+        getGitSmartCommitJob,
+      })}
+    />,
+  );
+
+  await screen.findByTestId("git-commit-panel");
+  const initialOverviewCalls = getGitOverview.mock.calls.length;
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText("commit message"), "manual draft");
+  await user.click(screen.getByRole("button", { name: "智能提交" }));
+
+  expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("工作区已变化")).toBeInTheDocument();
+  expect(screen.getByLabelText("commit message")).toHaveValue(generatedMessage);
+  expect(getGitOverview.mock.calls.length).toBeGreaterThan(initialOverviewCalls);
 });
 
 test("git screen shows generate error", async () => {

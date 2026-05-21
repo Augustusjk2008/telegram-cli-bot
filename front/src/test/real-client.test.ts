@@ -2704,6 +2704,156 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("git smart commit endpoints map snake case payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            job_id: "job-1",
+            alias: "main",
+            user_id: 1001,
+            status: "running",
+            phase: "generating",
+            message: "",
+            error: "",
+            overview: null,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            job_id: "job-1",
+            alias: "main",
+            user_id: 1001,
+            status: "running",
+            phase: "staging",
+            message: "feat(git): add generated commit message flow",
+            error: "",
+            overview: null,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            job_id: "job-1",
+            alias: "main",
+            user_id: 1001,
+            status: "succeeded",
+            phase: "done",
+            message: "feat(git): add generated commit message flow",
+            error: "",
+            overview: {
+              repo_found: true,
+              can_init: false,
+              working_dir: "C:\\workspace\\repo",
+              repo_path: "C:\\workspace\\repo",
+              repo_name: "repo",
+              current_branch: "main",
+              is_clean: true,
+              ahead_count: 1,
+              behind_count: 0,
+              changed_files: [],
+              recent_commits: [
+                {
+                  hash: "abcdef012345",
+                  short_hash: "abcdef0",
+                  author_name: "Web Bot",
+                  authored_at: "2026-04-09 21:00:00 +0800",
+                  subject: "feat: initial commit",
+                  message: "feat: initial commit\n\nadd first repo snapshot",
+                },
+              ],
+            },
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const started = await client.startGitSmartCommit("main");
+    const active = await client.getActiveGitSmartCommit("main");
+    const finished = await client.getGitSmartCommitJob("main", "job-1");
+
+    expect(started).toEqual({
+      jobId: "job-1",
+      alias: "main",
+      userId: 1001,
+      status: "running",
+      phase: "generating",
+      message: "",
+      error: "",
+      overview: null,
+    });
+    expect(active?.phase).toBe("staging");
+    expect(active?.message).toBe("feat(git): add generated commit message flow");
+    expect(finished.overview?.isClean).toBe(true);
+    expect(finished.overview?.recentCommits[0].shortHash).toBe("abcdef0");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/git/smart-commit",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main/git/smart-commit/active",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/bots/main/git/smart-commit/job-1",
+      expect.any(Object),
+    );
+  });
+
+  test("git smart commit active endpoint maps empty payload to null", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: null,
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(client.getActiveGitSmartCommit("main")).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/git/smart-commit/active",
+      expect.any(Object),
+    );
+  });
+
   test("sendMessage forwards status events before final output", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

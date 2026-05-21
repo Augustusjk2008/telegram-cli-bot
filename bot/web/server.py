@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -205,26 +206,32 @@ from .api_service import (
 from bot.assistant.admin_audit import list_admin_audit, summarize_request, write_admin_audit
 from .git_service import (
     apply_git_stash,
+    commit_git_message,
     commit_git_changes,
     create_git_branch,
     discard_all_git_changes,
     discard_git_paths,
     drop_git_stash,
     fetch_git_remote,
+    generate_git_smart_commit_message,
     generate_git_commit_message,
     get_git_blame,
     get_git_commit_message_cli_config,
     get_git_diff,
     get_git_identity_config,
     get_git_overview,
+    get_git_smart_commit_repo_hint,
     get_git_tree_status,
     init_git_repository,
     list_git_branches,
     list_git_stashes,
+    preflight_git_smart_commit,
     pop_git_stash,
     pull_git_remote,
     push_git_remote,
     reset_git_commit_message_cli_config,
+    ensure_git_status_snapshot_unchanged,
+    stage_all_git_changes,
     stage_git_paths,
     stash_git_changes,
     switch_git_branch,
@@ -659,6 +666,10 @@ class WebApiServer:
         self._debug_tasks: set[asyncio.Task[Any]] = set()
         self.announcement_store = _ANNOUNCEMENT_STORE
         self.lan_chat_service = LanChatService(repo_root=_REPO_ROOT)
+        self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
+        self._git_smart_commit_latest_by_alias: dict[str, str] = {}
+        self._git_smart_commit_repo_locks: dict[str, str] = {}
+        self._git_smart_commit_task_by_job: dict[str, asyncio.Task[None]] = {}
         self._tunnel_service = tunnel_service or TunnelService(
             host=self._host,
             port=self._port,
@@ -964,6 +975,124 @@ class WebApiServer:
 
         logger.warning("复制 Web 公网地址到剪贴板失败: 未找到可用的剪贴板命令")
         return False
+
+    def _build_git_smart_commit_job(
+        self,
+        *,
+        alias: str,
+        user_id: int,
+    ) -> dict[str, Any]:
+        job_id = f"gsc_{uuid.uuid4().hex}"
+        job = {
+            "job_id": job_id,
+            "alias": alias,
+            "user_id": user_id,
+            "repo_root": "",
+            "status": "queued",
+            "phase": "preflight",
+            "message": "",
+            "overview": None,
+            "error": "",
+        }
+        self._git_smart_commit_jobs[job_id] = job
+        self._git_smart_commit_latest_by_alias[alias] = job_id
+        return job
+
+    def _git_smart_commit_snapshot(self, job: dict[str, Any]) -> dict[str, Any]:
+        overview = job.get("overview")
+        return {
+            "job_id": str(job.get("job_id") or ""),
+            "alias": str(job.get("alias") or ""),
+            "user_id": int(job.get("user_id") or 0),
+            "status": str(job.get("status") or "queued"),
+            "phase": str(job.get("phase") or "preflight"),
+            "message": str(job.get("message") or ""),
+            "overview": overview if isinstance(overview, dict) and overview else None,
+            "error": str(job.get("error") or ""),
+        }
+
+    def _set_git_smart_commit_job(
+        self,
+        job: dict[str, Any],
+        *,
+        status: str | None = None,
+        phase: str | None = None,
+        message: str | None = None,
+        overview: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        if status is not None:
+            job["status"] = status
+        if phase is not None:
+            job["phase"] = phase
+        if message is not None:
+            job["message"] = message
+        if overview is not None:
+            job["overview"] = overview
+        if error is not None:
+            job["error"] = error
+
+    def _get_git_smart_commit_job_or_raise(self, alias: str, job_id: str) -> dict[str, Any]:
+        job = self._git_smart_commit_jobs.get(job_id)
+        if not job or str(job.get("alias") or "") != alias:
+            raise WebApiError(404, "git_smart_commit_job_not_found", "未找到智能提交任务")
+        return job
+
+    async def _run_git_smart_commit_job(
+        self,
+        job_id: str,
+        *,
+        alias: str,
+        user_id: int,
+    ) -> None:
+        job = self._git_smart_commit_jobs.get(job_id)
+        if not job:
+            return
+
+        repo_root = str(job.get("repo_root") or "")
+        try:
+            self._set_git_smart_commit_job(job, status="running", phase="preflight", error="")
+            _working_dir, repo_root, snapshot = preflight_git_smart_commit(self.manager, alias, user_id)
+            lock_holder = self._git_smart_commit_repo_locks.get(repo_root)
+            if lock_holder and lock_holder != job_id:
+                raise WebApiError(409, "git_smart_commit_conflict", "当前仓库已有智能提交任务在运行")
+            self._git_smart_commit_repo_locks[repo_root] = job_id
+            job["repo_root"] = repo_root
+
+            self._set_git_smart_commit_job(job, phase="generating")
+            generated = await generate_git_smart_commit_message(
+                self.manager,
+                alias,
+                user_id,
+                repo_root=repo_root,
+            )
+            message = str(generated.get("message") or "").strip()
+            self._set_git_smart_commit_job(job, message=message)
+
+            ensure_git_status_snapshot_unchanged(repo_root, snapshot)
+
+            self._set_git_smart_commit_job(job, phase="staging")
+            stage_all_git_changes(repo_root)
+
+            self._set_git_smart_commit_job(job, phase="committing")
+            commit_git_message(repo_root, message)
+
+            self._set_git_smart_commit_job(
+                job,
+                status="succeeded",
+                phase="done",
+                overview=get_git_overview(self.manager, alias, user_id),
+                error="",
+            )
+        except WebApiError as exc:
+            self._set_git_smart_commit_job(job, status="failed", error=exc.message)
+        except Exception as exc:
+            logger.exception("smart commit job failed: %s", exc)
+            self._set_git_smart_commit_job(job, status="failed", error=str(exc) or "智能提交失败")
+        finally:
+            if repo_root and self._git_smart_commit_repo_locks.get(repo_root) == job_id:
+                self._git_smart_commit_repo_locks.pop(repo_root, None)
+            self._git_smart_commit_task_by_job.pop(job_id, None)
 
     def _build_public_url_qr_text(self, public_url: str) -> str:
         import qrcode
@@ -2054,6 +2183,44 @@ class WebApiServer:
         alias = self._manager_alias(request)
         data = await generate_git_commit_message(self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": data})
+
+    async def post_git_smart_commit(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        _working_dir, repo_root = get_git_smart_commit_repo_hint(self.manager, alias)
+        if repo_root and self._git_smart_commit_repo_locks.get(repo_root):
+            raise WebApiError(409, "git_smart_commit_conflict", "当前仓库已有智能提交任务在运行")
+
+        job = self._build_git_smart_commit_job(alias=alias, user_id=auth.user_id)
+        if repo_root:
+            job["repo_root"] = repo_root
+            self._git_smart_commit_repo_locks[repo_root] = str(job["job_id"])
+        task = asyncio.create_task(
+            self._run_git_smart_commit_job(
+                str(job["job_id"]),
+                alias=alias,
+                user_id=auth.user_id,
+            )
+        )
+        self._git_smart_commit_task_by_job[str(job["job_id"])] = task
+        return _json({"ok": True, "data": self._git_smart_commit_snapshot(job)})
+
+    async def get_git_smart_commit_active(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        _ = auth
+        job_id = self._git_smart_commit_latest_by_alias.get(alias)
+        if not job_id:
+            return _json({"ok": True, "data": None})
+        job = self._get_git_smart_commit_job_or_raise(alias, job_id)
+        return _json({"ok": True, "data": self._git_smart_commit_snapshot(job)})
+
+    async def get_git_smart_commit_job(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        _ = auth
+        job = self._get_git_smart_commit_job_or_raise(alias, request.match_info["job_id"])
+        return _json({"ok": True, "data": self._git_smart_commit_snapshot(job)})
 
     async def put_git_identity_view(self, request: web.Request) -> web.Response:
         base_auth = await self._with_auth(request)

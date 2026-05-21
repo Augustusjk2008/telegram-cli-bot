@@ -32,6 +32,7 @@ from .git_commit_message import (
 )
 
 GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
+GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
 
 
 class GitCommandError(RuntimeError):
@@ -111,6 +112,33 @@ def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subproce
         result = subprocess.run(
             _build_git_command(args),
             cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        _raise(500, "git_not_found", "未找到 git 可执行文件")
+        raise exc  # pragma: no cover
+
+    if check and result.returncode != 0:
+        output = (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
+        raise GitCommandError(output)
+    return result
+
+
+def _run_git_with_input(
+    repo_root: str,
+    args: list[str],
+    *,
+    input_text: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            _build_git_command(args),
+            cwd=repo_root,
+            input=input_text,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -636,54 +664,102 @@ def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
     }
 
 
-def get_git_commit_message_cli_config(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    config = manager.get_git_commit_cli_config(alias)
-    return build_git_commit_cli_config(profile, config)
+def _extract_untracked_paths(status_text: str) -> list[str]:
+    paths: list[str] = []
+    for raw_line in (status_text or "").splitlines():
+        entry = _parse_porcelain_entry(raw_line)
+        if entry is None or not entry["untracked"]:
+            continue
+        paths.append(str(entry["path"] or "").strip())
+    return _unique_paths(paths)
 
 
-async def update_git_commit_message_cli_config(
+def _read_untracked_file_preview(repo_root: str, relative_path: str) -> str:
+    target_path = _resolve_repo_worktree_path(repo_root, relative_path)
+    try:
+        raw = Path(target_path).read_bytes()
+    except OSError:
+        return f"--- {relative_path} ---\n[unreadable]"
+    if b"\x00" in raw:
+        return f"--- {relative_path} ---\n[binary file]"
+
+    preview = raw[:GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT].decode("utf-8", errors="replace").strip()
+    if len(raw) > GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT:
+        preview = f"{preview}\n...[truncated]".strip()
+    return f"--- {relative_path} ---\n{preview or '[empty file]'}"
+
+
+def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
+    status_text = _run_git(repo_root, ["status", "--short", "--untracked-files=all"], check=False).stdout or ""
+    staged_stat = _run_git(repo_root, ["diff", "--cached", "--stat"], check=False).stdout or ""
+    staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
+    unstaged_stat = _run_git(repo_root, ["diff", "--stat"], check=False).stdout or ""
+    unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
+
+    sections: list[str] = []
+    if staged_stat.strip() or staged_diff.strip():
+        sections.append(
+            "\n".join(
+                part
+                for part in [
+                    "=== STAGED CHANGES ===",
+                    staged_stat.strip(),
+                    staged_diff.strip(),
+                ]
+                if part
+            )
+        )
+    if unstaged_stat.strip() or unstaged_diff.strip():
+        sections.append(
+            "\n".join(
+                part
+                for part in [
+                    "=== UNSTAGED CHANGES ===",
+                    unstaged_stat.strip(),
+                    unstaged_diff.strip(),
+                ]
+                if part
+            )
+        )
+
+    untracked_paths = _extract_untracked_paths(status_text)
+    if untracked_paths:
+        previews = [_read_untracked_file_preview(repo_root, path) for path in untracked_paths]
+        sections.append("=== UNTRACKED FILES ===\n" + "\n\n".join(previews))
+
+    diff_text, diff_truncated = truncate_diff_text("\n\n".join(part for part in sections if part))
+    return {
+        "status_text": status_text,
+        "diff_text": diff_text,
+        "use_staged_diff": True,
+        "diff_truncated": diff_truncated,
+    }
+
+
+def _build_git_worktree_snapshot(repo_root: str) -> str:
+    status_text = _run_git(repo_root, ["status", "--porcelain=1", "--untracked-files=all"], check=False).stdout or ""
+    staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
+    unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
+    untracked_paths = _extract_untracked_paths(status_text)
+    untracked_preview = "\n\n".join(_read_untracked_file_preview(repo_root, path) for path in untracked_paths)
+    return "\n<<STATUS>>\n".join(
+        [
+            status_text,
+            "<<STAGED>>\n" + staged_diff,
+            "<<UNSTAGED>>\n" + unstaged_diff,
+            "<<UNTRACKED>>\n" + untracked_preview,
+        ]
+    )
+
+
+async def _generate_git_commit_message_from_context(
     manager: MultiBotManager,
     alias: str,
+    user_id: int,
     *,
-    cli_type: Any = None,
-    cli_path: Any = None,
-    key: Any = None,
-    value: Any = None,
+    repo_root: str,
+    context: dict[str, Any],
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    current = manager.get_git_commit_cli_config(alias)
-    next_cli_type = str(cli_type or current.cli_type or profile.cli_type).strip().lower()
-    next_cli_path = str(cli_path if cli_path is not None else current.cli_path).strip()
-    next_params = CliParamsConfig.from_dict(current.cli_params.to_dict())
-
-    key_text = str(key or "").strip()
-    if key_text:
-        try:
-            coerced_value = coerce_param_value(next_cli_type, key_text, value)
-        except ValueError as exc:
-            _raise(400, "invalid_param_value", str(exc))
-        next_params.set_param(next_cli_type, key_text, coerced_value)
-
-    try:
-        await manager.set_git_commit_cli_config(
-            alias,
-            cli_type=next_cli_type,
-            cli_path=next_cli_path,
-            cli_params=next_params,
-        )
-    except ValueError as exc:
-        _raise(400, "invalid_git_commit_cli_config", str(exc))
-    return get_git_commit_message_cli_config(manager, alias)
-
-
-async def reset_git_commit_message_cli_config(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    await manager.reset_git_commit_cli_config(alias)
-    return get_git_commit_message_cli_config(manager, alias)
-
-
-async def generate_git_commit_message(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    _working_dir, repo_root = _require_repo_root(manager, alias, user_id)
     profile = get_profile_or_raise(manager, alias)
     cli_config = manager.get_git_commit_cli_config(alias)
     cli_type = str(cli_config.cli_type or "").strip().lower()
@@ -692,7 +768,6 @@ async def generate_git_commit_message(manager: MultiBotManager, alias: str, user
     if not resolved_cli:
         _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
 
-    context = _read_git_commit_message_context(repo_root)
     prompt_text = build_commit_message_prompt(**context)
     env = _build_git_commit_cli_env()
     try:
@@ -756,6 +831,132 @@ async def generate_git_commit_message(manager: MultiBotManager, alias: str, user
     if not message:
         _raise(400, "git_commit_message_parse_failed", "未提取到 commit message")
     return {"message": message}
+
+
+def get_git_commit_message_cli_config(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    config = manager.get_git_commit_cli_config(alias)
+    return build_git_commit_cli_config(profile, config)
+
+
+async def update_git_commit_message_cli_config(
+    manager: MultiBotManager,
+    alias: str,
+    *,
+    cli_type: Any = None,
+    cli_path: Any = None,
+    key: Any = None,
+    value: Any = None,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    current = manager.get_git_commit_cli_config(alias)
+    next_cli_type = str(cli_type or current.cli_type or profile.cli_type).strip().lower()
+    next_cli_path = str(cli_path if cli_path is not None else current.cli_path).strip()
+    next_params = CliParamsConfig.from_dict(current.cli_params.to_dict())
+
+    key_text = str(key or "").strip()
+    if key_text:
+        try:
+            coerced_value = coerce_param_value(next_cli_type, key_text, value)
+        except ValueError as exc:
+            _raise(400, "invalid_param_value", str(exc))
+        next_params.set_param(next_cli_type, key_text, coerced_value)
+
+    try:
+        await manager.set_git_commit_cli_config(
+            alias,
+            cli_type=next_cli_type,
+            cli_path=next_cli_path,
+            cli_params=next_params,
+        )
+    except ValueError as exc:
+        _raise(400, "invalid_git_commit_cli_config", str(exc))
+    return get_git_commit_message_cli_config(manager, alias)
+
+
+async def reset_git_commit_message_cli_config(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    await manager.reset_git_commit_cli_config(alias)
+    return get_git_commit_message_cli_config(manager, alias)
+
+
+async def generate_git_commit_message(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    _working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    context = _read_git_commit_message_context(repo_root)
+    return await _generate_git_commit_message_from_context(
+        manager,
+        alias,
+        user_id,
+        repo_root=repo_root,
+        context=context,
+    )
+
+
+def get_git_status_porcelain_snapshot(repo_root: str) -> str:
+    return _build_git_worktree_snapshot(repo_root)
+
+
+def get_git_status_porcelain_text(repo_root: str) -> str:
+    return _run_git(repo_root, ["status", "--porcelain=1", "--untracked-files=all"], check=False).stdout or ""
+
+
+def get_git_smart_commit_repo_hint(manager: MultiBotManager, alias: str) -> tuple[str, str]:
+    working_dir = _get_git_working_dir(manager, alias)
+    return working_dir, _resolve_repo_root(working_dir) or ""
+
+
+def preflight_git_smart_commit(manager: MultiBotManager, alias: str, user_id: int) -> tuple[str, str, str]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    status_text = get_git_status_porcelain_text(repo_root)
+    if not status_text.strip():
+        _raise(409, "git_no_changes", "当前没有可提交的改动")
+    snapshot = get_git_status_porcelain_snapshot(repo_root)
+
+    cli_config = manager.get_git_commit_cli_config(alias)
+    cli_path = str(cli_config.cli_path or "").strip()
+    resolved_cli = resolve_cli_executable(cli_path, repo_root)
+    if not resolved_cli:
+        _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
+    return working_dir, repo_root, snapshot
+
+
+async def generate_git_smart_commit_message(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    repo_root: str,
+) -> dict[str, Any]:
+    context = _read_git_smart_commit_message_context(repo_root)
+    return await _generate_git_commit_message_from_context(
+        manager,
+        alias,
+        user_id,
+        repo_root=repo_root,
+        context=context,
+    )
+
+
+def ensure_git_status_snapshot_unchanged(repo_root: str, expected_snapshot: str) -> None:
+    current_snapshot = get_git_status_porcelain_snapshot(repo_root)
+    if current_snapshot != expected_snapshot:
+        _raise(409, "git_worktree_changed", "生成期间工作区已变化，请重新生成提交说明")
+
+
+def stage_all_git_changes(repo_root: str) -> None:
+    try:
+        _run_git(repo_root, ["add", "-A"])
+    except GitCommandError as exc:
+        _raise(400, "git_stage_failed", str(exc))
+
+
+def commit_git_message(repo_root: str, message: str) -> None:
+    commit_message = (message or "").strip()
+    if not commit_message:
+        _raise(400, "empty_commit_message", "提交说明不能为空")
+    try:
+        _run_git_with_input(repo_root, ["commit", "-F", "-"], input_text=commit_message)
+    except GitCommandError as exc:
+        _raise(400, "git_commit_failed", str(exc))
 
 
 def list_git_branches(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

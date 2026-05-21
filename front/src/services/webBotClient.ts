@@ -62,6 +62,7 @@ import type {
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
+  GitSmartCommitJob,
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
@@ -267,6 +268,9 @@ export interface WebBotClient {
   updateGitCommitMessageConfig(botAlias: string, input: GitCommitMessageCliConfigUpdateInput): Promise<GitCommitMessageCliConfig>;
   resetGitCommitMessageConfig(botAlias: string): Promise<GitCommitMessageCliConfig>;
   generateGitCommitMessage(botAlias: string): Promise<GitCommitMessageGenerateResult>;
+  startGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob>;
+  getActiveGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob | null>;
+  getGitSmartCommitJob(botAlias: string, jobId: string): Promise<GitSmartCommitJob>;
   getLanChatConfig(): Promise<LanChatConfig>;
   updateLanChatConfig(input: LanChatConfigInput): Promise<LanChatConfig>;
   getLanChatStatus(): Promise<LanChatStatus>;

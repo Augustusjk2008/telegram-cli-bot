@@ -3774,6 +3774,332 @@ async def test_git_commit_message_routes_config_and_generate(
     assert reset_resp.status == 200
     assert reset_payload["data"]["cli_type"] == "codex"
 
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_active_route_returns_null_without_job(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            active_resp = await client.get("/api/bots/main/git/smart-commit/active")
+            active_payload = await active_resp.json()
+
+    assert active_resp.status == 200
+    assert active_payload["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_routes_succeed_and_support_multiline_message(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    (repo_dir / "new.txt").write_text("new\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    captured_prompt: dict[str, str] = {}
+    generated_message = "feat(git): smart commit\n\n- include tracked\n- include untracked"
+
+    async def fake_generate(_manager, _alias, _user_id, *, repo_root):
+        assert repo_root == str(repo_dir)
+        status_text = _run_git_command(repo_dir, "status", "--short").stdout
+        diff_text = _run_git_command(repo_dir, "diff", "--find-renames").stdout
+        captured_prompt["status"] = status_text
+        captured_prompt["diff"] = diff_text
+        return {"message": generated_message}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.generate_git_smart_commit_message", side_effect=fake_generate):
+                start_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+                start_payload = await start_resp.json()
+                assert start_resp.status == 200
+                job_id = start_payload["data"]["job_id"]
+                assert start_payload["data"]["status"] in {"queued", "running"}
+
+                for _ in range(100):
+                    job_resp = await client.get(f"/api/bots/main/git/smart-commit/{job_id}")
+                    job_payload = await job_resp.json()
+                    assert job_resp.status == 200
+                    if job_payload["data"]["status"] in {"succeeded", "failed", "canceled"}:
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("smart commit job did not finish")
+
+                active_resp = await client.get("/api/bots/main/git/smart-commit/active")
+                active_payload = await active_resp.json()
+
+    assert job_payload["data"]["status"] == "succeeded"
+    assert job_payload["data"]["phase"] == "done"
+    assert job_payload["data"]["message"] == generated_message
+    assert job_payload["data"]["error"] == ""
+    assert job_payload["data"]["overview"]["is_clean"] is True
+    assert active_resp.status == 200
+    assert active_payload["data"]["job_id"] == job_id
+    assert active_payload["data"]["status"] == "succeeded"
+    assert "tracked.txt" in captured_prompt["status"]
+    assert "?? new.txt" in captured_prompt["status"]
+    assert "diff --git a/tracked.txt b/tracked.txt" in captured_prompt["diff"]
+    committed_message = _run_git_command(repo_dir, "log", "-1", "--pretty=%B").stdout.strip()
+    assert committed_message == generated_message
+
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_route_fails_when_generation_fails(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("after\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch(
+                "bot.web.server.generate_git_smart_commit_message",
+                side_effect=WebApiError(400, "git_commit_message_failed", "CLI boom"),
+            ):
+                start_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+                start_payload = await start_resp.json()
+                job_id = start_payload["data"]["job_id"]
+
+                for _ in range(100):
+                    job_resp = await client.get(f"/api/bots/main/git/smart-commit/{job_id}")
+                    job_payload = await job_resp.json()
+                    if job_payload["data"]["status"] == "failed":
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("smart commit job did not fail")
+
+    assert job_payload["data"]["phase"] == "generating"
+    assert job_payload["data"]["message"] == ""
+    assert job_payload["data"]["overview"] is None
+    assert job_payload["data"]["error"] == "CLI boom"
+    assert _run_git_command(repo_dir, "status", "--short").stdout.strip() == "M tracked.txt"
+
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_route_rejects_non_git_repo(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    (workspace / "note.txt").write_text("x\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            start_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+            start_payload = await start_resp.json()
+            job_id = start_payload["data"]["job_id"]
+
+            for _ in range(100):
+                job_resp = await client.get(f"/api/bots/main/git/smart-commit/{job_id}")
+                job_payload = await job_resp.json()
+                if job_payload["data"]["status"] == "failed":
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("smart commit job did not fail")
+
+    assert job_payload["data"]["phase"] == "preflight"
+    assert job_payload["data"]["error"] == "当前目录不在 Git 仓库中"
+
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_route_rejects_clean_repo(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            start_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+            start_payload = await start_resp.json()
+            job_id = start_payload["data"]["job_id"]
+
+            for _ in range(100):
+                job_resp = await client.get(f"/api/bots/main/git/smart-commit/{job_id}")
+                job_payload = await job_resp.json()
+                if job_payload["data"]["status"] == "failed":
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("smart commit job did not fail")
+
+    assert job_payload["data"]["phase"] == "preflight"
+    assert job_payload["data"]["error"] == "当前没有可提交的改动"
+
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_route_rejects_concurrent_job_with_same_repo(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("after\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    blocker = asyncio.Event()
+
+    async def slow_generate(_manager, _alias, _user_id, *, repo_root):
+        assert repo_root == str(repo_dir)
+        await blocker.wait()
+        return {"message": "feat(git): slow"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.generate_git_smart_commit_message", side_effect=slow_generate):
+                first_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+                first_payload = await first_resp.json()
+                assert first_resp.status == 200
+
+                for _ in range(100):
+                    active_resp = await client.get("/api/bots/main/git/smart-commit/active")
+                    active_payload = await active_resp.json()
+                    if active_payload["data"]["status"] in {"queued", "running"}:
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("smart commit job did not become active")
+
+                second_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+                second_payload = await second_resp.json()
+                blocker.set()
+
+                for _ in range(100):
+                    job_resp = await client.get(
+                        f"/api/bots/main/git/smart-commit/{first_payload['data']['job_id']}"
+                    )
+                    job_payload = await job_resp.json()
+                    if job_payload["data"]["status"] == "succeeded":
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("smart commit job did not finish")
+
+    assert second_resp.status == 409
+    assert second_payload["error"]["code"] == "git_smart_commit_conflict"
+
+
+@pytest.mark.asyncio
+async def test_git_smart_commit_route_fails_when_worktree_changes_during_generation(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    async def dirty_generate(_manager, _alias, _user_id, *, repo_root):
+        assert repo_root == str(repo_dir)
+        tracked.write_text("before\nafter\nmutated\n", encoding="utf-8")
+        return {"message": "feat(git): race"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.generate_git_smart_commit_message", side_effect=dirty_generate):
+                start_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+                start_payload = await start_resp.json()
+                job_id = start_payload["data"]["job_id"]
+
+                for _ in range(100):
+                    job_resp = await client.get(f"/api/bots/main/git/smart-commit/{job_id}")
+                    job_payload = await job_resp.json()
+                    if job_payload["data"]["status"] == "failed":
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("smart commit job did not fail")
+
+    assert job_payload["data"]["phase"] == "generating"
+    assert job_payload["data"]["message"] == "feat(git): race"
+    assert job_payload["data"]["error"] == "生成期间工作区已变化，请重新生成提交说明"
+
 @pytest.mark.asyncio
 async def test_file_routes_serialize_last_modified_ns_as_string(
     web_manager: MultiBotManager,

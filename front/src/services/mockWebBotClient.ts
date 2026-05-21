@@ -93,6 +93,7 @@ import type {
   GitIdentityScope,
   GitProxySettings,
   GitOverview,
+  GitSmartCommitJob,
   GitStashList,
   GitTreeStatus,
   FileMoveResult,
@@ -1163,6 +1164,9 @@ export class MockWebBotClient implements WebBotClient {
   ]);
   private gitIdentityConfigs = new Map<string, GitIdentityConfig>();
   private gitCommitMessageConfig: GitCommitMessageCliConfig | null = null;
+  private gitSmartCommitJobs = new Map<string, GitSmartCommitJob>();
+  private gitSmartCommitActiveJobs = new Map<string, string>();
+  private gitSmartCommitJobSeq = 1;
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -4361,6 +4365,28 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  private setGitSmartCommitJob(job: GitSmartCommitJob) {
+    this.gitSmartCommitJobs.set(job.jobId, job);
+    this.gitSmartCommitActiveJobs.set(job.alias, job.jobId);
+    if (job.overview) {
+      this.gitOverviews.set(job.alias, job.overview);
+    }
+  }
+
+  private cloneGitSmartCommitJob(job: GitSmartCommitJob | null | undefined): GitSmartCommitJob | null {
+    if (!job) {
+      return null;
+    }
+    return {
+      ...job,
+      overview: job.overview ? {
+        ...job.overview,
+        changedFiles: job.overview.changedFiles.map((item) => ({ ...item })),
+        recentCommits: job.overview.recentCommits.map((item) => ({ ...item })),
+      } : null,
+    };
+  }
+
   async stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult> {
     return this.actionWithOverview(botAlias, "已暂存所选文件", (overview) => ({
       ...overview,
@@ -4658,6 +4684,88 @@ export class MockWebBotClient implements WebBotClient {
     return {
       message: `feat(${scope}): update changed files`,
     };
+  }
+
+  async startGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob> {
+    const current = this.gitSmartCommitActiveJobs.get(botAlias);
+    if (current) {
+      const existing = this.gitSmartCommitJobs.get(current);
+      if (existing && (existing.status === "queued" || existing.status === "running")) {
+        return this.cloneGitSmartCommitJob(existing) as GitSmartCommitJob;
+      }
+    }
+    const overview = await this.getGitOverview(botAlias);
+    const firstChanged = overview.changedFiles[0]?.path || "repo";
+    const scope = firstChanged.includes("/")
+      ? firstChanged.split("/")[0]
+      : firstChanged.replace(/\.[^.]+$/, "") || "repo";
+    const message = `feat(${scope}): update changed files`;
+    const committedOverview: GitOverview = {
+      ...overview,
+      isClean: true,
+      changedFiles: [],
+      recentCommits: [
+        {
+          hash: `${Date.now()}`,
+          shortHash: `${Date.now()}`.slice(-7),
+          authorName: "Web Bot",
+          authoredAt: new Date().toISOString(),
+          subject: message,
+          message,
+        },
+        ...overview.recentCommits,
+      ],
+    };
+    const jobId = `git-smart-${this.gitSmartCommitJobSeq++}`;
+    const job: GitSmartCommitJob = {
+      jobId,
+      alias: botAlias,
+      userId: 1001,
+      status: "running",
+      phase: "generating",
+      message: "",
+      error: "",
+      overview: null,
+    };
+    this.setGitSmartCommitJob(job);
+    window.setTimeout(() => {
+      this.setGitSmartCommitJob({
+        ...job,
+        status: "running",
+        phase: "staging",
+        message,
+      });
+    }, 50);
+    window.setTimeout(() => {
+      this.setGitSmartCommitJob({
+        ...job,
+        status: "running",
+        phase: "committing",
+        message,
+      });
+    }, 100);
+    window.setTimeout(() => {
+      this.setGitSmartCommitJob({
+        ...job,
+        status: "succeeded",
+        phase: "done",
+        message,
+        overview: committedOverview,
+      });
+    }, 150);
+    return this.cloneGitSmartCommitJob(job) as GitSmartCommitJob;
+  }
+
+  async getActiveGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob | null> {
+    return this.cloneGitSmartCommitJob(this.gitSmartCommitJobs.get(this.gitSmartCommitActiveJobs.get(botAlias) || ""));
+  }
+
+  async getGitSmartCommitJob(_botAlias: string, jobId: string): Promise<GitSmartCommitJob> {
+    const job = this.gitSmartCommitJobs.get(jobId);
+    if (!job) {
+      throw new WebApiClientError("智能提交任务不存在", { status: 404, code: "git_smart_commit_not_found" });
+    }
+    return this.cloneGitSmartCommitJob(job) as GitSmartCommitJob;
   }
 
   async getLanChatConfig(): Promise<LanChatConfig> {
@@ -5600,6 +5708,20 @@ export class MockWebBotClient implements WebBotClient {
     this.moveAgentScopedKeys(this.activeConversationByBot, botAlias, alias);
     this.moveKey(this.gitOverviews, botAlias, alias);
     this.moveKey(this.gitIdentityConfigs, botAlias, alias);
+    if (this.gitSmartCommitActiveJobs.has(botAlias)) {
+      const activeJobId = this.gitSmartCommitActiveJobs.get(botAlias) || "";
+      this.gitSmartCommitActiveJobs.delete(botAlias);
+      this.gitSmartCommitActiveJobs.set(alias, activeJobId);
+      const activeJob = this.gitSmartCommitJobs.get(activeJobId);
+      if (activeJob) {
+        this.gitSmartCommitJobs.set(activeJobId, { ...activeJob, alias });
+      }
+    }
+    for (const [jobId, job] of Array.from(this.gitSmartCommitJobs.entries())) {
+      if (job.alias === botAlias) {
+        this.gitSmartCommitJobs.set(jobId, { ...job, alias });
+      }
+    }
     this.moveKey(this.assistantCronJobs, botAlias, alias);
     this.moveKey(this.assistantProposals, botAlias, alias);
     this.moveKey(this.assistantMemories, botAlias, alias);
@@ -5658,6 +5780,12 @@ export class MockWebBotClient implements WebBotClient {
     this.workdirOverrides.delete(botAlias);
     this.gitOverviews.delete(botAlias);
     this.gitIdentityConfigs.delete(botAlias);
+    this.gitSmartCommitActiveJobs.delete(botAlias);
+    for (const [jobId, job] of Array.from(this.gitSmartCommitJobs.entries())) {
+      if (job.alias === botAlias) {
+        this.gitSmartCommitJobs.delete(jobId);
+      }
+    }
     this.assistantCronJobs.delete(botAlias);
     this.assistantProposals.delete(botAlias);
     this.assistantMemories.delete(botAlias);

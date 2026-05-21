@@ -32,6 +32,7 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitOverview,
+  GitSmartCommitJob,
   GitStashList,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -122,6 +123,29 @@ function identityForScope(config: GitIdentityConfig | null, scope: GitIdentitySc
   return scope === "local" ? config?.local : config?.global;
 }
 
+function isGitSmartCommitRunning(job: GitSmartCommitJob | null) {
+  return job?.status === "queued" || job?.status === "running";
+}
+
+function gitSmartCommitPhaseText(job: GitSmartCommitJob | null) {
+  if (!job) {
+    return "";
+  }
+  if (job.phase === "staging") {
+    return "暂存中...";
+  }
+  if (job.phase === "committing") {
+    return "提交中...";
+  }
+  if (job.phase === "done" && job.status === "succeeded") {
+    return "智能提交完成";
+  }
+  if (job.phase === "done" && job.status === "failed") {
+    return "智能提交失败";
+  }
+  return "生成说明...";
+}
+
 export function GitScreen({
   botAlias,
   botAvatarName,
@@ -152,9 +176,12 @@ export function GitScreen({
   const [identityName, setIdentityName] = useState("");
   const [identityEmail, setIdentityEmail] = useState("");
   const [identityLoading, setIdentityLoading] = useState(false);
+  const [smartCommitJob, setSmartCommitJob] = useState<GitSmartCommitJob | null>(null);
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
   const isGeneratingCommitMessage = actionLoading === "generate-commit-message";
+  const isSmartCommitRunning = isGitSmartCommitRunning(smartCommitJob);
+  const mutationBusy = actionLoading !== "" || isSmartCommitRunning;
   const groups = useMemo(() => groupedFiles(overview), [overview]);
   const changeGroups = useMemo(
     () => ([
@@ -170,25 +197,94 @@ export function GitScreen({
   );
   const totalChanges = groups.staged.length + groups.unstaged.length + groups.untracked.length;
 
+  function syncOverview(next: GitOverview | null) {
+    setOverview(next);
+    onOverviewChange?.(next);
+  }
+
   async function loadOverview() {
     setLoading(true);
     setError("");
     try {
       const next = await client.getGitOverview(botAlias);
-      setOverview(next);
-      onOverviewChange?.(next);
+      syncOverview(next);
     } catch (err) {
-      setOverview(null);
+      syncOverview(null);
       setError(err instanceof Error ? err.message : "加载 Git 状态失败");
-      onOverviewChange?.(null);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshOverviewQuietly() {
+    try {
+      syncOverview(await client.getGitOverview(botAlias));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载 Git 状态失败");
     }
   }
 
   useEffect(() => {
     void loadOverview();
     void loadIdentityConfig("global");
+  }, [botAlias, client]);
+
+  async function applySmartCommitJob(job: GitSmartCommitJob, options?: { refreshOverview?: boolean }) {
+    setSmartCommitJob(job);
+    if (job.message && job.status !== "succeeded") {
+      setCommitMessage(job.message);
+    }
+    if (job.overview) {
+      syncOverview(job.overview);
+    }
+    if (job.status === "succeeded") {
+      if (options?.refreshOverview !== false) {
+        await refreshOverviewQuietly();
+      }
+      setCommitMessage("");
+      setError("");
+      setNotice("智能提交完成");
+      return;
+    }
+    if (job.status === "failed") {
+      if (options?.refreshOverview !== false) {
+        await refreshOverviewQuietly();
+      }
+      setNotice("");
+      setError(job.error || "智能提交失败");
+      return;
+    }
+    if (job.status === "canceled") {
+      if (options?.refreshOverview !== false) {
+        await refreshOverviewQuietly();
+      }
+      setNotice("");
+      setError(job.error || "智能提交已取消");
+      return;
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    setSmartCommitJob(null);
+    async function restoreSmartCommit() {
+      try {
+        const job = await client.getActiveGitSmartCommit(botAlias);
+        if (cancelled || !job) {
+          return;
+        }
+        await applySmartCommitJob(job);
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        setError(err instanceof Error ? err.message : "加载智能提交状态失败");
+      }
+    }
+    void restoreSmartCommit();
+    return () => {
+      cancelled = true;
+    };
   }, [botAlias, client]);
 
   useEffect(() => {
@@ -202,6 +298,32 @@ export function GitScreen({
       setBlame(null);
     }
   }, [botAlias, client, overview?.repoFound]);
+
+  useEffect(() => {
+    if (!smartCommitJob?.jobId || !isSmartCommitRunning) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await client.getGitSmartCommitJob(botAlias, smartCommitJob.jobId);
+        if (cancelled) {
+          return;
+        }
+        await applySmartCommitJob(next);
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        setNotice("");
+        setError(err instanceof Error ? err.message : "查询智能提交状态失败");
+      }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [botAlias, client, isSmartCommitRunning, smartCommitJob]);
 
   function applyIdentityDraft(config: GitIdentityConfig, scope: GitIdentityScope) {
     const nextScope = scope === "local" && !config.repoFound ? "global" : scope;
@@ -240,8 +362,7 @@ export function GitScreen({
     setNotice("");
     try {
       const result = await fn();
-      setOverview(result.overview);
-      onOverviewChange?.(result.overview);
+      syncOverview(result.overview);
       setNotice(result.message || "Git 操作完成");
       if (key === "commit") {
         setCommitMessage("");
@@ -391,6 +512,20 @@ export function GitScreen({
       setNotice("已生成提交说明");
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成提交说明失败");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  async function startSmartCommit() {
+    setActionLoading("smart-commit");
+    setError("");
+    setNotice("");
+    try {
+      const job = await client.startGitSmartCommit(botAlias);
+      await applySmartCommitJob(job, { refreshOverview: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "发起智能提交失败");
     } finally {
       setActionLoading("");
     }
@@ -548,7 +683,7 @@ export function GitScreen({
                                         aria-label={`暂存 ${item.path}`}
                                         title={`暂存 ${item.path}`}
                                         onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]))}
-                                        disabled={actionLoading !== ""}
+                                        disabled={mutationBusy}
                                         className={iconButtonClass()}
                                       >
                                         <Plus className="h-3 w-3" />
@@ -560,7 +695,7 @@ export function GitScreen({
                                         aria-label={`取消暂存 ${item.path}`}
                                         title={`取消暂存 ${item.path}`}
                                         onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]))}
-                                        disabled={actionLoading !== ""}
+                                        disabled={mutationBusy}
                                         className={iconButtonClass()}
                                       >
                                         <Minus className="h-3 w-3" />
@@ -571,7 +706,7 @@ export function GitScreen({
                                       aria-label={`丢弃 ${item.path}`}
                                       title={`丢弃 ${item.path}`}
                                       onClick={() => void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]))}
-                                      disabled={actionLoading !== ""}
+                                      disabled={mutationBusy}
                                       className={iconButtonClass()}
                                     >
                                       <Trash2 className="h-3 w-3" />
@@ -697,7 +832,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void switchBranch()}
-                      disabled={actionLoading !== "" || !selectedBranch}
+                      disabled={mutationBusy || !selectedBranch}
                       className={buttonClass()}
                     >
                       <GitPullRequest className="h-3.5 w-3.5" />
@@ -718,7 +853,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void createBranch()}
-                      disabled={actionLoading !== "" || !branchDraft.trim()}
+                      disabled={mutationBusy || !branchDraft.trim()}
                       className={buttonClass()}
                     >
                       <GitFork className="h-3.5 w-3.5" />
@@ -751,7 +886,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void runAction("fetch", () => client.fetchGitRemote(botAlias))}
-                      disabled={actionLoading !== ""}
+                      disabled={mutationBusy}
                       className={buttonClass()}
                     >
                       <DownloadCloud className="h-3.5 w-3.5" />
@@ -760,7 +895,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void runAction("pull", () => client.pullGitRemote(botAlias))}
-                      disabled={actionLoading !== ""}
+                      disabled={mutationBusy}
                       className={buttonClass()}
                     >
                       <DownloadCloud className="h-3.5 w-3.5" />
@@ -769,7 +904,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void runAction("push", () => client.pushGitRemote(botAlias))}
-                      disabled={actionLoading !== ""}
+                      disabled={mutationBusy}
                       className={buttonClass()}
                     >
                       <UploadCloud className="h-3.5 w-3.5" />
@@ -778,7 +913,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void stashChanges()}
-                      disabled={actionLoading !== ""}
+                      disabled={mutationBusy}
                       className={buttonClass()}
                     >
                       <Archive className="h-3.5 w-3.5" />
@@ -820,7 +955,7 @@ export function GitScreen({
                                 aria-label={`应用 ${stash.ref}`}
                                 title={`应用 ${stash.ref}`}
                                 onClick={() => void applyStash(stash.ref)}
-                                disabled={actionLoading !== ""}
+                                disabled={mutationBusy}
                                 className={iconButtonClass()}
                               >
                                 <ArchiveRestore className="h-3 w-3" />
@@ -830,7 +965,7 @@ export function GitScreen({
                                 aria-label={`删除 ${stash.ref}`}
                                 title={`删除 ${stash.ref}`}
                                 onClick={() => void dropStash(stash.ref)}
-                                disabled={actionLoading !== ""}
+                                disabled={mutationBusy}
                                 className={iconButtonClass()}
                               >
                                 <Trash2 className="h-3 w-3" />
@@ -851,7 +986,7 @@ export function GitScreen({
                       aria-label="生成 commit message"
                       title="生成 commit message"
                       onClick={() => void generateCommitMessage()}
-                      disabled={actionLoading !== "" || overview.isClean}
+                      disabled={mutationBusy || overview.isClean}
                       className={buttonClass()}
                     >
                       {isGeneratingCommitMessage ? (
@@ -867,11 +1002,23 @@ export function GitScreen({
                       value={commitMessage}
                       onChange={(event) => setCommitMessage(event.target.value)}
                       rows={5}
+                      disabled={isSmartCommitRunning}
                       placeholder="输入 commit message"
                       aria-label="commit message"
                       className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
                   </div>
+                  {smartCommitJob ? (
+                    <div className={sectionBodyClass("space-y-1 text-xs")} data-testid="git-smart-commit-status">
+                      <div className="font-medium text-[var(--text)]">{gitSmartCommitPhaseText(smartCommitJob)}</div>
+                      {smartCommitJob.message ? (
+                        <div className="whitespace-pre-wrap text-[var(--muted)]">{smartCommitJob.message}</div>
+                      ) : null}
+                      {smartCommitJob.error ? (
+                        <div className="text-red-600">{smartCommitJob.error}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <button
                       type="button"
@@ -882,7 +1029,7 @@ export function GitScreen({
                           overview: result.overview,
                         };
                       })}
-                      disabled={actionLoading !== "" || stageAllPaths.length === 0}
+                      disabled={mutationBusy || stageAllPaths.length === 0}
                       className={buttonClass()}
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" />
@@ -891,7 +1038,7 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void runAction("discard-all", () => client.discardAllGitChanges(botAlias))}
-                      disabled={actionLoading !== "" || overview.isClean}
+                      disabled={mutationBusy || overview.isClean}
                       className={buttonClass()}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -900,11 +1047,24 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage))}
-                      disabled={actionLoading !== "" || overview.isClean}
+                      disabled={mutationBusy || overview.isClean}
                       className={buttonClass("primary")}
                     >
                       <SendHorizontal className="h-3.5 w-3.5" />
                       {actionLoading === "commit" ? "提交中..." : "提交更改"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void startSmartCommit()}
+                      disabled={mutationBusy || overview.isClean}
+                      className={buttonClass()}
+                    >
+                      {isSmartCommitRunning ? (
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                      智能提交
                     </button>
                   </div>
                 </section>
@@ -1020,7 +1180,7 @@ export function GitScreen({
                   <button
                     type="button"
                     onClick={() => void saveGitIdentity()}
-                    disabled={actionLoading !== "" || identityLoading || !identityName.trim() || !identityEmail.trim()}
+                    disabled={mutationBusy || identityLoading || !identityName.trim() || !identityEmail.trim()}
                     className={buttonClass("primary")}
                   >
                     <Save className="h-3.5 w-3.5" />

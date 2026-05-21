@@ -1491,6 +1491,21 @@ export type GitActionResult = {
   overview: GitOverview;
 };
 
+export type GitSmartCommitStatus = "queued" | "running" | "succeeded" | "failed" | "canceled" | string;
+
+export type GitSmartCommitPhase = "preflight" | "generating" | "staging" | "committing" | "done" | string;
+
+export type GitSmartCommitJob = {
+  jobId: string;
+  alias: string;
+  userId: number;
+  status: GitSmartCommitStatus;
+  phase: GitSmartCommitPhase;
+  message: string;
+  error: string;
+  overview: GitOverview | null;
+};
+
 export type GitBranchSummary = {
   name: string;
   current: boolean;
