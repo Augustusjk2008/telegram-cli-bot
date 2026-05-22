@@ -33,6 +33,33 @@ def test_portable_build_script_only_copies_tracked_files():
     assert 'Write-DistributionMarker -Root $packageRoot -PackageKind "portable" -Platform "windows-x64"' in content
 
 
+def test_windows_portable_build_does_not_bundle_codex_by_default():
+    content = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "function Install-PortableCodex" not in content
+    assert "Install-PortableCodex -PackageRoot" not in content
+    assert "CLI_PATH=codex" in content
+    assert "CLI_PATH=tools\\codex\\codex.exe" not in content
+    assert 'Join-Path $scriptDir "tools\\codex"' not in content
+    assert 'Join-Path $scriptDir "tools\\git\\cmd"' in content
+    assert 'Join-Path $scriptDir "tools\\git\\bin"' in content
+    assert 'Join-Path $scriptDir "tools\\git\\usr\\bin"' in content
+    assert 'Join-Path $scriptDir "tools\\git\\mingw64\\bin"' in content
+    assert 'Join-Path $PackageRoot "tools\\codex\\codex.exe"' not in content
+    assert "$codexExe" not in content
+    assert "包内 Codex 校验失败" not in content
+
+
+def test_windows_portable_readme_does_not_claim_bundled_codex():
+    content = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "内置 Codex" not in content
+    assert "Codex 来源" not in content
+    assert "不内置 AI CLI" in content
+    assert "codex --version / claude --version / kimi info" in content
+    assert "CLI_TYPE / CLI_PATH" in content
+
+
 def test_windows_portable_dependencies_include_tzdata():
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
 

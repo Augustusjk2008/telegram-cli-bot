@@ -1904,7 +1904,7 @@ test("restores queued message from storage and drains it after polling becomes i
       createdAt: new Date().toISOString(),
       state: "done",
     }]);
-  const sendMessage = vi.fn(async () => ({
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
     id: "assistant-restored-queue",
     role: "assistant",
     text: "已处理刷新后继续",

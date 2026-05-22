@@ -1,6 +1,6 @@
 # Orbit Safe Claw
 
-远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude`、项目文件、Git、终端、插件视图、Assistant 自动化和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent、集群任务和后台维护流程。
+远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude` / `kimi`、项目文件、Git、终端、插件视图、Assistant 自动化和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent、集群任务和后台维护流程。
 
 ## 核心能力
 
@@ -26,8 +26,10 @@
 Windows：
 
 1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
-2. 下载最新 `orbit-safe-claw-windows-x64-<version>.zip`
-3. 解压后运行 `install.bat`
+2. 绿色版：下载 `orbit-safe-claw-windows-x64-<version>.zip`，解压后运行 `start.bat`
+3. 安装版：下载 `orbit-safe-claw-windows-x64-installer-<version>.zip`，解压后运行 `install.bat`
+
+Windows 绿色版已带 Python、Git 和前端构建产物，无需安装 Python / Node / Git；不内置 AI CLI。使用前需本机可运行 `codex --version` / `claude --version` / `kimi info`，并可在 Web 设置页或 `.env` 修改 `CLI_TYPE` / `CLI_PATH`。
 
 Linux：
 
@@ -56,7 +58,7 @@ curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/ma
 - 前端依赖和构建
 - `.env`
 
-安装器会检查本机 `codex` / `claude` 可用性，并给出后续配置提示。
+安装器会检查本机 `codex` / `claude` / `kimi` 可用性，并给出后续配置提示。
 
 ## 如何运行
 
@@ -124,7 +126,7 @@ WEB_API_TOKEN=change-this-password
 
 ## 工作界面
 
-- `cli` Bot：把 Web 消息转发到本地 `codex` / `claude`，保留会话、trace、CLI 参数和子 agent 作用域。
+- `cli` Bot：把 Web 消息转发到本地 `codex` / `claude` / `kimi`，保留会话、trace、CLI 参数和子 agent 作用域。
 - `assistant` Bot：走宿主管理流程，在工作目录下维护 `.assistant/`，用于长期记忆、任务编排和自动化维护。
 - Desktop Workbench：面向重复开发操作，集中承载文件树、编辑器、Git、终端、聊天和插件视图。
 - Admin Center：面向运维管理，集中承载账号权限、邀请、公告和更新。
