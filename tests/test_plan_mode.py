@@ -43,6 +43,7 @@ def test_build_plan_mode_prompt_uses_plan_draft_protocol_without_file_instructio
     assert "不要修改文件" in prompt
     assert "不要创建文件" in prompt
     assert "会改变项目状态的命令" in prompt
+    assert "写的 plan 应详细、可执行" in prompt
     assert "docs/plan" not in prompt
 
 

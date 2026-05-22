@@ -64,6 +64,28 @@ test("renders mermaid code fences as svg diagrams", async () => {
   expect(screen.queryByRole("button", { name: "复制代码块" })).not.toBeInTheDocument();
 });
 
+test("keeps rendered mermaid diagram stable when parent rerenders with same content", async () => {
+  const content = [
+    "```mermaid",
+    "graph TD",
+    "A-->C",
+    "```",
+  ].join("\n");
+  const { rerender } = render(<MarkdownPreview content={content} />);
+
+  await waitFor(() => {
+    expect(mermaidRenderMock).toHaveBeenCalledTimes(1);
+  });
+  expect(screen.queryByText("正在渲染 Mermaid 图表...")).not.toBeInTheDocument();
+
+  rerender(<MarkdownPreview content={content} />);
+
+  expect(screen.queryByText("正在渲染 Mermaid 图表...")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(mermaidRenderMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 test("copies fenced code blocks", async () => {
   const user = userEvent.setup();
   const writeText = mockClipboardWrite();

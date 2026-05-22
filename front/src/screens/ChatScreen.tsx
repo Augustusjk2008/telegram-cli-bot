@@ -129,6 +129,10 @@ function planModeStorageKey(botAlias: string) {
   return `tcb.planMode.${botAlias}`;
 }
 
+function queuedMessageStorageKey(botAlias: string, agentId: string) {
+  return `tcb.queuedMessage.${botAlias}.${agentId || "main"}`;
+}
+
 function readStoredAgentId(botAlias: string) {
   if (typeof window === "undefined") {
     return "main";
@@ -152,6 +156,57 @@ function writeStoredPlanMode(botAlias: string, enabled: boolean) {
     return;
   }
   window.localStorage.removeItem(planModeStorageKey(botAlias));
+}
+
+function readStoredQueuedMessage(botAlias: string, agentId: string): QueuedChatMessage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const rawValue = window.localStorage.getItem(queuedMessageStorageKey(botAlias, agentId));
+    if (!rawValue) {
+      return null;
+    }
+    const parsed = JSON.parse(rawValue) as Partial<QueuedChatMessage>;
+    const text = typeof parsed.text === "string" ? parsed.text : "";
+    const attachments = Array.isArray(parsed.attachments)
+      ? parsed.attachments.filter((attachment): attachment is PendingChatAttachment => (
+        attachment
+        && typeof attachment.id === "string"
+        && typeof attachment.filename === "string"
+        && typeof attachment.savedPath === "string"
+        && typeof attachment.size === "number"
+      ))
+      : [];
+    const sendOptions = parsed.sendOptions && typeof parsed.sendOptions === "object" ? parsed.sendOptions : undefined;
+    const nextMessage = {
+      text,
+      attachments,
+      sendOptions,
+    };
+    return buildComposedMessageText(nextMessage.text, nextMessage.attachments) ? nextMessage : null;
+  } catch {
+    window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId));
+    return null;
+  }
+}
+
+function writeStoredQueuedMessage(botAlias: string, agentId: string, message: QueuedChatMessage) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(queuedMessageStorageKey(botAlias, agentId), JSON.stringify({
+    text: message.text,
+    attachments: message.attachments,
+    sendOptions: message.sendOptions,
+  }));
+}
+
+function clearStoredQueuedMessage(botAlias: string, agentId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId));
 }
 
 function agentOptions(agentId?: string) {
@@ -943,6 +998,7 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
+  const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
   const revealScrollFrameRef = useRef<number | null>(null);
   const revealScrollAttemptsRef = useRef(0);
@@ -962,10 +1018,28 @@ export function ChatScreen({
     });
   }, []);
 
+  const setQueuedMessageState = useCallback((
+    next: QueuedChatMessage | null,
+    context?: { botAlias: string; agentId: string },
+  ) => {
+    const targetBotAlias = context?.botAlias || botAlias;
+    const targetAgentId = context?.agentId || activeAgentIdRef.current || "main";
+    queuedMessageRef.current = next;
+    setQueuedMessage(next);
+    if (next) {
+      writeStoredQueuedMessage(targetBotAlias, targetAgentId, next);
+    } else {
+      clearStoredQueuedMessage(targetBotAlias, targetAgentId);
+    }
+  }, [botAlias]);
+
   useLayoutEffect(() => {
     if (previousBotAliasRef.current === botAlias) {
       return;
     }
+    clearStoredQueuedMessage(previousBotAliasRef.current, activeAgentIdRef.current || "main");
+    setQueuedMessage(null);
+    queuedMessageRef.current = null;
     previousBotAliasRef.current = botAlias;
     assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias));
@@ -1094,6 +1168,8 @@ export function ChatScreen({
     const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow || pendingRuns.length > 0);
 
     setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
+    isStreamingRef.current = shouldPoll;
+    streamModeRef.current = shouldPoll ? "poll" : "";
     setIsStreaming(shouldPoll);
     setStreamMode(shouldPoll ? "poll" : "");
     if (shouldPoll) {
@@ -1225,7 +1301,10 @@ export function ChatScreen({
             setPendingCronRuns(refreshedPendingRuns);
           }
           assistantSendVersionRef.current += 1;
-          applyHistoryView(messages, overview, refreshedPendingRuns);
+          const { shouldPoll } = applyHistoryView(messages, overview, refreshedPendingRuns);
+          if (!shouldPoll) {
+            void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
+          }
         } catch {
           sseLastActivityAtRef.current = Date.now();
           scheduleSseRecoveryWatch();
@@ -1303,6 +1382,9 @@ export function ChatScreen({
       if (!isVisibleRef.current && !shouldPoll && nextItems.length > previousCount) {
         onUnreadResult?.(botAlias);
       }
+      if (!shouldPoll) {
+        void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "恢复任务状态失败");
       setIsStreaming(false);
@@ -1352,10 +1434,13 @@ export function ChatScreen({
     hasActivatedRef.current = true;
 
     let cancelled = false;
+    loadingRef.current = true;
     setLoading(true);
     setError("");
     setItems([]);
     setWorkingDir("");
+    isStreamingRef.current = false;
+    streamModeRef.current = "";
     setIsStreaming(false);
     setStreamMode("");
     setStreamStartedAtMs(null);
@@ -1365,8 +1450,6 @@ export function ChatScreen({
     setBotOverview(null);
     setPendingCronRuns([]);
     setPendingAttachments([]);
-    setQueuedMessage(null);
-    queuedMessageRef.current = null;
     setUploadingAttachments(false);
     setDeletedAttachmentKeys({});
     setDeletingAttachmentKeys({});
@@ -1409,7 +1492,10 @@ export function ChatScreen({
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
-        applyHistoryView(messages, overview, []);
+        const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId);
+        setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
+        const { shouldPoll } = applyHistoryView(messages, overview, []);
+        loadingRef.current = false;
         setLoading(false);
         if (isVisibleRef.current && (overview.isProcessing || overview.botMode === "assistant")) {
           scheduleAssistantPoll(
@@ -1418,10 +1504,14 @@ export function ChatScreen({
         } else {
           stopAssistantPoll();
         }
+        if (!shouldPoll) {
+          void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId: nextAgentId });
+        }
       })
       .catch((err: Error) => {
         if (cancelled) return;
         setError(err.message || "加载历史失败");
+        loadingRef.current = false;
         setLoading(false);
       });
 
@@ -1437,6 +1527,7 @@ export function ChatScreen({
     isVisible,
     restoreClusterRunFromOverview,
     scheduleAssistantPoll,
+    setQueuedMessageState,
     stopAssistantPoll,
     stopSseRecoveryWatch,
   ]);
@@ -1855,8 +1946,7 @@ export function ChatScreen({
       clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
-      setQueuedMessage(null);
-      queuedMessageRef.current = null;
+      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
       setConversations((prev) => prev.map((item) => ({ ...item, active: item.id === conversationId })));
       setHistoryPanelOpen(false);
@@ -1889,8 +1979,7 @@ export function ChatScreen({
       clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
-      setQueuedMessage(null);
-      queuedMessageRef.current = null;
+      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
       setConversations((prev) => [data.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
@@ -1925,8 +2014,7 @@ export function ChatScreen({
       clusterRunIdRef.current = "";
       setExpandedTracePanels({});
       setTraceLoadState({});
-      setQueuedMessage(null);
-      queuedMessageRef.current = null;
+      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(result.messages);
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
@@ -1946,6 +2034,8 @@ export function ChatScreen({
 
   const handleSelectAgent = useCallback((agentId: string) => {
     const normalized = agentId || "main";
+    const previousAgentId = activeAgentIdRef.current || "main";
+    setQueuedMessageState(null, { botAlias, agentId: previousAgentId });
     activeAgentIdRef.current = normalized;
     setActiveAgentId(normalized);
     window.localStorage.setItem(activeAgentStorageKey(botAlias), normalized);
@@ -1953,6 +2043,7 @@ export function ChatScreen({
     stopAssistantPoll();
     stopSseRecoveryWatch();
     stopClusterTaskPoll();
+    loadingRef.current = true;
     setLoading(true);
     setError("");
     setItems([]);
@@ -1967,6 +2058,8 @@ export function ChatScreen({
     setQueuedMessage(null);
     queuedMessageRef.current = null;
     setHistoryPanelOpen(false);
+    isStreamingRef.current = false;
+    streamModeRef.current = "";
     setIsStreaming(false);
     setStreamMode("");
     setStreamStartedAtMs(null);
@@ -1985,17 +2078,24 @@ export function ChatScreen({
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
         }
-        applyHistoryView(messages, overview, []);
+        const storedQueuedMessage = readStoredQueuedMessage(botAlias, normalized);
+        setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: normalized });
+        const { shouldPoll } = applyHistoryView(messages, overview, []);
+        loadingRef.current = false;
         setLoading(false);
+        if (!shouldPoll) {
+          void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId: normalized });
+        }
       })
       .catch((err: Error) => {
         if (activeAgentIdRef.current !== normalized) {
           return;
         }
         setError(err.message || "切换 agent 失败");
+        loadingRef.current = false;
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, setQueuedMessageState, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -2078,6 +2178,8 @@ export function ChatScreen({
       onError?: (message: string) => void;
     } = {},
   ) => {
+    const sendBotAlias = botAlias;
+    const sendAgentId = activeAgentIdRef.current || "main";
     const composedText = buildComposedMessageText(text, options.attachments || []);
     if (!composedText) {
       return;
@@ -2117,6 +2219,8 @@ export function ChatScreen({
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     setItems((prev) => [...prev, userMessage, assistantMessage]);
+    isStreamingRef.current = true;
+    streamModeRef.current = "sse";
     setIsStreaming(true);
     setStreamMode("sse");
     setStreamStartedAtMs(localStartedAtMs);
@@ -2252,21 +2356,36 @@ export function ChatScreen({
       }
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
+      isStreamingRef.current = false;
+      streamModeRef.current = "";
       setIsStreaming(false);
       setStreamMode("");
       setStreamStartedAtMs(null);
       emitBotActivityForActiveAgent("idle");
-      const nextQueuedMessage = queuedMessageRef.current;
-      if (nextQueuedMessage) {
-        setQueuedMessage(null);
-        queuedMessageRef.current = null;
-        void sendMessageInternal(nextQueuedMessage.text, {
-          attachments: nextQueuedMessage.attachments,
-          sendOptions: nextQueuedMessage.sendOptions,
-        });
-      }
+      void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
     }
   }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
+
+  drainQueuedMessageIfIdleRef.current = async (context) => {
+    const targetBotAlias = context?.botAlias || botAlias;
+    const targetAgentId = context?.agentId || activeAgentIdRef.current || "main";
+    const nextQueuedMessage = queuedMessageRef.current;
+    if (!nextQueuedMessage) {
+      return;
+    }
+    if (targetBotAlias !== botAlias || targetAgentId !== (activeAgentIdRef.current || "main")) {
+      return;
+    }
+    if (loadingRef.current || isStreamingRef.current) {
+      return;
+    }
+
+    setQueuedMessageState(null, { botAlias: targetBotAlias, agentId: targetAgentId });
+    await sendMessageInternal(nextQueuedMessage.text, {
+      attachments: nextQueuedMessage.attachments,
+      sendOptions: nextQueuedMessage.sendOptions,
+    });
+  };
 
   const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
@@ -2293,11 +2412,7 @@ export function ChatScreen({
         return;
       }
       setError("");
-      setQueuedMessage((current) => {
-        const merged = mergeQueuedChatMessage(current, nextQueuedMessage);
-        queuedMessageRef.current = merged;
-        return merged;
-      });
+      setQueuedMessageState(mergeQueuedChatMessage(queuedMessageRef.current, nextQueuedMessage));
       if (pendingAttachments.length > 0) {
         setPendingAttachments([]);
       }

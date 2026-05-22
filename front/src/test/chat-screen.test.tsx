@@ -1762,6 +1762,10 @@ test("queues and merges messages typed while a reply is streaming", async () => 
   expect(screen.getByText("排队中")).toBeInTheDocument();
   expect(screen.getByText("排队中").parentElement).toHaveTextContent("第二条");
   expect(screen.getByText("排队中").parentElement).toHaveTextContent("第三条");
+  expect(JSON.parse(window.localStorage.getItem("tcb.queuedMessage.main.main") || "{}")).toMatchObject({
+    text: "第二条\n\n第三条",
+    attachments: [],
+  });
 
   resolveFirst?.({
     id: "assistant-first",
@@ -1775,6 +1779,7 @@ test("queues and merges messages typed while a reply is streaming", async () => 
   expect(sendMessage.mock.calls[1][1]).toBe("第二条\n\n第三条");
   expect(await screen.findByText(/已处理 第二条/)).toBeInTheDocument();
   expect(screen.queryByText("排队中")).not.toBeInTheDocument();
+  expect(window.localStorage.getItem("tcb.queuedMessage.main.main")).toBeNull();
 });
 
 test("previous bot reply does not drain queued messages from the next bot", async () => {
@@ -1857,6 +1862,79 @@ test("previous bot reply does not drain queued messages from the next bot", asyn
   expect(sendMessage).toHaveBeenCalledTimes(1);
   expect(screen.getByText("排队中")).toBeInTheDocument();
   expect(screen.queryByText("main-final")).not.toBeInTheDocument();
+});
+
+test("restores queued message from storage and drains it after polling becomes idle", async () => {
+  vi.useFakeTimers();
+  window.localStorage.setItem("tcb.queuedMessage.main.main", JSON.stringify({
+    text: "刷新后继续",
+    attachments: [],
+    sendOptions: { taskMode: "standard" },
+  }));
+
+  const getBotOverview = vi
+    .fn<() => Promise<BotOverview>>()
+    .mockResolvedValueOnce({
+      alias: "main",
+      cliType: "codex",
+      status: "busy",
+      workingDir: "C:\\workspace",
+      isProcessing: true,
+    })
+    .mockResolvedValueOnce({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+    });
+  const listMessages = vi
+    .fn<() => Promise<ChatMessage[]>>()
+    .mockResolvedValueOnce([{
+      id: "assistant-streaming",
+      role: "assistant",
+      text: "处理中",
+      createdAt: new Date().toISOString(),
+      state: "streaming",
+    }])
+    .mockResolvedValueOnce([{
+      id: "assistant-done",
+      role: "assistant",
+      text: "已完成",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }]);
+  const sendMessage = vi.fn(async () => ({
+    id: "assistant-restored-queue",
+    role: "assistant",
+    text: "已处理刷新后继续",
+    createdAt: new Date().toISOString(),
+    state: "done" as const,
+  }));
+  const client = createClient({
+    getBotOverview: getBotOverview as never,
+    listMessages: listMessages as never,
+    sendMessage: sendMessage as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("排队中")).toBeInTheDocument();
+  expect(screen.getByText("排队中").parentElement).toHaveTextContent("刷新后继续");
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1100);
+    await Promise.resolve();
+  });
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(sendMessage.mock.calls[0][1]).toBe("刷新后继续");
+  expect(window.localStorage.getItem("tcb.queuedMessage.main.main")).toBeNull();
 });
 
 test("recovers from a stalled sse completion by syncing finished history", async () => {

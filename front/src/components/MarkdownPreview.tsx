@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef, useState } from "react";
 import { CheckCheck, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
 import rehypeKatex from "rehype-katex";
@@ -26,6 +26,7 @@ function safeUrlTransform(url: string) {
 }
 
 let mermaidInitialized = false;
+const mermaidRenderCache = new Map<string, { svg: string; error: string }>();
 
 function stringifyCodeChildren(children: ReactNode) {
   if (Array.isArray(children)) {
@@ -35,12 +36,26 @@ function stringifyCodeChildren(children: ReactNode) {
 }
 
 function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
-  const [svg, setSvg] = useState("");
-  const [error, setError] = useState("");
-  const diagramId = `mermaid-${useId().replace(/:/g, "")}`;
+  const [rendered, setRendered] = useState(() => ({
+    code,
+    svg: mermaidRenderCache.get(code)?.svg || "",
+    error: mermaidRenderCache.get(code)?.error || "",
+  }));
+  const diagramIdRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
+    const cached = mermaidRenderCache.get(code);
+    if (cached) {
+      setRendered({ code, ...cached });
+      return;
+    }
+
     let active = true;
+    setRendered((current) => (
+      current.code === code && !current.svg && !current.error
+        ? current
+        : { code, svg: "", error: "" }
+    ));
 
     void import("mermaid")
       .then(({ default: mermaid }) => {
@@ -54,27 +69,32 @@ function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
           mermaidInitialized = true;
         }
 
-        return mermaid.render(diagramId, code);
+        return mermaid.render(diagramIdRef.current, code);
       })
       .then((result) => {
         if (!active) {
           return;
         }
-        setSvg(result.svg);
-        setError("");
+        const next = { svg: result.svg, error: "" };
+        mermaidRenderCache.set(code, next);
+        setRendered({ code, ...next });
       })
       .catch(() => {
         if (!active) {
           return;
         }
-        setSvg("");
-        setError("Mermaid 图表渲染失败，已回退为源码。");
+        const next = { svg: "", error: "Mermaid 图表渲染失败，已回退为源码。" };
+        mermaidRenderCache.set(code, next);
+        setRendered({ code, ...next });
       });
 
     return () => {
       active = false;
     };
-  }, [code, diagramId]);
+  }, [code]);
+
+  const svg = rendered.code === code ? rendered.svg : "";
+  const error = rendered.code === code ? rendered.error : "";
 
   if (error) {
     return (

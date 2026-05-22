@@ -78,6 +78,29 @@ function parentTreePath(path: string) {
   return lastSlash >= 0 ? path.slice(0, lastSlash) : "";
 }
 
+function findTreeNodeByPath(
+  rootEntries: FileTreeNode[],
+  branches: UseFileTreeResult["branches"],
+  path: string,
+): FileTreeNode | null {
+  const visit = (entries: FileTreeNode[]): FileTreeNode | null => {
+    for (const entry of entries) {
+      if (entry.path === path) {
+        return entry;
+      }
+      if (entry.isDir) {
+        const found = visit(branches[entry.path]?.entries || []);
+        if (found) {
+          return found;
+        }
+      }
+    }
+    return null;
+  };
+
+  return visit(rootEntries);
+}
+
 function dataTransferTypes(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer?.types || []);
 }
@@ -917,6 +940,15 @@ export function FileTreePane({
     });
   }
 
+  function resolveCreateParentPath() {
+    const selectedPath = tree.selectedPath;
+    if (!selectedPath) {
+      return "";
+    }
+    const selectedNode = findTreeNodeByPath(tree.rootEntries, tree.branches, selectedPath);
+    return selectedNode?.isDir ? selectedPath : parentTreePath(selectedPath);
+  }
+
   function handleEntryContextMenu(event: MouseEvent<HTMLButtonElement>, entry: FileTreeNode, absolutePath: string) {
     if (structureOnly) {
       return;
@@ -944,7 +976,7 @@ export function FileTreePane({
     setCreateFileError("");
     setActionError("");
     try {
-      const result = await tree.createFile(pendingFileName.trim(), "");
+      const result = await tree.createFile(pendingFileName.trim(), "", resolveCreateParentPath());
       setShowCreateFileDialog(false);
       setPendingFileName("");
       onCreatedFile(result.path, "", result.lastModifiedNs);
@@ -982,7 +1014,7 @@ export function FileTreePane({
     }
     setActionError("");
     try {
-      await tree.createDirectory(name);
+      await tree.createDirectory(name, resolveCreateParentPath());
       await onRefreshGitDecorations();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "新建文件夹失败");
