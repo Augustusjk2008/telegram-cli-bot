@@ -2120,6 +2120,10 @@ function mapGitCommitMessageGenerateResult(raw: RawGitCommitMessageGenerateResul
   };
 }
 
+function hasRawGitOverview(raw: RawGitOverview | null | undefined): raw is RawGitOverview {
+  return Boolean(raw && ("repo_found" in raw || "working_dir" in raw || "repo_path" in raw));
+}
+
 function mapGitSmartCommitJob(raw: RawGitSmartCommitJob): GitSmartCommitJob {
   return {
     jobId: raw.job_id || "",
@@ -2129,7 +2133,7 @@ function mapGitSmartCommitJob(raw: RawGitSmartCommitJob): GitSmartCommitJob {
     phase: raw.phase || "",
     message: raw.message || "",
     error: raw.error || "",
-    overview: raw.overview ? mapGitOverview(raw.overview) : null,
+    overview: hasRawGitOverview(raw.overview) ? mapGitOverview(raw.overview) : null,
   };
 }
 

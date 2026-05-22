@@ -2727,7 +2727,7 @@ describe("RealWebBotClient", () => {
             phase: "generating",
             message: "",
             error: "",
-            overview: null,
+            overview: {},
           },
         }),
       })
