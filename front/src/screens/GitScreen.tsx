@@ -146,6 +146,19 @@ function gitSmartCommitPhaseText(job: GitSmartCommitJob | null) {
   return "生成说明...";
 }
 
+function gitSmartCommitSuccessHash(job: GitSmartCommitJob | null, fallbackOverview: GitOverview | null = null) {
+  if (!job || job.status !== "succeeded") {
+    return "";
+  }
+  return job.overview?.recentCommits[0]?.shortHash || fallbackOverview?.recentCommits[0]?.shortHash || "";
+}
+
+function gitSmartCommitStatusText(job: GitSmartCommitJob | null, fallbackOverview: GitOverview | null = null) {
+  const text = gitSmartCommitPhaseText(job);
+  const hash = gitSmartCommitSuccessHash(job, fallbackOverview);
+  return hash ? `${text} · ${hash}` : text;
+}
+
 export function GitScreen({
   botAlias,
   botAvatarName,
@@ -243,7 +256,8 @@ export function GitScreen({
       }
       setCommitMessage("");
       setError("");
-      setNotice("智能提交完成");
+      const hash = gitSmartCommitSuccessHash(job);
+      setNotice(hash ? `智能提交完成 · ${hash}` : "智能提交完成");
       return;
     }
     if (job.status === "failed") {
@@ -1010,8 +1024,8 @@ export function GitScreen({
                   </div>
                   {smartCommitJob ? (
                     <div className={sectionBodyClass("space-y-1 text-xs")} data-testid="git-smart-commit-status">
-                      <div className="font-medium text-[var(--text)]">{gitSmartCommitPhaseText(smartCommitJob)}</div>
-                      {smartCommitJob.message ? (
+                      <div className="font-medium text-[var(--text)]">{gitSmartCommitStatusText(smartCommitJob, overview)}</div>
+                      {smartCommitJob.message && smartCommitJob.status !== "succeeded" ? (
                         <div className="whitespace-pre-wrap text-[var(--muted)]">{smartCommitJob.message}</div>
                       ) : null}
                       {smartCommitJob.error ? (

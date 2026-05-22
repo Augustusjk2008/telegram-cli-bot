@@ -194,6 +194,7 @@ def _turn_to_messages(turn: dict[str, Any]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     user_text = str(turn.get("user_text") or "").strip()
     created_at = str(turn.get("created_at") or "")
+    updated_at = str(turn.get("updated_at") or created_at)
     native_source = dict(turn.get("meta", {}).get("native_source") or {})
 
     if user_text:
@@ -203,6 +204,7 @@ def _turn_to_messages(turn: dict[str, Any]) -> list[dict[str, Any]]:
                 "role": "user",
                 "content": user_text,
                 "created_at": created_at,
+                "updated_at": created_at,
                 "meta": {
                     "native_source": native_source,
                 },
@@ -215,6 +217,7 @@ def _turn_to_messages(turn: dict[str, Any]) -> list[dict[str, Any]]:
             "role": "assistant",
             "content": str(turn.get("content") or ""),
             "created_at": created_at,
+            "updated_at": updated_at,
             "user_text": user_text,
             "meta": dict(turn.get("meta") or {}),
         }

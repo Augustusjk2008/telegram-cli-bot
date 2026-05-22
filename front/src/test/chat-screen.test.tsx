@@ -493,6 +493,32 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
+test("shows assistant completed message time from updatedAt", async () => {
+  const messages: ChatMessage[] = [
+    {
+      id: "user-start",
+      role: "user",
+      text: "开始",
+      createdAt: "2026-05-22T10:00:00+08:00",
+      state: "done",
+    },
+    {
+      id: "assistant-final",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-05-22T10:01:00+08:00",
+      updatedAt: "2026-05-22T10:03:00+08:00",
+      state: "done",
+    },
+  ];
+
+  render(<ChatScreen botAlias="main" client={createClient({ listMessages: async () => messages })} />);
+
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  expect(screen.getByText("10:03")).toBeInTheDocument();
+  expect(screen.queryByText("10:01")).not.toBeInTheDocument();
+});
+
 test("treats inactive history streaming rows as completed", async () => {
   const client = createClient({
     getBotOverview: async () => ({

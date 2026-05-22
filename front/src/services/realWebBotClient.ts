@@ -249,6 +249,8 @@ type RawHistoryItem = {
   id?: string;
   timestamp?: string;
   created_at?: string;
+  updated_at?: string;
+  updatedAt?: string;
   role: "user" | "assistant" | "system";
   content: string;
   state?: ChatMessage["state"];
@@ -1662,6 +1664,7 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
     role: raw.role,
     text: raw.content,
     createdAt: raw.created_at || raw.timestamp || new Date().toISOString(),
+    ...(raw.updated_at || raw.updatedAt ? { updatedAt: raw.updated_at || raw.updatedAt } : {}),
     state: raw.state || fallbackState,
     ...(typeof raw.elapsed_seconds === "number" ? { elapsedSeconds: raw.elapsed_seconds } : {}),
     ...(mapMessageMeta(raw.meta) ? { meta: mapMessageMeta(raw.meta) } : {}),

@@ -328,6 +328,16 @@ def test_build_web_chat_history_merges_cancelled_overlay_when_native_answer_miss
     assert messages[-1]["content"] == "已终止，未返回可显示内容"
     assert messages[-1]["meta"]["completion_state"] == "cancelled"
 
+    profile = BotProfile(
+        alias="main",
+        token="dummy-token",
+        cli_type="claude",
+        cli_path="claude",
+        working_dir="/srv/demo",
+    )
+    history_messages = build_web_chat_history(profile, session, limit=20)
+    assert history_messages[-1]["updated_at"] == "2026-04-14T10:00:05"
+
 
 def test_build_web_chat_history_expands_turns_into_user_and_assistant_messages(monkeypatch):
     transcript = FIXTURE_DIR / "codex-session.jsonl"

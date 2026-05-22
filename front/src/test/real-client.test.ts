@@ -1541,6 +1541,7 @@ describe("RealWebBotClient", () => {
             items: [
               {
                 timestamp: "2026-04-10T00:00:00",
+                updated_at: "2026-04-10T00:00:06",
                 role: "assistant",
                 content: "最终结果",
                 elapsed_seconds: 6,
@@ -1560,6 +1561,7 @@ describe("RealWebBotClient", () => {
         role: "assistant",
         text: "最终结果",
         createdAt: "2026-04-10T00:00:00",
+        updatedAt: "2026-04-10T00:00:06",
         elapsedSeconds: 6,
         state: "done",
       },
@@ -2954,7 +2956,7 @@ describe("RealWebBotClient", () => {
       start(controller) {
         controller.enqueue(encoder.encode("event: trace\ndata: {\"event\":{\"kind\":\"commentary\",\"source\":\"native\",\"raw_type\":\"agent_message\",\"summary\":\"我先检查目录结构。\"}}\n\n"));
         controller.enqueue(encoder.encode("event: trace\ndata: {\"event\":{\"kind\":\"tool_call\",\"source\":\"native\",\"raw_type\":\"function_call\",\"title\":\"shell_command\",\"tool_name\":\"shell_command\",\"call_id\":\"call_1\",\"summary\":\"Get-ChildItem -Force\",\"payload\":{\"arguments\":{\"command\":\"Get-ChildItem -Force\"}}}}\n\n"));
-        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"fallback output\",\"elapsed_seconds\":4,\"message\":{\"id\":\"codex-thread-1-0\",\"role\":\"assistant\",\"content\":\"目录已读取完成。\",\"created_at\":\"2026-04-14T10:00:00\",\"meta\":{\"summary_kind\":\"final\",\"completion_state\":\"completed\",\"trace_version\":1,\"native_source\":{\"provider\":\"codex\",\"session_id\":\"thread-1\"},\"trace\":[{\"kind\":\"commentary\",\"source\":\"native\",\"raw_type\":\"agent_message\",\"summary\":\"我先检查目录结构。\"}]}}}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"fallback output\",\"elapsed_seconds\":4,\"message\":{\"id\":\"codex-thread-1-0\",\"role\":\"assistant\",\"content\":\"目录已读取完成。\",\"created_at\":\"2026-04-14T10:00:00\",\"updated_at\":\"2026-04-14T10:00:04\",\"meta\":{\"summary_kind\":\"final\",\"completion_state\":\"completed\",\"trace_version\":1,\"native_source\":{\"provider\":\"codex\",\"session_id\":\"thread-1\"},\"trace\":[{\"kind\":\"commentary\",\"source\":\"native\",\"raw_type\":\"agent_message\",\"summary\":\"我先检查目录结构。\"}]}}}\n\n"));
         controller.close();
       },
     });
@@ -2998,6 +3000,7 @@ describe("RealWebBotClient", () => {
       },
     ) as {
       text: string;
+      updatedAt?: string;
       elapsedSeconds?: number;
       meta?: {
         summaryKind?: string;
@@ -3030,6 +3033,7 @@ describe("RealWebBotClient", () => {
       },
     ]);
     expect(message.text).toBe("目录已读取完成。");
+    expect(message.updatedAt).toBe("2026-04-14T10:00:04");
     expect(message.elapsedSeconds).toBe(4);
     expect(message.meta?.summaryKind).toBe("final");
     expect(message.meta?.completionState).toBe("completed");

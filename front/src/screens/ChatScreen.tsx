@@ -312,6 +312,13 @@ function hasPersistedStreamingAssistant(items: ChatMessage[]) {
   ));
 }
 
+function chatMessageDisplayTime(item: ChatMessage) {
+  if (item.role === "assistant" && item.state !== "streaming" && item.updatedAt) {
+    return item.updatedAt;
+  }
+  return item.createdAt;
+}
+
 function resolvePendingCronRuns(
   pendingRuns: AssistantCronRunEnqueuedDetail[],
   items: ChatMessage[],
@@ -762,7 +769,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
       <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
         <ChatMessageMeta
           name={messageName}
-          createdAt={item.createdAt}
+          createdAt={chatMessageDisplayTime(item)}
           align={isUser ? "right" : "left"}
           avatar={inlineAvatar}
         />

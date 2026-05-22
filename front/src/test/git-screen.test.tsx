@@ -821,12 +821,13 @@ test("git screen starts smart commit, polls phases, refreshes overview and clear
 
   expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("暂存中...")).toBeInTheDocument();
   expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("提交中...")).toBeInTheDocument();
-  expect(await within(await screen.findByTestId("git-smart-commit-status")).findByText("智能提交完成")).toBeInTheDocument();
-  expect(screen.getAllByText("智能提交完成").length).toBeGreaterThan(0);
+  const smartStatus = await screen.findByTestId("git-smart-commit-status");
+  expect(await within(smartStatus).findByText("智能提交完成 · 1234567")).toBeInTheDocument();
+  expect(screen.getAllByText("智能提交完成 · 1234567").length).toBeGreaterThan(0);
   expect(screen.getByLabelText("commit message")).toHaveValue("");
   expect(getGitOverview.mock.calls.length).toBeGreaterThan(initialOverviewCalls);
   expect(getGitSmartCommitJob).toHaveBeenCalledTimes(4);
-  expect(within(screen.getByTestId("git-smart-commit-status")).getByText(generatedMessage)).toBeInTheDocument();
+  expect(within(smartStatus).queryByText(generatedMessage)).not.toBeInTheDocument();
 });
 
 test("git screen restores running smart commit after remount and continues polling", async () => {
@@ -882,7 +883,7 @@ test("git screen restores running smart commit after remount and continues polli
   render(<GitScreen botAlias="main" client={client} />);
   await screen.findByTestId("git-commit-panel");
   expect(await screen.findByTestId("git-smart-commit-status")).toBeInTheDocument();
-  expect(await screen.findAllByText("智能提交完成")).toHaveLength(2);
+  expect(await screen.findAllByText("智能提交完成 · 1234567")).toHaveLength(2);
   expect(getActiveGitSmartCommit).toHaveBeenCalledTimes(2);
 });
 

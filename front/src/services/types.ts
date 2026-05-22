@@ -464,6 +464,7 @@ export type ChatMessage = {
   role: "user" | "assistant" | "system";
   text: string;
   createdAt: string;
+  updatedAt?: string;
   elapsedSeconds?: number;
   state?: "done" | "streaming" | "error";
   meta?: ChatMessageMetaInfo;
