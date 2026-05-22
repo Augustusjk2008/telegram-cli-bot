@@ -66,6 +66,298 @@ function createDragData(path: string) {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
+test("refresh shows the root before restored child branches finish loading", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const docsRefresh = createDeferred<Awaited<ReturnType<MockWebBotClient["listFiles"]>>>();
+  let refreshStarted = false;
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [
+          { name: "docs", isDir: true },
+          { name: refreshStarted ? "after-refresh.txt" : "before-refresh.txt", isDir: false, size: 12 },
+        ],
+      };
+    }
+    if (path === "/workspace/docs") {
+      if (refreshStarted) {
+        return docsRefresh.promise;
+      }
+      return {
+        workingDir: "/workspace/docs",
+        entries: [{ name: "ready.md", isDir: false, size: 24 }],
+      };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  expect(await screen.findByRole("button", { name: "打开 docs/ready.md" })).toBeInTheDocument();
+
+  refreshStarted = true;
+  await user.click(screen.getByRole("button", { name: "刷新文件树" }));
+
+  expect(await screen.findByRole("button", { name: "打开 after-refresh.txt" })).toBeInTheDocument();
+  expect(screen.getByText("加载中...")).toBeInTheDocument();
+
+  docsRefresh.resolve({
+    workingDir: "/workspace/docs",
+    entries: [{ name: "after.md", isDir: false, size: 24 }],
+  });
+  expect(await screen.findByRole("button", { name: "打开 docs/after.md" })).toBeInTheDocument();
+});
+
+test("clicking a branch while background restore is loading reuses the same request", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const docsRefresh = createDeferred<Awaited<ReturnType<MockWebBotClient["listFiles"]>>>();
+  let refreshStarted = false;
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  const listFilesSpy = vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [
+          { name: "docs", isDir: true },
+          { name: "README.md", isDir: false, size: 12 },
+        ],
+      };
+    }
+    if (path === "/workspace/docs") {
+      if (refreshStarted) {
+        return docsRefresh.promise;
+      }
+      return {
+        workingDir: "/workspace/docs",
+        entries: [{ name: "ready.md", isDir: false, size: 24 }],
+      };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await screen.findByRole("button", { name: "打开 docs/ready.md" });
+
+  refreshStarted = true;
+  await user.click(screen.getByRole("button", { name: "刷新文件树" }));
+  await screen.findByRole("button", { name: "打开 README.md" });
+  await user.click(screen.getByRole("button", { name: "收起 docs" }));
+  await user.click(screen.getByRole("button", { name: "展开 docs" }));
+
+  expect(listFilesSpy.mock.calls.filter(([, path]) => path === "/workspace/docs")).toHaveLength(2);
+
+  docsRefresh.resolve({
+    workingDir: "/workspace/docs",
+    entries: [{ name: "after.md", isDir: false, size: 24 }],
+  });
+  expect(await screen.findByRole("button", { name: "打开 docs/after.md" })).toBeInTheDocument();
+  expect(listFilesSpy.mock.calls.filter(([, path]) => path === "/workspace/docs")).toHaveLength(2);
+});
+
+test("forced branch refresh after file creation wins over stale background restore", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const staleDocsRefresh = createDeferred<Awaited<ReturnType<MockWebBotClient["listFiles"]>>>();
+  let refreshStarted = false;
+  let docsEntries = [{ name: "old.md", isDir: false, size: 12 }];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [
+          { name: "docs", isDir: true },
+          { name: "README.md", isDir: false, size: 12 },
+        ],
+      };
+    }
+    if (path === "/workspace/docs") {
+      if (refreshStarted) {
+        refreshStarted = false;
+        return staleDocsRefresh.promise;
+      }
+      return {
+        workingDir: "/workspace/docs",
+        entries: docsEntries,
+      };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+  vi.spyOn(client, "createTextFile").mockImplementation(async (_botAlias, filename) => {
+    docsEntries = [{ name: filename, isDir: false, size: 0 }];
+    return {
+      path: `docs/${filename}`,
+      fileSizeBytes: 0,
+      lastModifiedNs: "2",
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await screen.findByRole("button", { name: "打开 docs/old.md" });
+
+  refreshStarted = true;
+  await user.click(screen.getByRole("button", { name: "刷新文件树" }));
+  await screen.findByText("加载中...");
+  await user.click(screen.getByRole("button", { name: "新建文件" }));
+  await user.type(await screen.findByRole("textbox", { name: "文件名" }), "new.md");
+  await user.click(screen.getByRole("button", { name: "创建" }));
+
+  expect(await screen.findByRole("button", { name: "打开 docs/new.md" })).toBeInTheDocument();
+
+  staleDocsRefresh.resolve({
+    workingDir: "/workspace/docs",
+    entries: [{ name: "stale.md", isDir: false, size: 12 }],
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: "打开 docs/stale.md" })).not.toBeInTheDocument();
+  });
+  expect(screen.getByRole("button", { name: "打开 docs/new.md" })).toBeInTheDocument();
+});
+
+test("stale background branch results do not overwrite after switching bots", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const oldDocsRefresh = createDeferred<Awaited<ReturnType<MockWebBotClient["listFiles"]>>>();
+  let refreshStarted = false;
+
+  vi.spyOn(client, "getCurrentPath").mockImplementation(async (botAlias) => (
+    botAlias === "team2" ? "/team2" : "/workspace"
+  ));
+  vi.spyOn(client, "changeDirectory").mockImplementation(async (botAlias, path) => (
+    botAlias === "team2" ? "/team2" : path
+  ));
+  vi.spyOn(client, "listFiles").mockImplementation(async (botAlias, path) => {
+    if (botAlias === "team2") {
+      if (!path || path === "/team2") {
+        return {
+          workingDir: "/team2",
+          entries: [{ name: "docs", isDir: true }],
+        };
+      }
+      if (path === "/team2/docs") {
+        return {
+          workingDir: "/team2/docs",
+          entries: [{ name: "new-bot.md", isDir: false, size: 12 }],
+        };
+      }
+    }
+
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [{ name: "docs", isDir: true }],
+      };
+    }
+    if (path === "/workspace/docs") {
+      if (refreshStarted) {
+        return oldDocsRefresh.promise;
+      }
+      return {
+        workingDir: "/workspace/docs",
+        entries: [{ name: "old-bot-ready.md", isDir: false, size: 12 }],
+      };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+
+  const view = render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await screen.findByRole("button", { name: "打开 docs/old-bot-ready.md" });
+
+  refreshStarted = true;
+  await user.click(screen.getByRole("button", { name: "刷新文件树" }));
+  await screen.findByText("加载中...");
+
+  view.rerender(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench
+        authToken="123"
+        botAlias="team2"
+        client={client}
+        viewMode="desktop"
+        onViewModeChange={() => {}}
+        onOpenBotSwitcher={() => {}}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  expect(await screen.findByRole("button", { name: "打开 docs/new-bot.md" })).toBeInTheDocument();
+
+  oldDocsRefresh.resolve({
+    workingDir: "/workspace/docs",
+    entries: [{ name: "old-bot-late.md", isDir: false, size: 12 }],
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: "打开 docs/old-bot-late.md" })).not.toBeInTheDocument();
+  });
+  expect(screen.getByRole("button", { name: "打开 docs/new-bot.md" })).toBeInTheDocument();
+});
+
 test("directory click expands the tree without changing the working directory", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

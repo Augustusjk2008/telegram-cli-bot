@@ -33,6 +33,16 @@ function expectDesktopTreeRowSelected(path: string, selected = true) {
   expect(row).toHaveAttribute("data-selected", selected ? "true" : "false");
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
 test("desktop workbench shows four panes and persists collapse state", async () => {
   const user = userEvent.setup();
   const onViewModeChange = vi.fn();
@@ -324,6 +334,77 @@ test("desktop structureOnly does not restore editor tabs from local session", as
   expect(screen.queryByRole("tab", { name: /README\.md/ })).not.toBeInTheDocument();
   expect(screen.queryByText("RESTORED")).not.toBeInTheDocument();
   expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
+});
+
+test("desktop workbench marks restore applied before slow expanded branches finish", async () => {
+  const client = new MockWebBotClient();
+  const docsListing = createDeferred<Awaited<ReturnType<MockWebBotClient["listFiles"]>>>();
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return {
+        workingDir: "/workspace",
+        entries: [
+          { name: "docs", isDir: true },
+          { name: "README.md", isDir: false, size: 12 },
+        ],
+      };
+    }
+    if (path === "/workspace/docs") {
+      return docsListing.promise;
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", "/workspace"), JSON.stringify({
+    version: 1,
+    botAlias: "main",
+    workspaceRoot: "/workspace",
+    sidebarView: "files",
+    expandedPaths: ["docs"],
+    selectedTreePath: "docs/guide.md",
+    activeTabPath: "README.md",
+    tabs: [
+      {
+        path: "README.md",
+        dirty: false,
+        savedContent: "RESTORED_CONTENT",
+        contentPersistence: "clean_snapshot",
+      },
+    ],
+    focusedPane: null,
+  }));
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-restore-state", "restored");
+  });
+  expect(screen.getByText("加载中...")).toBeInTheDocument();
+  expect(await screen.findByRole("tab", { name: "README.md" })).toBeInTheDocument();
+  expect(screen.getByText("RESTORED_CONTENT")).toBeInTheDocument();
+
+  docsListing.resolve({
+    workingDir: "/workspace/docs",
+    entries: [{ name: "guide.md", isDir: false, size: 24 }],
+  });
+
+  expect(await screen.findByRole("button", { name: "打开 docs/guide.md" })).toBeInTheDocument();
+  await waitFor(() => {
+    expectDesktopTreeRowSelected("docs/guide.md");
+  });
 });
 
 test("desktop workbench restores sidebar view from bot session instead of global pane state", async () => {

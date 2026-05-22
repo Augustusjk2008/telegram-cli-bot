@@ -18,6 +18,16 @@ type FileTreeBranchState = {
   error: string;
 };
 
+type BranchLoadOptions = {
+  force?: boolean;
+  generation?: number;
+};
+
+type InFlightBranchLoad = {
+  generation: number;
+  promise: Promise<FileTreeBranchState>;
+};
+
 export type FileTreeDownloadProgress = FileDownloadProgress & {
   path: string;
 };
@@ -80,7 +90,7 @@ function branchEntriesForPath(
   return branchMap[parentPath]?.entries || [];
 }
 
-function branchMapContainsPath(
+function branchMapConfirmsMissingPath(
   branchMap: Record<string, FileTreeBranchState>,
   path: string,
 ) {
@@ -88,7 +98,11 @@ function branchMapContainsPath(
     return false;
   }
   const parentPath = parentTreePath(path);
-  return branchEntriesForPath(branchMap, parentPath).some((entry) => entry.path === path);
+  const parentBranch = branchMap[parentPath];
+  if (!parentBranch?.loaded) {
+    return false;
+  }
+  return !parentBranch.entries.some((entry) => entry.path === path);
 }
 
 function mapBranchEntries(parentPath: string, entries: Array<{ name: string; isDir: boolean; size?: number; updatedAt?: string }>) {
@@ -138,73 +152,208 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   const [selectedPath, setSelectedPath] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<FileTreeDownloadProgress | null>(null);
   const expandedPathsRef = useRef<string[]>([]);
+  const branchesRef = useRef<Record<string, FileTreeBranchState>>({});
   const selectedPathRef = useRef("");
   const highlightTimerRef = useRef<number | null>(null);
+  const loadGenerationRef = useRef(0);
+  const branchRequestSeqRef = useRef<Map<string, number>>(new Map());
+  const inFlightBranchLoadsRef = useRef<Map<string, InFlightBranchLoad>>(new Map());
+  const backgroundRestoreIdRef = useRef(0);
 
   useEffect(() => {
     expandedPathsRef.current = expandedPaths;
   }, [expandedPaths]);
 
   useEffect(() => {
+    branchesRef.current = branches;
+  }, [branches]);
+
+  useEffect(() => {
     selectedPathRef.current = selectedPath;
   }, [selectedPath]);
 
-  const loadBranch = useCallback(async (currentRootPath: string, branchPath: string) => {
-    setBranches((current) => ({
-      ...current,
-      [branchPath]: {
-        entries: current[branchPath]?.entries || [],
-        loading: true,
-        loaded: current[branchPath]?.loaded || false,
-        error: "",
-      },
-    }));
+  function setExpandedPathsSynced(nextPaths: string[]) {
+    expandedPathsRef.current = nextPaths;
+    setExpandedPaths(nextPaths);
+  }
 
-    try {
-      const listing = await client.listFiles(botAlias, joinAbsoluteTreePath(currentRootPath, branchPath));
-      const branchState = {
-        entries: mapBranchEntries(branchPath, listing.entries),
-        loading: false,
-        loaded: true,
-        error: "",
-      };
-      setBranches((current) => ({
-        ...current,
-        [branchPath]: branchState,
-      }));
-      return branchState;
-    } catch (nextError) {
-      setBranches((current) => ({
+  function updateExpandedPathsSynced(updater: (current: string[]) => string[]) {
+    const nextPaths = updater(expandedPathsRef.current);
+    setExpandedPathsSynced(nextPaths);
+    return nextPaths;
+  }
+
+  function setBranchesSynced(
+    nextBranches: Record<string, FileTreeBranchState> | ((current: Record<string, FileTreeBranchState>) => Record<string, FileTreeBranchState>),
+  ) {
+    const resolvedBranches = typeof nextBranches === "function" ? nextBranches(branchesRef.current) : nextBranches;
+    branchesRef.current = resolvedBranches;
+    setBranches(resolvedBranches);
+    return resolvedBranches;
+  }
+
+  function clearSelectionIfConfirmedMissing(branchMap: Record<string, FileTreeBranchState>, path: string) {
+    if (branchMapConfirmsMissingPath(branchMap, path)) {
+      clearSelection();
+    }
+  }
+
+  function branchLoadKey(currentRootPath: string, branchPath: string) {
+    return `${currentRootPath}\0${branchPath}`;
+  }
+
+  const loadBranch = useCallback(async (currentRootPath: string, branchPath: string, options?: BranchLoadOptions) => {
+    const generation = options?.generation ?? loadGenerationRef.current;
+    const key = branchLoadKey(currentRootPath, branchPath);
+    const force = options?.force === true;
+    const currentBranch = branchesRef.current[branchPath];
+    if (!force && currentBranch?.loaded) {
+      return currentBranch;
+    }
+
+    const inFlight = inFlightBranchLoadsRef.current.get(key);
+    if (!force && inFlight?.generation === generation) {
+      return inFlight.promise;
+    }
+
+    const previousSeq = branchRequestSeqRef.current.get(key) ?? 0;
+    const requestSeq = force ? previousSeq + 1 : previousSeq;
+    if (force) {
+      branchRequestSeqRef.current.set(key, requestSeq);
+    }
+
+    if (loadGenerationRef.current === generation) {
+      setBranchesSynced((current) => ({
         ...current,
         [branchPath]: {
           entries: current[branchPath]?.entries || [],
-          loading: false,
-          loaded: false,
-          error: getErrorMessage(nextError, "加载目录失败"),
+          loading: true,
+          loaded: current[branchPath]?.loaded || false,
+          error: "",
         },
       }));
-      throw nextError;
     }
+
+    const promise = (async () => {
+      try {
+        const listing = await client.listFiles(botAlias, joinAbsoluteTreePath(currentRootPath, branchPath));
+        const branchState = {
+          entries: mapBranchEntries(branchPath, listing.entries),
+          loading: false,
+          loaded: true,
+          error: "",
+        };
+        if (
+          loadGenerationRef.current === generation
+          && (branchRequestSeqRef.current.get(key) ?? 0) === requestSeq
+        ) {
+          const nextBranches = setBranchesSynced((current) => ({
+            ...current,
+            [branchPath]: branchState,
+          }));
+          clearSelectionIfConfirmedMissing(nextBranches, selectedPathRef.current);
+        }
+        return branchState;
+      } catch (nextError) {
+        if (
+          loadGenerationRef.current === generation
+          && (branchRequestSeqRef.current.get(key) ?? 0) === requestSeq
+        ) {
+          setBranchesSynced((current) => ({
+            ...current,
+            [branchPath]: {
+              entries: current[branchPath]?.entries || [],
+              loading: false,
+              loaded: false,
+              error: getErrorMessage(nextError, "加载目录失败"),
+            },
+          }));
+        }
+        throw nextError;
+      } finally {
+        const currentInFlight = inFlightBranchLoadsRef.current.get(key);
+        if (currentInFlight?.promise === promise) {
+          inFlightBranchLoadsRef.current.delete(key);
+        }
+      }
+    })();
+
+    inFlightBranchLoadsRef.current.set(key, { generation, promise });
+    return promise;
   }, [botAlias, client]);
 
-  const loadExpandedPathsForRoot = useCallback(async (currentRootPath: string, paths: string[]) => {
-    const loadedBranches: Record<string, FileTreeBranchState> = {};
-    for (const path of uniqueExpandedPaths(paths)) {
-      try {
-        loadedBranches[path] = await loadBranch(currentRootPath, path);
-      } catch {
-        // Branch state already captures the error.
-      }
+  const startBackgroundRestoreExpandedPaths = useCallback((currentRootPath: string, paths: string[], generation: number) => {
+    const normalizedPaths = uniqueExpandedPaths(paths);
+    const restoreId = backgroundRestoreIdRef.current + 1;
+    backgroundRestoreIdRef.current = restoreId;
+    setExpandedPathsSynced(normalizedPaths);
+
+    if (normalizedPaths.length === 0) {
+      return;
     }
-    return loadedBranches;
+
+    setBranchesSynced((current) => {
+      if (loadGenerationRef.current !== generation) {
+        return current;
+      }
+      const nextBranches = { ...current };
+      for (const path of normalizedPaths) {
+        const existing = nextBranches[path];
+        if (existing?.loaded) {
+          continue;
+        }
+        nextBranches[path] = {
+          entries: existing?.entries || [],
+          loading: true,
+          loaded: false,
+          error: "",
+        };
+      }
+      return nextBranches;
+    });
+
+    let nextIndex = 0;
+    const runWorker = async () => {
+      while (nextIndex < normalizedPaths.length) {
+        const path = normalizedPaths[nextIndex];
+        nextIndex += 1;
+        if (loadGenerationRef.current !== generation || backgroundRestoreIdRef.current !== restoreId) {
+          return;
+        }
+        if (!expandedPathsRef.current.includes(path)) {
+          continue;
+        }
+        if (branchesRef.current[path]?.loaded) {
+          continue;
+        }
+        const key = branchLoadKey(currentRootPath, path);
+        if (inFlightBranchLoadsRef.current.get(key)?.generation === generation) {
+          continue;
+        }
+        try {
+          await loadBranch(currentRootPath, path, { generation });
+        } catch {
+          // Branch state already captures the error.
+        }
+      }
+    };
+
+    void Promise.all([runWorker(), runWorker()]);
   }, [loadBranch]);
 
   const refreshRoot = useCallback(async (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    backgroundRestoreIdRef.current += 1;
+    inFlightBranchLoadsRef.current.clear();
     const preserveExpandedPaths = options?.preserveExpandedPaths === true;
     setLoading(true);
     setError("");
     try {
       const listing = await client.listFiles(botAlias, options?.rootPath);
+      if (loadGenerationRef.current !== generation) {
+        return;
+      }
       const nextRootPath = listing.workingDir;
       const nextExpandedPaths = preserveExpandedPaths ? expandedPathsRef.current : [];
       const normalizedExpandedPaths = uniqueExpandedPaths(nextExpandedPaths);
@@ -219,24 +368,26 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       };
 
       setRootPath(nextRootPath);
-      setExpandedPaths(normalizedExpandedPaths);
-      setBranches(nextBranches);
+      setBranchesSynced(nextBranches);
+      setExpandedPathsSynced([]);
 
       if (normalizedExpandedPaths.length > 0) {
-        Object.assign(nextBranches, await loadExpandedPathsForRoot(nextRootPath, normalizedExpandedPaths));
+        startBackgroundRestoreExpandedPaths(nextRootPath, normalizedExpandedPaths, generation);
       }
 
-      if (selectedPathRef.current && !branchMapContainsPath(nextBranches, selectedPathRef.current)) {
+      clearSelectionIfConfirmedMissing(nextBranches, selectedPathRef.current);
+    } catch (nextError) {
+      if (loadGenerationRef.current === generation) {
+        setError(getErrorMessage(nextError, "加载文件树失败"));
+        setBranchesSynced({});
         clearSelection();
       }
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载文件树失败"));
-      setBranches({});
-      clearSelection();
     } finally {
-      setLoading(false);
+      if (loadGenerationRef.current === generation) {
+        setLoading(false);
+      }
     }
-  }, [botAlias, client, loadExpandedPathsForRoot]);
+  }, [botAlias, client, startBackgroundRestoreExpandedPaths]);
 
   useEffect(() => {
     void refreshRoot();
@@ -280,16 +431,14 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       await refreshRoot({ preserveExpandedPaths: true });
       return;
     }
-    await loadBranch(rootPath, branchPath);
+    await loadBranch(rootPath, branchPath, { force: true });
   }
 
   async function restoreExpandedPaths(paths: string[]) {
     if (!rootPath) {
       return;
     }
-    const normalizedPaths = uniqueExpandedPaths(paths);
-    setExpandedPaths(normalizedPaths);
-    await loadExpandedPathsForRoot(rootPath, normalizedPaths);
+    startBackgroundRestoreExpandedPaths(rootPath, paths, loadGenerationRef.current);
   }
 
   async function revealPath(path: string) {
@@ -313,9 +462,8 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       ...result.expandedPaths,
       ...ancestorPathsForPath(result.highlightPath || path),
     ]);
-    expandedPathsRef.current = nextExpandedPaths;
-    setExpandedPaths(nextExpandedPaths);
-    setBranches((current) => ({
+    setExpandedPathsSynced(nextExpandedPaths);
+    setBranchesSynced((current) => ({
       ...current,
       ...nextBranches,
     }));
@@ -327,12 +475,12 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   async function toggleDirectory(path: string) {
     const isExpanded = expandedPathsRef.current.includes(path);
     if (isExpanded) {
-      setExpandedPaths((current) => current.filter((item) => item !== path));
+      updateExpandedPathsSynced((current) => current.filter((item) => item !== path));
       return;
     }
 
-    setExpandedPaths((current) => uniqueExpandedPaths([...current, path]));
-    if (!branches[path]?.loaded) {
+    updateExpandedPathsSynced((current) => uniqueExpandedPaths([...current, path]));
+    if (!branchesRef.current[path]?.loaded) {
       try {
         await loadBranch(rootPath, path);
       } catch {
@@ -386,8 +534,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     const result = await client.movePath(botAlias, path, targetParentPath);
     const sourceParentPath = parentTreePath(path);
     const targetExpandedPaths = uniqueExpandedPaths([...expandedPathsRef.current, ...ancestorPathsForPath(result.path)]);
-    expandedPathsRef.current = targetExpandedPaths;
-    setExpandedPaths(targetExpandedPaths);
+    setExpandedPathsSynced(targetExpandedPaths);
     if (sourceParentPath !== targetParentPath) {
       await refreshBranch(sourceParentPath);
     }
@@ -399,7 +546,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
 
   function resolveSelectionAfterDelete(path: string) {
     const parentPath = parentTreePath(path);
-    const siblings = branchEntriesForPath(branches, parentPath);
+    const siblings = branchEntriesForPath(branchesRef.current, parentPath);
     const index = siblings.findIndex((entry) => entry.path === path);
     if (index >= 0) {
       const nextSibling = siblings[index + 1] || siblings[index - 1];
@@ -418,8 +565,8 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     const nextSelectedPath = shouldMoveSelection ? resolveSelectionAfterDelete(path) : selectedBeforeDelete;
 
     await client.deletePath(botAlias, path);
-    setExpandedPaths((current) => current.filter((item) => item !== path && !item.startsWith(`${path}/`)));
-    setBranches((current) => Object.fromEntries(
+    updateExpandedPathsSynced((current) => current.filter((item) => item !== path && !item.startsWith(`${path}/`)));
+    setBranchesSynced((current) => Object.fromEntries(
       Object.entries(current).filter(([key]) => key !== path && !key.startsWith(`${path}/`)),
     ));
     if (shouldMoveSelection) {
