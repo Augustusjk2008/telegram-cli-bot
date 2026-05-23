@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
+import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -22,6 +24,10 @@ from bot.assistant.cron.store import (
 from bot.assistant.cron.types import AssistantCronJob, AssistantCronJobState
 from bot.assistant.home import AssistantHome
 from bot.assistant.runtime import AssistantRunRequest
+from bot.web.diagnostics import diag_log_event, diag_log_slow
+
+
+logger = logging.getLogger(__name__)
 
 
 def _load_timezone(key: str):
@@ -385,6 +391,7 @@ class AssistantCronService:
         trigger_source: str,
         scheduled_at: datetime,
     ) -> dict[str, str] | None:
+        started_at = time.perf_counter()
         if state.pending_run_id or state.current_run_id:
             self._save_state(
                 job.id,
@@ -394,6 +401,16 @@ class AssistantCronService:
                         "coalesced_count": state.coalesced_count + 1,
                     }
                 ),
+            )
+            diag_log_event(
+                logger,
+                "assistant_cron_coalesced",
+                alias=self.bot_alias,
+                job_id=job.id,
+                trigger_source=trigger_source,
+                pending_run_id=state.pending_run_id,
+                current_run_id=state.current_run_id,
+                coalesced_count=state.coalesced_count + 1,
             )
             return None
 
@@ -462,6 +479,27 @@ class AssistantCronService:
             trigger_source,
             timeout_seconds=job.execution.timeout_seconds,
         )
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_event(
+            logger,
+            "assistant_cron_enqueued",
+            alias=self.bot_alias,
+            job_id=job.id,
+            run_id=request.run_id,
+            trigger_source=trigger_source,
+            task_mode=job.task.mode,
+            elapsed_ms=elapsed_ms,
+        )
+        diag_log_slow(
+            logger,
+            "assistant_cron_enqueue",
+            elapsed_ms,
+            alias=self.bot_alias,
+            job_id=job.id,
+            run_id=request.run_id,
+            trigger_source=trigger_source,
+            task_mode=job.task.mode,
+        )
         return {
             **result,
             "task_mode": job.task.mode,
@@ -476,6 +514,7 @@ class AssistantCronService:
         *,
         timeout_seconds: int | None = None,
     ) -> None:
+        watch_started_at = time.perf_counter()
         try:
             wait_coro = self.coordinator.wait_for_run(run_id)
             if timeout_seconds is not None and int(timeout_seconds) > 0:
@@ -525,6 +564,27 @@ class AssistantCronService:
                     "error": "",
                 },
             )
+            elapsed_ms = int(round((time.perf_counter() - watch_started_at) * 1000))
+            diag_log_event(
+                logger,
+                "assistant_cron_run_done",
+                alias=self.bot_alias,
+                job_id=job_id,
+                run_id=run_id,
+                trigger_source=trigger_source,
+                status="success",
+                elapsed_ms=elapsed_ms,
+            )
+            diag_log_slow(
+                logger,
+                "assistant_cron_watch",
+                elapsed_ms,
+                alias=self.bot_alias,
+                job_id=job_id,
+                run_id=run_id,
+                trigger_source=trigger_source,
+                status="success",
+            )
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as exc:
@@ -571,6 +631,17 @@ class AssistantCronService:
                     "error": error_text,
                 },
             )
+            elapsed_ms = int(round((time.perf_counter() - watch_started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "assistant_cron_watch",
+                elapsed_ms,
+                alias=self.bot_alias,
+                job_id=job_id,
+                run_id=run_id,
+                trigger_source=trigger_source,
+                status="timeout",
+            )
         except Exception as exc:
             if job_id in self._deleted_job_ids:
                 return
@@ -615,6 +686,17 @@ class AssistantCronService:
                     "output_excerpt": "",
                     "error": error_text,
                 },
+            )
+            elapsed_ms = int(round((time.perf_counter() - watch_started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "assistant_cron_watch",
+                elapsed_ms,
+                alias=self.bot_alias,
+                job_id=job_id,
+                run_id=run_id,
+                trigger_source=trigger_source,
+                status="failed",
             )
 
     def _resolve_next_run_at(self, job: AssistantCronJob, state: AssistantCronJobState, now: datetime) -> datetime:

@@ -131,6 +131,7 @@ from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
+from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.native_history_locator import locate_kimi_transcript
 from bot.web.plan_mode import (
@@ -2482,6 +2483,7 @@ def _prepare_assistant_prompt(
     user_text: str,
     cli_type: str,
 ) -> tuple[Any, dict[str, str], str, bool, dict[str, int]]:
+    started_at = time.perf_counter()
     assistant_home = bootstrap_assistant_home(profile.working_dir)
     assistant_pre_surface = snapshot_managed_surface(assistant_home)
     compaction_prompt_active = is_compaction_prompt_active(assistant_home)
@@ -2515,6 +2517,19 @@ def _prepare_assistant_prompt(
     if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
         session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
         session.persist()
+    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+    diag_log_slow(
+        logger,
+        "assistant_prompt_prepare",
+        elapsed_ms,
+        alias=profile.alias,
+        agent=session.agent_id,
+        user_id=user_id,
+        prompt_chars=len(compiled_prompt.prompt_text),
+        sync_ms=stage_durations.get("sync_ms", 0),
+        index_ms=stage_durations.get("index_ms", 0),
+        recall_ms=stage_durations.get("recall_ms", 0),
+    )
     return assistant_home, assistant_pre_surface, compiled_prompt.prompt_text, compaction_prompt_active, stage_durations
 
 
@@ -2605,6 +2620,7 @@ def _prepare_dream_assistant_prompt(
     *,
     user_text: str,
 ) -> tuple[Any, str, dict[str, Any], dict[str, int]]:
+    started_at = time.perf_counter()
     assistant_home = bootstrap_assistant_home(profile.working_dir)
     stage_durations = new_stage_durations()
     with activate_perf_capture(stage_durations):
@@ -2642,6 +2658,17 @@ def _prepare_dream_assistant_prompt(
     if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
         session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
         session.persist()
+    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+    diag_log_slow(
+        logger,
+        "assistant_dream_prepare",
+        elapsed_ms,
+        alias=profile.alias,
+        agent=session.agent_id,
+        user_id=request.user_id,
+        prompt_chars=len(compiled_prompt.prompt_text),
+        sync_ms=stage_durations.get("sync_ms", 0),
+    )
     return assistant_home, compiled_prompt.prompt_text, prepared_prompt.context_stats, stage_durations
 
 
@@ -2693,8 +2720,14 @@ def _finalize_assistant_chat_turn(
     assistant_pre_surface: dict[str, str],
     compaction_prompt_active: bool,
 ) -> None:
+    started_at = time.perf_counter()
+    capture_ms = 0
+    hot_path_ms = 0
+    compaction_ms = 0
     capture = record_assistant_capture(assistant_home, user_id, user_text, response)
+    capture_ms = int(round((time.perf_counter() - started_at) * 1000))
     try:
+        hot_path_started_at = time.perf_counter()
         write_hot_path_memories(
             assistant_home,
             user_id=user_id,
@@ -2702,8 +2735,11 @@ def _finalize_assistant_chat_turn(
             assistant_text=response,
             source_ref=str(capture.get("id") or "chat"),
         )
+        hot_path_ms = int(round((time.perf_counter() - hot_path_started_at) * 1000))
     except Exception as exc:
         logger.warning("assistant memory hot-path write failed user=%s error=%s", user_id, exc)
+        hot_path_ms = int(round((time.perf_counter() - hot_path_started_at) * 1000))
+    compaction_started_at = time.perf_counter()
     refresh_compaction_state(assistant_home, latest_capture=capture)
     consumed_capture_ids = list_pending_capture_ids(assistant_home) or [capture["id"]]
     sync_managed_prompt_files(assistant_home)
@@ -2717,6 +2753,19 @@ def _finalize_assistant_chat_turn(
     )
     if compaction_result in {"changed", "noop"}:
         sync_managed_prompt_files(assistant_home)
+    compaction_ms = int(round((time.perf_counter() - compaction_started_at) * 1000))
+    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+    diag_log_slow(
+        logger,
+        "assistant_chat_finalize",
+        elapsed_ms,
+        user_id=user_id,
+        capture_id=str(capture.get("id") or ""),
+        capture_ms=capture_ms,
+        hot_path_ms=hot_path_ms,
+        compaction_ms=compaction_ms,
+        compaction_result=compaction_result,
+    )
 
 
 def _log_assistant_chat_finalize_failure(task: asyncio.Task[Any], *, user_id: int) -> None:
@@ -3263,6 +3312,8 @@ async def _reconcile_native_trace_before_completion(
     poll_attempts: int = 4,
     poll_interval_seconds: float = 0.1,
 ) -> None:
+    started_at = time.perf_counter()
+    provider = normalize_cli_type(getattr(profile, "cli_type", ""))
     if completion_state != "completed":
         return
     normalized_session_id = str(native_session_id or "").strip()
@@ -3279,8 +3330,32 @@ async def _reconcile_native_trace_before_completion(
             assistant_text=assistant_text,
             native_session_id=normalized_session_id,
         ):
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "trace_reconcile_slow",
+                elapsed_ms,
+                alias=session.bot_alias,
+                agent=session.agent_id,
+                provider=provider,
+                turn_id=getattr(turn_handle, "turn_id", ""),
+                attempts=attempt_index + 1,
+                recovered=True,
+            )
             return
         if attempt_index + 1 >= attempts:
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "trace_reconcile_slow",
+                elapsed_ms,
+                alias=session.bot_alias,
+                agent=session.agent_id,
+                provider=provider,
+                turn_id=getattr(turn_handle, "turn_id", ""),
+                attempts=attempt_index + 1,
+                recovered=False,
+            )
             return
         await asyncio.sleep(poll_interval_seconds)
 
@@ -3643,6 +3718,7 @@ async def _stream_cli_chat(
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    total_started_at = time.perf_counter()
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
@@ -3712,6 +3788,12 @@ async def _stream_cli_chat(
         session.is_processing = True
 
     loop: asyncio.AbstractEventLoop | None = None
+    process_pid = 0
+    output_bytes = 0
+    final_trace_count = 0
+    sqlite_flush_count = 0
+    completion_state_for_diag = ""
+    normal_return_for_diag = False
     try:
         session.touch()
         loop = asyncio.get_running_loop()
@@ -3720,6 +3802,7 @@ async def _stream_cli_chat(
         meta_sent = False
         max_attempts = 2 if cli_type == "claude" else 1
         service = _get_chat_history_service(session)
+        persist_started_at = time.perf_counter()
         turn_handle = service.start_turn(
             profile=profile,
             session=session,
@@ -3728,6 +3811,10 @@ async def _stream_cli_chat(
             assistant_home=str(assistant_home.root) if assistant_home is not None else None,
             managed_prompt_hash=session.managed_prompt_hash_seen,
             prompt_surface_version="v1" if assistant_home is not None else None,
+        )
+        assistant_stage_durations["db_ms"] += max(
+            0,
+            int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
 
         for attempt_index in range(max_attempts):
@@ -3749,6 +3836,7 @@ async def _stream_cli_chat(
                 _raise(400, "invalid_cli_command", str(exc))
 
             try:
+                spawn_started_at = time.perf_counter()
                 process = subprocess.Popen(
                     cmd,
                     stdin=subprocess.PIPE if use_stdin else None,
@@ -3761,6 +3849,28 @@ async def _stream_cli_chat(
                     encoding="utf-8",
                     errors="replace",
                     **build_hidden_process_kwargs(),
+                )
+                process_pid = int(getattr(process, "pid", 0) or 0)
+                diag_log_event(
+                    logger,
+                    "cli_stream_start",
+                    alias=alias,
+                    agent=session.agent_id,
+                    cli_type=cli_type,
+                    pid=process_pid,
+                    cluster_run_id=cluster_run_id,
+                    resume_session=attempt.resume_session,
+                    attempt=attempt_index + 1,
+                )
+                diag_log_slow(
+                    logger,
+                    "cli_spawn",
+                    int(round((time.perf_counter() - spawn_started_at) * 1000)),
+                    alias=alias,
+                    agent=session.agent_id,
+                    cli_type=cli_type,
+                    pid=process_pid,
+                    cluster_run_id=cluster_run_id,
                 )
             except FileNotFoundError:
                 _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
@@ -3860,6 +3970,7 @@ async def _stream_cli_chat(
                             raise item
 
                         text_chunk = str(item)
+                        output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
                         preview_state.consume(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
@@ -3980,6 +4091,7 @@ async def _stream_cli_chat(
                 with session._lock:
                     session.process = None
             assistant_stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
+            sqlite_flush_count = persistence_buffer.flush_count
 
             raw_output = preview_state.raw_output_for_parse()
             error_detail = ""
@@ -4071,10 +4183,12 @@ async def _stream_cli_chat(
                 returncode=returncode,
                 error_detail=response if completion_state == "error" else error_detail,
             )
+            final_trace_count = len(final_trace)
             persistence_buffer.flush()
             for trace_event in final_trace[len(live_trace_events):]:
                 persistence_buffer.queue_trace(trace_event)
             persistence_buffer.flush()
+            sqlite_flush_count = persistence_buffer.flush_count
             native_session_id = _current_native_session_id(session, cli_type)
             trace_started_at = time.perf_counter()
             await _reconcile_native_trace_before_completion(
@@ -4093,6 +4207,7 @@ async def _stream_cli_chat(
                 if completion_state == "completed" or should_force_error_output
                 else (response or latest_preview_text)
             )
+            complete_started_at = time.perf_counter()
             done_message = service.complete_turn(
                 turn_handle,
                 completion_state=completion_state,
@@ -4101,6 +4216,11 @@ async def _stream_cli_chat(
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
             )
+            assistant_stage_durations["db_ms"] += max(
+                0,
+                int(round((time.perf_counter() - complete_started_at) * 1000)),
+            )
+            completion_state_for_diag = completion_state
             if assistant_home is not None:
                 _schedule_assistant_chat_turn_finalization(
                     assistant_home,
@@ -4149,9 +4269,59 @@ async def _stream_cli_chat(
                 "returncode": returncode,
                 "session": build_session_snapshot(profile, session),
             }
+            elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
+            diag_log_event(
+                logger,
+                "cli_stream_done",
+                alias=alias,
+                agent=session.agent_id,
+                cli_type=cli_type,
+                pid=process_pid,
+                cluster_run_id=cluster_run_id,
+                completion_state=completion_state,
+                returncode=returncode,
+                elapsed_ms=elapsed_ms,
+                output_bytes=output_bytes,
+                trace_count=final_trace_count,
+                sqlite_flush_count=sqlite_flush_count,
+                cli_ms=assistant_stage_durations.get("cli_ms", 0),
+                trace_ms=assistant_stage_durations.get("trace_ms", 0),
+                db_ms=assistant_stage_durations.get("db_ms", 0),
+            )
+            diag_log_slow(
+                logger,
+                "cli_stream_total",
+                elapsed_ms,
+                alias=alias,
+                agent=session.agent_id,
+                cli_type=cli_type,
+                pid=process_pid,
+                cluster_run_id=cluster_run_id,
+                completion_state=completion_state,
+                output_bytes=output_bytes,
+                trace_count=final_trace_count,
+                sqlite_flush_count=sqlite_flush_count,
+            )
+            normal_return_for_diag = True
             yield done_event
             return
     finally:
+        elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
+        if not normal_return_for_diag:
+            diag_log_slow(
+                logger,
+                "cli_stream_total",
+                elapsed_ms,
+                alias=alias,
+                agent=getattr(session, "agent_id", agent_id),
+                cli_type=cli_type,
+                pid=process_pid,
+                cluster_run_id=cluster_run_id,
+                completion_state=completion_state_for_diag or "incomplete",
+                output_bytes=output_bytes,
+                trace_count=final_trace_count,
+                sqlite_flush_count=sqlite_flush_count,
+            )
         lingering_process: subprocess.Popen | None = None
         with session._lock:
             lingering_process = session.process
@@ -4176,6 +4346,7 @@ async def run_cli_chat(
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    total_started_at = time.perf_counter()
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
@@ -4261,6 +4432,11 @@ async def run_cli_chat(
         session.stop_requested = False
         session.is_processing = True
 
+    process_pid = 0
+    output_bytes = 0
+    final_trace_count = 0
+    completion_state_for_diag = ""
+    normal_return_for_diag = False
     try:
         session.touch()
         loop = asyncio.get_running_loop()
@@ -4268,6 +4444,7 @@ async def run_cli_chat(
         session_id_changed = False
         max_attempts = 2 if cli_type == "claude" else 1
         service = _get_chat_history_service(session)
+        persist_started_at = time.perf_counter()
         turn_handle = service.start_turn(
             profile=profile,
             session=session,
@@ -4276,6 +4453,10 @@ async def run_cli_chat(
             assistant_home=str(assistant_home.root) if assistant_home is not None else None,
             managed_prompt_hash=session.managed_prompt_hash_seen,
             prompt_surface_version="v1" if assistant_home is not None else None,
+        )
+        assistant_stage_durations["db_ms"] += max(
+            0,
+            int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
 
         for attempt_index in range(max_attempts):
@@ -4297,6 +4478,7 @@ async def run_cli_chat(
                 _raise(400, "invalid_cli_command", str(exc))
 
             try:
+                spawn_started_at = time.perf_counter()
                 process = subprocess.Popen(
                     cmd,
                     stdin=subprocess.PIPE if use_stdin else None,
@@ -4309,6 +4491,28 @@ async def run_cli_chat(
                     encoding="utf-8",
                     errors="replace",
                     **build_hidden_process_kwargs(),
+                )
+                process_pid = int(getattr(process, "pid", 0) or 0)
+                diag_log_event(
+                    logger,
+                    "cli_run_start",
+                    alias=alias,
+                    agent=session.agent_id,
+                    cli_type=cli_type,
+                    pid=process_pid,
+                    cluster_run_id=cluster_run_id,
+                    resume_session=attempt.resume_session,
+                    attempt=attempt_index + 1,
+                )
+                diag_log_slow(
+                    logger,
+                    "cli_spawn",
+                    int(round((time.perf_counter() - spawn_started_at) * 1000)),
+                    alias=alias,
+                    agent=session.agent_id,
+                    cli_type=cli_type,
+                    pid=process_pid,
+                    cluster_run_id=cluster_run_id,
                 )
             except FileNotFoundError:
                 _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
@@ -4340,6 +4544,7 @@ async def run_cli_chat(
                 else:
                     response, returncode = await _communicate_process(process)
                     response = response.strip() or msg("chat", "no_output")
+                output_bytes = len(str(response or "").encode("utf-8", errors="replace"))
             except Exception:
                 if process.poll() is None:
                     _terminate_process_sync(process)
@@ -4409,6 +4614,7 @@ async def run_cli_chat(
                 returncode=returncode,
                 error_detail=error_detail,
             )
+            final_trace_count = len(terminal_trace)
             for trace_event in terminal_trace:
                 service.append_trace_event(turn_handle, trace_event)
             native_session_id = _current_native_session_id(session, cli_type)
@@ -4424,6 +4630,7 @@ async def run_cli_chat(
                 native_session_id=native_session_id,
             )
             assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
+            complete_started_at = time.perf_counter()
             done_message = service.complete_turn(
                 turn_handle,
                 content=(
@@ -4436,6 +4643,11 @@ async def run_cli_chat(
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
             )
+            assistant_stage_durations["db_ms"] += max(
+                0,
+                int(round((time.perf_counter() - complete_started_at) * 1000)),
+            )
+            completion_state_for_diag = completion_state
             if assistant_home is not None and finalize_assistant_turn:
                 try:
                     _finalize_assistant_chat_turn(
@@ -4489,8 +4701,55 @@ async def run_cli_chat(
             if dream_context_stats is not None:
                 response_payload["dream_context_stats"] = dream_context_stats
                 response_payload["dream_prompt_text"] = dream_prompt_text
+            elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
+            diag_log_event(
+                logger,
+                "cli_run_done",
+                alias=alias,
+                agent=session.agent_id,
+                cli_type=cli_type,
+                pid=process_pid,
+                cluster_run_id=cluster_run_id,
+                completion_state=completion_state,
+                returncode=returncode,
+                elapsed_ms=elapsed_ms,
+                output_bytes=output_bytes,
+                trace_count=final_trace_count,
+                cli_ms=assistant_stage_durations.get("cli_ms", 0),
+                trace_ms=assistant_stage_durations.get("trace_ms", 0),
+                db_ms=assistant_stage_durations.get("db_ms", 0),
+            )
+            diag_log_slow(
+                logger,
+                "cli_run_total",
+                elapsed_ms,
+                alias=alias,
+                agent=session.agent_id,
+                cli_type=cli_type,
+                pid=process_pid,
+                cluster_run_id=cluster_run_id,
+                completion_state=completion_state,
+                output_bytes=output_bytes,
+                trace_count=final_trace_count,
+            )
+            normal_return_for_diag = True
             return response_payload
     finally:
+        if not normal_return_for_diag:
+            elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "cli_run_total",
+                elapsed_ms,
+                alias=alias,
+                agent=getattr(session, "agent_id", agent_id),
+                cli_type=cli_type,
+                pid=process_pid,
+                cluster_run_id=cluster_run_id,
+                completion_state=completion_state_for_diag or "incomplete",
+                output_bytes=output_bytes,
+                trace_count=final_trace_count,
+            )
         with session._lock:
             session.process = None
             session.is_processing = False

@@ -35,6 +35,9 @@ class StreamingPersistenceBuffer:
         self._last_flush_at = float(loop_time())
         self._pending_preview: str | None = None
         self._pending_trace: list[dict[str, Any]] = []
+        self.flush_count = 0
+        self.preview_flush_count = 0
+        self.trace_flush_count = 0
 
     def queue_preview(self, preview_text: str) -> None:
         text = str(preview_text or "").strip()
@@ -60,8 +63,11 @@ class StreamingPersistenceBuffer:
         self._pending_trace.clear()
         if preview:
             self._service.replace_assistant_preview(self._handle, preview)
+            self.preview_flush_count += 1
         if trace:
             self._service.append_trace_events(self._handle, trace)
+            self.trace_flush_count += 1
+        self.flush_count += 1
         self._last_flush_at = float(self._loop_time())
 
 

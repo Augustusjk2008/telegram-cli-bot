@@ -683,3 +683,59 @@ def test_chat_store_schema_is_prepared_once_per_db_path(monkeypatch, tmp_path: P
     store.count_history(bot_id=1, user_id=1001, working_dir=str(workspace), session_epoch=0)
 
     assert calls == [store.db_path]
+
+
+def test_chat_store_slow_log_threshold_boundary(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setenv("TCB_DIAG_ENABLED", "1")
+    monkeypatch.setenv("TCB_DIAG_SLOW_MS", "500")
+
+    warnings: list[str] = []
+
+    def fake_warning(message, *args):
+        warnings.append(message % args if args else message)
+
+    monkeypatch.setattr(chat_store_module.logger, "warning", fake_warning)
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=0,
+        user_text="secret-user-text",
+        native_provider="codex",
+    )
+    warnings.clear()
+
+    ticks = iter([100.0, 100.01, 100.02, 100.499, 200.0, 200.01, 200.02, 200.5])
+    monkeypatch.setattr(chat_store_module.time, "perf_counter", lambda: next(ticks))
+
+    assert store.count_history(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=0,
+        conversation_id=handle.conversation_id,
+    ) == 2
+    assert warnings == []
+
+    assert store.count_history(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=0,
+        conversation_id=handle.conversation_id,
+    ) == 2
+
+    assert len(warnings) == 1
+    assert "event=chat_store" in warnings[0]
+    assert "op=count_history" in warnings[0]
+    assert "elapsed_ms=500" in warnings[0]
+    assert "secret-user-text" not in warnings[0]

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
+
+from bot.web.diagnostics import diag_log_event, diag_log_slow
 
 RunSource = Literal["web", "cron", "manual"]
 RunStatus = Literal["queued", "running", "completed", "failed"]
@@ -13,6 +17,7 @@ StreamExecutor = Callable[["AssistantRunRequest"], AsyncIterator[dict[str, Any]]
 
 _STOP = object()
 _RUNTIME_STOPPED_MESSAGE = "assistant runtime stopped"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,7 @@ class _QueuedRun:
     future: asyncio.Future[dict[str, Any]]
     event_queue: asyncio.Queue[dict[str, Any] | object] | None = None
     status: RunStatus = field(default="queued")
+    enqueued_monotonic: float = field(default_factory=time.perf_counter)
 
 
 @dataclass(frozen=True)
@@ -206,6 +212,17 @@ class AssistantRuntimeCoordinator:
         )
         self._runs[request.run_id] = run
         self._queue.put_nowait(run)
+        diag_log_event(
+            logger,
+            "assistant_runtime_queued",
+            run_id=request.run_id,
+            alias=request.bot_alias,
+            source=request.source,
+            task_mode=request.task_mode,
+            interactive=request.interactive,
+            mode=mode,
+            queued_count=self._queue.qsize(),
+        )
         return run
 
     def _fail_run(self, run: _QueuedRun, message: str) -> None:
@@ -242,6 +259,30 @@ class AssistantRuntimeCoordinator:
                 run = queued
                 current_run = run
                 run.status = "running"
+                started_at = time.perf_counter()
+                queue_wait_ms = int(round((started_at - run.enqueued_monotonic) * 1000))
+                diag_log_slow(
+                    logger,
+                    "assistant_runtime_queue_wait",
+                    queue_wait_ms,
+                    run_id=run.request.run_id,
+                    alias=run.request.bot_alias,
+                    source=run.request.source,
+                    task_mode=run.request.task_mode,
+                    interactive=run.request.interactive,
+                    mode=run.mode,
+                )
+                diag_log_event(
+                    logger,
+                    "assistant_runtime_running",
+                    run_id=run.request.run_id,
+                    alias=run.request.bot_alias,
+                    source=run.request.source,
+                    task_mode=run.request.task_mode,
+                    interactive=run.request.interactive,
+                    mode=run.mode,
+                    queue_wait_ms=queue_wait_ms,
+                )
                 try:
                     if run.mode == "stream":
                         await self._run_stream_request(run)
@@ -250,6 +291,32 @@ class AssistantRuntimeCoordinator:
                         run.status = "completed"
                         if not run.future.done():
                             run.future.set_result(result)
+                    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+                    diag_log_event(
+                        logger,
+                        "assistant_runtime_done",
+                        run_id=run.request.run_id,
+                        alias=run.request.bot_alias,
+                        source=run.request.source,
+                        task_mode=run.request.task_mode,
+                        interactive=run.request.interactive,
+                        mode=run.mode,
+                        status=run.status,
+                        elapsed_ms=elapsed_ms,
+                        queue_wait_ms=queue_wait_ms,
+                    )
+                    diag_log_slow(
+                        logger,
+                        "assistant_runtime_run",
+                        elapsed_ms,
+                        run_id=run.request.run_id,
+                        alias=run.request.bot_alias,
+                        source=run.request.source,
+                        task_mode=run.request.task_mode,
+                        interactive=run.request.interactive,
+                        mode=run.mode,
+                        status=run.status,
+                    )
                 except asyncio.CancelledError:
                     run.status = "failed"
                     if run.mode == "stream" and run.event_queue is not None:
@@ -262,6 +329,18 @@ class AssistantRuntimeCoordinator:
                         )
                     if not run.future.done():
                         run.future.set_exception(RuntimeError(_RUNTIME_STOPPED_MESSAGE))
+                    diag_log_slow(
+                        logger,
+                        "assistant_runtime_run",
+                        int(round((time.perf_counter() - started_at) * 1000)),
+                        run_id=run.request.run_id,
+                        alias=run.request.bot_alias,
+                        source=run.request.source,
+                        task_mode=run.request.task_mode,
+                        interactive=run.request.interactive,
+                        mode=run.mode,
+                        status="cancelled",
+                    )
                     raise
                 except Exception as exc:
                     run.status = "failed"
@@ -275,6 +354,18 @@ class AssistantRuntimeCoordinator:
                         )
                     if not run.future.done():
                         run.future.set_exception(exc)
+                    diag_log_slow(
+                        logger,
+                        "assistant_runtime_run",
+                        int(round((time.perf_counter() - started_at) * 1000)),
+                        run_id=run.request.run_id,
+                        alias=run.request.bot_alias,
+                        source=run.request.source,
+                        task_mode=run.request.task_mode,
+                        interactive=run.request.interactive,
+                        mode=run.mode,
+                        status="failed",
+                    )
                 finally:
                     if run.mode == "stream" and run.event_queue is not None:
                         await run.event_queue.put(_STOP)

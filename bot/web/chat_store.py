@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,12 +18,14 @@ from bot.runtime_paths import (
     get_legacy_project_chat_db_path,
     normalize_workspace_dir,
 )
+from bot.web.diagnostics import diag_log_slow
 
 LOCAL_HISTORY_BACKEND = "local_v1"
 LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
 _STORE_PREPARE_LOCK = Lock()
 _PREPARED_STORES: set[Path] = set()
 _SCHEMA_READY_STORES: set[Path] = set()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -123,13 +127,25 @@ class ChatStore:
             return True
 
     def _connect(self, *, create: bool) -> sqlite3.Connection | None:
-        if not self._prepare_store(create=create):
-            return None
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        self._ensure_schema_once(conn)
-        return conn
+        started_at = time.perf_counter()
+        try:
+            if not self._prepare_store(create=create):
+                return None
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._ensure_schema_once(conn)
+            return conn
+        finally:
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "chat_store",
+                elapsed_ms,
+                op="_connect",
+                create=create,
+                workspace_key=self.workspace_key,
+            )
 
     def _connect_for_write(self) -> sqlite3.Connection:
         conn = self._connect(create=True)
@@ -626,6 +642,7 @@ class ChatStore:
         prompt_surface_version: str | None = None,
         agent_prompt_hash: str | None = None,
     ) -> ChatTurnHandle:
+        started_at = time.perf_counter()
         now = _utc_now()
         turn_id = f"turn_{uuid.uuid4().hex}"
         user_message_id = f"msg_{uuid.uuid4().hex}"
@@ -746,23 +763,49 @@ class ChatStore:
                     now,
                 ),
             )
-        return ChatTurnHandle(
+        handle = ChatTurnHandle(
             conversation_id=resolved_conversation_id,
             turn_id=turn_id,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
         )
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="begin_turn",
+            bot_id=bot_id,
+            alias=bot_alias,
+            agent=agent_id,
+            turn_id=turn_id,
+            conversation_id=resolved_conversation_id,
+        )
+        return handle
 
     def replace_assistant_content(self, handle: ChatTurnHandle, content: str, *, state: str = "streaming") -> None:
+        started_at = time.perf_counter()
         now = _utc_now()
-        with self._connect_for_write() as conn:
-            conn.execute(
-                "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
-                (content, state, now, handle.assistant_message_id),
-            )
-            conn.execute(
-                "UPDATE turns SET assistant_state = ?, updated_at = ? WHERE id = ?",
-                (state, now, handle.turn_id),
+        try:
+            with self._connect_for_write() as conn:
+                conn.execute(
+                    "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
+                    (content, state, now, handle.assistant_message_id),
+                )
+                conn.execute(
+                    "UPDATE turns SET assistant_state = ?, updated_at = ? WHERE id = ?",
+                    (state, now, handle.turn_id),
+                )
+        finally:
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "chat_store",
+                elapsed_ms,
+                op="replace_assistant_content",
+                turn_id=handle.turn_id,
+                state=state,
+                content_chars=len(str(content or "")),
             )
 
     def append_trace_event(
@@ -793,6 +836,7 @@ class ChatStore:
         )
 
     def append_trace_events(self, turn_id: str, events: list[dict[str, Any]]) -> None:
+        started_at = time.perf_counter()
         normalized_events = [dict(event) for event in events if isinstance(event, dict)]
         if not normalized_events:
             return
@@ -837,6 +881,15 @@ class ChatStore:
                     ),
                 )
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="append_trace_events",
+            turn_id=turn_id,
+            trace_count=len(normalized_events),
+        )
 
     def mark_trace_recovery_attempted(self, turn_id: str, *, status: str) -> None:
         now = _utc_now()
@@ -856,6 +909,7 @@ class ChatStore:
                 raise KeyError(turn_id)
 
     def replace_trace_events(self, turn_id: str, trace: list[dict[str, Any]] | None) -> None:
+        started_at = time.perf_counter()
         now = _utc_now()
         normalized_trace = [dict(item) for item in (trace or []) if isinstance(item, dict)]
         with self._connect_for_write() as conn:
@@ -901,6 +955,15 @@ class ChatStore:
                     ),
                 )
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="replace_trace_events",
+            turn_id=turn_id,
+            trace_count=len(normalized_trace),
+        )
 
     def _derive_title(self, conn: sqlite3.Connection, conversation_id: str) -> str:
         row = conn.execute(
@@ -934,6 +997,7 @@ class ChatStore:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> dict[str, Any]:
+        started_at = time.perf_counter()
         now = _utc_now()
         message_state = "done" if completion_state == "completed" else "error"
         with self._connect_for_write() as conn:
@@ -984,7 +1048,19 @@ class ChatStore:
                     handle.conversation_id,
                 ),
             )
-        return self.get_message(handle.assistant_message_id)
+        message = self.get_message(handle.assistant_message_id)
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="complete_turn",
+            turn_id=handle.turn_id,
+            conversation_id=handle.conversation_id,
+            completion_state=completion_state,
+            content_chars=len(str(content or "")),
+        )
+        return message
 
     def _load_trace_stats(
         self,
@@ -1183,6 +1259,7 @@ class ChatStore:
         conversation_id: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
+        started_at = time.perf_counter()
         conn = self._connect(create=False)
         if conn is None:
             return []
@@ -1198,7 +1275,20 @@ class ChatStore:
             )
         if resolved_conversation_id is None:
             return []
-        return self.list_messages(resolved_conversation_id, limit=max(1, limit))
+        items = self.list_messages(resolved_conversation_id, limit=max(1, limit))
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="list_active_history",
+            bot_id=bot_id,
+            agent=agent_id,
+            conversation_id=resolved_conversation_id,
+            limit=limit,
+            result_count=len(items),
+        )
+        return items
 
     def count_history(
         self,
@@ -1210,6 +1300,7 @@ class ChatStore:
         agent_id: str = "main",
         conversation_id: str | None = None,
     ) -> int:
+        started_at = time.perf_counter()
         conn = self._connect(create=False)
         if conn is None:
             return 0
@@ -1229,7 +1320,19 @@ class ChatStore:
                 "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
                 (resolved_conversation_id,),
             ).fetchone()
-            return int(row["count"])
+            count = int(row["count"])
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="count_history",
+            bot_id=bot_id,
+            agent=agent_id,
+            conversation_id=resolved_conversation_id,
+            result_count=count,
+        )
+        return count
 
     def mark_stale_streaming_turns(
         self,
@@ -1243,6 +1346,7 @@ class ChatStore:
         error_code: str = "stale_stream_recovered",
         fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
     ) -> int:
+        started_at = time.perf_counter()
         conn = self._connect(create=False)
         if conn is None:
             return 0
@@ -1290,7 +1394,19 @@ class ChatStore:
                     """,
                     ("error", error_code, now, now, error_code, content, row["turn_id"]),
                 )
-            return len(rows)
+            row_count = len(rows)
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="mark_stale_streaming_turns",
+            bot_id=bot_id,
+            agent=agent_id,
+            conversation_id=resolved_conversation_id,
+            result_count=row_count,
+        )
+        return row_count
 
     def get_running_reply(
         self,
@@ -1302,6 +1418,7 @@ class ChatStore:
         agent_id: str = "main",
         conversation_id: str | None = None,
     ) -> dict[str, Any] | None:
+        started_at = time.perf_counter()
         conn = self._connect(create=False)
         if conn is None:
             return None
@@ -1335,12 +1452,24 @@ class ChatStore:
             ).fetchone()
             if row is None:
                 return None
-            return {
+            result = {
                 "user_text": row["user_text"] or "",
                 "preview_text": row["preview_text"] or "",
                 "started_at": row["started_at"],
                 "updated_at": row["updated_at"] or row["started_at"],
             }
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        diag_log_slow(
+            logger,
+            "chat_store",
+            elapsed_ms,
+            op="get_running_reply",
+            bot_id=bot_id,
+            agent=agent_id,
+            conversation_id=resolved_conversation_id,
+            found=bool(result),
+        )
+        return result
 
     def _turn_count(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(

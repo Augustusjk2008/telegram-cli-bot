@@ -58,6 +58,7 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
+from .diagnostics import diag_enabled, diag_log_slow, diag_loop_lag_ms
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
 from .pushplus_client import PushPlusClient
@@ -650,6 +651,44 @@ async def cors_middleware(request: web.Request, handler):
     return response
 
 
+def _request_diag_alias(request: web.Request) -> str:
+    return str(request.match_info.get("alias") or request.query.get("alias") or "").strip()
+
+
+def _request_diag_agent(request: web.Request) -> str:
+    value = request.match_info.get("agent_id") or request.query.get("agent_id") or request.query.get("agentId")
+    return str(value or "").strip() or "main"
+
+
+@web.middleware
+async def diag_slow_request_middleware(request: web.Request, handler):
+    if not diag_enabled():
+        return await handler(request)
+    started_at = time.perf_counter()
+    status = 500
+    try:
+        response = await handler(request)
+        status = int(getattr(response, "status", 200) or 200)
+        return response
+    except web.HTTPException as exc:
+        status = int(exc.status)
+        raise
+    finally:
+        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+        route = getattr(getattr(request, "match_info", None), "route", None)
+        route_name = getattr(route, "resource", None)
+        diag_log_slow(
+            logger,
+            "web_request",
+            elapsed_ms,
+            method=request.method,
+            route=getattr(route_name, "canonical", "") or request.path,
+            status=status,
+            alias=_request_diag_alias(request),
+            agent=_request_diag_agent(request),
+        )
+
+
 class WebApiServer:
     """可嵌入现有进程的 Web API 服务器。"""
 
@@ -666,6 +705,7 @@ class WebApiServer:
         self._port = int(port if port is not None else WEB_PORT)
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
+        self._loop_lag_task: asyncio.Task[None] | None = None
         self._restart_task: asyncio.Task[None] | None = None
         self._update_task: asyncio.Task[None] | None = None
         self._tunnel_ready_task: asyncio.Task[None] | None = None
@@ -3744,7 +3784,10 @@ class WebApiServer:
     def _build_app(self) -> web.Application:
         # Desktop file editing/preview can legitimately exceed the default aiohttp body cap.
         # Upload routes still enforce their own explicit limits in api_service.
-        app = web.Application(middlewares=[cors_middleware, error_middleware], client_max_size=0)
+        app = web.Application(
+            middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware],
+            client_max_size=0,
+        )
         for module in (
             auth_routes,
             announcement_routes,
@@ -3798,6 +3841,8 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
         await self._site.start()
+        if diag_enabled():
+            self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
         if get_update_status().get("update_enabled"):
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
         if self._tunnel_service.should_autostart():
@@ -3812,6 +3857,38 @@ class WebApiServer:
             ",".join(WEB_ALLOWED_ORIGINS),
         )
 
+    async def _watch_loop_lag(self) -> None:
+        loop = asyncio.get_running_loop()
+        interval_seconds = 1.0
+        expected_at = loop.time() + interval_seconds
+        while True:
+            await asyncio.sleep(interval_seconds)
+            now = loop.time()
+            lag_ms = max(0, int(round((now - expected_at) * 1000)))
+            expected_at = now + interval_seconds
+            threshold_ms = diag_loop_lag_ms()
+            if lag_ms < threshold_ms:
+                continue
+            pending = [
+                task
+                for task in asyncio.all_tasks(loop)
+                if task is not asyncio.current_task(loop) and not task.done()
+            ]
+            names: list[str] = []
+            for task in pending[:8]:
+                name = task.get_name()
+                coro = task.get_coro()
+                names.append(name or getattr(coro, "__qualname__", "") or type(coro).__name__)
+            diag_log_slow(
+                logger,
+                "event_loop_lag",
+                lag_ms,
+                threshold_ms=threshold_ms,
+                lag_ms=lag_ms,
+                pending_count=len(pending),
+                pending=",".join(names),
+            )
+
     async def stop(self, *, preserve_tunnel: bool = False):
         if self._runner is None:
             return
@@ -3824,6 +3901,10 @@ class WebApiServer:
             self._update_task.cancel()
             await asyncio.gather(self._update_task, return_exceptions=True)
             self._update_task = None
+        if self._loop_lag_task is not None:
+            self._loop_lag_task.cancel()
+            await asyncio.gather(self._loop_lag_task, return_exceptions=True)
+            self._loop_lag_task = None
         if self._tunnel_ready_task is not None:
             self._tunnel_ready_task.cancel()
             await asyncio.gather(self._tunnel_ready_task, return_exceptions=True)

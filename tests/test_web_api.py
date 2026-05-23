@@ -194,6 +194,62 @@ def test_no_cli_message_points_to_web_settings_not_legacy_command():
 
 
 @pytest.mark.asyncio
+async def test_slow_request_middleware_disabled_by_default(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("TCB_DIAG_ENABLED", raising=False)
+    monkeypatch.setenv("TCB_DIAG_SLOW_MS", "0")
+    warnings: list[str] = []
+    monkeypatch.setattr("bot.web.server.logger.warning", lambda message, *args: warnings.append(message % args))
+
+    app = WebApiServer(web_manager)._build_app()
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        response = await client.get("/api/health")
+        assert response.status == 200
+    finally:
+        await client.close()
+
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_slow_request_middleware_redacts_query_and_body(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TCB_DIAG_ENABLED", "1")
+    monkeypatch.setenv("TCB_DIAG_SLOW_MS", "0")
+    warnings: list[str] = []
+    monkeypatch.setattr("bot.web.server.logger.warning", lambda message, *args: warnings.append(message % args))
+
+    app = WebApiServer(web_manager)._build_app()
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        response = await client.post(
+            "/api/health?token=q-secret&q=search-secret&agent_id=reviewer",
+            json={"password": "p-secret", "message": "m-secret"},
+        )
+        assert response.status == 405
+    finally:
+        await client.close()
+
+    line = "\n".join(warnings)
+    assert "event=web_request" in line
+    assert "method=POST" in line
+    assert "route=/api/health" in line
+    assert "agent=reviewer" in line
+    assert "q-secret" not in line
+    assert "search-secret" not in line
+    assert "p-secret" not in line
+    assert "m-secret" not in line
+    assert "token=" not in line
+
+
+@pytest.mark.asyncio
 async def test_cluster_status_reports_mcp_missing(web_manager: MultiBotManager):
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
