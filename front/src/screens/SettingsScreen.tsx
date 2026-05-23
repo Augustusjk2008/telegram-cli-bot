@@ -174,6 +174,7 @@ export function SettingsScreen({
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
+  const [testingPushPlus, setTestingPushPlus] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
@@ -400,6 +401,24 @@ export function SettingsScreen({
     }
   };
 
+  const sendPushPlusTest = async () => {
+    if (!client.sendPushPlusTest) {
+      setError("当前后端不支持 PushPlus 测试推送");
+      return;
+    }
+    setTestingPushPlus(true);
+    setError("");
+    setNotice("");
+    try {
+      await client.sendPushPlusTest();
+      setNotice("PushPlus 测试推送已发送");
+    } catch (err) {
+      setError(getErrorMessage(err, "PushPlus 测试推送失败"));
+    } finally {
+      setTestingPushPlus(false);
+    }
+  };
+
   const handleChatBodyFontFamilyChange = (nextFontFamily: ChatBodyFontFamilyName) => {
     if (nextFontFamily === chatBodyFontFamily) {
       return;
@@ -605,6 +624,14 @@ export function SettingsScreen({
             >
               <Bell className="h-4 w-4" />
               {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void sendPushPlusTest()}
+              disabled={testingPushPlus || !notificationSettings?.pushPlusEnabled}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            >
+              {testingPushPlus ? "发送中..." : "测试 PushPlus 推送"}
             </button>
             <button
               type="button"

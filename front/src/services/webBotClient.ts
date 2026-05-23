@@ -77,6 +77,7 @@ import type {
   LanChatMessage,
   LanChatStatus,
   NotificationSettingsStatus,
+  NotificationTestResult,
   NotificationSubscription,
   NotificationSubscriptionOptions,
   NotificationPresenceUpdate,
@@ -286,6 +287,7 @@ export interface WebBotClient {
   markLanChatRead(conversationId: string, seq: number): Promise<void>;
   openLanChatSocket?(onEvent: (event: LanChatEvent) => void): () => void;
   getNotificationSettings?(): Promise<NotificationSettingsStatus>;
+  sendPushPlusTest?(): Promise<NotificationTestResult>;
   subscribeNotifications?(
     onEvent: (event: WebNotificationEvent) => void,
     options?: NotificationSubscriptionOptions,

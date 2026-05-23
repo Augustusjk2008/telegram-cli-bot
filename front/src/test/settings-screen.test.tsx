@@ -348,6 +348,44 @@ test("settings screen exposes notification permission and PushPlus status", asyn
   expect(await screen.findByText("聊天完成通知已开启")).toBeInTheDocument();
 });
 
+test("settings screen sends PushPlus test when enabled", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const sendPushPlusTest = vi.fn().mockResolvedValue({ sent: true });
+  Object.assign(client, {
+    getNotificationSettings: vi.fn().mockResolvedValue({
+      pushPlusEnabled: true,
+      pushPlusConfigured: true,
+      pushPlusTopicConfigured: false,
+    }),
+    sendPushPlusTest,
+  });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.click(await screen.findByRole("button", { name: "测试 PushPlus 推送" }));
+
+  await waitFor(() => {
+    expect(sendPushPlusTest).toHaveBeenCalled();
+  });
+  expect(await screen.findByText("PushPlus 测试推送已发送")).toBeInTheDocument();
+});
+
+test("settings screen disables PushPlus test when PushPlus is off", async () => {
+  const client = new MockWebBotClient();
+  Object.assign(client, {
+    getNotificationSettings: vi.fn().mockResolvedValue({
+      pushPlusEnabled: false,
+      pushPlusConfigured: false,
+      pushPlusTopicConfigured: false,
+    }),
+  });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByRole("button", { name: "测试 PushPlus 推送" })).toBeDisabled();
+});
+
 test("settings screen shows PushPlus setup guide dialog", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

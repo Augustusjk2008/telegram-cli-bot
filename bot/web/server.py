@@ -2011,6 +2011,22 @@ class WebApiServer:
             },
         })
 
+    async def post_pushplus_test(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        pushplus = self._notification_service.pushplus
+        if not bool(getattr(pushplus, "enabled", False)):
+            raise WebApiError(409, "pushplus_disabled", "PushPlus 未启用")
+        if not str(getattr(pushplus, "token", "") or "").strip():
+            raise WebApiError(409, "pushplus_not_configured", "PushPlus token 未配置")
+
+        sent = await pushplus.send(
+            "PushPlus 测试推送",
+            "### PushPlus 测试推送\n\n如果你收到这条消息，说明 PushPlus 已可用。",
+        )
+        if not sent:
+            raise WebApiError(502, "pushplus_test_failed", "PushPlus 测试推送失败")
+        return _json({"ok": True, "data": {"sent": True}})
+
     async def get_pwd(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
@@ -3745,6 +3761,7 @@ class WebApiServer:
         ):
             module.register(app, self)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
+        app.router.add_post("/api/notifications/pushplus/test", self.post_pushplus_test)
         app.router.add_get("/api/notifications/ws", self.notifications_ws)
         
         # Add static file serving for frontend when dist exists

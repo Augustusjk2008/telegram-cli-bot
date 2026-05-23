@@ -159,6 +159,7 @@ import type {
   NotificationSocketStatus,
   NotificationSubscription,
   NotificationSubscriptionOptions,
+  NotificationTestResult,
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
@@ -2958,6 +2959,14 @@ export class RealWebBotClient implements WebBotClient {
   async getNotificationSettings(): Promise<NotificationSettingsStatus> {
     const data = await this.requestJson<RawNotificationSettings>("/api/notifications/settings");
     return mapNotificationSettings(data);
+  }
+
+  async sendPushPlusTest(): Promise<NotificationTestResult> {
+    const data = await this.requestJson<NotificationTestResult>("/api/notifications/pushplus/test", {
+      method: "POST",
+      headers: this.headers({ "Content-Type": "application/json" }),
+    });
+    return { sent: Boolean(data.sent) };
   }
 
   subscribeNotifications(

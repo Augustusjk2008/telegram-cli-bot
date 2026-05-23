@@ -585,6 +585,10 @@ export type NotificationSettingsStatus = {
   pushPlusTopicConfigured?: boolean;
 };
 
+export type NotificationTestResult = {
+  sent: boolean;
+};
+
 export type TerminalRuntimePlatform = "windows" | "linux";
 
 export type TerminalAction = {

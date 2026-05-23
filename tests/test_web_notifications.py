@@ -243,6 +243,64 @@ async def test_notification_settings_returns_pushplus_status_without_token(
 
 
 @pytest.mark.asyncio
+async def test_pushplus_test_endpoint_sends_configured_push(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    pushplus = FakePushPlus()
+    pushplus.enabled = True
+    pushplus.token = "secret-token"
+    server = WebApiServer(web_manager)
+    server._notification_service.pushplus = pushplus
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/notifications/pushplus/test")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert payload["data"] == {"sent": True}
+    assert pushplus.calls == [{
+        "title": "PushPlus 测试推送",
+        "content": "### PushPlus 测试推送\n\n如果你收到这条消息，说明 PushPlus 已可用。",
+        "topic": None,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_pushplus_test_endpoint_rejects_disabled_pushplus(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    pushplus = FakePushPlus()
+    pushplus.enabled = False
+    pushplus.token = "secret-token"
+    server = WebApiServer(web_manager)
+    server._notification_service.pushplus = pushplus
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/notifications/pushplus/test")
+            payload = await resp.json()
+
+    assert resp.status == 409
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "pushplus_disabled"
+    assert pushplus.calls == []
+
+
+@pytest.mark.asyncio
 async def test_post_chat_notifies_after_success(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
