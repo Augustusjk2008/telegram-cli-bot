@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { AlertTriangle, Copy, Globe, LogOut, RotateCw, Save, Square } from "lucide-react";
+import { AlertTriangle, Bell, Copy, Globe, LogOut, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
@@ -12,8 +12,10 @@ import { WebApiClientError } from "../services/types";
 import type {
   AvatarAsset,
   BotOverview,
+  BrowserNotificationPermission,
   CliType,
   GitProxySettings,
+  NotificationSettingsStatus,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
@@ -38,6 +40,12 @@ import {
   type ChatBodyParagraphSpacingName,
   type UiThemeName,
 } from "../theme";
+import {
+  getBrowserNotificationPermission,
+  readChatCompletionWebNotificationEnabled,
+  requestBrowserNotificationPermission,
+  writeChatCompletionWebNotificationEnabled,
+} from "../utils/chatNotificationEvents";
 
 type Props = {
   botAlias: string;
@@ -88,6 +96,19 @@ function tunnelStatusText(status: TunnelSnapshot["status"]) {
   return "已停止";
 }
 
+function notificationPermissionText(permission: BrowserNotificationPermission) {
+  if (permission === "granted") return "已允许";
+  if (permission === "denied") return "已拒绝";
+  if (permission === "unsupported") return "浏览器不支持";
+  return "未询问";
+}
+
+function pushPlusStatusText(status: NotificationSettingsStatus | null) {
+  if (!status) return "后端未提供状态";
+  if (!status.pushPlusEnabled) return "未启用";
+  return status.pushPlusConfigured ? "已配置" : "未配置 token";
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
@@ -133,6 +154,9 @@ export function SettingsScreen({
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
+  const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
+  const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
@@ -148,6 +172,7 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [savingGitProxy, setSavingGitProxy] = useState(false);
+  const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
@@ -163,12 +188,14 @@ export function SettingsScreen({
       client.getBotOverview(botAlias),
       client.getTunnelStatus(),
       isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
+      client.getNotificationSettings?.() ?? Promise.resolve(null),
       client.listAvatarAssets(),
     ])
       .then(([
         overviewResult,
         tunnelResult,
         gitProxyResult,
+        notificationSettingsResult,
         avatarAssetsResult,
       ]) => {
         if (cancelled) return;
@@ -182,6 +209,7 @@ export function SettingsScreen({
         const overviewData = overviewResult.value;
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
+        const notificationData = notificationSettingsResult.status === "fulfilled" ? notificationSettingsResult.value : null;
         const avatarData = avatarAssetsResult.status === "fulfilled" && avatarAssetsResult.value.length > 0
           ? avatarAssetsResult.value
           : DEFAULT_AVATAR_ASSETS;
@@ -193,6 +221,8 @@ export function SettingsScreen({
         setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setTunnel(tunnelData);
         setGitProxySettings(gitProxyData);
+        setNotificationSettings(notificationData);
+        setNotificationPermission(getBrowserNotificationPermission());
         setGitProxyAddressDraft(gitProxyData?.address || (gitProxyData?.port ? `127.0.0.1:${gitProxyData.port}` : ""));
         setLoading(false);
       })
@@ -342,6 +372,31 @@ export function SettingsScreen({
     }
     setNotice("界面主题已切换");
     onThemeChange?.(nextTheme);
+  };
+
+  const handleNotificationToggle = (enabled: boolean) => {
+    setNotificationEnabled(enabled);
+    writeChatCompletionWebNotificationEnabled(enabled);
+    setNotice(enabled ? "聊天完成通知已开启" : "聊天完成通知已关闭");
+  };
+
+  const requestNotificationPermission = async () => {
+    setRequestingNotificationPermission(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextPermission = await requestBrowserNotificationPermission();
+      setNotificationPermission(nextPermission);
+      if (nextPermission === "granted") {
+        handleNotificationToggle(true);
+      } else if (nextPermission === "denied") {
+        setNotice("浏览器已拒绝通知权限");
+      } else if (nextPermission === "unsupported") {
+        setNotice("当前浏览器不支持通知");
+      }
+    } finally {
+      setRequestingNotificationPermission(false);
+    }
   };
 
   const handleChatBodyFontFamilyChange = (nextFontFamily: ChatBodyFontFamilyName) => {
@@ -513,6 +568,43 @@ export function SettingsScreen({
             </div>
           </div>
         ) : null}
+
+        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Bell className="h-5 w-5 text-[var(--accent)]" />
+            <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
+          </div>
+
+          <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+            <span className="text-sm text-[var(--text)]">聊天完成网页通知</span>
+            <input
+              aria-label="聊天完成网页通知"
+              type="checkbox"
+              checked={notificationEnabled}
+              onChange={(event) => handleNotificationToggle(event.target.checked)}
+              className="h-4 w-4"
+            />
+          </label>
+
+          <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              浏览器权限: <span className="font-medium text-[var(--text)]">{notificationPermissionText(notificationPermission)}</span>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              PushPlus: <span className="font-medium text-[var(--text)]">{pushPlusStatusText(notificationSettings)}</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void requestNotificationPermission()}
+            disabled={requestingNotificationPermission || notificationPermission === "unsupported"}
+            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+          >
+            <Bell className="h-4 w-4" />
+            {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
+          </button>
+        </div>
 
         <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
           <div className="flex items-center justify-between gap-4">

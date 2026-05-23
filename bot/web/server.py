@@ -25,6 +25,15 @@ from aiohttp import web
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
 from bot.config import (
     ALLOWED_USER_IDS,
+    CHAT_COMPLETION_NOTIFY_ENABLED,
+    PUSHPLUS_API_URL,
+    PUSHPLUS_CHANNEL,
+    PUSHPLUS_ENABLED,
+    PUSHPLUS_PREVIEW_CHARS,
+    PUSHPLUS_TEMPLATE,
+    PUSHPLUS_TIMEOUT_SECONDS,
+    PUSHPLUS_TOKEN,
+    PUSHPLUS_TOPIC,
     WEB_ALLOWED_ORIGINS,
     WEB_API_TOKEN,
     WEB_DEFAULT_USER_ID,
@@ -50,6 +59,8 @@ from bot.updater import (
 )
 from .announcement_store import AnnouncementStore
 from .lan_chat_service import LanChatService
+from .notification_service import ChatNotificationService
+from .pushplus_client import PushPlusClient
 from .auth_store import (
     AuthStoreError,
     CAP_ADMIN_OPS,
@@ -664,6 +675,20 @@ class WebApiServer:
         self._debug_service = DebugService(manager)
         self._debug_sockets: set[web.WebSocketResponse] = set()
         self._debug_tasks: set[asyncio.Task[Any]] = set()
+        self._notification_tasks: set[asyncio.Task[Any]] = set()
+        self._notification_service = ChatNotificationService(
+            pushplus=PushPlusClient(
+                enabled=PUSHPLUS_ENABLED,
+                token=PUSHPLUS_TOKEN,
+                topic=PUSHPLUS_TOPIC,
+                template=PUSHPLUS_TEMPLATE,
+                channel=PUSHPLUS_CHANNEL,
+                api_url=PUSHPLUS_API_URL,
+                timeout_seconds=PUSHPLUS_TIMEOUT_SECONDS,
+            ),
+            enabled=CHAT_COMPLETION_NOTIFY_ENABLED,
+            preview_chars=PUSHPLUS_PREVIEW_CHARS,
+        )
         self.announcement_store = _ANNOUNCEMENT_STORE
         self.lan_chat_service = LanChatService(repo_root=_REPO_ROOT)
         self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
@@ -1342,6 +1367,113 @@ class WebApiServer:
             return "main"
         return str(value or "main").strip().lower() or "main"
 
+    def _chat_notification_url(self, alias: str, conversation_id: str = "") -> str:
+        path = f"/bots/{str(alias or '').strip().lower() or 'main'}/chat"
+        if conversation_id:
+            path = f"{path}?conversation_id={conversation_id}"
+        return path
+
+    def _extract_chat_notification_payload(
+        self,
+        *,
+        alias: str,
+        agent_id: str,
+        data: dict[str, Any],
+        fallback_status: str = "success",
+    ) -> dict[str, Any]:
+        message = data.get("message") if isinstance(data.get("message"), dict) else {}
+        session = data.get("session") if isinstance(data.get("session"), dict) else {}
+        meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+        completion_state = str(meta.get("completion_state") or "").strip().lower()
+        state = str(message.get("state") or "").strip().lower()
+        status = "error" if fallback_status == "error" or completion_state in {"error", "failed"} or state == "error" else "success"
+        conversation_id = str(
+            session.get("active_conversation_id")
+            or data.get("conversation_id")
+            or data.get("conversationId")
+            or message.get("conversation_id")
+            or ""
+        ).strip()
+        message_id = str(message.get("id") or data.get("message_id") or data.get("messageId") or "").strip()
+        if not message_id and not conversation_id:
+            message_id = str(data.get("id") or data.get("code") or f"event_{uuid.uuid4().hex}")
+        preview = str(
+            data.get("output")
+            or message.get("content")
+            or data.get("preview")
+            or data.get("message")
+            or ""
+        ).strip()
+        if completion_state == "cancelled":
+            status = "cancelled"
+        return {
+            "bot_alias": alias,
+            "agent_id": agent_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "status": status,
+            "preview": preview,
+            "elapsed_seconds": data.get("elapsed_seconds"),
+            "url": self._chat_notification_url(alias, conversation_id),
+        }
+
+    async def _safe_notify_chat_terminal_event(
+        self,
+        *,
+        auth: AuthContext,
+        alias: str,
+        agent_id: str,
+        data: dict[str, Any],
+        fallback_status: str = "success",
+    ) -> None:
+        try:
+            payload = self._extract_chat_notification_payload(
+                alias=alias,
+                agent_id=agent_id,
+                data=data,
+                fallback_status=fallback_status,
+            )
+            if payload.get("status") == "cancelled":
+                return
+            await self._notification_service.notify_chat_completed(
+                account_id=auth.account_id,
+                user_id=auth.user_id,
+                **payload,
+            )
+        except Exception as exc:
+            logger.warning("聊天完成通知失败 alias=%s user_id=%s error=%s", alias, auth.user_id, exc)
+
+    def _schedule_chat_terminal_event(
+        self,
+        *,
+        auth: AuthContext,
+        alias: str,
+        agent_id: str,
+        data: dict[str, Any],
+        fallback_status: str = "success",
+    ) -> None:
+        task = asyncio.create_task(
+            self._safe_notify_chat_terminal_event(
+                auth=auth,
+                alias=alias,
+                agent_id=agent_id,
+                data=data,
+                fallback_status=fallback_status,
+            )
+        )
+        self._notification_tasks.add(task)
+
+        def discard_task(done_task: asyncio.Task[Any]) -> None:
+            self._notification_tasks.discard(done_task)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("聊天完成通知任务失败 alias=%s user_id=%s error=%s", alias, auth.user_id, exc)
+
+        task.add_done_callback(discard_task)
+
     async def get_agents_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
@@ -1461,29 +1593,40 @@ class WebApiServer:
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
-        if task_mode or isinstance(task_payload, dict) or visible_text is not None:
-            data = await run_chat(
-                self.manager,
-                alias,
-                auth.user_id,
-                body.get("message", ""),
-                task_mode=task_mode or "standard",
-                task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
-                visible_text=str(visible_text) if visible_text is not None else None,
+        try:
+            if task_mode or isinstance(task_payload, dict) or visible_text is not None:
+                data = await run_chat(
+                    self.manager,
+                    alias,
+                    auth.user_id,
+                    body.get("message", ""),
+                    task_mode=task_mode or "standard",
+                    task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
+                    visible_text=str(visible_text) if visible_text is not None else None,
+                    agent_id=agent_id,
+                    cluster=cluster_enabled,
+                    mentions=mentions,
+                )
+            else:
+                data = await run_chat(
+                    self.manager,
+                    alias,
+                    auth.user_id,
+                    body.get("message", ""),
+                    agent_id=agent_id,
+                    cluster=cluster_enabled,
+                    mentions=mentions,
+                )
+        except Exception as exc:
+            self._schedule_chat_terminal_event(
+                auth=auth,
+                alias=alias,
                 agent_id=agent_id,
-                cluster=cluster_enabled,
-                mentions=mentions,
+                data={"output": str(exc), "elapsed_seconds": 0},
+                fallback_status="error",
             )
-        else:
-            data = await run_chat(
-                self.manager,
-                alias,
-                auth.user_id,
-                body.get("message", ""),
-                agent_id=agent_id,
-                cluster=cluster_enabled,
-                mentions=mentions,
-            )
+            raise
+        self._schedule_chat_terminal_event(auth=auth, alias=alias, agent_id=agent_id, data=data)
         return _json({"ok": True, "data": data})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
@@ -1543,6 +1686,22 @@ class WebApiServer:
                     **stream_kwargs,
                 )
         async for event in event_stream:
+            event_type = str(event.get("type") or "")
+            if event_type == "done":
+                self._schedule_chat_terminal_event(
+                    auth=auth,
+                    alias=alias,
+                    agent_id=agent_id,
+                    data=event,
+                )
+            elif event_type == "error":
+                self._schedule_chat_terminal_event(
+                    auth=auth,
+                    alias=alias,
+                    agent_id=agent_id,
+                    data=event,
+                    fallback_status="error",
+                )
             if client_disconnected:
                 continue
             try:
@@ -1792,6 +1951,65 @@ class WebApiServer:
                 await self._terminal_manager.detach(auth.user_id, owner_id, queue)
 
         return ws
+
+    async def notifications_ws(self, request: web.Request) -> web.WebSocketResponse:
+        auth = await self._with_auth(request)
+        ws = web.WebSocketResponse(heartbeat=30.0)
+        await ws.prepare(request)
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._notification_tasks.add(current_task)
+        connection = self._notification_service.register(
+            account_id=auth.account_id,
+            user_id=auth.user_id,
+            username=auth.username,
+            ws=ws,
+        )
+        try:
+            await ws.send_json({
+                "type": "hello",
+                "accountId": auth.account_id,
+                "userId": auth.user_id,
+                "username": auth.username,
+            })
+            async for message in ws:
+                if message.type != WSMsgType.TEXT:
+                    if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                        break
+                    continue
+                try:
+                    payload = json.loads(message.data or "{}")
+                except json.JSONDecodeError:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                message_type = str(payload.get("type") or "").strip()
+                if message_type in {"hello", "heartbeat", "presence_update"}:
+                    presence = payload.get("presence") if isinstance(payload.get("presence"), dict) else payload
+                    self._notification_service.heartbeat(connection, presence)
+                    await ws.send_json({"type": "heartbeat_ack"})
+        except _CLIENT_DISCONNECT_ERRORS:
+            pass
+        except Exception as exc:
+            logger.warning("通知 WebSocket 处理失败 account=%s error=%s", auth.account_id, exc)
+        finally:
+            self._notification_service.unregister(connection)
+            if current_task is not None:
+                self._notification_tasks.discard(current_task)
+        return ws
+
+    async def get_notification_settings(self, request: web.Request) -> web.Response:
+        await self._with_auth(request)
+        pushplus = self._notification_service.pushplus
+        return _json({
+            "ok": True,
+            "data": {
+                "chat_completion_notify_enabled": self._notification_service.enabled,
+                "pushplus_enabled": bool(getattr(pushplus, "enabled", False)),
+                "pushplus_configured": bool(str(getattr(pushplus, "token", "") or "").strip()),
+                "pushplus_topic_configured": bool(str(getattr(pushplus, "topic", "") or "").strip()),
+            },
+        })
 
     async def get_pwd(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
@@ -3526,6 +3744,8 @@ class WebApiServer:
             lan_chat_routes,
         ):
             module.register(app, self)
+        app.router.add_get("/api/notifications/settings", self.get_notification_settings)
+        app.router.add_get("/api/notifications/ws", self.notifications_ws)
         
         # Add static file serving for frontend when dist exists
         assets_dir = Path(self._get_static_dir("assets"))
@@ -3619,6 +3839,13 @@ class WebApiServer:
             except Exception:
                 pass
         await self._debug_service.shutdown()
+        notification_tasks = list(self._notification_tasks)
+        self._notification_tasks.clear()
+        for task in notification_tasks:
+            task.cancel()
+        if notification_tasks:
+            await asyncio.gather(*notification_tasks, return_exceptions=True)
+        await self._notification_service.close()
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             await plugin_service.shutdown()

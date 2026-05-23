@@ -76,6 +76,11 @@ import type {
   LanChatEvent,
   LanChatMessage,
   LanChatStatus,
+  NotificationSettingsStatus,
+  NotificationSubscription,
+  NotificationSubscriptionOptions,
+  NotificationPresenceUpdate,
+  WebNotificationEvent,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   ChatSendOptions,
@@ -280,6 +285,12 @@ export interface WebBotClient {
   sendLanChatMessage(conversationId: string, text: string): Promise<LanChatMessage>;
   markLanChatRead(conversationId: string, seq: number): Promise<void>;
   openLanChatSocket?(onEvent: (event: LanChatEvent) => void): () => void;
+  getNotificationSettings?(): Promise<NotificationSettingsStatus>;
+  subscribeNotifications?(
+    onEvent: (event: WebNotificationEvent) => void,
+    options?: NotificationSubscriptionOptions,
+  ): NotificationSubscription;
+  sendNotificationPresenceUpdate?(presence: NotificationPresenceUpdate): void;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;

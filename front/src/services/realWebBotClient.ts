@@ -154,6 +154,12 @@ import type {
   LanChatMessage,
   LanChatParticipant,
   LanChatStatus,
+  NotificationPresenceUpdate,
+  NotificationSettingsStatus,
+  NotificationSocketStatus,
+  NotificationSubscription,
+  NotificationSubscriptionOptions,
+  WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
@@ -243,6 +249,15 @@ type RawHealthResponse = {
   host?: string;
   port?: number;
   host_info?: RawPublicHostInfo;
+};
+
+type RawNotificationSettings = {
+  pushplus_enabled?: boolean;
+  pushplus_configured?: boolean;
+  pushplus_topic_configured?: boolean;
+  pushPlusEnabled?: boolean;
+  pushPlusConfigured?: boolean;
+  pushPlusTopicConfigured?: boolean;
 };
 
 type RawHistoryItem = {
@@ -2775,8 +2790,35 @@ function parseSseBlock(block: string): StreamEvent | null {
   }
 }
 
+function mapNotificationSettings(data: RawNotificationSettings | null | undefined): NotificationSettingsStatus {
+  return {
+    pushPlusEnabled: Boolean(data?.pushplus_enabled ?? data?.pushPlusEnabled),
+    pushPlusConfigured: Boolean(data?.pushplus_configured ?? data?.pushPlusConfigured),
+    pushPlusTopicConfigured: Boolean(data?.pushplus_topic_configured ?? data?.pushPlusTopicConfigured),
+  };
+}
+
+function buildWebSocketUrl(path: string, token: string) {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const configuredBase = typeof __PUBLIC_ENV__ !== "undefined" ? __PUBLIC_ENV__.VITE_API_BASE_URL : "";
+  const configuredUrl = configuredBase ? new URL(configuredBase, window.location.href) : null;
+  const host = configuredUrl?.host || window.location.host;
+  const basePath = configuredUrl?.pathname && configuredUrl.pathname !== "/" ? configuredUrl.pathname.replace(/\/$/, "") : "";
+  const url = new URL(`${protocol}//${host}${basePath}${path}`);
+  if (token) {
+    url.searchParams.set("token", token);
+  }
+  return url.toString();
+}
+
+function isWebNotificationEvent(value: unknown): value is WebNotificationEvent {
+  return Boolean(value && typeof value === "object" && typeof (value as { type?: unknown }).type === "string");
+}
+
 export class RealWebBotClient implements WebBotClient {
   private token = "";
+  private notificationPresence: NotificationPresenceUpdate | null = null;
+  private notificationPresenceSenders = new Set<(presence: NotificationPresenceUpdate) => void>();
 
   private headers(extraHeaders: HeadersInit = {}) {
     return {
@@ -2911,6 +2953,152 @@ export class RealWebBotClient implements WebBotClient {
     }
 
     return mapPublicHostInfo(payload.host_info);
+  }
+
+  async getNotificationSettings(): Promise<NotificationSettingsStatus> {
+    const data = await this.requestJson<RawNotificationSettings>("/api/notifications/settings");
+    return mapNotificationSettings(data);
+  }
+
+  subscribeNotifications(
+    onEvent: (event: WebNotificationEvent) => void,
+    options: NotificationSubscriptionOptions = {},
+  ): NotificationSubscription {
+    const HEARTBEAT_INTERVAL_MS = 25000;
+    const MAX_RECONNECT_DELAY_MS = 30000;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let heartbeatTimer: number | null = null;
+    let closedByClient = false;
+    let reconnectAttempt = 0;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const clearHeartbeatTimer = () => {
+      if (heartbeatTimer !== null) {
+        window.clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+
+    const sendJson = (payload: Record<string, unknown>) => {
+      if (socket?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      try {
+        socket.send(JSON.stringify(payload));
+      } catch {
+        // Socket may close while the page is being hidden.
+      }
+    };
+
+    const sendPresence = (presence: NotificationPresenceUpdate) => {
+      this.notificationPresence = presence;
+      sendJson({ type: "presence_update", ...presence });
+    };
+
+    const startHeartbeat = () => {
+      clearHeartbeatTimer();
+      heartbeatTimer = window.setInterval(() => {
+        sendJson({ type: "heartbeat", sentAt: new Date().toISOString() });
+      }, HEARTBEAT_INTERVAL_MS);
+    };
+
+    const notifyStatus = (status: NotificationSocketStatus) => {
+      options.onStatus?.(status);
+    };
+
+    const scheduleReconnect = () => {
+      if (closedByClient || reconnectTimer !== null) {
+        return;
+      }
+      const delay = Math.min(1000 * (2 ** reconnectAttempt), MAX_RECONNECT_DELAY_MS);
+      reconnectAttempt += 1;
+      notifyStatus("reconnecting");
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
+
+    const connect = () => {
+      if (closedByClient) {
+        return;
+      }
+      clearReconnectTimer();
+      clearHeartbeatTimer();
+      if (socket && socket.readyState !== WebSocket.CLOSED) {
+        try {
+          socket.close();
+        } catch {
+          // ignore close failures
+        }
+      }
+      notifyStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
+      socket = new WebSocket(buildWebSocketUrl("/api/notifications/ws", this.token));
+      socket.addEventListener("open", () => {
+        reconnectAttempt = 0;
+        notifyStatus("open");
+        sendJson({ type: "hello", sentAt: new Date().toISOString() });
+        if (this.notificationPresence) {
+          sendPresence(this.notificationPresence);
+        }
+        startHeartbeat();
+      });
+      socket.addEventListener("message", (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (isWebNotificationEvent(payload)) {
+            onEvent(payload);
+          }
+        } catch {
+          return;
+        }
+      });
+      socket.addEventListener("close", () => {
+        clearHeartbeatTimer();
+        if (closedByClient) {
+          notifyStatus("closed");
+          return;
+        }
+        scheduleReconnect();
+      });
+      socket.addEventListener("error", () => {
+        notifyStatus("error");
+      });
+    };
+
+    const trackedSendPresence = (presence: NotificationPresenceUpdate) => {
+      sendPresence(presence);
+    };
+
+    this.notificationPresenceSenders.add(trackedSendPresence);
+    connect();
+
+    return {
+      close: () => {
+        closedByClient = true;
+        clearReconnectTimer();
+        clearHeartbeatTimer();
+        this.notificationPresenceSenders.delete(trackedSendPresence);
+        if (socket && socket.readyState !== WebSocket.CLOSED) {
+          socket.close();
+        } else {
+          notifyStatus("closed");
+        }
+      },
+      sendPresenceUpdate: trackedSendPresence,
+    };
+  }
+
+  sendNotificationPresenceUpdate(presence: NotificationPresenceUpdate): void {
+    this.notificationPresence = presence;
+    this.notificationPresenceSenders.forEach((sendPresence) => sendPresence(presence));
   }
 
   async login(input: { username: string; password: string } | string): Promise<SessionState> {

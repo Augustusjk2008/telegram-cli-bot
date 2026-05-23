@@ -38,6 +38,29 @@ def _get_project_config(name: str, default: str = "") -> str:
     return default
 
 
+def _get_project_bool(name: str, default: bool = False) -> bool:
+    value = _get_project_config(name, "true" if default else "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _get_project_float(name: str, default: float) -> float:
+    raw_value = _get_project_config(name, str(default)).strip()
+    try:
+        return float(raw_value)
+    except ValueError:
+        logging.warning("忽略无效的浮点配置 %s=%s，使用默认值 %s", name, raw_value, default)
+        return default
+
+
+def _get_project_int(name: str, default: int) -> int:
+    raw_value = _get_project_config(name, str(default)).strip()
+    try:
+        return int(raw_value)
+    except ValueError:
+        logging.warning("忽略无效的整数配置 %s=%s，使用默认值 %s", name, raw_value, default)
+        return default
+
+
 DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
 
 ALLOWED_USER_IDS: List[int] = []
@@ -82,6 +105,17 @@ APP_UPDATE_REPOSITORY = _get_project_config(
     "APP_UPDATE_REPOSITORY",
     DEFAULT_APP_UPDATE_REPOSITORY,
 ).strip()
+
+# Chat completion notifications.
+CHAT_COMPLETION_NOTIFY_ENABLED = _get_project_bool("CHAT_COMPLETION_NOTIFY_ENABLED", True)
+PUSHPLUS_ENABLED = _get_project_bool("PUSHPLUS_ENABLED", False)
+PUSHPLUS_TOKEN = _get_project_config("PUSHPLUS_TOKEN", "").strip()
+PUSHPLUS_TOPIC = _get_project_config("PUSHPLUS_TOPIC", "").strip()
+PUSHPLUS_TEMPLATE = _get_project_config("PUSHPLUS_TEMPLATE", "markdown").strip() or "markdown"
+PUSHPLUS_CHANNEL = _get_project_config("PUSHPLUS_CHANNEL", "wechat").strip() or "wechat"
+PUSHPLUS_API_URL = _get_project_config("PUSHPLUS_API_URL", "https://www.pushplus.plus/send").strip() or "https://www.pushplus.plus/send"
+PUSHPLUS_TIMEOUT_SECONDS = _get_project_float("PUSHPLUS_TIMEOUT_SECONDS", 5.0)
+PUSHPLUS_PREVIEW_CHARS = _get_project_int("PUSHPLUS_PREVIEW_CHARS", 300)
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"claude", "codex", "kimi"}

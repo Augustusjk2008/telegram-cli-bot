@@ -533,6 +533,58 @@ export type ChatSendOptions = {
   mentions?: AgentMention[];
 };
 
+export type BrowserNotificationPermission = NotificationPermission | "unsupported";
+
+export type NotificationPresenceUpdate = {
+  visible: boolean;
+  focused: boolean;
+  permission: BrowserNotificationPermission;
+  webNotificationsEnabled: boolean;
+  currentBotAlias?: string | null;
+  updatedAt?: string;
+};
+
+export type ChatCompletedNotificationEvent = {
+  type: "chat_completed";
+  id: string;
+  dedupeKey: string;
+  botAlias: string;
+  agentId?: string;
+  conversationId?: string;
+  status: "success" | "error" | string;
+  title: string;
+  preview: string;
+  elapsedSeconds?: number;
+  completedAt: string;
+  url?: string;
+};
+
+export type WebNotificationEvent =
+  | ChatCompletedNotificationEvent
+  | {
+      type: string;
+      id?: string;
+      dedupeKey?: string;
+      [key: string]: unknown;
+    };
+
+export type NotificationSocketStatus = "connecting" | "open" | "closed" | "reconnecting" | "error";
+
+export type NotificationSubscriptionOptions = {
+  onStatus?: (status: NotificationSocketStatus) => void;
+};
+
+export type NotificationSubscription = {
+  close: () => void;
+  sendPresenceUpdate: (presence: NotificationPresenceUpdate) => void;
+};
+
+export type NotificationSettingsStatus = {
+  pushPlusEnabled: boolean;
+  pushPlusConfigured: boolean;
+  pushPlusTopicConfigured?: boolean;
+};
+
 export type TerminalRuntimePlatform = "windows" | "linux";
 
 export type TerminalAction = {

@@ -1,9 +1,15 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { DirectoryListing } from "../services/types";
+import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationEvents";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  localStorage.removeItem(CHAT_COMPLETION_WEB_NOTIFICATION_KEY);
+});
 
 class SettingsDirectoryPickerClient extends MockWebBotClient {
   browserPath = "C:\\workspace";
@@ -307,4 +313,37 @@ test("main settings saves Git proxy address and port shortcut", async () => {
     expect(updateGitProxySettings).toHaveBeenLastCalledWith("7898");
   });
   expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
+});
+
+test("settings screen exposes notification permission and PushPlus status", async () => {
+  const user = userEvent.setup();
+  vi.stubGlobal("Notification", {
+    permission: "default",
+    requestPermission: vi.fn().mockResolvedValue("granted"),
+  });
+  const client = new MockWebBotClient();
+  Object.assign(client, {
+    getNotificationSettings: vi.fn().mockResolvedValue({
+      pushPlusEnabled: true,
+      pushPlusConfigured: true,
+      pushPlusTopicConfigured: false,
+    }),
+  });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByRole("heading", { name: "通知" })).toBeInTheDocument();
+  expect(screen.getByLabelText("聊天完成网页通知")).toBeChecked();
+  expect(screen.getByText(/PushPlus:/)).toHaveTextContent("已配置");
+
+  await user.click(screen.getByLabelText("聊天完成网页通知"));
+  expect(localStorage.getItem(CHAT_COMPLETION_WEB_NOTIFICATION_KEY)).toBe("false");
+  expect(await screen.findByText("聊天完成通知已关闭")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "请求浏览器通知权限" }));
+  await waitFor(() => {
+    expect(Notification.requestPermission).toHaveBeenCalled();
+  });
+  expect(localStorage.getItem(CHAT_COMPLETION_WEB_NOTIFICATION_KEY)).toBe("true");
+  expect(await screen.findByText("聊天完成通知已开启")).toBeInTheDocument();
 });

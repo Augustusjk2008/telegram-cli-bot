@@ -6,6 +6,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
+import { NotificationCenter } from "./NotificationCenter";
 import {
   readStoredViewMode,
   readViewportWidth,
@@ -720,6 +721,14 @@ export function App() {
       onClose={handleCloseAnnouncements}
     />
   );
+  const notificationCenter = (
+    <NotificationCenter
+      client={client}
+      enabled={isLoggedIn}
+      currentBotAlias={currentBot}
+      onUnreadBot={markBotUnread}
+    />
+  );
 
   if (!isLoggedIn) {
     return (
@@ -746,6 +755,7 @@ export function App() {
           onBotsChange={setBots}
           canManageRegisterCodes={canManageRegisterCodes}
         />
+        {notificationCenter}
         {announcementDialog}
       </>
     );
@@ -762,6 +772,7 @@ export function App() {
             onBotsChange={setBots}
             canManage={canManageBots}
           />
+          {notificationCenter}
           {announcementDialog}
         </>
       );
@@ -769,6 +780,7 @@ export function App() {
     return (
       <>
         <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} canManage={canManageBots} />
+        {notificationCenter}
         {announcementDialog}
       </>
     );
@@ -1023,6 +1035,7 @@ export function App() {
           />
         </PersistentTerminalProvider>
         {switcher}
+        {notificationCenter}
         {announcementDialog}
       </>
     );
@@ -1057,6 +1070,7 @@ export function App() {
         />
       </PersistentTerminalProvider>
       {switcher}
+      {notificationCenter}
       {announcementDialog}
     </>
   );
