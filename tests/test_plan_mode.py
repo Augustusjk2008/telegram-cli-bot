@@ -94,6 +94,15 @@ def test_build_assistant_run_request_preserves_plan_mode():
     assert request.text == "先出方案"
 
 
+def test_build_assistant_run_request_downgrades_plan_execution_prompt_to_standard():
+    prompt = build_plan_execution_prompt("docs/plan/demo.md")
+
+    request = build_assistant_run_request("main", 1001, prompt, task_mode="plan")
+
+    assert request.task_mode == "standard"
+    assert request.text == prompt
+
+
 def test_plan_prompt_wrapper_is_used_for_cli_request():
     wrapped = build_plan_mode_prompt("先出方案", cluster_active=True)
 

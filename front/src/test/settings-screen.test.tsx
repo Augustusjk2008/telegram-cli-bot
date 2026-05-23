@@ -347,3 +347,24 @@ test("settings screen exposes notification permission and PushPlus status", asyn
   expect(localStorage.getItem(CHAT_COMPLETION_WEB_NOTIFICATION_KEY)).toBe("true");
   expect(await screen.findByText("聊天完成通知已开启")).toBeInTheDocument();
 });
+
+test("settings screen shows PushPlus setup guide dialog", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.click(await screen.findByRole("button", { name: "PushPlus 配置教程" }));
+
+  const dialog = screen.getByRole("dialog", { name: "PushPlus 配置教程" });
+  expect(within(dialog).getByText("关注 PushPlus 公众号")).toBeInTheDocument();
+  expect(within(dialog).getByText("完成实名制认证")).toBeInTheDocument();
+  expect(within(dialog).getByText("复制 token")).toBeInTheDocument();
+  expect(within(dialog).getByText(/PUSHPLUS_ENABLED=true/)).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "PushPlus 配置教程" })).not.toBeInTheDocument();
+  });
+});

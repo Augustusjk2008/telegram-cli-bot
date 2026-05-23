@@ -137,6 +137,7 @@ from bot.web.plan_mode import (
     PLAN_MODE_TASK_MODE,
     build_plan_execution_prompt,
     build_plan_mode_prompt,
+    is_plan_execution_prompt,
     save_execution_plan,
 )
 from bot.web.api_common import (
@@ -4705,6 +4706,9 @@ def build_assistant_run_request(
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
 ) -> AssistantRunRequest:
+    normalized_task_mode = task_mode if task_mode in {"standard", "dream", "proposal_patch", PLAN_MODE_TASK_MODE} else "standard"
+    if normalized_task_mode == PLAN_MODE_TASK_MODE and is_plan_execution_prompt(user_text):
+        normalized_task_mode = "standard"
     return AssistantRunRequest(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         source="web",
@@ -4713,7 +4717,7 @@ def build_assistant_run_request(
         text=user_text,
         interactive=True,
         visible_text=visible_text if visible_text is not None else user_text,
-        task_mode=task_mode if task_mode in {"standard", "dream", "proposal_patch", PLAN_MODE_TASK_MODE} else "standard",
+        task_mode=normalized_task_mode,
         task_payload=task_payload,
     )
 

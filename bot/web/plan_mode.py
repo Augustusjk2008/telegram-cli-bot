@@ -10,6 +10,7 @@ from bot.prompts import render_prompt
 PLAN_MODE_TASK_MODE = "plan"
 PLAN_DRAFT_OPEN = "<PLAN_DRAFT>"
 PLAN_DRAFT_CLOSE = "</PLAN_DRAFT>"
+PLAN_EXECUTION_PROMPT_PREFIX = "请按方案执行。方案文件："
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,10 @@ def build_plan_execution_prompt(relative_plan_path: str) -> str:
         "plan_execution",
         relative_plan_path=relative_plan_path,
     ).removesuffix("\n")
+
+
+def is_plan_execution_prompt(text: str) -> bool:
+    return str(text or "").lstrip().startswith(PLAN_EXECUTION_PROMPT_PREFIX)
 
 
 def _derive_title(content: str) -> str:

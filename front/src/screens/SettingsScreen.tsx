@@ -168,6 +168,7 @@ export function SettingsScreen({
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
+  const [showPushPlusGuide, setShowPushPlusGuide] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
@@ -595,15 +596,24 @@ export function SettingsScreen({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void requestNotificationPermission()}
-            disabled={requestingNotificationPermission || notificationPermission === "unsupported"}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-          >
-            <Bell className="h-4 w-4" />
-            {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
-          </button>
+          <div className="flex flex-col items-start gap-2">
+            <button
+              type="button"
+              onClick={() => void requestNotificationPermission()}
+              disabled={requestingNotificationPermission || notificationPermission === "unsupported"}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            >
+              <Bell className="h-4 w-4" />
+              {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPushPlusGuide(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+            >
+              PushPlus 配置教程
+            </button>
+          </div>
         </div>
 
         <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
@@ -960,6 +970,43 @@ export function SettingsScreen({
                 className="px-4 py-2 rounded-lg bg-[var(--danger)] text-white hover:opacity-90"
               >
                 {actionLoading === "kill" ? "终止中..." : "确定终止"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showPushPlusGuide ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="PushPlus 配置教程"
+        >
+          <div className="w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl">
+            <h2 className="text-base font-semibold text-[var(--text)]">PushPlus 配置教程</h2>
+            <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-[var(--text)]">
+              <li>关注 PushPlus 公众号</li>
+              <li>完成实名制认证</li>
+              <li>登录 PushPlus 网站</li>
+              <li>复制 token</li>
+              <li>编辑项目 `.env`</li>
+            </ol>
+            <pre className="mt-4 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text)]">
+              <code>{`PUSHPLUS_ENABLED=true
+PUSHPLUS_TOKEN=你的token
+PUSHPLUS_TOPIC=可选群组编码`}</code>
+            </pre>
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              PUSHPLUS_TOPIC 可不填；不填时只推送给 token 所属账号。
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowPushPlusGuide(false)}
+                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)]"
+              >
+                关闭
               </button>
             </div>
           </div>

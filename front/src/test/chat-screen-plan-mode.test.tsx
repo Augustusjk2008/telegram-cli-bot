@@ -109,6 +109,31 @@ test("sends chat with plan task mode when plan mode is active", async () => {
   });
 });
 
+test("sends plan execution prompt as standard even when plan mode is active", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn(async () => createAssistantMessage("已执行", { id: "assistant-done" }));
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "计划模式" }));
+  await user.type(screen.getByPlaceholderText("输入消息"), buildMockPlanExecutionMessage());
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalledWith(
+      "main",
+      expect.stringContaining("请按方案执行"),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ taskMode: "standard" }),
+    );
+  });
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
+  expect(window.localStorage.getItem("tcb.planMode.main")).toBeNull();
+});
+
 test("shows execute and edit actions for final plan drafts", async () => {
   const user = userEvent.setup();
   const client = createClient({
@@ -197,4 +222,6 @@ test("execute plan keeps cluster enabled but leaves plan mode", async () => {
       expect.objectContaining({ cluster: true, taskMode: "standard" }),
     );
   });
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
+  expect(window.localStorage.getItem("tcb.planMode.main")).toBeNull();
 });

@@ -129,6 +129,10 @@ function planModeStorageKey(botAlias: string) {
   return `tcb.planMode.${botAlias}`;
 }
 
+function isPlanExecutionPrompt(text: string) {
+  return text.trimStart().startsWith("请按方案执行。方案文件：");
+}
+
 function queuedMessageStorageKey(botAlias: string, agentId: string) {
   return `tcb.queuedMessage.${botAlias}.${agentId || "main"}`;
 }
@@ -2394,7 +2398,17 @@ export function ChatScreen({
       return;
     }
     const clusterSend = clusterMode || mentions.length > 0;
-    const sendOptions = planMode
+    const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
+    if (planMode && isExecutingPlanPrompt) {
+      setPlanMode(false);
+    }
+    const shouldSendPlanMode = planMode && !isExecutingPlanPrompt;
+    const sendOptions = isExecutingPlanPrompt
+      ? {
+        taskMode: "standard" as const,
+        ...(clusterSend ? { cluster: true, mentions } : {}),
+      }
+      : shouldSendPlanMode
       ? {
         taskMode: "plan" as const,
         ...(clusterSend ? { cluster: true, mentions } : {}),
