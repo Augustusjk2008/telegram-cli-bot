@@ -386,15 +386,21 @@ test("settings screen disables PushPlus test when PushPlus is off", async () => 
   expect(await screen.findByRole("button", { name: "测试 PushPlus 推送" })).toBeDisabled();
 });
 
-test("settings screen shows PushPlus setup guide dialog", async () => {
+test("settings screen portals PushPlus setup guide dialog outside transformed panes", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
 
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+  const { container } = render(
+    <div data-testid="stacked-pane" style={{ position: "relative", zIndex: 1, transform: "translateZ(0)" }}>
+      <SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />
+    </div>,
+  );
 
   await user.click(await screen.findByRole("button", { name: "PushPlus 配置教程" }));
 
   const dialog = screen.getByRole("dialog", { name: "PushPlus 配置教程" });
+  expect(container).not.toContainElement(dialog);
+  expect(document.body).toContainElement(dialog);
   expect(within(dialog).getByText("关注 PushPlus 公众号")).toBeInTheDocument();
   expect(within(dialog).getByText("完成实名制认证")).toBeInTheDocument();
   expect(within(dialog).getByText("复制 token")).toBeInTheDocument();

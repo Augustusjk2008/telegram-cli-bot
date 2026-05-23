@@ -1,5 +1,6 @@
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, Bell, Copy, Globe, LogOut, RotateCw, Save, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
@@ -486,6 +487,43 @@ export function SettingsScreen({
       setTunnelAction("");
     }
   };
+
+  const pushPlusGuideDialog = showPushPlusGuide ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="PushPlus 配置教程"
+    >
+      <div className="w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl">
+        <h2 className="text-base font-semibold text-[var(--text)]">PushPlus 配置教程</h2>
+        <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-[var(--text)]">
+          <li>关注 PushPlus 公众号</li>
+          <li>完成实名制认证</li>
+          <li>登录 PushPlus 网站</li>
+          <li>复制 token</li>
+          <li>编辑项目 `.env`</li>
+        </ol>
+        <pre className="mt-4 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text)]">
+          <code>{`PUSHPLUS_ENABLED=true
+PUSHPLUS_TOKEN=你的token
+PUSHPLUS_TOPIC=可选群组编码`}</code>
+        </pre>
+        <p className="mt-3 text-sm text-[var(--muted)]">
+          PUSHPLUS_TOPIC 可不填；不填时只推送给 token 所属账号。
+        </p>
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setShowPushPlusGuide(false)}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)]"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--surface)]" : "bg-[var(--bg)]")}>
@@ -1003,42 +1041,7 @@ export function SettingsScreen({
         </div>
       ) : null}
 
-      {showPushPlusGuide ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="PushPlus 配置教程"
-        >
-          <div className="w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl">
-            <h2 className="text-base font-semibold text-[var(--text)]">PushPlus 配置教程</h2>
-            <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-[var(--text)]">
-              <li>关注 PushPlus 公众号</li>
-              <li>完成实名制认证</li>
-              <li>登录 PushPlus 网站</li>
-              <li>复制 token</li>
-              <li>编辑项目 `.env`</li>
-            </ol>
-            <pre className="mt-4 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text)]">
-              <code>{`PUSHPLUS_ENABLED=true
-PUSHPLUS_TOKEN=你的token
-PUSHPLUS_TOPIC=可选群组编码`}</code>
-            </pre>
-            <p className="mt-3 text-sm text-[var(--muted)]">
-              PUSHPLUS_TOPIC 可不填；不填时只推送给 token 所属账号。
-            </p>
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowPushPlusGuide(false)}
-                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)]"
-              >
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {pushPlusGuideDialog && typeof document !== "undefined" ? createPortal(pushPlusGuideDialog, document.body) : pushPlusGuideDialog}
 
     </main>
   );
