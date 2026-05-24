@@ -93,6 +93,60 @@ export type UserBotPermissions = {
   allowedBots: string[];
 };
 
+export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";
+
+export type EnvConfigValue = string | number | boolean | string[];
+
+export type EnvConfigOption = {
+  value: string;
+  label: string;
+};
+
+export type EnvConfigItem = {
+  key: string;
+  label: string;
+  description: string;
+  type: EnvConfigFieldType;
+  category: string;
+  value: EnvConfigValue;
+  defaultValue: EnvConfigValue;
+  source: string;
+  sensitive: boolean;
+  masked: boolean;
+  restartRequired: boolean;
+  rebuildRequired: boolean;
+  processOverridden?: boolean;
+  options?: EnvConfigOption[];
+  validation?: Record<string, unknown>;
+};
+
+export type EnvConfigSnapshot = {
+  envPath: string;
+  examplePath: string;
+  items: EnvConfigItem[];
+};
+
+export type EnvConfigPatchValue =
+  | EnvConfigValue
+  | ""
+  | null
+  | {
+      value?: EnvConfigValue | "";
+      masked?: boolean;
+      action?: "clear" | "regenerate";
+    };
+
+export type EnvConfigPatchInput = {
+  values: Record<string, EnvConfigPatchValue>;
+};
+
+export type EnvConfigPatchResult = {
+  changedKeys: string[];
+  restartRequiredKeys: string[];
+  rebuildRequiredKeys: string[];
+  backupPath: string;
+};
+
 export type BotSummary = {
   alias: string;
   cliType: CliType;

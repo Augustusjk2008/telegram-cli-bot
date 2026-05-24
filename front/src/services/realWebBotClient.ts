@@ -106,6 +106,12 @@ import type {
   DebugState,
   DebugVariable,
   DirectoryListing,
+  EnvConfigFieldType,
+  EnvConfigItem,
+  EnvConfigPatchInput,
+  EnvConfigPatchResult,
+  EnvConfigPatchValue,
+  EnvConfigSnapshot,
   AvatarAsset,
   FileOpenTarget,
   FileTreeRevealResult,
@@ -532,6 +538,53 @@ type RawAdminUser = {
   owned_bots?: string[];
   owned_bot_count?: number;
   bot_create_limit?: number;
+};
+
+type RawEnvConfigOption = string | {
+  value?: string;
+  label?: string;
+};
+
+type RawEnvConfigItem = {
+  key?: string;
+  label?: string;
+  description?: string;
+  type?: string;
+  category?: string;
+  value?: unknown;
+  default?: unknown;
+  default_value?: unknown;
+  defaultValue?: unknown;
+  source?: string;
+  sensitive?: boolean;
+  masked?: boolean;
+  restart_required?: boolean;
+  restartRequired?: boolean;
+  rebuild_required?: boolean;
+  rebuildRequired?: boolean;
+  process_overridden?: boolean;
+  processOverridden?: boolean;
+  options?: RawEnvConfigOption[];
+  validation?: Record<string, unknown>;
+};
+
+type RawEnvConfigSnapshot = {
+  envPath?: string;
+  env_path?: string;
+  examplePath?: string;
+  example_path?: string;
+  items?: RawEnvConfigItem[];
+};
+
+type RawEnvConfigPatchResult = {
+  changedKeys?: string[];
+  changed_keys?: string[];
+  restartRequiredKeys?: string[];
+  restart_required_keys?: string[];
+  rebuildRequiredKeys?: string[];
+  rebuild_required_keys?: string[];
+  backupPath?: string;
+  backup_path?: string;
 };
 
 type RawAnnouncementSection = {
@@ -1861,6 +1914,100 @@ function mapLanChatEvent(raw: unknown): LanChatEvent | null {
     return { type: "config_updated", config: mapLanChatConfig(event.config) };
   }
   return null;
+}
+
+function normalizeEnvFieldType(type: unknown): EnvConfigFieldType {
+  return type === "number"
+    || type === "boolean"
+    || type === "select"
+    || type === "csv"
+    || type === "path"
+    || type === "password"
+    ? type
+    : "string";
+}
+
+function normalizeEnvConfigValue(value: unknown, type: EnvConfigFieldType) {
+  if (type === "boolean") {
+    return value === true || value === "true" || value === "1";
+  }
+  if (type === "number") {
+    return typeof value === "number" ? value : Number(value || 0);
+  }
+  if (type === "csv") {
+    if (Array.isArray(value)) {
+      return value.map(String);
+    }
+    return typeof value === "string" && value.trim()
+      ? value.split(",").map((item) => item.trim()).filter(Boolean)
+      : [];
+  }
+  return value === null || typeof value === "undefined" ? "" : String(value);
+}
+
+function mapEnvConfigItem(raw: RawEnvConfigItem): EnvConfigItem {
+  const fieldType = normalizeEnvFieldType(raw.type);
+  return {
+    key: String(raw.key || ""),
+    label: String(raw.label || raw.key || ""),
+    description: String(raw.description || ""),
+    type: fieldType,
+    category: String(raw.category || "advanced"),
+    value: normalizeEnvConfigValue(raw.value, fieldType),
+    defaultValue: normalizeEnvConfigValue(raw.default_value ?? raw.defaultValue ?? raw.default, fieldType),
+    source: String(raw.source || ""),
+    sensitive: Boolean(raw.sensitive),
+    masked: Boolean(raw.masked),
+    restartRequired: Boolean(raw.restart_required ?? raw.restartRequired),
+    rebuildRequired: Boolean(raw.rebuild_required ?? raw.rebuildRequired),
+    processOverridden: Boolean(raw.process_overridden ?? raw.processOverridden),
+    options: (raw.options || []).map((option) => {
+      if (typeof option === "string") {
+        return { value: option, label: option };
+      }
+      return {
+        value: String(option.value || ""),
+        label: String(option.label || option.value || ""),
+      };
+    }),
+    validation: raw.validation || {},
+  };
+}
+
+function mapEnvConfigSnapshot(raw: RawEnvConfigSnapshot): EnvConfigSnapshot {
+  return {
+    envPath: String(raw.env_path || raw.envPath || ""),
+    examplePath: String(raw.example_path || raw.examplePath || ""),
+    items: (raw.items || []).map(mapEnvConfigItem),
+  };
+}
+
+function mapEnvPatchValue(value: EnvConfigPatchValue): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date)) {
+    return {
+      ...("value" in value ? { value: value.value } : {}),
+      ...(typeof value.masked === "boolean" ? { masked: value.masked } : {}),
+      ...(value.action ? { action: value.action } : {}),
+    };
+  }
+  return value;
+}
+
+function mapEnvPatchInput(input: EnvConfigPatchInput) {
+  return {
+    values: Object.fromEntries(
+      Object.entries(input.values).map(([key, value]) => [key, mapEnvPatchValue(value)]),
+    ),
+  };
+}
+
+function mapEnvPatchResult(raw: RawEnvConfigPatchResult): EnvConfigPatchResult {
+  return {
+    changedKeys: raw.changed_keys || raw.changedKeys || [],
+    restartRequiredKeys: raw.restart_required_keys || raw.restartRequiredKeys || [],
+    rebuildRequiredKeys: raw.rebuild_required_keys || raw.rebuildRequiredKeys || [],
+    backupPath: String(raw.backup_path || raw.backupPath || ""),
+  };
 }
 
 function mapSessionState(raw: RawAuthSession): SessionState {
@@ -3267,6 +3414,33 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapUserBotPermissions(data);
+  }
+
+  async getEnvConfig(): Promise<EnvConfigSnapshot> {
+    const data = await this.requestJson<RawEnvConfigSnapshot>("/api/admin/env");
+    return mapEnvConfigSnapshot(data);
+  }
+
+  async previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult> {
+    const data = await this.requestJson<RawEnvConfigPatchResult>("/api/admin/env/reload-preview", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(mapEnvPatchInput(input)),
+    });
+    return mapEnvPatchResult(data);
+  }
+
+  async updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult> {
+    const data = await this.requestJson<RawEnvConfigPatchResult>("/api/admin/env", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(mapEnvPatchInput(input)),
+    });
+    return mapEnvPatchResult(data);
   }
 
   async listBots(): Promise<BotSummary[]> {

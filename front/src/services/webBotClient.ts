@@ -43,6 +43,9 @@ import type {
   DebugProfile,
   DebugState,
   DirectoryListing,
+  EnvConfigPatchInput,
+  EnvConfigPatchResult,
+  EnvConfigSnapshot,
   FileOpenTarget,
   FileTreeRevealResult,
   FileCopyResult,
@@ -144,6 +147,9 @@ export interface WebBotClient {
   listAdminUsers(): Promise<AdminUser[]>;
   updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser>;
   updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions>;
+  getEnvConfig(): Promise<EnvConfigSnapshot>;
+  previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
+  updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;

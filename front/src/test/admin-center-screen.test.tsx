@@ -15,8 +15,41 @@ function createClient() {
     getUpdateStatus: vi.spyOn(client, "getUpdateStatus"),
     listOfflineUpdatePackages: vi.spyOn(client, "listOfflineUpdatePackages"),
     upsertAnnouncement: vi.spyOn(client, "upsertAnnouncement"),
+    previewEnvConfig: vi.spyOn(client, "previewEnvConfig"),
+    updateEnvConfig: vi.spyOn(client, "updateEnvConfig"),
+    restartService: vi.spyOn(client, "restartService"),
   };
 }
+
+test("admin center lazy-loads and refreshes env tab only when active", async () => {
+  const user = userEvent.setup();
+  const { client, listAdminUsers, getUpdateStatus, listOfflineUpdatePackages } = createClient();
+  const getEnvConfig = vi.spyOn(client, "getEnvConfig");
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await screen.findByRole("heading", { name: "用户权限" });
+  expect(getEnvConfig).not.toHaveBeenCalled();
+
+  vi.clearAllMocks();
+  await user.click(screen.getByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+
+  expect(getEnvConfig).toHaveBeenCalledTimes(1);
+  expect(listAdminUsers).not.toHaveBeenCalled();
+  expect(getUpdateStatus).not.toHaveBeenCalled();
+  expect(listOfflineUpdatePackages).not.toHaveBeenCalled();
+
+  vi.clearAllMocks();
+  await user.click(screen.getByRole("button", { name: "刷新" }));
+
+  await waitFor(() => {
+    expect(getEnvConfig).toHaveBeenCalledTimes(1);
+  });
+  expect(listAdminUsers).not.toHaveBeenCalled();
+  expect(getUpdateStatus).not.toHaveBeenCalled();
+});
 
 test("admin center loads user permissions without waiting for unrelated tabs", async () => {
   const { client, listRegisterCodes, getUpdateStatus, listOfflineUpdatePackages } = createClient();
@@ -127,4 +160,79 @@ test("admin center configures lan chat host mode", async () => {
     }));
   });
   expect(await screen.findByText("联机聊天配置已保存")).toBeInTheDocument();
+});
+
+test("admin center edits env config with diff confirmation and restart hint", async () => {
+  const user = userEvent.setup();
+  const { client, previewEnvConfig, updateEnvConfig } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: "Web" }));
+  await user.clear(screen.getByLabelText("Web 端口"));
+  await user.type(screen.getByLabelText("Web 端口"), "9000");
+  await user.click(screen.getByRole("button", { name: "预览 diff" }));
+
+  expect(await screen.findByRole("dialog", { name: "环境配置 diff 确认" })).toBeInTheDocument();
+  expect(screen.getAllByText("WEB_PORT").length).toBeGreaterThan(0);
+  expect(previewEnvConfig).toHaveBeenCalledWith({
+    values: {
+      WEB_PORT: 9000,
+    },
+  });
+
+  await user.click(screen.getByRole("button", { name: "确认保存" }));
+
+  await waitFor(() => {
+    expect(updateEnvConfig).toHaveBeenCalledWith({
+      values: {
+        WEB_PORT: 9000,
+      },
+    });
+  });
+  expect(await screen.findByText(/需重启: WEB_PORT/)).toBeInTheDocument();
+});
+
+test("admin center masks and clears sensitive env values", async () => {
+  const user = userEvent.setup();
+  const { client, previewEnvConfig } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
+  await user.click(await screen.findByRole("button", { name: "Web" }));
+  expect(await screen.findByDisplayValue("********")).toBeDisabled();
+
+  await user.click(screen.getByRole("button", { name: "清空" }));
+  await user.click(screen.getByRole("button", { name: "预览 diff" }));
+
+  await waitFor(() => {
+    expect(previewEnvConfig).toHaveBeenCalledWith({
+      values: {
+        WEB_API_TOKEN: { action: "clear" },
+      },
+    });
+  });
+  expect(screen.getByText("保存后将禁用口令登录。")).toBeInTheDocument();
+});
+
+test("admin center shows env tab for admin ops without invite-code permission", async () => {
+  const client = new MockWebBotClient();
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} canManageRegisterCodes={false} canManageEnvConfig />);
+
+  expect(await screen.findByRole("tab", { name: "环境配置" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "邀请码" })).not.toBeInTheDocument();
+});
+
+test("admin center hides env tab without admin capability flag", async () => {
+  const client = new MockWebBotClient();
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} canManageEnvConfig={false} />);
+
+  expect(screen.queryByRole("tab", { name: "环境配置" })).not.toBeInTheDocument();
 });

@@ -3950,6 +3950,85 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("env admin endpoints map schema and patch payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        env_path: "C:\\repo\\.env",
+        example_path: "C:\\repo\\.env.example",
+        items: [{
+          key: "WEB_PORT",
+          label: "Web 端口",
+          description: "监听端口",
+          type: "number",
+          category: "web",
+          value: "8765",
+          default: "8765",
+          source: "env",
+          sensitive: false,
+          masked: false,
+          restart_required: true,
+          rebuild_required: false,
+          process_overridden: true,
+          options: [],
+          validation: { min: 1, max: 65535, integer: true },
+        }, {
+          key: "CLI_TYPE",
+          label: "CLI 类型",
+          description: "CLI",
+          type: "select",
+          category: "basic",
+          value: "codex",
+          default: "codex",
+          source: "example",
+          sensitive: false,
+          masked: false,
+          restart_required: true,
+          rebuild_required: false,
+          options: ["codex", "claude", "kimi"],
+        }],
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        changed_keys: ["WEB_API_TOKEN"],
+        restart_required_keys: ["WEB_API_TOKEN"],
+        rebuild_required_keys: [],
+        backup_path: "",
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        changed_keys: ["VITE_CHAT_TRACE_PREVIEW_MAX_LINES"],
+        restart_required_keys: [],
+        rebuild_required_keys: ["VITE_CHAT_TRACE_PREVIEW_MAX_LINES"],
+        backup_path: "C:\\repo\\.env.bak.1",
+      }));
+
+    const client = new RealWebBotClient();
+    const snapshot = await client.getEnvConfig();
+    const preview = await client.previewEnvConfig({ values: { WEB_API_TOKEN: { action: "regenerate" } } });
+    const result = await client.updateEnvConfig({ values: { VITE_CHAT_TRACE_PREVIEW_MAX_LINES: 8 } });
+
+    expect(snapshot.envPath).toBe("C:\\repo\\.env");
+    expect(snapshot.items[0]).toEqual(expect.objectContaining({
+      key: "WEB_PORT",
+      value: 8765,
+      defaultValue: 8765,
+      processOverridden: true,
+    }));
+    expect(snapshot.items[1].options).toEqual([
+      { value: "codex", label: "codex" },
+      { value: "claude", label: "claude" },
+      { value: "kimi", label: "kimi" },
+    ]);
+    expect(preview.changedKeys).toEqual(["WEB_API_TOKEN"]);
+    expect(result.rebuildRequiredKeys).toEqual(["VITE_CHAT_TRACE_PREVIEW_MAX_LINES"]);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/admin/env/reload-preview", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ values: { WEB_API_TOKEN: { action: "regenerate" } } }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/admin/env", expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ values: { VITE_CHAT_TRACE_PREVIEW_MAX_LINES: 8 } }),
+    }));
+  });
+
   test("offline update APIs map payloads", async () => {
     fetchMock
       .mockResolvedValueOnce({

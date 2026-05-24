@@ -60,6 +60,7 @@ from bot.updater import (
 )
 from .announcement_store import AnnouncementStore
 from .diagnostics import diag_enabled, diag_log_slow, diag_loop_lag_ms
+from .env_service import EnvConfigService, EnvValidationError
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
 from .pushplus_client import PushPlusClient
@@ -732,6 +733,7 @@ class WebApiServer:
         )
         self.announcement_store = _ANNOUNCEMENT_STORE
         self.lan_chat_service = LanChatService(repo_root=_REPO_ROOT)
+        self.env_config_service = EnvConfigService(_REPO_ROOT)
         self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
         self._git_smart_commit_latest_by_alias: dict[str, str] = {}
         self._git_smart_commit_repo_locks: dict[str, str] = {}
@@ -3019,6 +3021,28 @@ class WebApiServer:
                 await response.write(_format_sse("error", error))
                 await response.write_eof()
         return response
+
+    async def admin_env_get(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": self.env_config_service.snapshot()})
+
+    async def admin_env_patch(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        try:
+            data = self.env_config_service.patch(body)
+        except EnvValidationError as exc:
+            raise WebApiError(400, exc.code, exc.message, exc.data) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_env_reload_preview(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        try:
+            data = self.env_config_service.reload_preview(body)
+        except EnvValidationError as exc:
+            raise WebApiError(400, exc.code, exc.message, exc.data) from exc
+        return _json({"ok": True, "data": data})
 
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

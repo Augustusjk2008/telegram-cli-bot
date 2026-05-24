@@ -113,7 +113,25 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(screen.getByRole("button", { name: "插件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
   expect(sessionStorage.getItem("web-api-token")).toBe("123");
-  expect(localStorage.getItem("web-api-token")).toBeNull();
+  expect(localStorage.getItem("web-api-token")).toBe("123");
+  expect(localStorage.getItem("web-session-token")).toBe("123");
+});
+
+test("restores login after browser session storage is cleared", async () => {
+  const user = userEvent.setup();
+  const { unmount } = render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
+  expect(localStorage.getItem("web-session-token")).toBe("123");
+
+  unmount();
+  sessionStorage.clear();
+  render(<App />);
+
+  expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "登录" })).not.toBeInTheDocument();
 });
 
 test("opens announcements after login when unseen exists", async () => {
@@ -476,8 +494,6 @@ test("re-mounting app restores persisted appearance preferences", async () => {
   unmount();
   sessionStorage.clear();
   render(<App />);
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
   await screen.findByRole("button", { name: "聊天" });
   await user.click(screen.getByRole("button", { name: "设置" }));
 

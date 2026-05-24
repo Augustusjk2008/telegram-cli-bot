@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, RefreshCw, Save } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
@@ -8,6 +8,12 @@ import type {
   AppUpdateStatus,
   BotSummary,
   CreateAnnouncementInput,
+  EnvConfigItem,
+  EnvConfigPatchInput,
+  EnvConfigPatchResult,
+  EnvConfigPatchValue,
+  EnvConfigSnapshot,
+  EnvConfigValue,
   LanChatConfig,
   LanChatConfigInput,
   OfflineUpdatePackageList,
@@ -22,9 +28,36 @@ type Props = {
   initialBots?: BotSummary[];
   onBotsChange?: (bots: BotSummary[]) => void;
   canManageRegisterCodes?: boolean;
+  canManageEnvConfig?: boolean;
 };
 
-type AdminCenterTab = "users" | "invites" | "updates" | "announcements" | "lan-chat";
+type AdminCenterTab = "users" | "invites" | "updates" | "announcements" | "lan-chat" | "env";
+
+const ENV_CATEGORY_LABELS: Record<string, string> = {
+  basic: "基础",
+  web: "Web",
+  tunnel: "Tunnel",
+  updates: "更新",
+  update: "更新",
+  notifications: "通知",
+  notification: "通知",
+  diagnostics: "诊断",
+  advanced: "高级",
+  frontend: "前端构建项",
+};
+
+const ENV_CATEGORY_ORDER = [
+  "basic",
+  "web",
+  "tunnel",
+  "updates",
+  "update",
+  "notifications",
+  "notification",
+  "diagnostics",
+  "advanced",
+  "frontend",
+];
 
 const DEFAULT_ANNOUNCEMENT_DRAFT: CreateAnnouncementInput = {
   publisher: "CLI Bridge",
@@ -50,12 +83,34 @@ function formatPackageKind(kind?: string) {
   return "未知";
 }
 
+function formatEnvValue(value: EnvConfigValue | undefined, masked = false) {
+  if (masked) return "********";
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  return value || "";
+}
+
+function envValueEquals(left: EnvConfigValue | undefined, right: EnvConfigValue | undefined) {
+  return formatEnvValue(left) === formatEnvValue(right);
+}
+
+function normalizeEnvDraftValue(item: EnvConfigItem, value: string | boolean): EnvConfigValue {
+  if (item.type === "boolean") return Boolean(value);
+  if (item.type === "number") return Number(value || 0);
+  if (item.type === "csv") {
+    return String(value).split(",").map((part) => part.trim()).filter(Boolean);
+  }
+  return String(value);
+}
+
 export function AdminCenterScreen({
   client = new MockWebBotClient(),
   onClose,
   initialBots = [],
   onBotsChange,
   canManageRegisterCodes = true,
+  canManageEnvConfig = true,
 }: Props) {
   const [activeTab, setActiveTab] = useState<AdminCenterTab>("users");
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -70,12 +125,22 @@ export function AdminCenterScreen({
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
   const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
   const [lanChatSaving, setLanChatSaving] = useState(false);
+  const [envConfig, setEnvConfig] = useState<EnvConfigSnapshot | null>(null);
+  const [envDraft, setEnvDraft] = useState<Record<string, EnvConfigValue>>({});
+  const [envVisibleSecrets, setEnvVisibleSecrets] = useState<Record<string, boolean>>({});
+  const [envSecretActions, setEnvSecretActions] = useState<Record<string, "clear" | "regenerate" | "edit">>({});
+  const [activeEnvCategory, setActiveEnvCategory] = useState("");
+  const [envPreview, setEnvPreview] = useState<EnvConfigPatchResult | null>(null);
+  const [envSaving, setEnvSaving] = useState(false);
+  const [envRestarting, setEnvRestarting] = useState(false);
+  const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
     users: false,
     invites: false,
     updates: false,
     announcements: false,
     "lan-chat": false,
+    env: false,
   });
   const [manualPackagePath, setManualPackagePath] = useState("");
   const [registerCodeDraftUses, setRegisterCodeDraftUses] = useState("1");
@@ -91,11 +156,34 @@ export function AdminCenterScreen({
 
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
   const visibleTabs = useMemo<AdminCenterTab[]>(
-    () => (canManageRegisterCodes
-      ? ["users", "invites", "updates", "announcements", "lan-chat"]
-      : ["users", "updates", "announcements", "lan-chat"]),
-    [canManageRegisterCodes],
+    () => [
+      "users",
+      ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
+      "updates",
+      "announcements",
+      "lan-chat",
+      ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
+    ],
+    [canManageEnvConfig, canManageRegisterCodes],
   );
+  const envCategories = useMemo(() => {
+    const categories = Array.from(new Set((envConfig?.items || []).map((item) => item.category)));
+    return categories.sort((left, right) => {
+      const leftIndex = ENV_CATEGORY_ORDER.indexOf(left);
+      const rightIndex = ENV_CATEGORY_ORDER.indexOf(right);
+      return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex);
+    });
+  }, [envConfig]);
+  const envChangedItems = useMemo(() => (envConfig?.items || []).filter((item) => {
+    const action = envSecretActions[item.key];
+    if (action === "clear" || action === "regenerate") return true;
+    return Object.prototype.hasOwnProperty.call(envDraft, item.key)
+      && !envValueEquals(envDraft[item.key], item.value);
+  }), [envConfig, envDraft, envSecretActions]);
+  const activeEnvItems = useMemo(() => {
+    const category = activeEnvCategory || envCategories[0] || "";
+    return (envConfig?.items || []).filter((item) => item.category === category);
+  }, [activeEnvCategory, envCategories, envConfig]);
 
   useEffect(() => {
     if (!visibleTabs.includes(activeTab)) {
@@ -247,6 +335,41 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadEnvConfig(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const config = await client.getEnvConfig();
+      setEnvConfig(config);
+      setEnvDraft(Object.fromEntries(config.items.map((item) => [item.key, item.value])));
+      setEnvSecretActions({});
+      setEnvVisibleSecrets({});
+      setEnvPreview(null);
+      setLoadedTabs((prev) => ({ ...prev, env: true }));
+      if (config.items.length) {
+        const firstCategory = ENV_CATEGORY_ORDER.find((category) =>
+          config.items.some((item) => item.category === category),
+        ) || config.items[0].category;
+        setActiveEnvCategory((current) => current || firstCategory);
+      }
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载环境配置失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function refreshActiveTab(nextNotice = "", refresh = false) {
     if (activeTab === "users") {
       await loadUsers(nextNotice, refresh);
@@ -256,6 +379,8 @@ export function AdminCenterScreen({
       await loadUpdates(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
       await loadLanChat(nextNotice, refresh);
+    } else if (activeTab === "env" && canManageEnvConfig) {
+      await loadEnvConfig(nextNotice, refresh);
     } else {
       await loadAnnouncements(nextNotice, refresh);
     }
@@ -266,7 +391,7 @@ export function AdminCenterScreen({
       return;
     }
     void refreshActiveTab();
-  }, [activeTab, canManageRegisterCodes, client, loadedTabs]);
+  }, [activeTab, canManageEnvConfig, canManageRegisterCodes, client, loadedTabs]);
 
   const appendUpdateLog = (message?: string) => {
     if (!message) {
@@ -500,6 +625,73 @@ export function AdminCenterScreen({
     }
   };
 
+  const buildEnvPatchInput = (): EnvConfigPatchInput => {
+    const values: Record<string, EnvConfigPatchValue> = {};
+    for (const item of envChangedItems) {
+      const action = envSecretActions[item.key];
+      if (action === "clear" || action === "regenerate") {
+        values[item.key] = { action };
+      } else if (item.sensitive && item.masked && !envVisibleSecrets[item.key]) {
+        values[item.key] = { masked: true };
+      } else {
+        values[item.key] = envDraft[item.key];
+      }
+    }
+    return { values };
+  };
+
+  const previewEnvChanges = async () => {
+    if (!envChangedItems.length) {
+      setError("没有可保存的环境配置改动");
+      return;
+    }
+    setEnvSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const preview = await client.previewEnvConfig(buildEnvPatchInput());
+      setEnvPreview(preview);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "预览环境配置失败"));
+    } finally {
+      setEnvSaving(false);
+    }
+  };
+
+  const saveEnvChanges = async () => {
+    if (!envPreview) {
+      await previewEnvChanges();
+      return;
+    }
+    setEnvSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await client.updateEnvConfig(buildEnvPatchInput());
+      setEnvSavedImpact(result);
+      await loadEnvConfig("环境配置已保存", true);
+      setEnvSavedImpact(result);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "保存环境配置失败"));
+    } finally {
+      setEnvSaving(false);
+    }
+  };
+
+  const requestEnvRestart = async () => {
+    setEnvRestarting(true);
+    setError("");
+    setNotice("");
+    try {
+      await client.restartService();
+      setNotice("已请求重启服务");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "请求重启服务失败"));
+    } finally {
+      setEnvRestarting(false);
+    }
+  };
+
   const removeAnnouncement = async (id: string) => {
     setAnnouncementDeletingId(id);
     setError("");
@@ -544,7 +736,17 @@ export function AdminCenterScreen({
                 ? "rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)]"
                 : "rounded-md border border-[var(--border)] px-3 py-2 text-sm"}
             >
-              {tab === "users" ? "用户权限" : tab === "invites" ? "邀请码" : tab === "updates" ? "升级" : tab === "announcements" ? "公告" : "联机聊天"}
+              {tab === "users"
+                ? "用户权限"
+                : tab === "invites"
+                  ? "邀请码"
+                  : tab === "updates"
+                    ? "升级"
+                    : tab === "announcements"
+                      ? "公告"
+                      : tab === "env"
+                        ? "环境配置"
+                        : "联机聊天"}
             </button>
           ))}
           <button
@@ -834,6 +1036,237 @@ export function AdminCenterScreen({
               <Save className="h-4 w-4" />
               {lanChatSaving ? "保存中..." : "保存联机聊天配置"}
             </button>
+          </section>
+        ) : null}
+
+        {!loading && activeTab === "env" && canManageEnvConfig ? (
+          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">环境配置</h2>
+                <p className="text-sm text-[var(--muted)]">保存写入 .env；运行时配置多需重启服务，VITE_* 需重新 build。</p>
+                <p className="mt-1 break-all text-xs text-[var(--muted)]">文件: {envConfig?.envPath || ".env"}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void previewEnvChanges()}
+                  disabled={envSaving || envChangedItems.length === 0}
+                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  预览 diff
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveEnvChanges()}
+                  disabled={envSaving || envChangedItems.length === 0}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {envSaving ? "保存中..." : "保存环境配置"}
+                </button>
+              </div>
+            </div>
+
+            {envSavedImpact && (envSavedImpact.restartRequiredKeys.length || envSavedImpact.rebuildRequiredKeys.length) ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                <span>
+                  {envSavedImpact.restartRequiredKeys.length ? `需重启: ${envSavedImpact.restartRequiredKeys.join(", ")}` : ""}
+                  {envSavedImpact.restartRequiredKeys.length && envSavedImpact.rebuildRequiredKeys.length ? "；" : ""}
+                  {envSavedImpact.rebuildRequiredKeys.length ? `需重新 build: ${envSavedImpact.rebuildRequiredKeys.join(", ")}` : ""}
+                </span>
+                {envSavedImpact.restartRequiredKeys.length ? (
+                  <button
+                    type="button"
+                    onClick={() => void requestEnvRestart()}
+                    disabled={envRestarting}
+                    className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                  >
+                    {envRestarting ? "请求中..." : "重启服务"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {envPreview ? (
+              <div role="dialog" aria-label="环境配置 diff 确认" className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-[var(--text)]">保存前确认</p>
+                    <p className="text-xs text-[var(--muted)]">
+                      变更 {envPreview.changedKeys.length} 项
+                      {envPreview.restartRequiredKeys.length ? ` · 重启 ${envPreview.restartRequiredKeys.length} 项` : ""}
+                      {envPreview.rebuildRequiredKeys.length ? ` · 重建 ${envPreview.rebuildRequiredKeys.length} 项` : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEnvPreview(null)}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    取消
+                  </button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {envChangedItems.map((item) => {
+                    const action = envSecretActions[item.key];
+                    const afterValue = action === "clear"
+                      ? ""
+                      : action === "regenerate"
+                        ? "重新生成"
+                        : formatEnvValue(envDraft[item.key], item.sensitive && !envVisibleSecrets[item.key]);
+                    return (
+                      <div key={item.key} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs">
+                        <p className="font-medium text-[var(--text)]">{item.key}</p>
+                        <p className="break-all text-[var(--muted)]">- {formatEnvValue(item.value, item.sensitive)}</p>
+                        <p className="break-all text-[var(--text)]">+ {afterValue || "空值"}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void saveEnvChanges()}
+                  disabled={envSaving}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  确认保存
+                </button>
+              </div>
+            ) : null}
+
+            <div className="grid gap-4 lg:grid-cols-[180px_1fr]">
+              <nav className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
+                {envCategories.map((category) => (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => setActiveEnvCategory(category)}
+                    className={(activeEnvCategory || envCategories[0]) === category
+                      ? "whitespace-nowrap rounded-lg bg-[var(--accent)] px-3 py-2 text-left text-sm text-[var(--accent-foreground)]"
+                      : "whitespace-nowrap rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"}
+                  >
+                    {ENV_CATEGORY_LABELS[category] || category}
+                  </button>
+                ))}
+              </nav>
+
+              <div className="space-y-3">
+                {activeEnvItems.map((item) => {
+                  const draftValue = envDraft[item.key] ?? item.value;
+                  const secretAction = envSecretActions[item.key];
+                  const secretMasked = item.sensitive && item.masked && !envVisibleSecrets[item.key] && secretAction !== "edit";
+                  return (
+                    <article key={item.key} className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="font-medium text-[var(--text)]">{item.label}</h3>
+                            <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--muted)]">{item.key}</span>
+                            {item.restartRequired ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">重启生效</span> : null}
+                            {item.rebuildRequired ? <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-700">需 build</span> : null}
+                          </div>
+                          <p className="text-sm text-[var(--muted)]">{item.description}</p>
+                          <p className="text-xs text-[var(--muted)]">默认: {formatEnvValue(item.defaultValue)} · 来源: {item.source || "未知"}</p>
+                        </div>
+                        {item.sensitive ? (
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEnvVisibleSecrets((prev) => ({ ...prev, [item.key]: !prev[item.key] }));
+                                setEnvSecretActions((prev) => ({ ...prev, [item.key]: "edit" }));
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-strong)]"
+                            >
+                              {envVisibleSecrets[item.key] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              {envVisibleSecrets[item.key] ? "遮蔽" : "显示"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEnvSecretActions((prev) => ({ ...prev, [item.key]: "clear" }));
+                                setEnvDraft((prev) => ({ ...prev, [item.key]: "" }));
+                                setEnvPreview(null);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              清空
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEnvSecretActions((prev) => ({ ...prev, [item.key]: "regenerate" }));
+                                setEnvDraft((prev) => ({ ...prev, [item.key]: "重新生成" }));
+                                setEnvPreview(null);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-strong)]"
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              重新生成
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {item.type === "boolean" ? (
+                        <label className="inline-flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(draftValue)}
+                            onChange={(event) => {
+                              setEnvDraft((prev) => ({ ...prev, [item.key]: event.target.checked }));
+                              setEnvPreview(null);
+                            }}
+                          />
+                          启用
+                        </label>
+                      ) : item.type === "select" && item.options?.length ? (
+                        <select
+                          aria-label={item.label}
+                          value={String(draftValue || "")}
+                          onChange={(event) => {
+                            setEnvDraft((prev) => ({ ...prev, [item.key]: event.target.value }));
+                            setEnvPreview(null);
+                          }}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                        >
+                          {item.options.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          aria-label={item.label}
+                          type={item.type === "number" ? "number" : item.type === "password" && secretMasked ? "password" : "text"}
+                          value={secretMasked ? "********" : formatEnvValue(draftValue)}
+                          disabled={secretMasked || secretAction === "regenerate"}
+                          onChange={(event) => {
+                            setEnvDraft((prev) => ({
+                              ...prev,
+                              [item.key]: normalizeEnvDraftValue(item, event.target.value),
+                            }));
+                            if (item.sensitive) {
+                              setEnvSecretActions((prev) => ({ ...prev, [item.key]: "edit" }));
+                            }
+                            setEnvPreview(null);
+                          }}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-70"
+                        />
+                      )}
+                      {item.key === "WEB_API_TOKEN" && envSecretActions[item.key] === "clear" ? (
+                        <p className="text-xs text-red-700">保存后将禁用口令登录。</p>
+                      ) : null}
+                    </article>
+                  );
+                })}
+                {activeEnvItems.length === 0 ? (
+                  <p className="text-sm text-[var(--muted)]">暂无环境配置项</p>
+                ) : null}
+              </div>
+            </div>
           </section>
         ) : null}
 

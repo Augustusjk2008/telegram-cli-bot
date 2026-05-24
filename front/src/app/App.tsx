@@ -86,6 +86,8 @@ function readStoredToken() {
     return (
       sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY)?.trim()
       || sessionStorage.getItem(LEGACY_TOKEN_STORAGE_KEY)?.trim()
+      || localStorage.getItem(SESSION_TOKEN_STORAGE_KEY)?.trim()
+      || localStorage.getItem(LEGACY_TOKEN_STORAGE_KEY)?.trim()
       || ""
     );
   } catch {
@@ -99,6 +101,8 @@ function storeToken(token: string) {
     try {
       sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
       sessionStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
+      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
     } catch {
       // Ignore storage failures and keep the in-memory state.
     }
@@ -107,6 +111,8 @@ function storeToken(token: string) {
   try {
     sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
     sessionStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
+    localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
+    localStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
@@ -116,6 +122,8 @@ function clearStoredToken() {
   try {
     sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
     sessionStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
@@ -278,6 +286,7 @@ export function App() {
   const canUseSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "admin_ops");
   const canOpenAdminCenter = hasCapability(session, "admin_ops");
+  const canManageEnvConfig = hasCapability(session, "admin_ops");
   const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
   const displayBots = useMemo(() => buildDisplayBots(bots, unreadBots, botActivityOverrides), [botActivityOverrides, bots, unreadBots]);
   const botSummaryByAlias = useMemo(() => new Map(displayBots.map((bot) => [bot.alias, bot] as const)), [displayBots]);
@@ -754,6 +763,7 @@ export function App() {
           initialBots={bots}
           onBotsChange={setBots}
           canManageRegisterCodes={canManageRegisterCodes}
+          canManageEnvConfig={canManageEnvConfig}
         />
         {notificationCenter}
         {announcementDialog}

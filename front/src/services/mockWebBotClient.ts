@@ -74,6 +74,11 @@ import type {
   DebugProfile,
   DebugState,
   DirectoryListing,
+  EnvConfigItem,
+  EnvConfigPatchInput,
+  EnvConfigPatchResult,
+  EnvConfigPatchValue,
+  EnvConfigSnapshot,
   AvatarAsset,
   FileOpenTarget,
   FileTreeRevealResult,
@@ -323,6 +328,212 @@ function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): Gi
     params: { ...payload.params },
     defaults: { ...payload.defaults },
     schema: { ...payload.schema },
+  };
+}
+
+function createMockEnvItems(): EnvConfigItem[] {
+  return [
+    {
+      key: "CLI_TYPE",
+      label: "CLI 类型",
+      description: "主 Bot 下次启动使用的 CLI。",
+      type: "select",
+      category: "basic",
+      value: "codex",
+      defaultValue: "codex",
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+      options: [
+        { value: "codex", label: "codex" },
+        { value: "claude", label: "claude" },
+        { value: "kimi", label: "kimi" },
+      ],
+    },
+    {
+      key: "CLI_PATH",
+      label: "CLI 路径",
+      description: "CLI 可执行文件名或绝对路径。",
+      type: "path",
+      category: "basic",
+      value: "codex",
+      defaultValue: "codex",
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "WORKING_DIR",
+      label: "默认工作目录",
+      description: "只影响主 Bot 下次启动默认值。",
+      type: "path",
+      category: "basic",
+      value: DEMO_MAIN_WORKDIR,
+      defaultValue: DEMO_MAIN_WORKDIR,
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "WEB_HOST",
+      label: "Web 监听地址",
+      description: "Web 服务监听 host。",
+      type: "string",
+      category: "web",
+      value: "127.0.0.1",
+      defaultValue: "127.0.0.1",
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "WEB_PORT",
+      label: "Web 端口",
+      description: "Web 服务监听端口。",
+      type: "number",
+      category: "web",
+      value: 8765,
+      defaultValue: 8765,
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "WEB_API_TOKEN",
+      label: "Web API 口令",
+      description: "空值会禁用口令登录。",
+      type: "password",
+      category: "web",
+      value: "",
+      defaultValue: "",
+      source: "env",
+      sensitive: true,
+      masked: true,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "WEB_ALLOWED_ORIGINS",
+      label: "允许来源",
+      description: "CORS 来源，逗号分隔。",
+      type: "csv",
+      category: "web",
+      value: ["http://127.0.0.1:3000"],
+      defaultValue: [],
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "WEB_TUNNEL_MODE",
+      label: "Tunnel 模式",
+      description: "保存后需重启或手动重启 tunnel。",
+      type: "select",
+      category: "tunnel",
+      value: "cloudflare_quick",
+      defaultValue: "disabled",
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+      options: [
+        { value: "disabled", label: "disabled" },
+        { value: "cloudflare_quick", label: "cloudflare_quick" },
+      ],
+    },
+    {
+      key: "APP_UPDATE_REPOSITORY",
+      label: "更新仓库",
+      description: "GitHub Release 仓库。",
+      type: "string",
+      category: "updates",
+      value: "owner/repo",
+      defaultValue: "",
+      source: "example",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "PUSHPLUS_TOKEN",
+      label: "PushPlus Token",
+      description: "推送通知 token。",
+      type: "password",
+      category: "notifications",
+      value: "",
+      defaultValue: "",
+      source: "env",
+      sensitive: true,
+      masked: true,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "TCB_DIAG_ENABLED",
+      label: "诊断日志",
+      description: "开启后重启生效。",
+      type: "boolean",
+      category: "diagnostics",
+      value: false,
+      defaultValue: false,
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "CLI_EXEC_TIMEOUT",
+      label: "CLI 超时秒数",
+      description: "CLI 执行超时。",
+      type: "number",
+      category: "advanced",
+      value: 600,
+      defaultValue: 600,
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    },
+    {
+      key: "VITE_CHAT_TRACE_PREVIEW_MAX_LINES",
+      label: "Trace 预览行数",
+      description: "前端构建项，保存后需重新 build。",
+      type: "number",
+      category: "frontend",
+      value: 5,
+      defaultValue: 5,
+      source: "example",
+      sensitive: false,
+      masked: false,
+      restartRequired: false,
+      rebuildRequired: true,
+    },
+  ];
+}
+
+function cloneEnvItem(item: EnvConfigItem): EnvConfigItem {
+  return {
+    ...item,
+    value: Array.isArray(item.value) ? [...item.value] : item.value,
+    defaultValue: Array.isArray(item.defaultValue) ? [...item.defaultValue] : item.defaultValue,
+    options: item.options?.map((option) => ({ ...option })),
+    validation: item.validation ? { ...item.validation } : undefined,
   };
 }
 
@@ -1423,6 +1634,7 @@ export class MockWebBotClient implements WebBotClient {
       botCreateLimit: MEMBER_BOT_LIMIT,
     }],
   ]);
+  private envItems: EnvConfigItem[] = createMockEnvItems();
   private botOwners = new Map<string, string>([
     ["team2", "demo"],
   ]);
@@ -1497,6 +1709,72 @@ export class MockWebBotClient implements WebBotClient {
   private lanChatMessages: LanChatMessage[] = [];
   private lanChatReadSeq = new Map<string, number>();
   private lanChatSocketListeners = new Set<(event: LanChatEvent) => void>();
+
+  private normalizeEnvValue(item: EnvConfigItem, patchValue: EnvConfigPatchValue): EnvConfigItem["value"] {
+    if (patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)) {
+      if (patchValue.masked) {
+        return item.value;
+      }
+      if (patchValue.action === "clear") {
+        return item.type === "csv" ? [] : item.type === "boolean" ? false : item.type === "number" ? 0 : "";
+      }
+      if (patchValue.action === "regenerate") {
+        return `mock_${Math.random().toString(36).slice(2, 14)}`;
+      }
+      return this.normalizeEnvValue(item, patchValue.value ?? "");
+    }
+    if (item.type === "boolean") {
+      return patchValue === true || patchValue === "true" || patchValue === "1";
+    }
+    if (item.type === "number") {
+      return Number(patchValue || 0);
+    }
+    if (item.type === "csv") {
+      return Array.isArray(patchValue)
+        ? patchValue.map(String)
+        : String(patchValue || "").split(",").map((value) => value.trim()).filter(Boolean);
+    }
+    return String(patchValue ?? "");
+  }
+
+  private buildEnvPatchResult(input: EnvConfigPatchInput, apply: boolean): EnvConfigPatchResult {
+    const changedKeys: string[] = [];
+    const restartRequiredKeys: string[] = [];
+    const rebuildRequiredKeys: string[] = [];
+    const nextItems = this.envItems.map((item) => {
+      if (!Object.prototype.hasOwnProperty.call(input.values, item.key)) {
+        return item;
+      }
+      const nextValue = this.normalizeEnvValue(item, input.values[item.key]);
+      const currentText = Array.isArray(item.value) ? item.value.join(",") : String(item.value);
+      const nextText = Array.isArray(nextValue) ? nextValue.join(",") : String(nextValue);
+      if (currentText === nextText) {
+        return item;
+      }
+      changedKeys.push(item.key);
+      if (item.restartRequired) {
+        restartRequiredKeys.push(item.key);
+      }
+      if (item.rebuildRequired) {
+        rebuildRequiredKeys.push(item.key);
+      }
+      return {
+        ...item,
+        value: nextValue,
+        source: "env",
+        masked: item.sensitive && nextText.length > 0,
+      };
+    });
+    if (apply) {
+      this.envItems = nextItems;
+    }
+    return {
+      changedKeys,
+      restartRequiredKeys,
+      rebuildRequiredKeys,
+      backupPath: apply && changedKeys.length ? ".env.bak.20260524102000" : "",
+    };
+  }
 
   private moveKey<T>(map: Map<string, T>, oldKey: string, newKey: string) {
     if (!map.has(oldKey)) {
@@ -1590,6 +1868,10 @@ export class MockWebBotClient implements WebBotClient {
 
   private isLocalAdminSession() {
     return this.session.username.trim() === "127.0.0.1" || this.session.capabilities.includes("manage_register_codes");
+  }
+
+  private hasAdminOps() {
+    return this.session.username.trim() === "127.0.0.1" || this.session.capabilities.includes("admin_ops");
   }
 
   private ensureAdminUser(accountId: string, username = accountId) {
@@ -2426,6 +2708,31 @@ export class MockWebBotClient implements WebBotClient {
       accountId,
       allowedBots: [...normalized],
     };
+  }
+
+  async getEnvConfig(): Promise<EnvConfigSnapshot> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看环境配置", { status: 403, code: "forbidden" });
+    }
+    return {
+      envPath: ".env",
+      examplePath: ".env.example",
+      items: this.envItems.map(cloneEnvItem),
+    };
+  }
+
+  async previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权预览环境配置", { status: 403, code: "forbidden" });
+    }
+    return this.buildEnvPatchResult(input, false);
+  }
+
+  async updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权保存环境配置", { status: 403, code: "forbidden" });
+    }
+    return this.buildEnvPatchResult(input, true);
   }
 
   async listBots(): Promise<BotSummary[]> {
