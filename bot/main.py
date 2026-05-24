@@ -303,6 +303,45 @@ def suppress_windows_error_dialogs():
         logger.warning(f"禁用 Windows 错误弹窗失败: {e}")
 
 
+def _context_text(context: dict) -> str:
+    parts: list[str] = []
+    for key in ("message", "handle"):
+        value = context.get(key)
+        if value is not None:
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _is_benign_windows_proactor_reset(context: dict) -> bool:
+    if sys.platform != "win32":
+        return False
+    if not isinstance(context.get("exception"), ConnectionResetError):
+        return False
+    text = _context_text(context)
+    return (
+        "_ProactorBasePipeTransport._call_connection_lost" in text
+        or "proactor_events.py" in text and "_call_connection_lost" in text
+    )
+
+
+def _install_asyncio_exception_filter(loop):
+    if getattr(loop, "_tcb_proactor_reset_filter_installed", False):
+        return
+    previous_handler = loop.get_exception_handler()
+
+    def handle_exception(current_loop, context):
+        if _is_benign_windows_proactor_reset(context):
+            logger.debug("已忽略 Windows Proactor 连接重置: %s", context.get("message", ""))
+            return
+        if previous_handler is not None:
+            previous_handler(current_loop, context)
+            return
+        current_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handle_exception)
+    setattr(loop, "_tcb_proactor_reset_filter_installed", True)
+
+
 def prevent_system_sleep():
     """阻止系统进入睡眠状态"""
     if sys.platform == "win32":
@@ -326,6 +365,7 @@ def restore_system_sleep():
 
 
 async def run_all_bots():
+    _install_asyncio_exception_filter(asyncio.get_running_loop())
     config.RESTART_REQUESTED = False
     config.RESTART_EVENT = asyncio.Event()
     if not config.WEB_ENABLED:

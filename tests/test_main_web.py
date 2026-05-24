@@ -297,6 +297,64 @@ def test_safe_print_falls_back_on_gbk_console(monkeypatch):
 
     assert "? Web Bot 已启动" in fake_stdout.getvalue()
 
+def test_windows_proactor_connection_reset_context_is_benign(monkeypatch):
+    import bot.main as main_module
+
+    monkeypatch.setattr(main_module.sys, "platform", "win32")
+
+    assert main_module._is_benign_windows_proactor_reset({
+        "message": "Exception in callback _ProactorBasePipeTransport._call_connection_lost()",
+        "exception": ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。"),
+    })
+    assert not main_module._is_benign_windows_proactor_reset({
+        "message": "Exception in callback other_callback()",
+        "exception": ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。"),
+    })
+    assert not main_module._is_benign_windows_proactor_reset({
+        "message": "Exception in callback _ProactorBasePipeTransport._call_connection_lost()",
+        "exception": RuntimeError("boom"),
+    })
+
+
+def test_windows_proactor_exception_filter_suppresses_only_transport_reset(monkeypatch):
+    import bot.main as main_module
+
+    class FakeLoop:
+        def __init__(self):
+            self.installed_handler = None
+            self.previous_contexts = []
+            self.default_contexts = []
+
+        def get_exception_handler(self):
+            return lambda loop, context: self.previous_contexts.append(context)
+
+        def set_exception_handler(self, handler):
+            self.installed_handler = handler
+
+        def default_exception_handler(self, context):
+            self.default_contexts.append(context)
+
+    loop = FakeLoop()
+    monkeypatch.setattr(main_module.sys, "platform", "win32")
+
+    main_module._install_asyncio_exception_filter(loop)
+
+    benign_context = {
+        "message": "Exception in callback _ProactorBasePipeTransport._call_connection_lost()",
+        "exception": ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。"),
+    }
+    other_context = {
+        "message": "Exception in callback other_callback()",
+        "exception": ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。"),
+    }
+
+    assert loop.installed_handler is not None
+    loop.installed_handler(loop, benign_context)
+    loop.installed_handler(loop, other_context)
+
+    assert loop.previous_contexts == [other_context]
+    assert loop.default_contexts == []
+
 @pytest.mark.skipif(sys.platform != "win32", reason="该回归仅在 Windows 的 Web 终端重启路径上复现")
 @pytest.mark.asyncio
 async def test_supervised_web_restart_exits_with_terminal_connection():

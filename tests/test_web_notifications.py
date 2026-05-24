@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -81,6 +82,13 @@ class FakeWebSocket:
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         self.sent.append(payload)
+
+
+class ResetWebSocket:
+    closed = False
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        raise ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。")
 
 
 @pytest.mark.asyncio
@@ -237,6 +245,34 @@ async def test_notification_service_expired_ws_falls_back_to_pushplus() -> None:
 
     assert ws.sent == []
     assert len(pushplus.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_notification_service_disconnect_send_is_not_warning(caplog: pytest.LogCaptureFixture) -> None:
+    pushplus = FakePushPlus()
+    service = ChatNotificationService(pushplus=pushplus, enabled=True)
+    ws = ResetWebSocket()
+    service.register(account_id="alice", user_id=1001, username="alice", ws=ws)
+    caplog.set_level(logging.WARNING, logger="bot.web.notification_service")
+
+    await service.notify_chat_completed(
+        account_id="alice",
+        user_id=1001,
+        bot_alias="main",
+        agent_id="main",
+        conversation_id="conv-reset",
+        message_id="msg-reset",
+        status="success",
+        preview="断链内容",
+    )
+    await service.drain_push_tasks()
+
+    assert service._connections == {}
+    assert len(pushplus.calls) == 1
+    assert not [
+        record for record in caplog.records
+        if record.name == "bot.web.notification_service" and record.levelno >= logging.WARNING
+    ]
 
 
 @pytest.mark.asyncio

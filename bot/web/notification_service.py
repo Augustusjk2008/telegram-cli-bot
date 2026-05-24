@@ -10,11 +10,17 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from aiohttp import web
+from aiohttp.client_exceptions import ClientConnectionResetError
 
 from bot.config import PUSHPLUS_PREVIEW_CHARS
 from bot.web.pushplus_client import PushPlusClient
 
 logger = logging.getLogger(__name__)
+_CLIENT_DISCONNECT_ERRORS = (
+    ClientConnectionResetError,
+    ConnectionResetError,
+    BrokenPipeError,
+)
 
 
 @dataclass(eq=False)
@@ -245,6 +251,9 @@ class ChatNotificationService:
             try:
                 await connection.ws.send_json(event)
                 delivered += 1
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                logger.debug("通知 WebSocket 已断开 account=%s error=%s", account_id, exc)
+                failed.append(connection)
             except Exception as exc:
                 logger.warning("通知 WebSocket 投递失败 account=%s error=%s", account_id, exc)
                 failed.append(connection)
