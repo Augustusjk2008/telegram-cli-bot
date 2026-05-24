@@ -494,20 +494,26 @@ test("shows streaming state before assistant message completes", async () => {
 });
 
 test("shows assistant completed message time from updatedAt", async () => {
+  const today = new Date();
+  const datePrefix = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
+  ].join("-");
   const messages: ChatMessage[] = [
     {
       id: "user-start",
       role: "user",
       text: "开始",
-      createdAt: "2026-05-22T10:00:00+08:00",
+      createdAt: `${datePrefix}T10:00:00`,
       state: "done",
     },
     {
       id: "assistant-final",
       role: "assistant",
       text: "完成",
-      createdAt: "2026-05-22T10:01:00+08:00",
-      updatedAt: "2026-05-22T10:03:00+08:00",
+      createdAt: `${datePrefix}T10:01:00`,
+      updatedAt: `${datePrefix}T10:03:00`,
       state: "done",
     },
   ];
