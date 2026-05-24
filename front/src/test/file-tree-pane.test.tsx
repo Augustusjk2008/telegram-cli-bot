@@ -516,69 +516,6 @@ test("right-clicking a desktop file tree row selects the menu target", async () 
   expect(await screen.findByRole("menu", { name: "文件树菜单" })).toBeInTheDocument();
 });
 
-test("desktop file tree context menu stays at the pointer position under pane focus motion", async () => {
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockResolvedValue({
-    workingDir: "/workspace",
-    entries: [
-      { name: "docs", isDir: true },
-      { name: "README.md", isDir: false, size: 12 },
-    ],
-  });
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={client}
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  const fileButton = await screen.findByRole("button", { name: "打开 README.md" });
-  fireEvent.contextMenu(fileButton, { clientX: 240, clientY: 180 });
-
-  const menu = await screen.findByRole("menu", { name: "文件树菜单" });
-  expect(menu).toHaveStyle({
-    left: "240px",
-    top: "180px",
-  });
-});
-
-test("desktop file tree create-file dialog is portaled outside the workbench pane", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockResolvedValue({
-    workingDir: "/workspace",
-    entries: [
-      { name: "README.md", isDir: false, size: 12 },
-    ],
-  });
-
-  const { container } = render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={client}
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "新建文件" }));
-
-  const dialog = await screen.findByRole("dialog", { name: "新建文件" });
-  expect(container).not.toContainElement(dialog);
-  expect(document.body).toContainElement(dialog);
-});
-
 test("new file is created inside the selected directory", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

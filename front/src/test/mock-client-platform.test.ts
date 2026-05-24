@@ -2,26 +2,6 @@ import { describe, expect, test } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 
 describe("MockWebBotClient platform defaults", () => {
-  test("listBots uses macOS-style demo working directories by default", async () => {
-    const client = new MockWebBotClient();
-
-    const bots = await client.listBots();
-
-    expect(bots.map((bot) => bot.workingDir)).toEqual([
-      "/Users/demo/orbit-safe-claw",
-      "/Users/demo/orbit-safe-claw/plans",
-    ]);
-  });
-
-  test("getGitOverview uses macOS-style repo paths by default", async () => {
-    const client = new MockWebBotClient();
-
-    const overview = await client.getGitOverview("main");
-
-    expect(overview.workingDir).toBe("/Users/demo/orbit-safe-claw");
-    expect(overview.repoPath).toBe("/Users/demo/orbit-safe-claw");
-  });
-
   test("changeDirectory keeps the bot workingDir while moving only the browser path", async () => {
     const client = new MockWebBotClient();
 

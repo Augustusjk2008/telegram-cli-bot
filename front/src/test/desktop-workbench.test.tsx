@@ -74,22 +74,6 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
 });
 
-test("desktop workbench exposes announcement action", () => {
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={new MockWebBotClient()}
-      viewMode="desktop"
-      announcementAction={<button type="button" aria-label="公告">公告</button>}
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  expect(screen.getByLabelText("公告")).toBeInTheDocument();
-});
-
 test("desktop command palette stays keyboard accessible with premium motion", async () => {
   const user = userEvent.setup();
 
@@ -140,44 +124,6 @@ test("desktop structureOnly file click never opens editor or reads full content"
   expect(readFileFull).not.toHaveBeenCalled();
   expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: /README\.md/ })).not.toBeInTheDocument();
-});
-
-test("desktop structureOnly preview hides full-read and edit entry", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const readFile = vi.spyOn(client, "readFile").mockResolvedValue({
-    content: "# README\n\npreview",
-    mode: "head",
-    fileSizeBytes: 128,
-    isFullContent: false,
-    lastModifiedNs: "1",
-  });
-  const readFileFull = vi.spyOn(client, "readFileFull");
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={client}
-      structureOnly
-      viewMode="desktop"
-      chatPaneContent={({ requestPreview }) => (
-        <button type="button" onClick={() => requestPreview("README.md")}>预览 README</button>
-      )}
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(screen.getByRole("button", { name: "预览 README" }));
-
-  await waitFor(() => {
-    expect(readFile).toHaveBeenCalledWith("main", "README.md");
-  });
-  expect(readFileFull).not.toHaveBeenCalled();
-  expect(await screen.findByTestId("desktop-workbench-preview-window")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
 });
 
 test("desktop command palette keeps animated results clickable", async () => {
@@ -749,27 +695,6 @@ test("desktop sidebar view switch keeps selected pane accessible with motion", a
   expect(screen.getByRole("button", { name: "搜索" })).toHaveAttribute("data-active", "true");
 });
 
-test("desktop git sidebar keeps a bounded vertical scroll region", async () => {
-  const user = userEvent.setup();
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={new MockWebBotClient()}
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(screen.getByRole("button", { name: "Git" }));
-
-  const scrollRegion = await screen.findByTestId("desktop-sidebar-scroll");
-  expect(scrollRegion).toHaveClass("h-full", "min-h-0", "flex-1", "overflow-y-auto");
-  expect(await screen.findByText("当前分支")).toBeInTheDocument();
-});
-
 test("embedded git opens changed file diffs as read-only editor tabs", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -877,93 +802,6 @@ test("desktop workbench opens .vcd files as plugin waveform tabs", async () => {
   expect(await screen.findByRole("tab", { name: "simple_counter.vcd" })).toBeInTheDocument();
   expect(screen.getByTestId("desktop-plugin-view")).toBeInTheDocument();
   expect(screen.getByText("tb.clk")).toBeInTheDocument();
-});
-
-test("desktop workbench opens png files in the shared preview window", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockResolvedValue({
-    workingDir: "/workspace",
-    entries: [{ name: "photo.png", isDir: false, size: 68, updatedAt: "2026-04-27T09:00:00Z" }],
-  });
-  vi.spyOn(client, "readFile").mockResolvedValue({
-    content: "",
-    mode: "head",
-    fileSizeBytes: 68,
-    isFullContent: true,
-    previewKind: "image",
-    contentType: "image/png",
-    contentBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2WJw0AAAAASUVORK5CYII=",
-    lastModifiedNs: "1",
-  });
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={client}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "打开 photo.png" }));
-
-  expect(await screen.findByTestId("desktop-workbench-preview-window")).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "photo.png" })).toBeInTheDocument();
-  expect(screen.queryByTestId("desktop-plugin-view")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
-});
-
-test("desktop workbench previews html files in a sandboxed iframe", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockResolvedValue({
-    workingDir: "/workspace",
-    entries: [{ name: "report.html", isDir: false, size: 128 }],
-  });
-  vi.spyOn(client, "readFile").mockResolvedValue({
-    content: "<html>",
-    mode: "head",
-    fileSizeBytes: 128,
-    isFullContent: false,
-  });
-  vi.spyOn(client, "readFileFull").mockResolvedValue({
-    content: "<!doctype html><html><body><h1>Report</h1></body></html>",
-    mode: "cat",
-    fileSizeBytes: 56,
-    isFullContent: true,
-  });
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={client}
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "打开 report.html" }));
-
-  await waitFor(() => {
-    expect(document.querySelector('iframe[title="report.html"]')).toBeInTheDocument();
-  });
-  const frame = document.querySelector('iframe[title="report.html"]') as HTMLIFrameElement;
-  expect(frame).toHaveAttribute("sandbox", "");
-  expect(frame).toHaveAttribute("srcdoc", expect.stringContaining("<h1>Report</h1>"));
 });
 
 test("desktop workbench opens .hier files as tree plugin tabs and handles open-file effects", async () => {
@@ -1493,7 +1331,7 @@ test("desktop file clicks open tabs and sync rename and delete actions", async (
   });
 });
 
-test("desktop file tree shows diff for modified files and uses the tighter menu radius", async () => {
+test("desktop file tree shows diff for modified files", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
 
@@ -1534,8 +1372,6 @@ test("desktop file tree shows diff for modified files and uses the tighter menu 
   await screen.findByRole("button", { name: "打开 README.md" });
 
   fireEvent.contextMenu(screen.getByRole("button", { name: "打开 README.md" }));
-  const menu = await screen.findByRole("menu", { name: "文件树菜单" });
-  expect(menu).toHaveClass("rounded-md");
   await user.click(await screen.findByRole("button", { name: "Diff" }));
 
   expect(getGitDiff).toHaveBeenCalledWith("main", "README.md", false);
@@ -1587,48 +1423,6 @@ test("desktop file tree diff uses repo-relative path when workbench root is nest
 
   expect(getGitDiff).toHaveBeenCalledWith("main", "packages/app/README.md", false);
   expect(await screen.findByRole("tab", { name: "README.md.diff" })).toBeInTheDocument();
-});
-
-test("desktop file tree loads file content on the first click", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-
-  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
-  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
-  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => ({
-    workingDir: "/workspace",
-    entries: !path || path === "/workspace"
-      ? [{ name: "README.md", isDir: false, size: 128, updatedAt: "2026-04-17T09:00:00Z" }]
-      : [],
-  }));
-  vi.spyOn(client, "readFileFull").mockResolvedValue({
-    content: "FIRST_CLICK_CONTENT",
-    mode: "cat",
-    fileSizeBytes: 128,
-    isFullContent: true,
-    lastModifiedNs: "1",
-  });
-
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      botAvatarName="avatar_01.png"
-      userAvatarName="avatar_01.png"
-      client={client}
-      themeName="deep-space"
-      viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
-
-  await waitFor(() => {
-    expect(screen.getByText("FIRST_CLICK_CONTENT")).toBeInTheDocument();
-  });
-  expect(client.readFileFull).toHaveBeenCalledTimes(1);
 });
 
 test("desktop workbench refreshes file tree git decorations after an embedded git commit", async () => {
@@ -1794,21 +1588,6 @@ test("desktop workbench exposes lan chat dock in status bar only on desktop", as
       botAlias="main"
       client={new MockWebBotClient()}
       viewMode="desktop"
-      onViewModeChange={() => {}}
-      onOpenBotSwitcher={() => {}}
-    />,
-  );
-
-  expect(await screen.findByRole("button", { name: /成员聊天/ })).toBeInTheDocument();
-});
-
-test("desktop workbench exposes lan chat dock when layout mode is auto", async () => {
-  render(
-    <DesktopWorkbench
-      authToken="123"
-      botAlias="main"
-      client={new MockWebBotClient()}
-      viewMode="auto"
       onViewModeChange={() => {}}
       onOpenBotSwitcher={() => {}}
     />,

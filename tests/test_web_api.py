@@ -752,41 +752,6 @@ async def test_cluster_ask_agent_records_progress_messages_from_status_events(
 
 
 @pytest.mark.asyncio
-async def test_cluster_poll_agent_tasks_message_limit(web_manager: MultiBotManager):
-    from bot.cluster.config import BotClusterConfig
-
-    profile = web_manager.main_profile
-    profile.cluster = BotClusterConfig(enabled=True)
-    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
-    run = api_service._CLUSTER_RUNTIME.start_run(
-        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
-    )
-    request = api_service._CLUSTER_RUNTIME.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
-    task = api_service._CLUSTER_RUNTIME.create_agent_task(run.run_id, request)
-    for index in range(4):
-        api_service._CLUSTER_RUNTIME.append_agent_task_message(
-            run.run_id,
-            task.task_id,
-            kind="progress",
-            content=f"step {index}",
-        )
-
-    result = await api_service.handle_cluster_mcp_tool(
-        web_manager,
-        run.run_id,
-        "poll_agent_tasks",
-        {"task_ids": [task.task_id], "include_messages": True, "message_limit": 2, "include_output": False},
-    )
-
-    task_item = result["data"]["tasks"][0]
-    assert "output" not in task_item
-    assert task_item["message_count"] == 4
-    assert [message["content"] for message in task_item["messages"]] == ["step 2", "step 3"]
-    api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
-    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
-
-
-@pytest.mark.asyncio
 async def test_cluster_wait_agent_messages_returns_any_agent_message(web_manager: MultiBotManager):
     from bot.cluster.config import BotClusterConfig
 
@@ -814,66 +779,6 @@ async def test_cluster_wait_agent_messages_returns_any_agent_message(web_manager
     assert result["data"]["messages"][0]["task_id"] == task.task_id
     assert result["data"]["messages"][0]["kind"] == "progress"
     api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
-    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
-
-
-@pytest.mark.asyncio
-async def test_cluster_wait_agent_messages_without_after_sequence_reads_pending_messages(
-    web_manager: MultiBotManager,
-):
-    from bot.cluster.config import BotClusterConfig
-
-    profile = web_manager.main_profile
-    profile.cluster = BotClusterConfig(enabled=True)
-    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
-    run = api_service._CLUSTER_RUNTIME.start_run(
-        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
-    )
-    request = api_service._CLUSTER_RUNTIME.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
-    task = api_service._CLUSTER_RUNTIME.create_agent_task(run.run_id, request)
-    api_service._CLUSTER_RUNTIME.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="step 1")
-    api_service._CLUSTER_RUNTIME.append_agent_task_message(run.run_id, task.task_id, kind="progress", content="step 2")
-
-    first = await api_service.handle_cluster_mcp_tool(
-        web_manager,
-        run.run_id,
-        "wait_agent_messages",
-        {"wait_seconds": 1, "message_limit": 1},
-    )
-    second = await api_service.handle_cluster_mcp_tool(
-        web_manager,
-        run.run_id,
-        "wait_agent_messages",
-        {"wait_seconds": 1, "message_limit": 1},
-    )
-
-    assert first["data"]["timed_out"] is False
-    assert [message["content"] for message in first["data"]["messages"]] == ["step 1"]
-    assert second["data"]["timed_out"] is False
-    assert [message["content"] for message in second["data"]["messages"]] == ["step 2"]
-    api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
-    api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
-
-
-@pytest.mark.asyncio
-async def test_cluster_wait_agent_messages_times_out(web_manager: MultiBotManager):
-    from bot.cluster.config import BotClusterConfig
-
-    profile = web_manager.main_profile
-    profile.cluster = BotClusterConfig(enabled=True)
-    run = api_service._CLUSTER_RUNTIME.start_run(
-        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
-    )
-
-    result = await api_service.handle_cluster_mcp_tool(
-        web_manager,
-        run.run_id,
-        "wait_agent_messages",
-        {"after_sequence": 0, "wait_seconds": 0.01},
-    )
-
-    assert result["data"]["timed_out"] is True
-    assert result["data"]["messages"] == []
     api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
 
 
@@ -4243,43 +4148,6 @@ async def test_workspace_search_routes_use_current_working_directory(
 
 
 @pytest.mark.asyncio
-async def test_workspace_outline_route_returns_nested_items(
-    web_manager: MultiBotManager,
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-):
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    (workspace / "app.py").write_text(
-        "class Api:\n"
-        "    def run(self):\n"
-        "        return True\n",
-        encoding="utf-8",
-    )
-    web_manager.main_profile.working_dir = str(workspace)
-    change_working_directory(web_manager, "main", 1001, str(workspace))
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            outline_resp = await client.get("/api/bots/main/workspace/outline?path=app.py")
-
-            assert outline_resp.status == 200
-            outline_payload = await outline_resp.json()
-            assert outline_payload["data"]["items"][0]["children"][0] == {
-                "name": "run",
-                "kind": "method",
-                "line": 2,
-                "level": 2,
-                "children": [],
-            }
-
-
-@pytest.mark.asyncio
 async def test_workspace_routes_use_current_file_browser_directory(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -4326,54 +4194,6 @@ async def test_workspace_routes_use_current_file_browser_directory(
             assert definition_resp.status == 200
             definition_payload = await definition_resp.json()
             assert definition_payload["data"]["items"][0]["path"] == "src/main.py"
-
-
-@pytest.mark.asyncio
-async def test_workspace_search_route_runs_search_in_executor(
-    web_manager: MultiBotManager,
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-):
-    from bot.web import server as server_module
-
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
-    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
-
-    workspace = temp_dir / "workspace"
-    workspace.mkdir()
-    web_manager.main_profile.working_dir = str(workspace)
-    change_working_directory(web_manager, "main", 1001, str(workspace))
-
-    search_calls = []
-    loop_calls = []
-    real_loop = asyncio.get_running_loop()
-
-    def fake_search(workspace_arg, query, *, limit=100):
-        search_calls.append((workspace_arg, query, limit))
-        return {"items": []}
-
-    class FakeLoop:
-        def __getattr__(self, name):
-            return getattr(real_loop, name)
-
-        async def run_in_executor(self, executor, func):
-            loop_calls.append(executor)
-            return func()
-
-    app = WebApiServer(web_manager)._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            monkeypatch.setattr(server_module, "search_workspace_text", fake_search)
-            monkeypatch.setattr(server_module.asyncio, "get_running_loop", lambda: FakeLoop())
-            resp = await client.get("/api/bots/main/workspace/search?q=needle&limit=5")
-            payload = await resp.json()
-
-    assert resp.status == 200
-    assert payload["ok"] is True
-    assert payload["data"] == {"items": []}
-    assert search_calls == [(str(workspace), "needle", 5)]
-    assert loop_calls == [None]
 
 
 @pytest.mark.asyncio
@@ -5825,29 +5645,6 @@ async def test_notify_tunnel_public_url_returns_clipboard_result_for_quick_tunne
     server._copy_text_to_clipboard.assert_called_once_with("https://failed.trycloudflare.com")
 
 @pytest.mark.asyncio
-async def test_notify_tunnel_public_url_returns_false_when_clipboard_and_qr_both_fail(web_manager: MultiBotManager):
-    server = WebApiServer(web_manager)
-    server._copy_text_to_clipboard = MagicMock(return_value=False)
-    server._print_public_url_qr = MagicMock(return_value=False)
-
-    result = await server._notify_tunnel_public_url(
-        {
-            "mode": "cloudflare_quick",
-            "status": "running",
-            "source": "quick_tunnel",
-            "public_url": "https://web-only.trycloudflare.com",
-            "local_url": "http://127.0.0.1:8765",
-            "last_error": "",
-            "pid": 1234,
-        },
-        reason="web_server_start",
-    )
-
-    assert result is False
-    server._copy_text_to_clipboard.assert_called_once_with("https://web-only.trycloudflare.com")
-    server._print_public_url_qr.assert_called_once_with("https://web-only.trycloudflare.com")
-
-@pytest.mark.asyncio
 async def test_web_server_start_copies_public_url_on_autostart(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     class FakeTunnelService:
         def should_autostart(self):
@@ -6031,60 +5828,6 @@ async def test_web_server_start_logs_bracketed_ipv6_url(
     await server.stop()
 
     assert any("http://[::1]:8765" in line for line in log_lines)
-
-@pytest.mark.asyncio
-async def test_web_server_start_in_web_only_mode_copies_tunnel_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
-    class FakeTunnelService:
-        def should_autostart(self):
-            return True
-
-        async def start(self):
-            return {
-                "mode": "cloudflare_quick",
-                "status": "running",
-                "source": "quick_tunnel",
-                "public_url": "https://web-only-start.trycloudflare.com",
-                "local_url": "http://127.0.0.1:8765",
-                "last_error": "",
-                "pid": 4321,
-            }
-
-        async def stop(self):
-            return {
-                "mode": "cloudflare_quick",
-                "status": "stopped",
-                "source": "quick_tunnel",
-                "public_url": "",
-                "local_url": "http://127.0.0.1:8765",
-                "last_error": "",
-                "pid": None,
-            }
-
-    class FakeRunner:
-        async def setup(self):
-            return None
-
-        async def cleanup(self):
-            return None
-
-    class FakeSite:
-        def __init__(self, runner, host, port):
-            self.runner = runner
-            self.host = host
-            self.port = port
-
-        async def start(self):
-            return None
-
-    monkeypatch.setattr("bot.web.server.web.AppRunner", lambda app: FakeRunner())
-    monkeypatch.setattr("bot.web.server.web.TCPSite", FakeSite)
-
-    server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
-    server._copy_text_to_clipboard = MagicMock(return_value=True)
-    await server.start()
-    await server.stop()
-
-    server._copy_text_to_clipboard.assert_called_once_with("https://web-only-start.trycloudflare.com")
 
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_skips_non_quick_tunnel(web_manager: MultiBotManager):

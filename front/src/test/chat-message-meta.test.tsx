@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
+import { resolveChatTracePreviewConfig } from "../utils/chatTracePreview";
+import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -35,4 +37,38 @@ test("shows date and time for messages from another day", () => {
   render(<ChatMessageMeta name="助手" createdAt={createdAt} />);
 
   expect(screen.getByText(`${expectedDate} ${expectedTime}`)).toBeInTheDocument();
+});
+
+test("chat trace preview resolves defaults and valid env overrides", () => {
+  expect(resolveChatTracePreviewConfig({})).toEqual({
+    maxLines: 5,
+    maxChars: 200,
+  });
+
+  expect(resolveChatTracePreviewConfig({
+    VITE_CHAT_TRACE_PREVIEW_MAX_LINES: "8",
+    VITE_CHAT_TRACE_PREVIEW_MAX_CHARS: "320",
+  })).toEqual({
+    maxLines: 8,
+    maxChars: 320,
+  });
+});
+
+test("chat trace preview ignores invalid env overrides", () => {
+  expect(resolveChatTracePreviewConfig({
+    VITE_CHAT_TRACE_PREVIEW_MAX_LINES: "0",
+    VITE_CHAT_TRACE_PREVIEW_MAX_CHARS: "abc",
+  })).toEqual({
+    maxLines: 5,
+    maxChars: 200,
+  });
+});
+
+test("plan draft helpers extract complete drafts and strip wrappers", () => {
+  expect(extractPlanDraft("分析\n<PLAN_DRAFT>\n# 方案\n- A\n</PLAN_DRAFT>")).toBe("# 方案\n- A");
+  expect(stripPlanDraftTags("前文\n<PLAN_DRAFT>\n# 方案\n</PLAN_DRAFT>\n后文")).toBe("# 方案");
+});
+
+test("plan draft extraction ignores incomplete draft", () => {
+  expect(extractPlanDraft("<PLAN_DRAFT>\n# 方案")).toBe("");
 });

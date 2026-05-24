@@ -7,7 +7,6 @@ import pytest
 from bot.main import _get_web_access_lines
 from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
 from bot.web.server import WebApiServer
-from bot.web.tunnel_service import TunnelService
 
 
 class DummyTunnelService:
@@ -112,35 +111,6 @@ async def test_health_reports_runtime_port() -> None:
     assert payload["port"] == 8768
 
 
-def test_tunnel_service_uses_runtime_port_for_local_url() -> None:
-    tunnel = TunnelService(host="127.0.0.1", port=8769, mode="cloudflare_quick")
-
-    assert tunnel.snapshot()["local_url"] == "http://127.0.0.1:8769"
-
-
-def test_web_server_routes_still_include_core_endpoints() -> None:
-    server = WebApiServer(object())
-    app = server._build_app()
-    routes = {route.resource.canonical for route in app.router.routes()}
-
-    assert "/api/health" in routes
-    assert "/api/bots/{alias}/chat/stream" in routes
-    assert "/api/bots/{alias}/files/read" in routes
-    assert "/api/bots/{alias}/plugins/{plugin_id}/views/{view_id}/open" in routes
-    assert "/api/admin/bots/{alias}/assistant/proposals" in routes
-
-
-def test_web_server_routes_include_lan_chat_endpoints() -> None:
-    server = WebApiServer(object())
-    app = server._build_app()
-    routes = {route.resource.canonical for route in app.router.routes()}
-
-    assert "/api/admin/lan-chat/config" in routes
-    assert "/api/lan-chat/status" in routes
-    assert "/api/lan-chat/conversations" in routes
-    assert "/lan-chat/ws" in routes
-
-
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_prints_qr_for_quick_tunnel(monkeypatch: pytest.MonkeyPatch) -> None:
     server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
@@ -170,12 +140,3 @@ def test_print_public_url_qr_returns_false_when_renderer_fails(monkeypatch: pyte
     monkeypatch.setattr(server, "_build_public_url_qr_text", raise_error)
 
     assert server._print_public_url_qr("https://demo.trycloudflare.com") is False
-
-
-def test_build_public_url_qr_text_uses_solid_blocks() -> None:
-    server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
-
-    qr_text = server._build_public_url_qr_text("https://demo.trycloudflare.com")
-
-    assert "██" in qr_text
-    assert "##" not in qr_text

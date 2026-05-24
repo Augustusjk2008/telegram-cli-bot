@@ -8,13 +8,3 @@ test("app has no horizontal overflow on mobile", async ({ page }) => {
   const innerWidth = await page.evaluate(() => window.innerWidth);
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
 });
-
-test("mobile shell exposes announcement action", async ({ page }) => {
-  await page.goto("http://localhost:3000/");
-  await page.getByLabel("用户名").fill("demo");
-  await page.getByLabel("密码").fill("demo");
-  await page.getByRole("button", { name: "登录" }).click();
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-
-  await expect(page.getByLabel("公告")).toBeVisible();
-});

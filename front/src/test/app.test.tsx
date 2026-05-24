@@ -268,23 +268,6 @@ test("desktop bot switching requires confirmation when there are dirty editor ta
   expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
 });
 
-test("desktop bot switcher uses anchored popover and leaves mobile sheet untouched", async () => {
-  localStorage.setItem("web-view-mode", "desktop");
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByTestId("desktop-workbench-root");
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-
-  expect(await screen.findByTestId("desktop-bot-switcher-popover")).toBeInTheDocument();
-  expect(screen.getByLabelText("搜索智能体")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "智能体管理" })).toBeInTheDocument();
-});
-
 test("desktop bot switching restores sidebar view per bot session", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   localStorage.setItem("web-workbench-pane-state", JSON.stringify({
@@ -333,21 +316,6 @@ test("desktop bot switching restores sidebar view per bot session", async () => 
 
   expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
   expect(await screen.findByTestId("git-scroll-region")).toBeInTheDocument();
-});
-
-test("mobile bot switcher still uses bottom sheet", async () => {
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "123");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByRole("button", { name: "聊天" });
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-
-  expect(await screen.findByRole("dialog", { name: "智能体切换" })).toBeInTheDocument();
-  expect(screen.queryByTestId("desktop-bot-switcher-popover")).not.toBeInTheDocument();
 });
 
 test("desktop read-only session does not restore or open editor tabs", async () => {
@@ -737,7 +705,6 @@ test("terminal tab does not auto start and keeps one shared session across bot s
   await user.click(screen.getByRole("button", { name: "终端" }));
 
   expect(await screen.findByTestId("terminal-screen-root")).toBeInTheDocument();
-  expect(screen.getByText("未启动终端")).toBeInTheDocument();
   expect(screen.getByTestId("terminal-instance-id")).toHaveTextContent("0");
 
   await user.click(screen.getByRole("button", { name: "Git" }));

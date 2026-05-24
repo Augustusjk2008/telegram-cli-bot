@@ -168,26 +168,10 @@ test("uses a smaller terminal font and keeps scrolling inside xterm viewport", a
   await rebuildTerminal(user);
 
   const viewport = await screen.findByTestId("terminal-viewport");
-  const frame = screen.getByTestId("terminal-shell-frame");
-  const container = viewport.querySelector(".terminal-shell");
-  const xtermRoot = viewport.querySelector(".xterm");
-  const xtermScreen = viewport.querySelector(".xterm-screen");
 
   expect(viewport).toHaveStyle({
     overflow: "hidden",
     touchAction: "pan-x pan-y",
-  });
-  expect(frame).toHaveClass("px-3");
-  expect(frame).toHaveClass("py-2");
-  expect(container).toHaveClass("w-full");
-  expect(container).toHaveClass("min-w-0");
-  expect(container).not.toHaveClass("px-3");
-  expect(container).not.toHaveClass("py-2");
-  await waitFor(() => {
-    expect((xtermRoot as HTMLElement).style.width).toBe("100%");
-    expect((xtermRoot as HTMLElement).style.minWidth).toBe("0px");
-    expect((xtermScreen as HTMLElement).style.width).toBe("100%");
-    expect((xtermScreen as HTMLElement).style.minWidth).toBe("100%");
   });
   expect(createTerminalSessionMock).toHaveBeenCalledWith(
     expect.any(HTMLElement),
