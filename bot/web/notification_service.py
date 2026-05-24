@@ -166,9 +166,16 @@ class ChatNotificationService:
                 pass
         return event
 
+    def _build_push_title(self, event: dict[str, Any]) -> str:
+        bot_alias = str(event.get("botAlias") or "main").strip() or "main"
+        status = str(event.get("status") or "success").strip().lower()
+        suffix = "聊天失败" if status == "error" else "聊天已完成"
+        return f"{bot_alias} 的{suffix}"
+
     def _build_push_content(self, event: dict[str, Any]) -> str:
+        title = self._build_push_title(event)
         lines = [
-            f"### {event.get('title') or '聊天已完成'}",
+            f"### {title}",
             "",
             f"- Bot: {event.get('botAlias') or ''}",
             f"- Agent: {event.get('agentId') or 'main'}",
@@ -176,12 +183,12 @@ class ChatNotificationService:
         ]
         if "elapsedSeconds" in event:
             lines.append(f"- 耗时: {event.get('elapsedSeconds')}s")
-        preview = str(event.get("preview") or "").strip()
-        if preview:
-            lines.extend(["", "预览:", preview])
         url = str(event.get("url") or "").strip()
         if url:
             lines.extend(["", f"[打开聊天]({url})"])
+        preview = str(event.get("preview") or "").strip()
+        if preview:
+            lines.extend(["", "预览:", preview])
         return "\n".join(lines)
 
     async def _send_pushplus(self, event: dict[str, Any]) -> None:
@@ -189,7 +196,7 @@ class ChatNotificationService:
             return
         try:
             await self.pushplus.send(
-                str(event.get("title") or "聊天已完成"),
+                self._build_push_title(event),
                 self._build_push_content(event),
             )
         except Exception as exc:  # pragma: no cover - defensive

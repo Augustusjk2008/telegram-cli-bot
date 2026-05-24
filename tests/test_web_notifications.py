@@ -188,10 +188,32 @@ async def test_notification_service_offline_uses_pushplus_once_per_dedupe_key() 
     await service.drain_push_tasks()
 
     assert len(pushplus.calls) == 1
-    assert pushplus.calls[0]["title"] == "聊天已完成"
+    assert pushplus.calls[0]["title"] == "main 的聊天已完成"
     assert "- Bot: main" in pushplus.calls[0]["content"]
+    assert pushplus.calls[0]["content"].startswith("### main 的聊天已完成")
     assert "完成内容" in pushplus.calls[0]["content"]
     assert "打开聊天" not in pushplus.calls[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_notification_service_pushplus_error_title_uses_bot_alias() -> None:
+    pushplus = FakePushPlus()
+    service = ChatNotificationService(pushplus=pushplus, enabled=True)
+
+    await service.notify_chat_completed(
+        account_id="alice",
+        user_id=1001,
+        bot_alias="worker",
+        agent_id="main",
+        conversation_id="conv-err",
+        message_id="msg-err",
+        status="error",
+        preview="失败内容",
+    )
+    await service.drain_push_tasks()
+
+    assert pushplus.calls[0]["title"] == "worker 的聊天失败"
+    assert pushplus.calls[0]["content"].startswith("### worker 的聊天失败")
 
 
 @pytest.mark.asyncio
@@ -213,7 +235,9 @@ async def test_notification_service_pushplus_includes_chat_link_when_url_present
     )
     await service.drain_push_tasks()
 
-    assert "[打开聊天](https://demo.trycloudflare.com/bots/main/chat?conversation_id=conv-1)" in pushplus.calls[0]["content"]
+    content = pushplus.calls[0]["content"]
+    assert "[打开聊天](https://demo.trycloudflare.com/bots/main/chat?conversation_id=conv-1)" in content
+    assert content.index("[打开聊天]") < content.index("预览:")
 
 
 @pytest.mark.asyncio
@@ -344,7 +368,10 @@ async def test_pushplus_test_endpoint_sends_configured_push(
     pushplus = FakePushPlus()
     pushplus.enabled = True
     pushplus.token = "secret-token"
-    server = WebApiServer(web_manager)
+    server = WebApiServer(
+        web_manager,
+        tunnel_service=FakeTunnelService("https://demo.trycloudflare.com/"),
+    )
     server._notification_service.pushplus = pushplus
     app = server._build_app()
 
@@ -358,9 +385,37 @@ async def test_pushplus_test_endpoint_sends_configured_push(
     assert payload["data"] == {"sent": True}
     assert pushplus.calls == [{
         "title": "PushPlus 测试推送",
-        "content": "### PushPlus 测试推送\n\n如果你收到这条消息，说明 PushPlus 已可用。",
+        "content": (
+            "### PushPlus 测试推送\n\n"
+            "如果你收到这条消息，说明 PushPlus 已可用。\n\n"
+            "- 公网网址: https://demo.trycloudflare.com"
+        ),
         "topic": None,
     }]
+
+
+@pytest.mark.asyncio
+async def test_pushplus_test_endpoint_mentions_missing_public_url(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    pushplus = FakePushPlus()
+    pushplus.enabled = True
+    pushplus.token = "secret-token"
+    server = WebApiServer(web_manager, tunnel_service=FakeTunnelService(""))
+    server._notification_service.pushplus = pushplus
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/notifications/pushplus/test")
+
+    assert resp.status == 200
+    assert "- 公网网址: 未配置或未获取" in pushplus.calls[0]["content"]
 
 
 @pytest.mark.asyncio

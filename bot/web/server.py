@@ -1410,16 +1410,19 @@ class WebApiServer:
             return "main"
         return str(value or "main").strip().lower() or "main"
 
-    def _chat_notification_url(self, alias: str, conversation_id: str = "") -> str:
+    def _public_tunnel_url(self) -> str:
         snapshot = self._tunnel_service.snapshot()
-        public_url = str(snapshot.get("public_url") or "").strip().rstrip("/")
-        if not public_url:
+        return str(snapshot.get("public_url") or "").strip().rstrip("/")
+
+    def _chat_notification_url(self, alias: str, conversation_id: str = "") -> str:
+        base_url = self._public_tunnel_url()
+        if not base_url:
             return ""
         safe_alias = quote(str(alias or "").strip().lower() or "main", safe="")
         path = f"/bots/{safe_alias}/chat"
         if conversation_id:
             path = f"{path}?{urlencode({'conversation_id': conversation_id})}"
-        return f"{public_url}{path}"
+        return f"{base_url}{path}"
 
     def _extract_chat_notification_payload(
         self,
@@ -2067,10 +2070,15 @@ class WebApiServer:
         if not str(getattr(pushplus, "token", "") or "").strip():
             raise WebApiError(409, "pushplus_not_configured", "PushPlus token 未配置")
 
-        sent = await pushplus.send(
-            "PushPlus 测试推送",
-            "### PushPlus 测试推送\n\n如果你收到这条消息，说明 PushPlus 已可用。",
-        )
+        public_url = self._public_tunnel_url() or "未配置或未获取"
+        content = "\n".join([
+            "### PushPlus 测试推送",
+            "",
+            "如果你收到这条消息，说明 PushPlus 已可用。",
+            "",
+            f"- 公网网址: {public_url}",
+        ])
+        sent = await pushplus.send("PushPlus 测试推送", content)
         if not sent:
             raise WebApiError(502, "pushplus_test_failed", "PushPlus 测试推送失败")
         return _json({"ok": True, "data": {"sent": True}})
