@@ -5752,6 +5752,57 @@ async def test_admin_tunnel_restart_copies_public_url(web_manager: MultiBotManag
 
     server._copy_text_to_clipboard.assert_called_once_with("https://fresh.trycloudflare.com")
 
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_stop_uses_tunnel_service(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    class FakeTunnelService:
+        def __init__(self):
+            self.stop_called = False
+
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://stable.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+        async def stop(self):
+            self.stop_called = True
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+    server = WebApiServer(web_manager)
+    fake_tunnel = FakeTunnelService()
+    server._tunnel_service = fake_tunnel
+    server._copy_text_to_clipboard = MagicMock(side_effect=AssertionError("should not copy stopped tunnel url"))
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/admin/tunnel/stop")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert fake_tunnel.stop_called is True
+    assert payload["data"]["status"] == "stopped"
+    assert payload["data"]["public_url"] == ""
+    server._copy_text_to_clipboard.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_notify_tunnel_public_url_returns_clipboard_result_for_quick_tunnel(web_manager: MultiBotManager):
     server = WebApiServer(web_manager)
@@ -9193,6 +9244,26 @@ async def test_web_server_stop_closes_debug_resources(web_manager: MultiBotManag
     server._debug_service.shutdown.assert_awaited_once()
     runner.cleanup.assert_awaited_once()
     server._tunnel_service.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_web_server_stop_preserve_tunnel_uses_preserve_for_restart(web_manager: MultiBotManager):
+    server = WebApiServer(web_manager)
+    runner = MagicMock()
+    runner.cleanup = AsyncMock()
+    server._runner = runner
+    server._site = object()
+    server._tunnel_service = MagicMock()
+    server._tunnel_service.stop = AsyncMock()
+    server._tunnel_service.preserve_for_restart = MagicMock()
+    server._debug_service = MagicMock()
+    server._debug_service.shutdown = AsyncMock()
+
+    await server.stop(preserve_tunnel=True)
+
+    server._tunnel_service.preserve_for_restart.assert_called_once()
+    server._tunnel_service.stop.assert_not_awaited()
+    runner.cleanup.assert_awaited_once()
 
 
 @pytest.mark.asyncio

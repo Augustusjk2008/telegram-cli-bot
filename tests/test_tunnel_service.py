@@ -67,6 +67,42 @@ async def test_tunnel_service_reuses_persisted_quick_tunnel_without_starting_new
 
 
 @pytest.mark.asyncio
+async def test_tunnel_service_reuses_persisted_starting_quick_tunnel(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "mode": "cloudflare_quick",
+                "status": "starting",
+                "source": "quick_tunnel",
+                "public_url": "https://slow.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "pid": 4321,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+    )
+
+    with patch.object(service, "_is_cloudflared_process", return_value=True), \
+         patch.object(service, "_can_resolve_public_url", return_value=True, create=True), \
+         patch("bot.web.tunnel_service.subprocess.Popen", side_effect=AssertionError("should not spawn cloudflared")):
+        snapshot = await service.start()
+
+    assert snapshot["status"] == "starting"
+    assert snapshot["source"] == "quick_tunnel"
+    assert snapshot["public_url"] == "https://slow.trycloudflare.com"
+    assert snapshot["pid"] == 4321
+    assert "公网地址仍在传播" in snapshot["last_error"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("host", ["::", "[::]"])
 async def test_tunnel_service_reuses_persisted_ipv4_tunnel_for_ipv6_any_host(tmp_path: Path, host: str):
     state_file = tmp_path / "web-tunnel-state.json"
@@ -255,6 +291,246 @@ async def test_tunnel_service_start_keeps_slow_public_tunnel_starting(tmp_path: 
     persisted = json.loads(state_file.read_text(encoding="utf-8"))
     assert persisted["public_url"] == "https://fresh.trycloudflare.com"
     assert persisted["pid"] == 5555
+
+
+@pytest.mark.parametrize("status", ["starting", "running"])
+def test_tunnel_service_preserve_for_restart_keeps_active_state(tmp_path: Path, status: str):
+    state_file = tmp_path / "web-tunnel-state.json"
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+    )
+    service._set_snapshot(
+        status=status,
+        source="quick_tunnel",
+        public_url="https://slow.trycloudflare.com",
+        pid=5555,
+        last_error="公网地址仍在传播: https://slow.trycloudflare.com",
+    )
+
+    with patch.object(service, "_is_cloudflared_process", return_value=True):
+        snapshot = service.preserve_for_restart()
+
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert snapshot["status"] == status
+    assert persisted["status"] == status
+    assert persisted["public_url"] == "https://slow.trycloudflare.com"
+    assert persisted["pid"] == 5555
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_stop_terminates_restored_pid_and_clears_state(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://stable.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "pid": 4321,
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+    )
+    service._set_snapshot(
+        status="running",
+        source="quick_tunnel",
+        public_url="https://stable.trycloudflare.com",
+        pid=4321,
+        last_error="",
+    )
+
+    with patch.object(service, "_terminate_pid") as terminate_pid:
+        snapshot = await service.stop()
+
+    terminate_pid.assert_called_once_with(4321)
+    assert snapshot["status"] == "stopped"
+    assert snapshot["public_url"] == ""
+    assert snapshot["pid"] is None
+    assert not state_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_restart_stops_then_starts_new_tunnel(tmp_path: Path):
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(tmp_path / "web-tunnel-state.json"),
+    )
+    calls: list[str] = []
+
+    async def fake_stop():
+        calls.append("stop")
+        return {"status": "stopped", "public_url": "", "pid": None}
+
+    async def fake_start():
+        calls.append("start")
+        return {"status": "running", "public_url": "https://fresh.trycloudflare.com", "pid": 9876}
+
+    with patch.object(service, "stop", side_effect=fake_stop), \
+         patch.object(service, "start", side_effect=fake_start):
+        snapshot = await service.restart()
+
+    assert calls == ["stop", "start"]
+    assert snapshot["public_url"] == "https://fresh.trycloudflare.com"
+    assert snapshot["pid"] == 9876
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_start_cleans_stale_cloudflared_before_spawning(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://stale.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "pid": 4321,
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+        local_health_timeout=0.01,
+    )
+    events: list[str] = []
+
+    def fake_terminate(pid: int) -> None:
+        events.append(f"terminate:{pid}")
+
+    def fake_popen(*args, **kwargs):
+        events.append("popen")
+        raise FileNotFoundError
+
+    with patch.object(service, "_wait_for_health", return_value=True), \
+         patch.object(service, "_is_cloudflared_process", return_value=True), \
+         patch.object(service, "_can_resolve_public_url", return_value=False, create=True), \
+         patch.object(service, "_terminate_pid", side_effect=fake_terminate), \
+         patch("bot.web.tunnel_service.subprocess.Popen", side_effect=fake_popen):
+        snapshot = await service.start()
+
+    assert events == ["terminate:4321", "popen"]
+    assert snapshot["status"] == "error"
+    assert snapshot["last_error"] == "未找到 cloudflared 可执行文件"
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_start_does_not_clean_non_cloudflared_stale_pid(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://stale.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "pid": 4321,
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+        local_health_timeout=0.01,
+    )
+
+    with patch.object(service, "_wait_for_health", return_value=True), \
+         patch.object(service, "_is_cloudflared_process", return_value=False), \
+         patch.object(service, "_terminate_pid", side_effect=AssertionError("should not terminate pid")), \
+         patch("bot.web.tunnel_service.subprocess.Popen", side_effect=FileNotFoundError):
+        snapshot = await service.start()
+
+    assert snapshot["status"] == "error"
+    assert snapshot["last_error"] == "未找到 cloudflared 可执行文件"
+
+
+@pytest.mark.parametrize(
+    "state_patch",
+    [
+        {"source": "manual_config"},
+        {"local_url": "http://127.0.0.1:9999"},
+    ],
+)
+def test_tunnel_service_cleanup_stale_persisted_tunnel_skips_mismatched_state(
+    tmp_path: Path,
+    state_patch: dict[str, str],
+):
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(tmp_path / "web-tunnel-state.json"),
+    )
+    data = {
+        "mode": "cloudflare_quick",
+        "status": "running",
+        "source": "quick_tunnel",
+        "public_url": "https://stale.trycloudflare.com",
+        "local_url": "http://127.0.0.1:8765",
+        "pid": 4321,
+    }
+    data.update(state_patch)
+
+    with patch.object(service, "_is_cloudflared_process", side_effect=AssertionError("should not inspect pid")), \
+         patch.object(service, "_terminate_pid", side_effect=AssertionError("should not terminate pid")):
+        service._cleanup_stale_persisted_tunnel(data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_mode"),
+    [
+        ({"mode": "disabled"}, "disabled"),
+        ({"mode": "cloudflare_quick", "public_url": "https://manual.example.com"}, "manual"),
+    ],
+)
+async def test_tunnel_service_start_skips_cleanup_outside_quick_mode(
+    tmp_path: Path,
+    kwargs: dict[str, str],
+    expected_mode: str,
+):
+    state_file = tmp_path / "web-tunnel-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://stale.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "pid": 4321,
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = TunnelService(host="127.0.0.1", port=8765, state_file=str(state_file), **kwargs)
+
+    with patch.object(service, "_cleanup_stale_persisted_tunnel", side_effect=AssertionError("should not cleanup")), \
+         patch("bot.web.tunnel_service.subprocess.Popen", side_effect=AssertionError("should not spawn cloudflared")):
+        snapshot = await service.start()
+
+    assert snapshot["mode"] == expected_mode
 
 
 @pytest.mark.asyncio

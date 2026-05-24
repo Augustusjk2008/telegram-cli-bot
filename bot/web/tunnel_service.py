@@ -243,6 +243,11 @@ class TunnelService:
             return None
         return data
 
+    def _load_persisted_quick_tunnel_candidate(self) -> dict[str, Any] | None:
+        if self._manual_public_url or self._mode != "cloudflare_quick":
+            return None
+        return self._read_state_file()
+
     def _write_state_file(self, data: dict[str, Any]) -> None:
         try:
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -330,6 +335,29 @@ class TunnelService:
         name = self._query_process_name(pid)
         return bool(name) and name.startswith("cloudflared")
 
+    def _is_current_quick_tunnel_state(self, data: dict[str, Any] | None) -> bool:
+        if not isinstance(data, dict):
+            return False
+        if str(data.get("mode") or "").strip() != "cloudflare_quick":
+            return False
+        if str(data.get("source") or "").strip() != "quick_tunnel":
+            return False
+        persisted_local_url = str(data.get("local_url") or "").strip()
+        return persisted_local_url in self._restore_local_urls
+
+    def _cleanup_stale_persisted_tunnel(self, data: dict[str, Any] | None) -> None:
+        if self._manual_public_url or self._mode != "cloudflare_quick":
+            return
+        if not self._is_current_quick_tunnel_state(data):
+            return
+
+        pid = self._coerce_pid(data.get("pid"))
+        if pid <= 0 or not self._is_cloudflared_process(pid):
+            return
+
+        logger.info("清理无法复用的旧 cloudflared 进程 pid=%s", pid)
+        self._terminate_pid(pid)
+
     def _refresh_external_process_state(self) -> None:
         if self._manual_public_url:
             return
@@ -360,11 +388,12 @@ class TunnelService:
                     self._snapshot["public_url"] = ""
         self._clear_state_file()
 
-    def _try_restore_persisted_tunnel(self) -> bool:
+    def _try_restore_persisted_tunnel(self, data: dict[str, Any] | None = None) -> bool:
         if self._manual_public_url or self._mode != "cloudflare_quick":
             return False
 
-        data = self._read_state_file()
+        if data is None:
+            data = self._load_persisted_quick_tunnel_candidate()
         if not data:
             return False
         if str(data.get("mode") or "").strip() != "cloudflare_quick":
@@ -555,7 +584,8 @@ class TunnelService:
             if self._process is not None and self._process.poll() is None:
                 return copy.deepcopy(self._snapshot)
 
-        if self._try_restore_persisted_tunnel():
+        persisted_data = self._load_persisted_quick_tunnel_candidate()
+        if persisted_data and self._try_restore_persisted_tunnel(persisted_data):
             return self.snapshot()
 
         local_ready = await asyncio.to_thread(self._wait_for_health, self._local_url, timeout=self._local_health_timeout)
@@ -563,6 +593,8 @@ class TunnelService:
             self._set_snapshot(status="error", last_error="本地 Web 未就绪，未启动 cloudflared", pid=None, public_url="")
             self._clear_state_file()
             return self.snapshot()
+
+        await asyncio.to_thread(self._cleanup_stale_persisted_tunnel, persisted_data)
 
         with self._state_lock:
             self._expected_stop = False
@@ -675,5 +707,5 @@ class TunnelService:
         return await self.start()
 
     def preserve_for_restart(self) -> dict[str, Any]:
-        self._persist_running_state()
+        self._persist_starting_state()
         return self.snapshot()
