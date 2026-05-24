@@ -7,6 +7,7 @@ import pytest
 
 from bot.debug.models import DebugProfileV3
 from bot.debug.providers.godot import GodotProvider
+from bot.debug.providers import godot
 
 
 def _profile(tmp_path: Path, provider_config: dict[str, object] | None = None) -> DebugProfileV3:
@@ -152,3 +153,18 @@ async def test_godot_provider_sends_configuration_done_while_dap_launch_is_pendi
     assert fake_client.requests[1][1]["port"] == 6007
     assert fake_client.requests[1][1]["scene"] == "res://main.tscn"
     assert fake_client.closed is True
+
+
+def test_godot_provider_splits_options_with_posix_rules_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_split(value: str, *, posix: bool):
+        captured["value"] = value
+        captured["posix"] = posix
+        return ["--quoted value"]
+
+    monkeypatch.setattr(godot.sys, "platform", "darwin")
+    monkeypatch.setattr(godot.shlex, "split", fake_split)
+
+    assert godot._split_options("'--quoted value'") == ["--quoted value"]
+    assert captured == {"value": "'--quoted value'", "posix": True}

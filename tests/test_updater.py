@@ -1,5 +1,6 @@
 import io
 import json
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -22,6 +23,10 @@ def _windows_release_assets() -> list[dict[str, str]]:
         {
             "name": "orbit-safe-claw-linux-x64-1.2.0.tar.gz",
             "browser_download_url": "https://example.invalid/linux.tar.gz",
+        },
+        {
+            "name": "orbit-safe-claw-macos-universal-1.2.0.tar.gz",
+            "browser_download_url": "https://example.invalid/macos.tar.gz",
         },
     ]
 
@@ -116,6 +121,55 @@ def test_download_latest_update_marks_pending_bundle(monkeypatch, tmp_path: Path
     assert downloaded["url"] == "https://example.invalid/installer.zip"
     assert Path(status["pending_update_path"]).exists()
     assert Path(status["pending_update_path"]).parent == cache_dir
+
+
+def test_detect_update_package_kind_returns_macos_on_darwin(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("CLI_BRIDGE_UPDATE_PACKAGE_KIND", raising=False)
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+    monkeypatch.setattr(updater.os, "name", "posix")
+
+    assert updater.detect_update_package_kind(tmp_path) == "macos"
+
+
+def test_macos_release_asset_selection_and_platform_label():
+    asset = updater._select_release_asset(_windows_release_assets(), "macos")
+
+    assert asset["browser_download_url"] == "https://example.invalid/macos.tar.gz"
+    assert updater._pending_update_platform("macos") == "macos-universal"
+    assert updater._expected_distribution_platform("macos") == "macos-universal"
+    assert updater._format_update_package_kind("macos") == "macOS"
+
+
+def test_download_latest_update_marks_macos_pending_bundle(monkeypatch, tmp_path: Path):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda repo_root=None: "macos")
+    monkeypatch.setattr(
+        updater,
+        "_fetch_latest_release",
+        lambda: {
+            "tag_name": "v1.0.1",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.0.1",
+            "body": "Bugfixes",
+            "assets": _windows_release_assets(),
+        },
+    )
+    downloaded: dict[str, object] = {}
+
+    def fake_download(url, target, progress_callback=None):
+        downloaded["url"] = url
+        downloaded["target"] = target
+        target.write_bytes(b"tar-bytes")
+
+    monkeypatch.setattr(updater, "_download_file", fake_download)
+
+    status = updater.download_latest_update(repo_root=tmp_path)
+
+    assert status["pending_update_platform"] == "macos-universal"
+    assert status["pending_update_package_kind"] == "macos"
+    assert downloaded["url"] == "https://example.invalid/macos.tar.gz"
+    assert str(downloaded["target"]).endswith("orbit-safe-claw-macos-universal-1.2.0.tar.gz")
 
 
 def test_download_latest_update_replaces_unusable_repo_cache_path(monkeypatch, tmp_path: Path):
@@ -521,3 +575,29 @@ def test_prepare_offline_update_rejects_wrong_package_kind(monkeypatch, tmp_path
 
     with pytest.raises(RuntimeError, match="包类型"):
         updater.prepare_offline_update(repo_root, package, version="1.2.3")
+
+
+def test_prepare_offline_update_accepts_macos_tar_package(monkeypatch, tmp_path: Path):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda root=None: "macos")
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    package = tmp_path / "offline.tar.gz"
+    with tarfile.open(package, "w:gz") as archive:
+        distribution = json.dumps(
+            {"packageKind": "macos", "platform": "macos-universal", "version": "1.2.3"},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        marker_info = tarfile.TarInfo(".distribution.json")
+        marker_info.size = len(distribution)
+        archive.addfile(marker_info, io.BytesIO(distribution))
+        version_bytes = b"APP_VERSION = '1.2.3'\n"
+        version_info = tarfile.TarInfo("bot/version.py")
+        version_info.size = len(version_bytes)
+        archive.addfile(version_info, io.BytesIO(version_bytes))
+
+    status = updater.prepare_offline_update(repo_root, package, version="1.2.3")
+
+    assert status["pending_update_package_kind"] == "macos"
+    assert status["pending_update_platform"] == "macos-universal"

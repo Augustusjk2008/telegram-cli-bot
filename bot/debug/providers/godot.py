@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import shlex
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -45,7 +46,7 @@ def _split_options(value: object) -> list[str]:
         return [str(item) for item in value if str(item).strip()]
     if not isinstance(value, str) or not value.strip():
         return []
-    return shlex.split(value, posix=False)
+    return shlex.split(value, posix=sys.platform != "win32")
 
 
 async def _default_process_launcher(command: list[str], *, cwd: str, env: dict[str, str]):

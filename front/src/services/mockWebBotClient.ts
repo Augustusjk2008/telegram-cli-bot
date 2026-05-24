@@ -128,10 +128,12 @@ import type {
   RegisterCodeCreateResult,
   RegisterCodeItem,
   SessionState,
+  TerminalAction,
   TerminalActionRunInput,
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
+  TerminalRuntimePlatform,
   TreeViewPayload,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
@@ -176,6 +178,27 @@ import { APP_VERSION } from "../theme";
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
 const MEMBER_BOT_LIMIT = 3;
+
+function getMockUpdatePath(packageKind: AppUpdatePackageKind) {
+  if (packageKind === "portable") return ".updates/orbit-safe-claw-windows-x64.zip";
+  if (packageKind === "linux") return ".updates/orbit-safe-claw-linux-x64.tar.gz";
+  if (packageKind === "macos") return ".updates/orbit-safe-claw-macos-universal.tar.gz";
+  return ".updates/orbit-safe-claw-windows-x64-installer.zip";
+}
+
+function getMockUpdatePlatform(packageKind: AppUpdatePackageKind) {
+  if (packageKind === "portable") return "windows-x64-portable";
+  if (packageKind === "linux") return "linux-x64";
+  if (packageKind === "macos") return "macos-universal";
+  return "windows-x64-installer";
+}
+
+function resolveMockTerminalActionCommand(action: TerminalAction, runtimePlatform: TerminalRuntimePlatform) {
+  if (runtimePlatform === "windows") return (action.windowsCommand || "").trim();
+  if (runtimePlatform === "macos") return ((action.macosCommand || "").trim() || (action.linuxCommand || "").trim());
+  return (action.linuxCommand || "").trim();
+}
+
 const MEMBER_CAPABILITIES: Capability[] = [
   "view_bots",
   "view_bot_status",
@@ -1263,7 +1286,7 @@ export class MockWebBotClient implements WebBotClient {
   private agentsByBot = new Map<string, AgentSummary[]>();
   private terminalActionsConfig: TerminalActionsConfig = {
     schemaVersion: 1,
-    configPath: `${DEMO_MAIN_WORKDIR}\\scripts\\terminal-actions.json`,
+    configPath: `${DEMO_MAIN_WORKDIR}/scripts/terminal-actions.json`,
     exists: true,
     mtimeNs: "1",
     editable: true,
@@ -1275,7 +1298,8 @@ export class MockWebBotClient implements WebBotClient {
         label: "构建",
         icon: "Hammer",
         windowsCommand: "npm run build",
-        linuxCommand: "",
+        linuxCommand: "npm run build",
+        macosCommand: "npm run build",
         cwd: ".",
         confirm: false,
         enabled: true,
@@ -1285,7 +1309,8 @@ export class MockWebBotClient implements WebBotClient {
         label: "测试",
         icon: "TestTube2",
         windowsCommand: "python -m pytest tests -q",
-        linuxCommand: "",
+        linuxCommand: "python3 -m pytest tests -q",
+        macosCommand: "python3 -m pytest tests -q",
         cwd: ".",
         confirm: false,
         enabled: true,
@@ -1642,11 +1667,20 @@ export class MockWebBotClient implements WebBotClient {
     artifactsDir: ".release-local/artifacts",
     items: [
       {
-        name: "cli-bridge-1.2.3-installer.zip",
-        path: ".release-local/artifacts/cli-bridge-1.2.3-installer.zip",
+        name: "orbit-safe-claw-windows-x64-installer-1.2.3.zip",
+        path: ".release-local/artifacts/orbit-safe-claw-windows-x64-installer-1.2.3.zip",
         version: "1.2.3",
         packageKind: "installer",
         sizeBytes: 2_048,
+        valid: true,
+        error: "",
+      },
+      {
+        name: "orbit-safe-claw-macos-universal-1.2.3.tar.gz",
+        path: ".release-local/artifacts/orbit-safe-claw-macos-universal-1.2.3.tar.gz",
+        version: "1.2.3",
+        packageKind: "macos",
+        sizeBytes: 2_560,
         valid: true,
         error: "",
       },
@@ -3422,9 +3456,7 @@ export class MockWebBotClient implements WebBotClient {
       connectionText: "运行中",
     };
     writeMockPersistentTerminalSnapshot(snapshot);
-    const command = (this.terminalActionsConfig.runtimePlatform === "windows"
-      ? action.windowsCommand
-      : action.linuxCommand).trim();
+    const command = resolveMockTerminalActionCommand(action, this.terminalActionsConfig.runtimePlatform);
     return {
       actionId,
       command,
@@ -4490,16 +4522,8 @@ export class MockWebBotClient implements WebBotClient {
 
   async downloadUpdate(): Promise<AppUpdateStatus> {
     const packageKind = this.updateStatus.currentPackageKind || "installer";
-    const pendingUpdatePath = packageKind === "portable"
-      ? ".updates/orbit-safe-claw-windows-x64.zip"
-      : packageKind === "linux"
-        ? ".updates/orbit-safe-claw-linux-x64.tar.gz"
-        : ".updates/orbit-safe-claw-windows-x64-installer.zip";
-    const pendingUpdatePlatform = packageKind === "portable"
-      ? "windows-x64-portable"
-      : packageKind === "linux"
-        ? "linux-x64"
-        : "windows-x64-installer";
+    const pendingUpdatePath = getMockUpdatePath(packageKind);
+    const pendingUpdatePlatform = getMockUpdatePlatform(packageKind);
     this.updateStatus = {
       ...this.updateStatus,
       pendingUpdateVersion: this.updateStatus.latestVersion || APP_VERSION,
@@ -4553,11 +4577,7 @@ export class MockWebBotClient implements WebBotClient {
       pendingUpdateVersion: version || selected.version || this.updateStatus.latestVersion || APP_VERSION,
       pendingUpdatePath: selected.path,
       pendingUpdateNotes: `已选择离线包 ${selected.name}`,
-      pendingUpdatePlatform: selected.packageKind === "portable"
-        ? "windows-x64-portable"
-        : selected.packageKind === "linux"
-          ? "linux-x64"
-          : "windows-x64-installer",
+      pendingUpdatePlatform: getMockUpdatePlatform(selected.packageKind),
       pendingUpdatePackageKind: selected.packageKind,
       lastError: "",
     };

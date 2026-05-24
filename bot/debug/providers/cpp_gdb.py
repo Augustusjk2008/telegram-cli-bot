@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -156,6 +157,8 @@ class CppGdbProvider(DebugProvider):
         self._gdb_session_factory = gdb_session_factory
 
     def can_handle(self, profile: DebugProfile) -> bool:
+        if sys.platform == "darwin":
+            return profile.provider_id == self.provider_id
         return profile.provider_id == self.provider_id or profile.language == "cpp"
 
     def create_session(self, profile: DebugProfile) -> _CppGdbSession:

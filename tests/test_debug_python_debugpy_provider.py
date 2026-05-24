@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
 
 from bot.debug.models import DebugProfileV3
 from bot.debug.providers.python_debugpy import PythonDebugpyProvider
+from bot.debug.providers import python_debugpy
 
 
 def _profile(tmp_path: Path) -> DebugProfileV3:
@@ -157,3 +159,23 @@ async def test_python_debugpy_provider_sends_configuration_done_while_launch_is_
     await session.close()
 
     assert fake_client.requests[:3] == ["initialize", "launch", "configurationDone"]
+
+
+@pytest.mark.asyncio
+async def test_default_debugpy_adapter_uses_current_python_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(python_debugpy.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    process = await python_debugpy._default_adapter_launcher(_profile(tmp_path))
+
+    assert process is not None
+    assert captured["args"][:3] == (sys.executable, "-m", "debugpy.adapter")

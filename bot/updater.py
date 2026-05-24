@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -38,11 +39,13 @@ DISTRIBUTION_MARKER_FILE = ".distribution.json"
 WINDOWS_INSTALLER_PACKAGE_KIND = "installer"
 WINDOWS_PORTABLE_PACKAGE_KIND = "portable"
 LINUX_PACKAGE_KIND = "linux"
+MACOS_PACKAGE_KIND = "macos"
 UNKNOWN_PACKAGE_KIND = "unknown"
 SUPPORTED_UPDATE_PACKAGE_KINDS = {
     WINDOWS_INSTALLER_PACKAGE_KIND,
     WINDOWS_PORTABLE_PACKAGE_KIND,
     LINUX_PACKAGE_KIND,
+    MACOS_PACKAGE_KIND,
 }
 
 
@@ -111,9 +114,11 @@ def detect_update_package_kind(repo_root: Path | None = None) -> str:
     if override:
         return override
 
-    root = Path(repo_root or Path.cwd()).resolve()
+    if sys.platform == "darwin":
+        return MACOS_PACKAGE_KIND
     if not _is_windows_runtime():
         return LINUX_PACKAGE_KIND
+    root = Path(repo_root or Path.cwd()).resolve()
     marker_kind = _read_distribution_marker_kind(root)
     if marker_kind:
         return marker_kind
@@ -416,6 +421,13 @@ def _select_release_asset(assets: list[dict[str, Any]], package_kind: str | None
                 return asset
         raise RuntimeError("未找到 Linux release 包")
 
+    if normalized_kind == MACOS_PACKAGE_KIND:
+        for asset in assets:
+            name = str(asset.get("name") or "").lower()
+            if "macos" in name and name.endswith(".tar.gz"):
+                return asset
+        raise RuntimeError("未找到 macOS release 包")
+
     if normalized_kind in {WINDOWS_INSTALLER_PACKAGE_KIND, WINDOWS_PORTABLE_PACKAGE_KIND}:
         want_installer = normalized_kind == WINDOWS_INSTALLER_PACKAGE_KIND
         for asset in assets:
@@ -438,6 +450,8 @@ def _pending_update_platform(package_kind: str) -> str:
         return "windows-x64-portable"
     if package_kind == LINUX_PACKAGE_KIND:
         return "linux-x64"
+    if package_kind == MACOS_PACKAGE_KIND:
+        return "macos-universal"
     return UNKNOWN_PACKAGE_KIND
 
 
@@ -448,6 +462,8 @@ def _format_update_package_kind(package_kind: str) -> str:
         return "Windows 绿色版"
     if package_kind == LINUX_PACKAGE_KIND:
         return "Linux"
+    if package_kind == MACOS_PACKAGE_KIND:
+        return "macOS"
     return "未知"
 
 
@@ -730,6 +746,8 @@ def _expected_distribution_platform(package_kind: str) -> str:
         return "windows-x64"
     if package_kind == LINUX_PACKAGE_KIND:
         return "linux-x64"
+    if package_kind == MACOS_PACKAGE_KIND:
+        return "macos-universal"
     return ""
 
 

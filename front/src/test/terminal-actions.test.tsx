@@ -13,6 +13,7 @@ const actions: TerminalAction[] = [
     icon: "Hammer",
     windowsCommand: "npm run build",
     linuxCommand: "",
+    macosCommand: "npm run build:mac",
     cwd: ".",
     confirm: false,
     enabled: true,
@@ -23,6 +24,7 @@ const actions: TerminalAction[] = [
     icon: "Play",
     windowsCommand: "",
     linuxCommand: "echo linux",
+    macosCommand: "",
     cwd: ".",
     confirm: false,
     enabled: true,
@@ -33,6 +35,7 @@ const actions: TerminalAction[] = [
     icon: "Play",
     windowsCommand: "echo hidden",
     linuxCommand: "",
+    macosCommand: "",
     cwd: ".",
     confirm: false,
     enabled: false,
@@ -100,6 +103,7 @@ test("TerminalActionsConfigDialog edits and saves actions", async () => {
         icon: "Hammer",
         windowsCommand: "npm run build",
         linuxCommand: "",
+        macosCommand: "npm run build:mac",
         cwd: ".",
         confirm: false,
         enabled: true,
@@ -139,6 +143,7 @@ test("TerminalActionsConfigDialog shows icon picker and saves selected icon", as
         icon: "PowerOff",
         windowsCommand: "npm run build",
         linuxCommand: "",
+        macosCommand: "npm run build:mac",
         cwd: ".",
         confirm: false,
         enabled: true,
@@ -164,6 +169,28 @@ test("TerminalActionsConfigDialog can add an action", async () => {
     schemaVersion: 1,
     actions: [expect.objectContaining({ id: "test", windowsCommand: "python -m pytest tests -q" })],
   });
+});
+
+test("TerminalActionsBar uses macOS command then falls back to Linux", async () => {
+  const runAction = vi.fn();
+  const user = userEvent.setup();
+
+  render(
+    <TerminalActionsBar
+      actions={actions}
+      runtimePlatform="macos"
+      canEdit={false}
+      runningActionId=""
+      onRunAction={runAction}
+      onOpenConfig={vi.fn()}
+    />,
+  );
+
+  const macAction = screen.getByRole("button", { name: "构建" });
+  expect(macAction).toHaveAttribute("title", "npm run build:mac");
+  expect(screen.getByRole("button", { name: "仅 Linux" })).toHaveAttribute("title", "echo linux");
+  await user.click(screen.getByRole("button", { name: "仅 Linux" }));
+  expect(runAction).toHaveBeenCalledWith(actions[1]);
 });
 
 test("TerminalActionsConfigDialog shows config parse errors", () => {

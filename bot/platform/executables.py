@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import stat
 from typing import Optional
 
 
@@ -98,7 +99,10 @@ def _iter_posix_user_bin_dirs() -> list[str]:
         if sudo_home:
             homes.append(sudo_home)
 
-    dirs: list[str] = []
+    dirs: list[str] = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ]
     for home in homes:
         dirs.extend(
             [
@@ -125,4 +129,14 @@ def build_executable_invocation(resolved_path: str) -> list[str]:
         return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved_path]
     if os.name == "nt" and ext in {".cmd", ".bat"}:
         return ["cmd.exe", "/d", "/c", resolved_path]
+    if os.name != "nt" and not _has_posix_execute_bit(resolved_path):
+        return ["bash", resolved_path]
     return [resolved_path]
+
+
+def _has_posix_execute_bit(path: str) -> bool:
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return True
+    return bool(mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))

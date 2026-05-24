@@ -1,2 +1,2 @@
-export const DEMO_MAIN_WORKDIR = "/srv/telegram-cli-bridge/demo";
-export const DEMO_TEAM_WORKDIR = "/srv/telegram-cli-bridge/plans";
+export const DEMO_MAIN_WORKDIR = "/Users/demo/orbit-safe-claw";
+export const DEMO_TEAM_WORKDIR = "/Users/demo/orbit-safe-claw/plans";

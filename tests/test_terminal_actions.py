@@ -48,6 +48,7 @@ def test_load_terminal_actions_config_reads_valid_actions(tmp_path: Path, monkey
     assert result.config.schema_version == 1
     assert result.config.actions[0].id == "build"
     assert result.config.actions[0].linux_command == "npm run build"
+    assert result.config.actions[0].macos_command == ""
     assert result.config.actions[0].windows_command == ""
     assert result.config.actions[0].command == "npm run build"
     assert result.config.actions[0].resolved_cwd == str(tmp_path.resolve())
@@ -135,6 +136,7 @@ def test_save_terminal_actions_config_writes_normalized_json(tmp_path: Path) -> 
     assert raw["actions"][0]["enabled"] is True
     assert raw["actions"][0]["windowsCommand"] == "python -m pytest tests -q"
     assert raw["actions"][0]["linuxCommand"] == ""
+    assert raw["actions"][0]["macosCommand"] == ""
     assert "command" not in raw["actions"][0]
 
 
@@ -199,3 +201,99 @@ def test_resolve_terminal_action_rejects_missing_current_platform_command(
 
     with pytest.raises(TerminalActionValidationError, match="当前平台未配置命令"):
         resolve_terminal_action(tmp_path, "build", confirmed=True)
+
+
+def test_macos_terminal_action_prefers_macos_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.terminal_actions.get_runtime_platform", lambda: "macos")
+    _write_config(
+        tmp_path,
+        {
+            "schemaVersion": 1,
+            "actions": [
+                {
+                    "id": "build",
+                    "label": "构建",
+                    "icon": "Hammer",
+                    "windowsCommand": "build.bat",
+                    "linuxCommand": "npm run build",
+                    "macosCommand": "npm run build:mac",
+                }
+            ],
+        },
+    )
+
+    action = resolve_terminal_action(tmp_path, "build", confirmed=True)
+
+    assert action.command == "npm run build:mac"
+    assert action.macos_command == "npm run build:mac"
+
+
+def test_macos_terminal_action_falls_back_to_linux_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.terminal_actions.get_runtime_platform", lambda: "macos")
+    _write_config(
+        tmp_path,
+        {
+            "schemaVersion": 1,
+            "actions": [
+                {
+                    "id": "build",
+                    "label": "构建",
+                    "icon": "Hammer",
+                    "windowsCommand": "",
+                    "linuxCommand": "npm run build",
+                    "macosCommand": "",
+                }
+            ],
+        },
+    )
+
+    action = resolve_terminal_action(tmp_path, "build", confirmed=True)
+
+    assert action.command == "npm run build"
+
+
+def test_macos_terminal_action_rejects_when_only_windows_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.terminal_actions.get_runtime_platform", lambda: "macos")
+    _write_config(
+        tmp_path,
+        {
+            "schemaVersion": 1,
+            "actions": [
+                {
+                    "id": "build",
+                    "label": "构建",
+                    "icon": "Hammer",
+                    "windowsCommand": "build.bat",
+                    "linuxCommand": "",
+                    "macosCommand": "",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(TerminalActionValidationError, match="当前平台未配置命令"):
+        resolve_terminal_action(tmp_path, "build", confirmed=True)
+
+
+def test_save_terminal_actions_config_accepts_macos_command(tmp_path: Path) -> None:
+    saved = save_terminal_actions_config(
+        tmp_path,
+        {
+            "schemaVersion": 1,
+            "actions": [
+                {
+                    "id": "test",
+                    "label": "测试",
+                    "icon": "TestTube2",
+                    "windowsCommand": "",
+                    "linuxCommand": "",
+                    "macosCommand": "python -m pytest tests -q",
+                }
+            ],
+        },
+        expected_mtime_ns="",
+    )
+
+    assert saved.errors == []
+    raw = json.loads((tmp_path / "scripts" / "terminal-actions.json").read_text(encoding="utf-8"))
+    assert raw["actions"][0]["macosCommand"] == "python -m pytest tests -q"

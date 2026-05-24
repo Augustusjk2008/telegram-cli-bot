@@ -15,6 +15,7 @@
 
 - Windows 10 / 11
 - Ubuntu / Debian Linux
+- macOS 12+（首版为源码包，非 `.app` / DMG）
 - Python 3.10+
 - Node.js 18+
 - Git
@@ -37,6 +38,21 @@ Linux：
 2. 下载最新 `orbit-safe-claw-linux-x64-<version>.tar.gz`
 3. 解压后运行 `bash install.sh`
 
+macOS：
+
+1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
+2. 下载最新 `orbit-safe-claw-macos-universal-<version>.tar.gz`
+3. 解压后运行：
+
+```bash
+tar -xzf orbit-safe-claw-macos-universal-<version>.tar.gz
+cd orbit-safe-claw
+bash install.sh
+bash start.sh
+```
+
+macOS 需要 Python 3.10+、Node.js 18+、Git，推荐先装 Homebrew。AI CLI 不内置，需自行安装 `codex` / `claude` / `kimi`。
+
 源码快照安装：
 
 Windows：
@@ -46,6 +62,12 @@ $zip="$env:TEMP\\orbit-safe-claw.zip"; Invoke-WebRequest "https://github.com/Aug
 ```
 
 Linux：
+
+```bash
+curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz | tar -xz && cd telegram-cli-bot-master && bash install.sh
+```
+
+macOS：
 
 ```bash
 curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz | tar -xz && cd telegram-cli-bot-master && bash install.sh
@@ -68,6 +90,10 @@ Windows：
 - 或终端运行 `.\start.bat`
 
 Linux：
+
+- 运行 `bash start.sh`
+
+macOS：
 
 - 运行 `bash start.sh`
 
@@ -134,6 +160,8 @@ WEB_API_TOKEN=change-this-password
 ## 更新
 
 主 Bot 设置页和管理中心支持 GitHub Release 自动检查、下载更新和离线包查看。下载后的更新会在下次启动或重启后生效。
+
+更新包按平台匹配：Windows 安装版 / 绿色版、Linux、macOS。macOS 离线包名形如 `orbit-safe-claw-macos-universal-<version>.tar.gz`。
 
 首次安装生成的 `.env` 默认写入：
 

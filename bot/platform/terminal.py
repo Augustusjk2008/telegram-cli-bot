@@ -6,6 +6,7 @@ import logging
 import os
 import base64
 import select
+import shlex
 import subprocess
 import sys
 import threading
@@ -173,6 +174,19 @@ def _build_windows_powershell_command(executable: str) -> str:
     return f"{executable} -NoLogo -NoExit -EncodedCommand {encoded_setup}"
 
 
+def _build_posix_shell_argv(shell_type: str) -> list[str]:
+    if sys.platform == "darwin":
+        argv = shlex.split(shell_type or os.environ.get("SHELL") or "/bin/zsh", posix=True)
+        if not argv:
+            argv = ["/bin/zsh"]
+        if argv[0] in {"bash", "zsh", "sh"}:
+            argv[0] = f"/bin/{argv[0]}"
+        if not any(arg in {"-l", "--login"} for arg in argv[1:]):
+            argv.append("-l")
+        return argv
+    return shlex.split(shell_type or "bash", posix=True)
+
+
 def create_shell_process(
     shell_type: str,
     cwd: str,
@@ -233,7 +247,7 @@ def create_shell_process(
 
         master_fd, slave_fd = pty.openpty()
         process = subprocess.Popen(
-            cmdline.split(),
+            _build_posix_shell_argv(cmdline),
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
@@ -247,7 +261,7 @@ def create_shell_process(
         return PtyWrapper(pty_process, is_pty=True)
 
     process = subprocess.Popen(
-        cmdline.split(),
+        _build_posix_shell_argv(cmdline),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

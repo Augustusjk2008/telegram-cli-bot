@@ -4,13 +4,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" && "${CLI_BRIDGE_ALLOW_ROOT:-}" != "1" ]]; then
-  sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | awk -F: '{ print $6 }' || true)"
-  if [[ -n "$sudo_home" ]]; then
-    user_path="$sudo_home/.local/bin:$sudo_home/.npm-global/bin:$sudo_home/.cargo/bin:$PATH"
-  else
-    user_path="$PATH"
+resolve_user_home() {
+  local user_name="$1"
+  local home_dir=""
+
+  if command -v getent >/dev/null 2>&1; then
+    home_dir="$(getent passwd "$user_name" 2>/dev/null | awk -F: '{ print $6 }' || true)"
   fi
+  if [[ -z "$home_dir" ]] && command -v dscl >/dev/null 2>&1; then
+    home_dir="$(dscl . -read "/Users/$user_name" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }' || true)"
+  fi
+  if [[ -z "$home_dir" ]]; then
+    home_dir="$(eval echo "~$user_name" 2>/dev/null || true)"
+  fi
+  if [[ "$home_dir" == "~$user_name" ]]; then
+    home_dir=""
+  fi
+  printf '%s\n' "$home_dir"
+}
+
+build_user_path() {
+  local home_dir="$1"
+  local prefix="/opt/homebrew/bin:/usr/local/bin"
+
+  if [[ -n "$home_dir" ]]; then
+    printf '%s:%s/.npm-global/bin:%s/.local/bin:%s/.cargo/bin:%s/.bun/bin:%s\n' "$prefix" "$home_dir" "$home_dir" "$home_dir" "$home_dir" "$PATH"
+  else
+    printf '%s:%s\n' "$prefix" "$PATH"
+  fi
+}
+
+if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" && "${CLI_BRIDGE_ALLOW_ROOT:-}" != "1" ]]; then
+  sudo_home="$(resolve_user_home "$SUDO_USER")"
+  user_path="$(build_user_path "$sudo_home")"
   echo "[提示] 检测到 sudo 启动，已切换为用户 $SUDO_USER 运行，避免使用 root 的浏览器和 CLI 配置。"
   echo "[提示] 如确需 root 运行，请设置 CLI_BRIDGE_ALLOW_ROOT=1 后再启动。"
   if command -v sudo >/dev/null 2>&1; then
@@ -26,6 +52,8 @@ if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" && "${
     exit 1
   fi
 fi
+
+export PATH="$(build_user_path "${HOME:-}")"
 
 if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
   echo "[错误] 未找到 .env，请先运行 install.sh 或 install.bat 生成配置。" >&2

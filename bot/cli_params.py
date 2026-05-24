@@ -10,6 +10,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from bot.platform.executables import build_executable_invocation
+
 logger = logging.getLogger(__name__)
 
 MODEL_OPTION_NONE = "none"
@@ -361,15 +363,16 @@ def _build_claude_args(
     
     Note: disable_prompts 通过环境变量设置，不在命令行中
     """
+    cli_invocation = build_executable_invocation(resolved_cli)
     
     # 处理子命令
     if is_cli_subcommand:
         subcmd = user_text[1:]
         if subcmd in ("help", "usage"):
-            return [resolved_cli, "--help"], False
-        return [resolved_cli, subcmd], False
+            return [*cli_invocation, "--help"], False
+        return [*cli_invocation, subcmd], False
     
-    cmd = [resolved_cli, "-p"]
+    cmd = [*cli_invocation, "-p"]
     
     # 添加基础参数
     if params.get("yolo"):
@@ -414,13 +417,14 @@ def _build_codex_args(
     working_dir: Optional[str],
 ) -> Tuple[List[str], bool]:
     """构建 Codex CLI 参数"""
+    cli_invocation = build_executable_invocation(resolved_cli)
     
     # 处理子命令
     if is_cli_subcommand:
         subcmd = user_text[1:]
         if subcmd in ("help", "usage"):
-            return [resolved_cli, "--help"], False
-        return [resolved_cli, subcmd], False
+            return [*cli_invocation, "--help"], False
+        return [*cli_invocation, subcmd], False
     
     # 构建 exec 选项
     exec_options = []
@@ -455,7 +459,7 @@ def _build_codex_args(
     # 构建完整命令
     if session_id:
         cmd = [
-            resolved_cli,
+            *cli_invocation,
             "exec",
             "resume",
             *exec_options,
@@ -464,7 +468,7 @@ def _build_codex_args(
         ]
     else:
         cmd = [
-            resolved_cli,
+            *cli_invocation,
             "exec",
             *exec_options,
             "-",
@@ -482,14 +486,15 @@ def _build_kimi_args(
     working_dir: Optional[str],
 ) -> Tuple[List[str], bool]:
     """构建 Kimi CLI 参数"""
+    cli_invocation = build_executable_invocation(resolved_cli)
 
     if is_cli_subcommand:
         subcmd = user_text[1:]
         if subcmd in ("help", "usage"):
-            return [resolved_cli, "--help"], False
-        return [resolved_cli, subcmd], False
+            return [*cli_invocation, "--help"], False
+        return [*cli_invocation, subcmd], False
 
-    cmd = [resolved_cli]
+    cmd = [*cli_invocation]
     if working_dir:
         cmd.extend(["--work-dir", str(working_dir)])
     if session_id:

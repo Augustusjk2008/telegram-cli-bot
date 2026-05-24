@@ -77,9 +77,10 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function formatPackageKind(kind?: string) {
-  if (kind === "installer") return "安装版";
-  if (kind === "portable") return "绿色版";
+  if (kind === "installer") return "Windows 安装版";
+  if (kind === "portable") return "Windows 绿色版";
   if (kind === "linux") return "Linux";
+  if (kind === "macos") return "macOS";
   return "未知";
 }
 
@@ -1452,7 +1453,7 @@ export function AdminCenterScreen({
                     className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                     title={item.valid ? item.path : item.error || item.path}
                   >
-                    {item.name}
+                    {item.name} · {formatPackageKind(item.packageKind)}
                   </button>
                 ))}
               </div>

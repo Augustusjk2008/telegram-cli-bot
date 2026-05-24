@@ -67,6 +67,30 @@ test("admin center loads user permissions without waiting for unrelated tabs", a
   expect(listOfflineUpdatePackages).not.toHaveBeenCalled();
 });
 
+test("admin center shows macOS update packages", async () => {
+  const user = userEvent.setup();
+  const { client } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "升级" }));
+  expect(await screen.findByText("当前包: Windows 安装版")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /orbit-safe-claw-macos-universal-1\.2\.3\.tar\.gz · macOS/ })).toBeInTheDocument();
+});
+
+test("mock client prepares macOS offline update packages", async () => {
+  const client = new MockWebBotClient();
+
+  const status = await client.prepareOfflineUpdate(
+    ".release-local/artifacts/orbit-safe-claw-macos-universal-1.2.3.tar.gz",
+    "1.2.3",
+  );
+
+  expect(status.pendingUpdatePackageKind).toBe("macos");
+  expect(status.pendingUpdatePlatform).toBe("macos-universal");
+});
+
 test("admin center refreshes only active tab", async () => {
   const user = userEvent.setup();
   const { client, listAdminUsers, listRegisterCodes, getUpdateStatus, listOfflineUpdatePackages } = createClient();

@@ -249,7 +249,7 @@ export function DirectoryPickerDialog({
         <div className="border-b border-[var(--border)] px-5 py-3">
           <p className="text-xs text-[var(--muted)]">当前目录</p>
           <p className="mt-1 break-all text-sm text-[var(--text)]">{currentPath || "加载中..."}</p>
-          {isVirtualRoot ? <p className="mt-2 text-xs text-[var(--muted)]">请先选择一个具体盘符。</p> : null}
+          {isVirtualRoot ? <p className="mt-2 text-xs text-[var(--muted)]">请先选择具体目录或卷。</p> : null}
           {!isVirtualRoot ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <input

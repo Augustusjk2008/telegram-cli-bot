@@ -2,24 +2,24 @@ import { describe, expect, test } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 
 describe("MockWebBotClient platform defaults", () => {
-  test("listBots uses linux-style demo working directories by default", async () => {
+  test("listBots uses macOS-style demo working directories by default", async () => {
     const client = new MockWebBotClient();
 
     const bots = await client.listBots();
 
     expect(bots.map((bot) => bot.workingDir)).toEqual([
-      "/srv/telegram-cli-bridge/demo",
-      "/srv/telegram-cli-bridge/plans",
+      "/Users/demo/orbit-safe-claw",
+      "/Users/demo/orbit-safe-claw/plans",
     ]);
   });
 
-  test("getGitOverview uses linux-style repo paths by default", async () => {
+  test("getGitOverview uses macOS-style repo paths by default", async () => {
     const client = new MockWebBotClient();
 
     const overview = await client.getGitOverview("main");
 
-    expect(overview.workingDir).toBe("/srv/telegram-cli-bridge/demo");
-    expect(overview.repoPath).toBe("/srv/telegram-cli-bridge/demo");
+    expect(overview.workingDir).toBe("/Users/demo/orbit-safe-claw");
+    expect(overview.repoPath).toBe("/Users/demo/orbit-safe-claw");
   });
 
   test("changeDirectory keeps the bot workingDir while moving only the browser path", async () => {
@@ -30,31 +30,31 @@ describe("MockWebBotClient platform defaults", () => {
     const overview = await client.getBotOverview("main");
     const listing = await client.listFiles("main");
 
-    expect(overview.workingDir).toBe("/srv/telegram-cli-bridge/demo");
-    expect(await client.getCurrentPath("main")).toBe("/srv/telegram-cli-bridge/demo");
-    expect(listing.workingDir).toBe("/srv/telegram-cli-bridge/demo/docs");
+    expect(overview.workingDir).toBe("/Users/demo/orbit-safe-claw");
+    expect(await client.getCurrentPath("main")).toBe("/Users/demo/orbit-safe-claw");
+    expect(listing.workingDir).toBe("/Users/demo/orbit-safe-claw/docs");
   });
 
   test("changeDirectory accepts an absolute path when resetting the browser path", async () => {
     const client = new MockWebBotClient();
 
     await client.changeDirectory("main", "docs");
-    await client.changeDirectory("main", "/srv/telegram-cli-bridge/demo");
+    await client.changeDirectory("main", "/Users/demo/orbit-safe-claw");
 
     const listing = await client.listFiles("main");
-    expect(listing.workingDir).toBe("/srv/telegram-cli-bridge/demo");
+    expect(listing.workingDir).toBe("/Users/demo/orbit-safe-claw");
   });
 
   test("updateBotWorkdir requires confirmation when visible history exists", async () => {
     const client = new MockWebBotClient();
 
-    await expect(client.updateBotWorkdir("main", "/srv/telegram-cli-bridge/new-root")).rejects.toMatchObject({
+    await expect(client.updateBotWorkdir("main", "/Users/demo/new-root")).rejects.toMatchObject({
       name: "WebApiClientError",
       code: "workdir_change_requires_reset",
       status: 409,
       data: {
-        currentWorkingDir: "/srv/telegram-cli-bridge/demo",
-        requestedWorkingDir: "/srv/telegram-cli-bridge/new-root",
+        currentWorkingDir: "/Users/demo/orbit-safe-claw",
+        requestedWorkingDir: "/Users/demo/new-root",
         historyCount: 1,
         messageCount: 1,
         botMode: "cli",
@@ -67,20 +67,20 @@ describe("MockWebBotClient platform defaults", () => {
 
     await client.changeDirectory("main", "docs");
 
-    const updated = await client.updateBotWorkdir("main", "/srv/telegram-cli-bridge/new-root", { forceReset: true });
+    const updated = await client.updateBotWorkdir("main", "/Users/demo/new-root", { forceReset: true });
     const listing = await client.listFiles("main");
 
-    expect(updated.workingDir).toBe("/srv/telegram-cli-bridge/new-root");
-    expect(await client.getCurrentPath("main")).toBe("/srv/telegram-cli-bridge/new-root");
-    expect(listing.workingDir).toBe("/srv/telegram-cli-bridge/new-root");
+    expect(updated.workingDir).toBe("/Users/demo/new-root");
+    expect(await client.getCurrentPath("main")).toBe("/Users/demo/new-root");
+    expect(listing.workingDir).toBe("/Users/demo/new-root");
   });
 
   test("createTextFile accepts an explicit parent path for tree actions", async () => {
     const client = new MockWebBotClient();
 
-    await client.createTextFile("main", "draft.md", "# draft\n", "/srv/telegram-cli-bridge/demo/docs");
+    await client.createTextFile("main", "draft.md", "# draft\n", "/Users/demo/orbit-safe-claw/docs");
 
-    const listing = await client.listFiles("main", "/srv/telegram-cli-bridge/demo/docs");
+    const listing = await client.listFiles("main", "/Users/demo/orbit-safe-claw/docs");
     expect(listing.entries).toContainEqual(
       expect.objectContaining({
         name: "draft.md",

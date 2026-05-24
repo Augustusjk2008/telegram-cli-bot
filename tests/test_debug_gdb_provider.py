@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from bot.debug.models import DebugBreakpoint, DebugFrame, DebugProfileV3, DebugVariable
 from bot.debug.providers.cpp_gdb import CppGdbProvider
+from bot.debug.providers import cpp_gdb
 
 
 def _profile(tmp_path: Path) -> DebugProfileV3:
@@ -105,3 +107,13 @@ async def test_cpp_gdb_provider_session_wraps_gdb_session(tmp_path: Path) -> Non
     assert variables[0]["name"] == "child"
     assert result["value"] == "3"
     assert breakpoints[0]["line"] == 3
+
+
+def test_cpp_gdb_provider_does_not_auto_handle_cpp_on_macos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cpp_gdb.sys, "platform", "darwin")
+    profile = _profile(tmp_path)
+
+    provider = CppGdbProvider(gdb_session_factory=_FakeGdbSession)
+
+    assert provider.can_handle(profile) is True
+    assert provider.can_handle(replace(profile, provider_id="")) is False

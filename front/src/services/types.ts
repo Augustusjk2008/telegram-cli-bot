@@ -643,7 +643,7 @@ export type NotificationTestResult = {
   sent: boolean;
 };
 
-export type TerminalRuntimePlatform = "windows" | "linux";
+export type TerminalRuntimePlatform = "windows" | "linux" | "macos";
 
 export type TerminalAction = {
   id: string;
@@ -651,6 +651,7 @@ export type TerminalAction = {
   icon: string;
   windowsCommand: string;
   linuxCommand: string;
+  macosCommand: string;
   cwd: string;
   confirm: boolean;
   enabled: boolean;
@@ -1694,7 +1695,7 @@ export type GitProxySettings = {
   port: string;
 };
 
-export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "unknown" | "";
+export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "macos" | "unknown" | "";
 
 export type AppUpdateStatus = {
   currentVersion: string;

@@ -55,6 +55,7 @@ class TerminalAction:
     icon: str
     windows_command: str
     linux_command: str
+    macos_command: str
     command: str
     cwd: str
     resolved_cwd: str
@@ -114,7 +115,7 @@ def _normalize_command(value: Any, *, label: str, allow_empty: bool) -> str:
     return command
 
 
-def _resolve_platform_commands(current: dict[str, Any], index: int) -> tuple[str, str]:
+def _resolve_platform_commands(current: dict[str, Any], index: int) -> tuple[str, str, str]:
     windows_command = _normalize_command(
         current.get("windowsCommand"),
         label=f"actions[{index}].windowsCommand",
@@ -125,22 +126,44 @@ def _resolve_platform_commands(current: dict[str, Any], index: int) -> tuple[str
         label=f"actions[{index}].linuxCommand",
         allow_empty=True,
     )
+    macos_command = _normalize_command(
+        current.get("macosCommand"),
+        label=f"actions[{index}].macosCommand",
+        allow_empty=True,
+    )
 
-    if not windows_command and not linux_command and current.get("command") is not None:
+    if not windows_command and not linux_command and not macos_command and current.get("command") is not None:
         legacy_command = _normalize_command(
             current.get("command"),
             label=f"actions[{index}].command",
             allow_empty=False,
         )
-        if get_runtime_platform() == "windows":
+        platform = get_runtime_platform()
+        if platform == "windows":
             windows_command = legacy_command
+        elif platform == "macos":
+            macos_command = legacy_command
         else:
             linux_command = legacy_command
 
-    if not windows_command and not linux_command:
-        raise TerminalActionValidationError(f"actions[{index}] 的 Windows/Linux 命令至少填一个")
+    if not windows_command and not linux_command and not macos_command:
+        raise TerminalActionValidationError(f"actions[{index}] 的 Windows/Linux/macOS 命令至少填一个")
 
-    return windows_command, linux_command
+    return windows_command, linux_command, macos_command
+
+
+def _select_runtime_command(
+    *,
+    windows_command: str,
+    linux_command: str,
+    macos_command: str,
+) -> str:
+    platform = get_runtime_platform()
+    if platform == "windows":
+        return windows_command
+    if platform == "macos":
+        return macos_command or linux_command
+    return linux_command
 
 
 def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction:
@@ -158,8 +181,12 @@ def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction
     if not resolved_cwd.exists() or not resolved_cwd.is_dir():
         raise TerminalActionValidationError(f"actions[{index}].cwd 目录不存在: {cwd}")
 
-    windows_command, linux_command = _resolve_platform_commands(current, index)
-    command = windows_command if get_runtime_platform() == "windows" else linux_command
+    windows_command, linux_command, macos_command = _resolve_platform_commands(current, index)
+    command = _select_runtime_command(
+        windows_command=windows_command,
+        linux_command=linux_command,
+        macos_command=macos_command,
+    )
 
     return TerminalAction(
         id=action_id,
@@ -167,6 +194,7 @@ def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction
         icon=_normalize_icon(current.get("icon")),
         windows_command=windows_command,
         linux_command=linux_command,
+        macos_command=macos_command,
         command=command,
         cwd=cwd,
         resolved_cwd=str(resolved_cwd),
@@ -225,6 +253,7 @@ def _serialize_action(action: TerminalAction) -> dict[str, Any]:
         "icon": action.icon,
         "windowsCommand": action.windows_command,
         "linuxCommand": action.linux_command,
+        "macosCommand": action.macos_command,
         "cwd": action.cwd,
         "confirm": action.confirm,
         "enabled": action.enabled,

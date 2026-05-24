@@ -40,6 +40,9 @@ def test_start_sh_drops_sudo_to_original_user():
     assert "CLI_BRIDGE_ALLOW_ROOT" in content
     assert 'sudo -H -u "$SUDO_USER"' in content
     assert ".npm-global/bin" in content
+    assert "dscl" in content
+    assert "/opt/homebrew/bin" in content
+    assert ".bun/bin" in content
 
 
 def test_start_ps1_applies_pending_updates_before_boot():
@@ -73,3 +76,16 @@ def test_install_sh_offers_kimi_choice_but_keeps_codex_default():
     assert "选择默认 CLI：1) codex" in content
     assert "2) kimi" in content or "3) kimi" in content
     assert "printf 'codex\\n'" in content
+
+
+def test_install_sh_supports_macos_without_gnu_linux_only_tools():
+    content = Path("install.sh").read_text(encoding="utf-8")
+
+    assert "Darwin" in content
+    assert "RUNTIME_PLATFORM=\"macos\"" in content
+    assert "brew install" in content
+    assert "@tailwindcss/oxide-darwin-arm64" in content
+    assert "@tailwindcss/oxide-darwin-x64" in content
+    assert "dpkg --compare-versions" not in content
+    assert "sed -i" not in content
+    assert "shasum -a 256" in content

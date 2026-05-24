@@ -23,6 +23,7 @@ function createAction(index: number): TerminalAction {
     icon: "Terminal",
     windowsCommand: "",
     linuxCommand: "",
+    macosCommand: "",
     cwd: ".",
     confirm: false,
     enabled: true,
@@ -34,8 +35,9 @@ function normalizeActions(actions: TerminalAction[]): TerminalAction[] {
     id: action.id.trim(),
     label: action.label.trim(),
     icon: action.icon.trim() || "Terminal",
-    windowsCommand: action.windowsCommand.trim(),
-    linuxCommand: action.linuxCommand.trim(),
+    windowsCommand: (action.windowsCommand || "").trim(),
+    linuxCommand: (action.linuxCommand || "").trim(),
+    macosCommand: (action.macosCommand || "").trim(),
     cwd: action.cwd.trim() || ".",
     confirm: Boolean(action.confirm),
     enabled: Boolean(action.enabled),
@@ -61,7 +63,7 @@ export function TerminalActionsConfigDialog({
       if (seen.has(action.id)) return `ID 重复: ${action.id}`;
       seen.add(action.id);
       if (!action.label) return "名称不能为空";
-      if (!action.windowsCommand && !action.linuxCommand) return "Windows/Linux 命令至少填一个";
+      if (!action.windowsCommand && !action.linuxCommand && !action.macosCommand) return "至少填一个平台命令";
     }
     return "";
   }, [actions]);
@@ -179,7 +181,7 @@ export function TerminalActionsConfigDialog({
 
                 <div className="space-y-1 text-sm">
                   <span className="font-medium text-[var(--text)]">平台命令</span>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-4 lg:grid-cols-3">
                     <label className="space-y-1 text-sm">
                       <span className="font-medium text-[var(--text)]">Windows 命令</span>
                       <textarea
@@ -197,6 +199,16 @@ export function TerminalActionsConfigDialog({
                         rows={3}
                         value={selected.linuxCommand}
                         onChange={(event) => updateSelected({ linuxCommand: event.target.value })}
+                        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-sm"
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="font-medium text-[var(--text)]">macOS 命令</span>
+                      <textarea
+                        aria-label="macOS 命令"
+                        rows={3}
+                        value={selected.macosCommand || ""}
+                        onChange={(event) => updateSelected({ macosCommand: event.target.value })}
                         className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-sm"
                       />
                     </label>

@@ -64,3 +64,13 @@ def test_windows_portable_dependencies_include_tzdata():
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
 
     assert "tzdata" in requirements
+
+
+def test_publish_release_builds_and_publishes_macos_archive():
+    content = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
+
+    assert '"{0}-macos-universal-{1}.tar.gz"' in content
+    assert 'Write-DistributionMarker -Root $stageDir -PackageKind "macos" -Platform "macos-universal"' in content
+    assert "MacOSArchive" in content
+    assert "未找到 macOS 包" in content
+    assert "$releaseAssets += @($WindowsInstallerArchive, $LinuxArchive, $MacOSArchive)" in content

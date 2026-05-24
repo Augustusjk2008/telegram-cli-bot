@@ -1,8 +1,9 @@
-from bot.platform import executables, paths, runtime
+from bot.platform import executables, paths, runtime, terminal
 
 
 def test_get_default_shell_returns_bash_on_linux(monkeypatch):
     monkeypatch.setattr(runtime.os, "name", "posix")
+    monkeypatch.setattr(runtime.sys, "platform", "linux")
     assert runtime.get_runtime_platform() == "linux"
     assert runtime.get_default_shell() == "bash"
 
@@ -11,6 +12,23 @@ def test_get_default_shell_returns_powershell_on_windows(monkeypatch):
     monkeypatch.setattr(runtime.os, "name", "nt")
     assert runtime.get_runtime_platform() == "windows"
     assert runtime.get_default_shell() == "powershell"
+
+
+def test_get_default_shell_returns_macos_user_shell(monkeypatch):
+    monkeypatch.setattr(runtime.os, "name", "posix")
+    monkeypatch.setattr(runtime.sys, "platform", "darwin")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+
+    assert runtime.get_runtime_platform() == "macos"
+    assert runtime.get_default_shell() == "/bin/zsh"
+
+
+def test_get_default_shell_returns_zsh_on_macos_without_shell(monkeypatch):
+    monkeypatch.setattr(runtime.os, "name", "posix")
+    monkeypatch.setattr(runtime.sys, "platform", "darwin")
+    monkeypatch.delenv("SHELL", raising=False)
+
+    assert runtime.get_default_shell() == "/bin/zsh"
 
 
 def test_build_executable_invocation_wraps_powershell_script_on_windows(monkeypatch):
@@ -22,6 +40,37 @@ def test_build_executable_invocation_wraps_powershell_script_on_windows(monkeypa
 def test_build_executable_invocation_leaves_linux_binary_unwrapped(monkeypatch):
     monkeypatch.setattr(executables.os, "name", "posix")
     assert executables.build_executable_invocation("/usr/local/bin/codex") == ["/usr/local/bin/codex"]
+
+
+def test_build_executable_invocation_wraps_non_executable_posix_script(tmp_path, monkeypatch):
+    script = tmp_path / "codex"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o644)
+    monkeypatch.setattr(executables.os, "name", "posix")
+
+    assert executables.build_executable_invocation(str(script)) == ["bash", str(script)]
+
+
+def test_posix_user_bin_dirs_include_homebrew(monkeypatch):
+    monkeypatch.setenv("HOME", "/Users/demo")
+    monkeypatch.delenv("SUDO_USER", raising=False)
+
+    dirs = executables._iter_posix_user_bin_dirs()
+
+    assert "/opt/homebrew/bin" in dirs
+    assert "/usr/local/bin" in dirs
+
+
+def test_macos_terminal_shell_uses_login_shell_and_shlex(monkeypatch):
+    monkeypatch.setattr(terminal.sys, "platform", "darwin")
+
+    assert terminal._build_posix_shell_argv('/bin/zsh -i') == ["/bin/zsh", "-i", "-l"]
+
+
+def test_linux_terminal_shell_uses_shlex(monkeypatch):
+    monkeypatch.setattr(terminal.sys, "platform", "linux")
+
+    assert terminal._build_posix_shell_argv('bash -lc "echo hi"') == ["bash", "-lc", "echo hi"]
 
 
 def test_resolve_cli_executable_checks_sudo_user_npm_global_bin(tmp_path, monkeypatch):

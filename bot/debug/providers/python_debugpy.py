@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ async def _default_adapter_launcher(profile: DebugProfile):
         or "debugpy.adapter"
     )
     return await asyncio.create_subprocess_exec(
-        "python",
+        sys.executable,
         "-m",
         module,
         stdin=asyncio.subprocess.PIPE,

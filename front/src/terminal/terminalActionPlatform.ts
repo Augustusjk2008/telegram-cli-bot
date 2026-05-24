@@ -4,7 +4,13 @@ export function resolveTerminalActionCommand(
   action: TerminalAction,
   runtimePlatform: TerminalRuntimePlatform,
 ) {
-  return (runtimePlatform === "windows" ? action.windowsCommand : action.linuxCommand).trim();
+  if (runtimePlatform === "windows") {
+    return (action.windowsCommand || "").trim();
+  }
+  if (runtimePlatform === "macos") {
+    return ((action.macosCommand || "").trim() || (action.linuxCommand || "").trim());
+  }
+  return (action.linuxCommand || "").trim();
 }
 
 export function isTerminalActionVisible(

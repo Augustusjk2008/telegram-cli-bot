@@ -38,16 +38,34 @@ if [[ ! -f requirements.txt || ! -f front/package.json || ! -f .env.example ]]; 
   exit 1
 fi
 
-if [[ ! -f /etc/os-release ]]; then
-  echo "[错误] install.sh 目前只支持 Ubuntu / Debian" >&2
-  exit 1
-fi
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$PATH"
 
-# shellcheck disable=SC1091
-. /etc/os-release
-if [[ "${ID:-}" != "ubuntu" && "${ID:-}" != "debian" && "${ID_LIKE:-}" != *"debian"* ]]; then
-  echo "[错误] install.sh 目前只支持 Ubuntu / Debian" >&2
-  exit 1
+OS_NAME="$(uname -s 2>/dev/null || printf 'unknown')"
+case "$OS_NAME" in
+  Linux)
+    RUNTIME_PLATFORM="linux"
+    ;;
+  Darwin)
+    RUNTIME_PLATFORM="macos"
+    ;;
+  *)
+    echo "[错误] install.sh 目前只支持 Ubuntu / Debian Linux 和 macOS" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$RUNTIME_PLATFORM" == "linux" ]]; then
+  if [[ ! -f /etc/os-release ]]; then
+    echo "[错误] install.sh 目前只支持 Ubuntu / Debian Linux 和 macOS" >&2
+    exit 1
+  fi
+
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  if [[ "${ID:-}" != "ubuntu" && "${ID:-}" != "debian" && "${ID_LIKE:-}" != *"debian"* ]]; then
+    echo "[错误] Linux 安装目前只支持 Ubuntu / Debian" >&2
+    exit 1
+  fi
 fi
 
 if [[ ${EUID:-0} -eq 0 ]]; then
@@ -75,7 +93,98 @@ fail() {
 version_ge() {
   local current="$1"
   local minimum="$2"
-  dpkg --compare-versions "$current" ge "$minimum"
+  local IFS=.
+  local current_core minimum_core current_parts minimum_parts
+  current_core="${current%%[-+]*}"
+  minimum_core="${minimum%%[-+]*}"
+  read -r -a current_parts <<< "$current_core"
+  read -r -a minimum_parts <<< "$minimum_core"
+
+  for index in 0 1 2; do
+    local current_part="${current_parts[$index]:-0}"
+    local minimum_part="${minimum_parts[$index]:-0}"
+    current_part="${current_part//[^0-9]/}"
+    minimum_part="${minimum_part//[^0-9]/}"
+    current_part="${current_part:-0}"
+    minimum_part="${minimum_part:-0}"
+    if ((10#$current_part > 10#$minimum_part)); then
+      return 0
+    fi
+    if ((10#$current_part < 10#$minimum_part)); then
+      return 1
+    fi
+  done
+  return 0
+}
+
+generate_token() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(12))
+PY
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    python - <<'PY'
+import secrets
+print(secrets.token_hex(12))
+PY
+    return 0
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 12
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s-%s\n' "$(date +%s)" "$RANDOM" | shasum -a 256 | awk '{print substr($1, 1, 24)}'
+    return 0
+  fi
+  printf '%s%06d%06d\n' "$(date +%s)" "$RANDOM" "$RANDOM" | cut -c1-24
+}
+
+update_env_values() {
+  local env_path="$1"
+  local cli_type="$2"
+  local cli_path="$3"
+  local working_dir="$4"
+  local token="$5"
+  local updater_python
+
+  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    updater_python="$SCRIPT_DIR/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    updater_python="python3"
+  else
+    updater_python="python"
+  fi
+
+  "$updater_python" - "$env_path" "$cli_type" "$cli_path" "$working_dir" "$token" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+updates = {
+    "CLI_TYPE": sys.argv[2],
+    "CLI_PATH": sys.argv[3],
+    "WORKING_DIR": sys.argv[4],
+    "WEB_API_TOKEN": sys.argv[5],
+}
+lines = env_path.read_text(encoding="utf-8").splitlines()
+seen = set()
+output = []
+for line in lines:
+    key = line.split("=", 1)[0].strip() if "=" in line else ""
+    if key in updates and not line.lstrip().startswith("#"):
+        output.append(f"{key}={updates[key]}")
+        seen.add(key)
+    else:
+        output.append(line)
+for key, value in updates.items():
+    if key not in seen:
+        output.append(f"{key}={value}")
+env_path.write_text("\n".join(output) + "\n", encoding="utf-8")
+PY
 }
 
 detect_tailwind_oxide_binding() {
@@ -90,28 +199,44 @@ detect_tailwind_oxide_binding() {
     libc_flavor="musl"
   fi
 
-  if [[ "$node_platform" != "linux" ]]; then
-    return 1
+  if [[ "$node_platform" == "darwin" ]]; then
+    case "$node_arch" in
+      x64)
+        printf '@tailwindcss/oxide-darwin-x64\n'
+        ;;
+      arm64)
+        printf '@tailwindcss/oxide-darwin-arm64\n'
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    return 0
   fi
 
-  case "$node_arch" in
-    x64)
-      printf '@tailwindcss/oxide-linux-x64-%s\n' "$libc_flavor"
-      ;;
-    arm64)
-      printf '@tailwindcss/oxide-linux-arm64-%s\n' "$libc_flavor"
-      ;;
-    arm)
-      if [[ "$libc_flavor" == "gnu" ]]; then
-        printf '@tailwindcss/oxide-linux-arm-gnueabihf\n'
-        return 0
-      fi
-      return 1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  if [[ "$node_platform" == "linux" ]]; then
+    case "$node_arch" in
+      x64)
+        printf '@tailwindcss/oxide-linux-x64-%s\n' "$libc_flavor"
+        ;;
+      arm64)
+        printf '@tailwindcss/oxide-linux-arm64-%s\n' "$libc_flavor"
+        ;;
+      arm)
+        if [[ "$libc_flavor" == "gnu" ]]; then
+          printf '@tailwindcss/oxide-linux-arm-gnueabihf\n'
+          return 0
+        fi
+        return 1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    return 0
+  fi
+
+  return 1
 }
 
 ensure_tailwind_oxide_binding() {
@@ -195,12 +320,8 @@ ensure_env_file() {
   cp .env.example .env
   cli_type="$(select_default_cli_type)"
   cli_path="$cli_type"
-  token="$(date +%s | sha256sum | cut -c1-24)"
-
-  sed -i "s|^CLI_TYPE=.*$|CLI_TYPE=${cli_type}|" .env
-  sed -i "s|^CLI_PATH=.*$|CLI_PATH=${cli_path}|" .env
-  sed -i "s|^WORKING_DIR=.*$|WORKING_DIR=${SCRIPT_DIR}|" .env
-  sed -i "s|^WEB_API_TOKEN=.*$|WEB_API_TOKEN=${token}|" .env
+  token="$(generate_token)"
+  update_env_values ".env" "$cli_type" "$cli_path" "$SCRIPT_DIR" "$token"
 
   info ".env 已根据 .env.example 自动生成"
 }
@@ -262,6 +383,62 @@ install_example_plugins() {
   "$python_bin" -m bot.plugins.installer --repo-root "$SCRIPT_DIR" --all
 }
 
+run_install_user_phase() {
+  local user_home="${1:-}"
+  shift || true
+  local user_path="/opt/homebrew/bin:/usr/local/bin"
+  if [[ -n "$user_home" ]]; then
+    user_path="$user_path:$user_home/.npm-global/bin:$user_home/.local/bin:$user_home/.cargo/bin:$user_home/.bun/bin:$PATH"
+  else
+    user_path="$user_path:$PATH"
+  fi
+  exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 PATH="$user_path" bash "$0" "$@"
+}
+
+install_linux_system_dependencies() {
+  step "安装系统依赖"
+  $SUDO apt-get update
+  $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
+
+  if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
+    step "安装 Node.js LTS"
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
+    $SUDO apt-get install -y nodejs
+  fi
+}
+
+install_macos_system_dependencies() {
+  local packages=()
+
+  step "检查 macOS 依赖"
+  if ! command -v python3 >/dev/null 2>&1; then
+    packages+=("python")
+  elif ! version_ge "$(python3 --version 2>&1 | awk '{print $2}')" "3.10"; then
+    packages+=("python")
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    packages+=("node")
+  elif ! version_ge "$(node --version | sed 's/^v//')" "18"; then
+    packages+=("node")
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    packages+=("git")
+  fi
+
+  if [[ "${#packages[@]}" -eq 0 ]]; then
+    info "macOS 依赖已满足"
+    return 0
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    fail "缺少 macOS 依赖: ${packages[*]}。请先安装 Homebrew，再执行: brew install ${packages[*]}"
+    exit 1
+  fi
+
+  step "通过 Homebrew 安装依赖: ${packages[*]}"
+  brew install "${packages[@]}"
+}
+
 step "检查 Python 3.10+"
 python_bin=""
 if python_bin="$(detect_python)"; then
@@ -309,26 +486,44 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
 fi
 
 if [[ "$INSTALL_USER_PHASE" != "1" ]]; then
-  step "安装系统依赖"
-  $SUDO apt-get update
-  $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
+  if [[ "$RUNTIME_PLATFORM" == "macos" && ${EUID:-0} -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    sudo_home="$(eval echo "~$SUDO_USER" 2>/dev/null || true)"
+    if [[ "$sudo_home" == "~$SUDO_USER" ]]; then
+      sudo_home=""
+    fi
+    info "检测到 sudo 启动，切回 ${SUDO_USER} 执行 macOS 安装步骤"
+    run_install_user_phase "$sudo_home" "$@"
+  fi
+  if [[ "$RUNTIME_PLATFORM" == "macos" && ${EUID:-0} -eq 0 ]]; then
+    fail "macOS 安装请用普通用户执行 bash install.sh，不要直接用 root"
+    exit 1
+  fi
 
-  if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
-    step "安装 Node.js LTS"
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
-    $SUDO apt-get install -y nodejs
+  if [[ "$RUNTIME_PLATFORM" == "linux" ]]; then
+    install_linux_system_dependencies
+  else
+    install_macos_system_dependencies
   fi
 
   if [[ ${EUID:-0} -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
     step "修复项目目录权限"
     chown -R "${SUDO_UID:-$(id -u "$SUDO_USER")}":"${SUDO_GID:-$(id -g "$SUDO_USER")}" "$SCRIPT_DIR"
     info "切回 ${SUDO_USER} 执行项目安装步骤"
-    exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 bash "$0" "$@"
+    run_install_user_phase "" "$@"
   fi
 fi
 
 step "准备 Python 虚拟环境"
-python3 -m venv .venv
+if ! python_bin="$(detect_python)"; then
+  fail "未检测到 Python 3.10+，请先安装 Python"
+  exit 1
+fi
+python_version="$("$python_bin" --version 2>&1 | awk '{print $2}')"
+if ! version_ge "$python_version" "3.10"; then
+  fail "Python 版本过低: ${python_version}，需要 3.10+"
+  exit 1
+fi
+"${python_bin:-python3}" -m venv .venv
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 PIP_BIN="$SCRIPT_DIR/.venv/bin/pip"
 

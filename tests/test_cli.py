@@ -180,6 +180,24 @@ class TestBuildCliCommand:
 
         assert "--model" not in cmd
 
+    def test_posix_non_executable_cli_script_is_wrapped_with_bash(self, temp_dir: Path, monkeypatch):
+        monkeypatch.setattr("bot.platform.executables.os.name", "posix")
+        script = temp_dir / "codex"
+        script.write_text("#!/usr/bin/env bash\necho codex\n", encoding="utf-8")
+        os.chmod(script, 0o644)
+
+        cmd, use_stdin = build_cli_command(
+            cli_type="codex",
+            resolved_cli=str(script),
+            user_text="hello",
+            env={},
+            params_config=CliParamsConfig(),
+            working_dir=str(temp_dir),
+        )
+
+        assert cmd[:3] == ["bash", str(script), "exec"]
+        assert use_stdin is True
+
     def test_codex_injects_project_trust_override_when_working_dir_is_known(self, temp_dir: Path):
         env = {}
 
