@@ -17,6 +17,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlencode
 
 from aiohttp.client_exceptions import ClientConnectionResetError
 from aiohttp.http import WSCloseCode, WSMsgType
@@ -1408,10 +1409,15 @@ class WebApiServer:
         return str(value or "main").strip().lower() or "main"
 
     def _chat_notification_url(self, alias: str, conversation_id: str = "") -> str:
-        path = f"/bots/{str(alias or '').strip().lower() or 'main'}/chat"
+        snapshot = self._tunnel_service.snapshot()
+        public_url = str(snapshot.get("public_url") or "").strip().rstrip("/")
+        if not public_url:
+            return ""
+        safe_alias = quote(str(alias or "").strip().lower() or "main", safe="")
+        path = f"/bots/{safe_alias}/chat"
         if conversation_id:
-            path = f"{path}?conversation_id={conversation_id}"
-        return path
+            path = f"{path}?{urlencode({'conversation_id': conversation_id})}"
+        return f"{public_url}{path}"
 
     def _extract_chat_notification_payload(
         self,

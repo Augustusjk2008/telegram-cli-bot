@@ -34,6 +34,37 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
     return MultiBotManager(main_profile=profile, storage_file=str(storage_file))
 
 
+class FakeTunnelService:
+    def __init__(self, public_url: str = "") -> None:
+        self.public_url = public_url
+
+    def should_autostart(self) -> bool:
+        return False
+
+    async def start(self) -> dict[str, object]:
+        return self.snapshot()
+
+    async def stop(self) -> dict[str, object]:
+        return self.snapshot()
+
+    async def restart(self) -> dict[str, object]:
+        return self.snapshot()
+
+    def preserve_for_restart(self) -> dict[str, object]:
+        return self.snapshot()
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "mode": "manual" if self.public_url else "disabled",
+            "status": "running" if self.public_url else "stopped",
+            "source": "manual_config" if self.public_url else "disabled",
+            "public_url": self.public_url,
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "pid": None,
+        }
+
+
 class FakePushPlus:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -152,6 +183,29 @@ async def test_notification_service_offline_uses_pushplus_once_per_dedupe_key() 
     assert pushplus.calls[0]["title"] == "聊天已完成"
     assert "- Bot: main" in pushplus.calls[0]["content"]
     assert "完成内容" in pushplus.calls[0]["content"]
+    assert "打开聊天" not in pushplus.calls[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_notification_service_pushplus_includes_chat_link_when_url_present() -> None:
+    pushplus = FakePushPlus()
+    service = ChatNotificationService(pushplus=pushplus, enabled=True)
+
+    await service.notify_chat_completed(
+        account_id="alice",
+        user_id=1001,
+        bot_alias="main",
+        agent_id="main",
+        conversation_id="conv-1",
+        message_id="msg-1",
+        status="success",
+        preview="完成内容",
+        elapsed_seconds=3,
+        url="https://demo.trycloudflare.com/bots/main/chat?conversation_id=conv-1",
+    )
+    await service.drain_push_tasks()
+
+    assert "[打开聊天](https://demo.trycloudflare.com/bots/main/chat?conversation_id=conv-1)" in pushplus.calls[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -343,6 +397,46 @@ async def test_post_chat_notifies_after_success(
     assert kwargs["status"] == "success"
     assert kwargs["preview"] == "回复内容"
     assert kwargs["elapsed_seconds"] == 4
+    assert kwargs["url"] == ""
+
+
+@pytest.mark.asyncio
+async def test_post_chat_notification_url_uses_public_tunnel_url(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    async def fake_run_chat(_manager, _alias, _user_id, _message, **_kwargs):
+        return {
+            "output": "回复内容",
+            "elapsed_seconds": 4,
+            "message": {
+                "id": "msg-1",
+                "content": "回复内容",
+                "meta": {"completion_state": "completed"},
+            },
+            "session": {"active_conversation_id": "conv 1"},
+        }
+
+    server = WebApiServer(
+        web_manager,
+        tunnel_service=FakeTunnelService("https://demo.trycloudflare.com/"),
+    )
+    server._notification_service.notify_chat_completed = AsyncMock()
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.run_chat", fake_run_chat):
+                resp = await client.post("/api/bots/main/chat", json={"message": "hi"})
+            await asyncio.gather(*list(server._notification_tasks), return_exceptions=True)
+
+    assert resp.status == 200
+    kwargs = server._notification_service.notify_chat_completed.await_args.kwargs
+    assert kwargs["url"] == "https://demo.trycloudflare.com/bots/main/chat?conversation_id=conv+1"
 
 
 @pytest.mark.asyncio
