@@ -20,6 +20,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_patch("/api/admin/bots/{alias}/workdir", server.admin_update_workdir)
     app.router.add_patch("/api/admin/bots/{alias}/avatar", server.admin_update_avatar)
     app.router.add_patch("/api/admin/bots/{alias}/prompt-presets", server.admin_update_prompt_presets)
+    app.router.add_patch("/api/admin/prompt-presets/global", server.admin_update_global_prompt_presets)
     app.router.add_get("/api/admin/update", server.admin_get_update)
     app.router.add_patch("/api/admin/update", server.admin_patch_update)
     app.router.add_post("/api/admin/update/check", server.admin_update_check)

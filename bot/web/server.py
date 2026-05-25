@@ -205,6 +205,7 @@ from .api_service import (
     update_agent,
     update_bot_avatar,
     update_bot_cli,
+    update_global_prompt_presets,
     update_bot_prompt_presets,
     update_plugin,
     rename_managed_bot,
@@ -2930,6 +2931,18 @@ class WebApiServer:
             raise WebApiError(400, "invalid_prompt_presets", "缺少 prompt_presets")
         data = await update_bot_prompt_presets(self.manager, alias, presets, auth.user_id)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
+
+    async def admin_update_global_prompt_presets(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        if "prompt_presets" in body:
+            presets = body["prompt_presets"]
+        elif "promptPresets" in body:
+            presets = body["promptPresets"]
+        else:
+            raise WebApiError(400, "invalid_prompt_presets", "缺少 prompt_presets")
+        data = await update_global_prompt_presets(self.manager, presets)
+        return _json({"ok": True, "data": data})
 
     async def admin_get_git_proxy(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

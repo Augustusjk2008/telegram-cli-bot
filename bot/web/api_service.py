@@ -28,6 +28,7 @@ from bot.assistant.cron.store import (
     read_job_definition,
     read_job_run_audit,
 )
+from bot import app_settings
 from bot.assistant.dream.service import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
 from bot.assistant.dream.managed_context import collect_managed_bot_dream_context
 from bot.assistant.cron.types import AssistantCronJob
@@ -649,6 +650,7 @@ def build_bot_summary(
         "working_dir": working_dir,
         "avatar_name": profile.avatar_name or "",
         "prompt_presets": [dict(item) for item in profile.prompt_presets],
+        "global_prompt_presets": app_settings.get_global_prompt_presets(manager.app_settings_file),
         "is_main": alias == manager.main_profile.alias,
         "status": run_status,
         "service_status": service_status,
@@ -5526,6 +5528,17 @@ async def update_bot_prompt_presets(
     except ValueError as exc:
         _raise(400, "invalid_prompt_presets", str(exc))
     return {"bot": build_bot_summary(manager, alias, user_id)}
+
+
+async def update_global_prompt_presets(
+    manager: MultiBotManager,
+    presets: Any,
+) -> dict[str, Any]:
+    try:
+        normalized = app_settings.update_global_prompt_presets(presets, manager.app_settings_file)
+    except ValueError as exc:
+        _raise(400, "invalid_prompt_presets", str(exc))
+    return {"global_prompt_presets": normalized}
 
 
 def get_processing_sessions(alias: str) -> list[dict[str, Any]]:

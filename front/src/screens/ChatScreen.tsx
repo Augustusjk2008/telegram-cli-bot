@@ -2566,7 +2566,19 @@ export function ChatScreen({
     }
   }
 
-  const handleSavePromptPresets = useCallback(async (presets: PromptPreset[]) => {
+  const handleSaveGlobalPromptPresets = useCallback(async (presets: PromptPreset[]) => {
+    const nextPresets = await client.updateGlobalPromptPresets(presets);
+    setBotOverview((prev) => {
+      if (!prev || prev.alias !== botAlias) {
+        return prev;
+      }
+      const next = { ...prev, globalPromptPresets: nextPresets };
+      botOverviewRef.current = next;
+      return next;
+    });
+  }, [botAlias, client]);
+
+  const handleSaveBotPromptPresets = useCallback(async (presets: PromptPreset[]) => {
     const updated = await client.updateBotPromptPresets(botAlias, presets);
     const nextPresets = updated.promptPresets || [];
     setBotOverview((prev) => {
@@ -2885,9 +2897,11 @@ export function ChatScreen({
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
           placeholder={clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
-          promptPresets={botOverview?.promptPresets || []}
+          globalPromptPresets={botOverview?.globalPromptPresets || []}
+          botPromptPresets={botOverview?.promptPresets || []}
           canManagePromptPresets={canManagePromptPresets}
-          onSavePromptPresets={handleSavePromptPresets}
+          onSaveGlobalPromptPresets={handleSaveGlobalPromptPresets}
+          onSaveBotPromptPresets={handleSaveBotPromptPresets}
         />
       </div>
 

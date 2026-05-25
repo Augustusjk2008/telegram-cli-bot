@@ -20,10 +20,16 @@ type Props = {
   pulse?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
+  globalPromptPresets?: PromptPreset[];
+  botPromptPresets?: PromptPreset[];
   promptPresets?: PromptPreset[];
   canManagePromptPresets?: boolean;
+  onSaveGlobalPromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
+  onSaveBotPromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
   onSavePromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
 };
+
+type PresetScope = "global" | "bot";
 
 function collectMentions(text: string, agents: AgentSummary[] = []): AgentMention[] {
   const result: AgentMention[] = [];
@@ -54,6 +60,10 @@ function getMentionQuery(text: string, cursor: number): MentionQuery | null {
   return { query: match[1].toLowerCase(), start: atIndex, end: cursor };
 }
 
+function clonePromptPresetList(presets: PromptPreset[] = []) {
+  return presets.map((preset) => ({ ...preset }));
+}
+
 export function ChatComposer({
   onSend,
   onAttachFiles,
@@ -66,8 +76,12 @@ export function ChatComposer({
   pulse = false,
   uploadingAttachments = false,
   placeholder = "输入消息",
+  globalPromptPresets,
+  botPromptPresets,
   promptPresets = [],
   canManagePromptPresets = false,
+  onSaveGlobalPromptPresets,
+  onSaveBotPromptPresets,
   onSavePromptPresets,
 }: Props) {
   const shellClassName = compact
@@ -79,12 +93,22 @@ export function ChatComposer({
   const [expanded, setExpanded] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
-  const [draftPresets, setDraftPresets] = useState<PromptPreset[]>([]);
+  const [editingPresetScope, setEditingPresetScope] = useState<PresetScope>("bot");
+  const [draftPresetsByScope, setDraftPresetsByScope] = useState<Record<PresetScope, PromptPreset[]>>({
+    global: [],
+    bot: [],
+  });
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetError, setPresetError] = useState("");
   const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const presetIdCounterRef = useRef(1);
+  const resolvedGlobalPromptPresets = globalPromptPresets ?? [];
+  const resolvedBotPromptPresets = botPromptPresets ?? promptPresets;
+  const resolvedSaveBotPromptPresets = onSaveBotPromptPresets ?? onSavePromptPresets;
+  const draftPresets = draftPresetsByScope[editingPresetScope];
+  const showAnyPromptPresets = resolvedGlobalPromptPresets.length > 0 || resolvedBotPromptPresets.length > 0;
+  const editingPresetScopeLabel = editingPresetScope === "global" ? "全局" : "当前 Bot";
   const clusterAgents = useMemo(
     () => agents.filter((agent) => agent.enabled && !agent.isMain),
     [agents],
@@ -98,7 +122,7 @@ export function ChatComposer({
       return agent.id.toLowerCase().includes(query) || agent.name.toLowerCase().includes(query);
     }).slice(0, 8);
   }, [clusterAgents, clusterMode, mentionQuery]);
-  const showPromptPresetControls = promptPresets.length > 0 || canManagePromptPresets;
+  const showPromptPresetControls = showAnyPromptPresets || canManagePromptPresets;
 
   function updateMessage(next: string, cursor: number) {
     setMessage(next);
@@ -129,30 +153,45 @@ export function ChatComposer({
     focusTextarea(cursor);
   }
 
-  function openPresetEditor() {
-    setDraftPresets(promptPresets.map((preset) => ({ ...preset })));
+  function openPresetEditor(scope: PresetScope = "bot") {
+    setEditingPresetScope(scope);
+    setDraftPresetsByScope({
+      global: clonePromptPresetList(resolvedGlobalPromptPresets),
+      bot: clonePromptPresetList(resolvedBotPromptPresets),
+    });
     setPresetError("");
     setPresetMenuOpen(false);
     setPresetEditorOpen(true);
   }
 
   function updateDraftPreset(index: number, patch: Partial<PromptPreset>) {
-    setDraftPresets((current) => current.map((preset, itemIndex) => (
-      itemIndex === index ? { ...preset, ...patch } : preset
-    )));
+    setDraftPresetsByScope((current) => ({
+      ...current,
+      [editingPresetScope]: current[editingPresetScope].map((preset, itemIndex) => (
+        itemIndex === index ? { ...preset, ...patch } : preset
+      )),
+    }));
   }
 
   function addDraftPreset() {
-    if (draftPresets.length >= 50) {
-      return;
-    }
     const id = `preset-${Date.now().toString(36)}-${presetIdCounterRef.current}`;
     presetIdCounterRef.current += 1;
-    setDraftPresets((current) => [...current, { id, title: "", content: "" }]);
+    setDraftPresetsByScope((current) => {
+      if (current[editingPresetScope].length >= 50) {
+        return current;
+      }
+      return {
+        ...current,
+        [editingPresetScope]: [...current[editingPresetScope], { id, title: "", content: "" }],
+      };
+    });
   }
 
   function removeDraftPreset(index: number) {
-    setDraftPresets((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setDraftPresetsByScope((current) => ({
+      ...current,
+      [editingPresetScope]: current[editingPresetScope].filter((_, itemIndex) => itemIndex !== index),
+    }));
   }
 
   async function saveDraftPresets() {
@@ -168,7 +207,11 @@ export function ChatComposer({
     setPresetSaving(true);
     setPresetError("");
     try {
-      await onSavePromptPresets?.(normalized);
+      if (editingPresetScope === "global") {
+        await onSaveGlobalPromptPresets?.(normalized);
+      } else {
+        await resolvedSaveBotPromptPresets?.(normalized);
+      }
       setPresetEditorOpen(false);
     } catch (err) {
       setPresetError(err instanceof Error ? err.message : "保存失败");
@@ -189,6 +232,31 @@ export function ChatComposer({
     setMessage(next);
     setMentionQuery(null);
     focusTextarea((range ? range.start : current.length + prefix.length) + token.length);
+  }
+
+  function renderPresetSection(title: string, presets: PromptPreset[]) {
+    if (presets.length === 0) {
+      return null;
+    }
+    return (
+      <div>
+        <div className="px-3 py-2 text-xs font-medium text-[var(--muted)]">{title}</div>
+        {presets.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            role="option"
+            aria-selected={false}
+            title={preset.content}
+            onClick={() => insertTextAtCursor(preset.content)}
+            className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+          >
+            <span className="block truncate font-medium text-[var(--text)]">{preset.title}</span>
+            <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">{preset.content}</span>
+          </button>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -330,22 +398,13 @@ export function ChatComposer({
               aria-label="提示词预设"
               className="absolute bottom-full right-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
             >
-              {promptPresets.length > 0 ? (
+              {showAnyPromptPresets ? (
                 <div className="max-h-64 overflow-y-auto">
-                  {promptPresets.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      role="option"
-                      aria-selected={false}
-                      title={preset.content}
-                      onClick={() => insertTextAtCursor(preset.content)}
-                      className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-                    >
-                      <span className="block truncate font-medium text-[var(--text)]">{preset.title}</span>
-                      <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">{preset.content}</span>
-                    </button>
-                  ))}
+                  {renderPresetSection("全局预设", resolvedGlobalPromptPresets)}
+                  {resolvedGlobalPromptPresets.length > 0 && resolvedBotPromptPresets.length > 0 ? (
+                    <div className="mx-2 my-1 border-t border-[var(--border)]" />
+                  ) : null}
+                  {renderPresetSection("当前 Bot", resolvedBotPromptPresets)}
                 </div>
               ) : (
                 <div className="px-3 py-2 text-sm text-[var(--muted)]">暂无预设</div>
@@ -353,7 +412,7 @@ export function ChatComposer({
               {canManagePromptPresets ? (
                 <button
                   type="button"
-                  onClick={openPresetEditor}
+                  onClick={() => openPresetEditor("bot")}
                   className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
                 >
                   <Settings className="h-4 w-4 text-[var(--muted)]" />
@@ -416,7 +475,29 @@ export function ChatComposer({
             <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">提示词预设</h2>
-                <p className="mt-0.5 text-xs text-[var(--muted)]">{draftPresets.length}/50</p>
+                <p className="mt-0.5 text-xs text-[var(--muted)]">{editingPresetScopeLabel} · {draftPresets.length}/50</p>
+                <div className="mt-2 inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditingPresetScope("global")}
+                    disabled={presetSaving}
+                    className={editingPresetScope === "global"
+                      ? "rounded-md bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] shadow-sm"
+                      : "rounded-md px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)]"}
+                  >
+                    全局
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingPresetScope("bot")}
+                    disabled={presetSaving}
+                    className={editingPresetScope === "bot"
+                      ? "rounded-md bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] shadow-sm"
+                      : "rounded-md px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)]"}
+                  >
+                    当前 Bot
+                  </button>
+                </div>
               </div>
               <button
                 type="button"

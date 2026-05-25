@@ -171,6 +171,7 @@ export type BotSummary = {
   isOwnedByCurrentUser?: boolean;
   cluster?: BotClusterConfig;
   promptPresets?: PromptPreset[];
+  globalPromptPresets?: PromptPreset[];
 };
 
 export type PromptPreset = {
@@ -487,6 +488,7 @@ export type BotOverview = {
   canOperate?: boolean;
   effectiveCapabilities?: Capability[];
   promptPresets?: PromptPreset[];
+  globalPromptPresets?: PromptPreset[];
 };
 
 export type ChatTraceEvent = {

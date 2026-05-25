@@ -1275,6 +1275,7 @@ export class MockWebBotClient implements WebBotClient {
       },
     ]),
   );
+  private globalPromptPresets: PromptPreset[] = [];
   private currentPaths = new Map<string, string>();
   private pluginSessions = new Map<
     string,
@@ -2107,6 +2108,7 @@ export class MockWebBotClient implements WebBotClient {
       ownerUsername: base.ownerUsername || this.adminUsers.get(ownerAccountId)?.username || "",
       isOwnedByCurrentUser: ownerAccountId !== "" && ownerAccountId === this.currentAccountId(),
       promptPresets: clonePromptPresets(base.promptPresets),
+      globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
       cluster: base.cluster
         ? { ...base.cluster, modelTiers: { ...base.cluster.modelTiers } }
         : { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
@@ -3101,6 +3103,7 @@ export class MockWebBotClient implements WebBotClient {
       agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
       busyAgentIds: [],
+      globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
     };
   }
 
@@ -5303,6 +5306,14 @@ export class MockWebBotClient implements WebBotClient {
       promptPresets: clonePromptPresets(presets),
     });
     return this.getBotSummary(botAlias);
+  }
+
+  async updateGlobalPromptPresets(presets: PromptPreset[]): Promise<PromptPreset[]> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权保存提示词预设", { status: 403, code: "forbidden" });
+    }
+    this.globalPromptPresets = clonePromptPresets(presets);
+    return clonePromptPresets(this.globalPromptPresets);
   }
 
   async listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]> {

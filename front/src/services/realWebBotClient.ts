@@ -218,6 +218,8 @@ type RawBotSummary = {
   cluster?: Record<string, unknown>;
   prompt_presets?: RawPromptPreset[];
   promptPresets?: RawPromptPreset[];
+  global_prompt_presets?: RawPromptPreset[];
+  globalPromptPresets?: RawPromptPreset[];
 };
 
 type RawPromptPreset = {
@@ -1230,6 +1232,10 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const rawPromptPresets = raw.prompt_presets ?? raw.promptPresets;
   if (Array.isArray(rawPromptPresets)) {
     summary.promptPresets = mapPromptPresets(rawPromptPresets);
+  }
+  const rawGlobalPromptPresets = raw.global_prompt_presets ?? raw.globalPromptPresets;
+  if (Array.isArray(rawGlobalPromptPresets)) {
+    summary.globalPromptPresets = mapPromptPresets(rawGlobalPromptPresets);
   }
   if (raw.cli_path) {
     summary.cliPath = raw.cli_path;
@@ -5073,6 +5079,20 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({ prompt_presets: serializePromptPresets(presets) }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async updateGlobalPromptPresets(presets: PromptPreset[]): Promise<PromptPreset[]> {
+    const data = await this.requestJson<{ global_prompt_presets: RawPromptPreset[] }>(
+      "/api/admin/prompt-presets/global",
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt_presets: serializePromptPresets(presets) }),
+      },
+    );
+    return mapPromptPresets(data.global_prompt_presets);
   }
 
   async listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]> {

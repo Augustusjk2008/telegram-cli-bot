@@ -883,7 +883,7 @@ describe("RealWebBotClient", () => {
     );
   });
 
-  test("maps and saves bot prompt presets", async () => {
+  test("maps and saves global and bot prompt presets", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({ user_id: 1001 }))
       .mockResolvedValueOnce(jsonOk([
@@ -893,6 +893,7 @@ describe("RealWebBotClient", () => {
           status: "running",
           working_dir: "C:\\workspace\\demo",
           prompt_presets: [{ id: "review", title: "审查", content: "请审查代码" }],
+          global_prompt_presets: [{ id: "global", title: "全局", content: "全局提示" }],
         },
       ]))
       .mockResolvedValueOnce(jsonOk({
@@ -903,6 +904,9 @@ describe("RealWebBotClient", () => {
           working_dir: "C:\\workspace\\demo",
           prompt_presets: [{ id: "plan", title: "方案", content: "请按方案执行" }],
         },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        global_prompt_presets: [{ id: "shared", title: "共享", content: "共享提示" }],
       }));
 
     const client = new RealWebBotClient();
@@ -911,6 +915,7 @@ describe("RealWebBotClient", () => {
     await expect(client.listBots()).resolves.toMatchObject([
       {
         alias: "main",
+        globalPromptPresets: [{ id: "global", title: "全局", content: "全局提示" }],
         promptPresets: [{ id: "review", title: "审查", content: "请审查代码" }],
       },
     ]);
@@ -920,13 +925,28 @@ describe("RealWebBotClient", () => {
       alias: "main",
       promptPresets: [{ id: "plan", title: "方案", content: "请按方案执行" }],
     });
+    await expect(client.updateGlobalPromptPresets([
+      { id: "shared", title: "共享", content: "共享提示" },
+    ])).resolves.toEqual([
+      { id: "shared", title: "共享", content: "共享提示" },
+    ]);
 
-    expect(fetchMock).toHaveBeenLastCalledWith(
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
       "/api/admin/bots/main/prompt-presets",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({
           prompt_presets: [{ id: "plan", title: "方案", content: "请按方案执行" }],
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/prompt-presets/global",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          prompt_presets: [{ id: "shared", title: "共享", content: "共享提示" }],
         }),
       }),
     );

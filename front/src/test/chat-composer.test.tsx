@@ -115,7 +115,8 @@ test("inserts a prompt preset at the cursor", async () => {
       onAttachFiles={() => {}}
       onRemoveAttachment={() => {}}
       attachments={[]}
-      promptPresets={[{ id: "review", title: "审查", content: "请审查" }]}
+      globalPromptPresets={[{ id: "review", title: "审查", content: "请审查" }]}
+      botPromptPresets={[{ id: "plan", title: "方案", content: "请按方案执行" }]}
     />,
   );
 
@@ -125,15 +126,17 @@ test("inserts a prompt preset at the cursor", async () => {
   fireEvent.select(input);
 
   await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  expect(screen.getByText("全局预设")).toBeInTheDocument();
+  expect(screen.getByText("当前 Bot")).toBeInTheDocument();
   await user.click(screen.getByText("审查"));
 
   expect(input).toHaveValue("前请审查后");
   expect(screen.queryByRole("button", { name: "预设" })).not.toBeInTheDocument();
 });
 
-test("saves prompt preset edits from the config dialog", async () => {
+test("saves global prompt preset edits from the config dialog", async () => {
   const user = userEvent.setup();
-  const onSavePromptPresets = vi.fn(async () => {});
+  const onSaveGlobalPromptPresets = vi.fn(async () => {});
 
   render(
     <ChatComposer
@@ -142,19 +145,20 @@ test("saves prompt preset edits from the config dialog", async () => {
       onRemoveAttachment={() => {}}
       attachments={[]}
       canManagePromptPresets
-      onSavePromptPresets={onSavePromptPresets}
+      onSaveGlobalPromptPresets={onSaveGlobalPromptPresets}
     />,
   );
 
   await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
   await user.click(screen.getByRole("button", { name: "配置预设" }));
+  await user.click(screen.getByRole("button", { name: "全局" }));
   await user.click(screen.getByRole("button", { name: "新增预设" }));
   await user.type(screen.getByLabelText("预设标题 1"), "方案执行");
   await user.type(screen.getByLabelText("预设内容 1"), "请按方案执行");
   await user.click(screen.getByRole("button", { name: "保存预设" }));
 
   await waitFor(() => {
-    expect(onSavePromptPresets).toHaveBeenCalledWith([
+    expect(onSaveGlobalPromptPresets).toHaveBeenCalledWith([
       expect.objectContaining({
         title: "方案执行",
         content: "请按方案执行",
@@ -162,4 +166,37 @@ test("saves prompt preset edits from the config dialog", async () => {
     ]);
   });
   expect(screen.queryByRole("dialog", { name: "配置提示词预设" })).not.toBeInTheDocument();
+});
+
+test("saves bot prompt preset edits from the config dialog", async () => {
+  const user = userEvent.setup();
+  const onSaveBotPromptPresets = vi.fn(async () => {});
+
+  render(
+    <ChatComposer
+      onSend={() => {}}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      canManagePromptPresets
+      onSaveBotPromptPresets={onSaveBotPromptPresets}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  await user.click(screen.getByRole("button", { name: "配置预设" }));
+  await user.click(screen.getByRole("button", { name: "当前 Bot" }));
+  await user.click(screen.getByRole("button", { name: "新增预设" }));
+  await user.type(screen.getByLabelText("预设标题 1"), "当前方案");
+  await user.type(screen.getByLabelText("预设内容 1"), "请按当前 bot 方案执行");
+  await user.click(screen.getByRole("button", { name: "保存预设" }));
+
+  await waitFor(() => {
+    expect(onSaveBotPromptPresets).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "当前方案",
+        content: "请按当前 bot 方案执行",
+      }),
+    ]);
+  });
 });

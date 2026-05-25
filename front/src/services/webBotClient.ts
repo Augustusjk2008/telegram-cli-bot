@@ -167,6 +167,7 @@ export interface WebBotClient {
   prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult>;
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
   updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary>;
+  updateGlobalPromptPresets(presets: PromptPreset[]): Promise<PromptPreset[]>;
   getClusterTemplates(botAlias: string): Promise<ClusterTemplateListResult>;
   getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult>;
   previewClusterTemplate(botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult>;

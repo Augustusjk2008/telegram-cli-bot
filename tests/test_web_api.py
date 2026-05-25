@@ -46,6 +46,7 @@ from bot.web.api_service import (
     _stream_cli_chat,
     _build_stream_status_event,
     WebApiError,
+    build_bot_summary,
     build_session_snapshot,
     change_working_directory,
     create_agent,
@@ -5243,6 +5244,67 @@ async def test_admin_prompt_presets_route_persists_main_bot_profile(
 
 
 @pytest.mark.asyncio
+async def test_admin_global_prompt_presets_route_persists_and_exposes_in_bot_summaries(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    web_manager.managed_profiles["alpha"] = BotProfile(
+        alias="alpha",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(temp_dir),
+        prompt_presets=[{"id": "alpha-only", "title": "Alpha", "content": "A"}],
+    )
+    web_manager._save_profiles()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch(
+                "/api/admin/prompt-presets/global",
+                json={"prompt_presets": [{"id": "review", "title": "审查", "content": "请审查代码"}]},
+            )
+            payload = await resp.json()
+            bots_resp = await client.get("/api/bots")
+            bots_payload = await bots_resp.json()
+            main_resp = await client.get("/api/admin/bots/main")
+            main_payload = await main_resp.json()
+            alpha_resp = await client.get("/api/admin/bots/alpha")
+            alpha_payload = await alpha_resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["global_prompt_presets"] == [
+        {"id": "review", "title": "审查", "content": "请审查代码"}
+    ]
+    assert bots_resp.status == 200
+    assert main_resp.status == 200
+    assert alpha_resp.status == 200
+    summaries = {item["alias"]: item for item in bots_payload["data"]}
+    assert summaries["main"]["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+    assert summaries["alpha"]["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+    assert summaries["alpha"]["prompt_presets"] == [{"id": "alpha-only", "title": "Alpha", "content": "A"}]
+    assert main_payload["data"]["bot"]["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+    assert alpha_payload["data"]["bot"]["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+    assert alpha_payload["data"]["bot"]["prompt_presets"] == [{"id": "alpha-only", "title": "Alpha", "content": "A"}]
+
+    settings = json.loads((temp_dir / ".web_admin_settings.json").read_text(encoding="utf-8"))
+    assert settings["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+
+    restored = MultiBotManager(
+        BotProfile(alias="main", token="dummy-token", cli_type="codex", cli_path="codex", working_dir=str(temp_dir)),
+        str(temp_dir / "managed_bots.json"),
+    )
+    assert build_bot_summary(restored, "main")["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+    assert build_bot_summary(restored, "alpha")["global_prompt_presets"] == payload["data"]["global_prompt_presets"]
+    assert restored.managed_profiles["alpha"].prompt_presets == [{"id": "alpha-only", "title": "Alpha", "content": "A"}]
+
+
+@pytest.mark.asyncio
 async def test_admin_prompt_presets_route_persists_managed_bots_independently(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -5322,6 +5384,25 @@ async def test_admin_prompt_presets_route_requires_payload_field(
 
 
 @pytest.mark.asyncio
+async def test_admin_global_prompt_presets_route_requires_payload_field(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch("/api/admin/prompt-presets/global", json={})
+            payload = await resp.json()
+
+    assert resp.status == 400
+    assert payload["error"]["code"] == "invalid_prompt_presets"
+
+
+@pytest.mark.asyncio
 async def test_admin_prompt_presets_route_allows_explicit_clear(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -5342,6 +5423,41 @@ async def test_admin_prompt_presets_route_allows_explicit_clear(
     assert payload["data"]["bot"]["prompt_presets"] == []
     settings = json.loads((temp_dir / ".web_admin_settings.json").read_text(encoding="utf-8"))
     assert "prompt_presets" not in settings.get("main_bot_profile", {})
+
+
+@pytest.mark.asyncio
+async def test_admin_global_prompt_presets_route_allows_explicit_clear(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    settings_path = temp_dir / ".web_admin_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"global_prompt_presets": [{"id": "old", "title": "旧", "content": "内容"}]},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch("/api/admin/prompt-presets/global", json={"prompt_presets": []})
+            payload = await resp.json()
+            bots_resp = await client.get("/api/bots")
+            bots_payload = await bots_resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["global_prompt_presets"] == []
+    assert bots_resp.status == 200
+    assert all(item["global_prompt_presets"] == [] for item in bots_payload["data"])
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "global_prompt_presets" not in settings
 
 
 @pytest.mark.asyncio
@@ -5373,6 +5489,43 @@ async def test_admin_prompt_presets_route_requires_admin_ops(
         async with TestClient(test_server) as client:
             resp = await client.patch(
                 "/api/admin/bots/main/prompt-presets",
+                json={"prompt_presets": [{"id": "p", "title": "T", "content": "C"}]},
+            )
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_admin_global_prompt_presets_route_requires_admin_ops(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    permissions = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permissions.set_allowed_bots("member", ["main"])
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    def auth_without_admin_ops(_self, _request):
+        return AuthContext(
+            user_id=1001,
+            token_used=True,
+            account_id="member",
+            username="member",
+            role="member",
+            capabilities={"view_bots"},
+        )
+
+    monkeypatch.setattr("bot.web.server.WebApiServer._auth_context", auth_without_admin_ops)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch(
+                "/api/admin/prompt-presets/global",
                 json={"prompt_presets": [{"id": "p", "title": "T", "content": "C"}]},
             )
             payload = await resp.json()

@@ -26,6 +26,7 @@ _DEFAULT_SETTINGS = {
     "git_proxy_port": "",
     "bot_avatar_names": {},
     "main_bot_profile": {},
+    "global_prompt_presets": [],
     "update_enabled": True,
     "update_channel": "release",
     "last_checked_at": "",
@@ -216,6 +217,9 @@ def _sanitize_settings(raw: Any) -> dict[str, Any]:
         settings["git_proxy_port"] = ""
     settings["bot_avatar_names"] = _normalize_bot_avatar_names(raw.get("bot_avatar_names", {}))
     settings["main_bot_profile"] = _normalize_main_bot_profile(raw.get("main_bot_profile", {}))
+    settings["global_prompt_presets"] = normalize_prompt_presets(
+        raw.get("global_prompt_presets", raw.get("globalPromptPresets"))
+    )
     settings["update_enabled"] = _normalize_bool(raw.get("update_enabled"), True)
     settings["update_channel"] = _normalize_optional_text(raw.get("update_channel", "release")) or "release"
     for key in _UPDATE_TEXT_FIELDS:
@@ -267,6 +271,10 @@ def _serialize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     main_bot_profile = _normalize_main_bot_profile(settings.get("main_bot_profile", {}))
     if main_bot_profile:
         payload["main_bot_profile"] = main_bot_profile
+
+    global_prompt_presets = normalize_prompt_presets(settings.get("global_prompt_presets"))
+    if global_prompt_presets:
+        payload["global_prompt_presets"] = global_prompt_presets
 
     update_enabled = _normalize_bool(settings.get("update_enabled"), True)
     if not update_enabled:
@@ -335,12 +343,28 @@ def get_main_bot_profile(settings_file: str | Path | None = None) -> dict[str, A
     return copy.deepcopy(settings["main_bot_profile"])
 
 
+def get_global_prompt_presets(settings_file: str | Path | None = None) -> list[dict[str, str]]:
+    settings = _load_settings(settings_file)
+    return [dict(item) for item in settings["global_prompt_presets"]]
+
+
 def update_main_bot_profile(profile: dict[str, Any], settings_file: str | Path | None = None) -> dict[str, Any]:
     normalized_profile = _normalize_main_bot_profile(profile)
     settings = _load_settings(settings_file)
     settings["main_bot_profile"] = normalized_profile
     _save_settings(settings, settings_file)
     return copy.deepcopy(normalized_profile)
+
+
+def update_global_prompt_presets(
+    presets: Any,
+    settings_file: str | Path | None = None,
+) -> list[dict[str, str]]:
+    normalized = normalize_prompt_presets(presets, strict=True)
+    settings = _load_settings(settings_file)
+    settings["global_prompt_presets"] = normalized
+    _save_settings(settings, settings_file)
+    return [dict(item) for item in normalized]
 
 
 def update_bot_avatar_name(alias: str, avatar_name: Any, settings_file: str | Path | None = None) -> str:

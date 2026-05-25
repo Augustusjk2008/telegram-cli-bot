@@ -3333,8 +3333,9 @@ test("assistant queued send keeps the pending row visible while runtime queue is
   });
 });
 
-test("prompt presets save into current overview cache and stay bot scoped", async () => {
+test("prompt presets keep global presets cross-bot and bot presets scoped", async () => {
   const user = userEvent.setup();
+  let globalPresets: PromptPreset[] = [{ id: "global-1", title: "共享模板", content: "全局内容" }];
   const presetsByBot: Record<string, PromptPreset[]> = {
     main: [{ id: "main-1", title: "主预设", content: "主内容" }],
     team2: [{ id: "team-1", title: "团队预设", content: "团队内容" }],
@@ -3346,7 +3347,12 @@ test("prompt presets save into current overview cache and stay bot scoped", asyn
     workingDir: botAlias === "team2" ? "C:\\team2" : "C:\\workspace",
     isProcessing: false,
     effectiveCapabilities: ["admin_ops"],
+    globalPromptPresets: globalPresets.map((preset) => ({ ...preset })),
     promptPresets: presetsByBot[botAlias].map((preset) => ({ ...preset })),
+  });
+  const updateGlobalPromptPresets = vi.fn(async (presets: PromptPreset[]) => {
+    globalPresets = presets.map((preset) => ({ ...preset }));
+    return globalPresets.map((preset) => ({ ...preset }));
   });
   const updateBotPromptPresets = vi.fn(async (botAlias: string, presets: PromptPreset[]) => {
     presetsByBot[botAlias] = presets.map((preset) => ({ ...preset }));
@@ -3356,11 +3362,13 @@ test("prompt presets save into current overview cache and stay bot scoped", asyn
       status: "running" as const,
       workingDir: overviewFor(botAlias).workingDir,
       lastActiveText: "运行中",
+      globalPromptPresets: globalPresets.map((preset) => ({ ...preset })),
       promptPresets: presetsByBot[botAlias].map((preset) => ({ ...preset })),
     };
   });
   const client = createClient({
     getBotOverview: async (botAlias: string) => overviewFor(botAlias),
+    updateGlobalPromptPresets,
     updateBotPromptPresets,
   });
 
@@ -3368,7 +3376,26 @@ test("prompt presets save into current overview cache and stay bot scoped", asyn
   await screen.findByPlaceholderText("输入消息");
 
   await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  expect(screen.getByText("全局预设")).toBeInTheDocument();
+  expect(screen.getByText("主预设")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "配置预设" }));
+  await user.click(screen.getByRole("button", { name: "全局" }));
+  await user.click(screen.getByRole("button", { name: "新增预设" }));
+  await user.type(screen.getByLabelText("预设标题 2"), "通用补充");
+  await user.type(screen.getByLabelText("预设内容 2"), "通用补充内容");
+  await user.click(screen.getByRole("button", { name: "保存预设" }));
+
+  await waitFor(() => {
+    expect(updateGlobalPromptPresets).toHaveBeenCalledWith([
+      expect.objectContaining({ title: "共享模板", content: "全局内容" }),
+      expect.objectContaining({ title: "通用补充", content: "通用补充内容" }),
+    ]);
+  });
+
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  expect(screen.getByText("通用补充")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "配置预设" }));
+  await user.click(screen.getByRole("button", { name: "当前 Bot" }));
   await user.click(screen.getByRole("button", { name: "新增预设" }));
   await user.type(screen.getByLabelText("预设标题 2"), "补充");
   await user.type(screen.getByLabelText("预设内容 2"), "补充内容");
@@ -3391,20 +3418,25 @@ test("prompt presets save into current overview cache and stay bot scoped", asyn
     expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
   });
   await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  expect(screen.getByText("全局预设")).toBeInTheDocument();
+  expect(screen.getByText("通用补充")).toBeInTheDocument();
   expect(screen.getByText("团队预设")).toBeInTheDocument();
   expect(screen.queryByText("补充")).not.toBeInTheDocument();
 });
 
-test("mock client stores prompt presets independently per bot", async () => {
+test("mock client stores global and bot prompt presets separately", async () => {
   const client = new MockWebBotClient();
 
+  await client.updateGlobalPromptPresets([{ id: "global", title: "共享模板", content: "全局内容" }]);
   await client.updateBotPromptPresets("main", [{ id: "main", title: "主预设", content: "主内容" }]);
   await client.updateBotPromptPresets("team2", [{ id: "team", title: "团队预设", content: "团队内容" }]);
 
   await expect(client.getBotOverview("main")).resolves.toMatchObject({
+    globalPromptPresets: [{ id: "global", title: "共享模板", content: "全局内容" }],
     promptPresets: [{ id: "main", title: "主预设", content: "主内容" }],
   });
   await expect(client.getBotOverview("team2")).resolves.toMatchObject({
+    globalPromptPresets: [{ id: "global", title: "共享模板", content: "全局内容" }],
     promptPresets: [{ id: "team", title: "团队预设", content: "团队内容" }],
   });
 });
