@@ -3827,6 +3827,79 @@ async def test_git_smart_commit_routes_succeed_and_support_multiline_message(
 
 
 @pytest.mark.asyncio
+async def test_git_smart_commit_job_does_not_block_web_loop_during_preflight(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+    from bot.web import server as server_module
+
+    original_preflight = server_module.preflight_git_smart_commit
+    preflight_started = threading.Event()
+    preflight_finished = threading.Event()
+
+    def slow_preflight(*args, **kwargs):
+        preflight_started.set()
+        time.sleep(1.0)
+        try:
+            return original_preflight(*args, **kwargs)
+        finally:
+            preflight_finished.set()
+
+    async def fake_generate(_manager, _alias, _user_id, *, repo_root):
+        assert repo_root == str(repo_dir)
+        return {"message": "feat(git): async smart commit"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.preflight_git_smart_commit", side_effect=slow_preflight), \
+                 patch("bot.web.server.generate_git_smart_commit_message", side_effect=fake_generate):
+                started_at = time.perf_counter()
+                start_resp = await client.post("/api/bots/main/git/smart-commit", json={})
+                start_payload = await start_resp.json()
+                assert time.perf_counter() - started_at < 0.6
+                assert start_resp.status == 200
+                job_id = start_payload["data"]["job_id"]
+
+                assert await asyncio.to_thread(preflight_started.wait, 1.0)
+                assert not preflight_finished.is_set()
+
+                started_at = time.perf_counter()
+                active_resp = await client.get("/api/bots/main/git/smart-commit/active")
+                active_payload = await active_resp.json()
+                assert time.perf_counter() - started_at < 0.6
+                assert active_resp.status == 200
+                assert active_payload["data"]["job_id"] == job_id
+
+                for _ in range(100):
+                    job_resp = await client.get(f"/api/bots/main/git/smart-commit/{job_id}")
+                    job_payload = await job_resp.json()
+                    if job_payload["data"]["status"] in {"succeeded", "failed", "canceled"}:
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("smart commit job did not finish")
+
+    assert job_payload["data"]["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_git_smart_commit_route_fails_when_generation_fails(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

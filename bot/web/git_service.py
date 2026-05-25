@@ -880,8 +880,8 @@ async def reset_git_commit_message_cli_config(manager: MultiBotManager, alias: s
 
 
 async def generate_git_commit_message(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
-    _working_dir, repo_root = _require_repo_root(manager, alias, user_id)
-    context = _read_git_commit_message_context(repo_root)
+    _working_dir, repo_root = await asyncio.to_thread(_require_repo_root, manager, alias, user_id)
+    context = await asyncio.to_thread(_read_git_commit_message_context, repo_root)
     return await _generate_git_commit_message_from_context(
         manager,
         alias,
@@ -926,7 +926,7 @@ async def generate_git_smart_commit_message(
     *,
     repo_root: str,
 ) -> dict[str, Any]:
-    context = _read_git_smart_commit_message_context(repo_root)
+    context = await asyncio.to_thread(_read_git_smart_commit_message_context, repo_root)
     return await _generate_git_commit_message_from_context(
         manager,
         alias,

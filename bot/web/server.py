@@ -1122,7 +1122,12 @@ class WebApiServer:
         repo_root = str(job.get("repo_root") or "")
         try:
             self._set_git_smart_commit_job(job, status="running", phase="preflight", error="")
-            _working_dir, repo_root, snapshot = preflight_git_smart_commit(self.manager, alias, user_id)
+            _working_dir, repo_root, snapshot = await asyncio.to_thread(
+                preflight_git_smart_commit,
+                self.manager,
+                alias,
+                user_id,
+            )
             lock_holder = self._git_smart_commit_repo_locks.get(repo_root)
             if lock_holder and lock_holder != job_id:
                 raise WebApiError(409, "git_smart_commit_conflict", "当前仓库已有智能提交任务在运行")
@@ -1139,19 +1144,20 @@ class WebApiServer:
             message = str(generated.get("message") or "").strip()
             self._set_git_smart_commit_job(job, message=message)
 
-            ensure_git_status_snapshot_unchanged(repo_root, snapshot)
+            await asyncio.to_thread(ensure_git_status_snapshot_unchanged, repo_root, snapshot)
 
             self._set_git_smart_commit_job(job, phase="staging")
-            stage_all_git_changes(repo_root)
+            await asyncio.to_thread(stage_all_git_changes, repo_root)
 
             self._set_git_smart_commit_job(job, phase="committing")
-            commit_git_message(repo_root, message)
+            await asyncio.to_thread(commit_git_message, repo_root, message)
+            overview = await asyncio.to_thread(get_git_overview, self.manager, alias, user_id)
 
             self._set_git_smart_commit_job(
                 job,
                 status="succeeded",
                 phase="done",
-                overview=get_git_overview(self.manager, alias, user_id),
+                overview=overview,
                 error="",
             )
         except WebApiError as exc:
@@ -2479,7 +2485,7 @@ class WebApiServer:
     async def post_git_smart_commit(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        _working_dir, repo_root = get_git_smart_commit_repo_hint(self.manager, alias)
+        _working_dir, repo_root = await asyncio.to_thread(get_git_smart_commit_repo_hint, self.manager, alias)
         if repo_root and self._git_smart_commit_repo_locks.get(repo_root):
             raise WebApiError(409, "git_smart_commit_conflict", "当前仓库已有智能提交任务在运行")
 
