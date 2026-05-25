@@ -128,6 +128,7 @@ test("inserts a prompt preset at the cursor", async () => {
   await user.click(screen.getByText("审查"));
 
   expect(input).toHaveValue("前请审查后");
+  expect(screen.queryByRole("button", { name: "预设" })).not.toBeInTheDocument();
 });
 
 test("saves prompt preset edits from the config dialog", async () => {

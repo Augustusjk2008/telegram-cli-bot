@@ -272,59 +272,6 @@ export function ChatComposer({
             }}
           />
         </label>
-        {showPromptPresetControls ? (
-          <div className="relative shrink-0">
-            <button
-              type="button"
-              aria-label="打开提示词预设"
-              aria-expanded={presetMenuOpen}
-              disabled={inputDisabled}
-              onClick={() => setPresetMenuOpen((value) => !value)}
-              className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
-            >
-              <span>预设</span>
-              <ChevronDown className="h-4 w-4" />
-            </button>
-            {presetMenuOpen ? (
-              <div
-                role="listbox"
-                aria-label="提示词预设"
-                className="absolute bottom-full left-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
-              >
-                {promptPresets.length > 0 ? (
-                  <div className="max-h-64 overflow-y-auto">
-                    {promptPresets.map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        role="option"
-                        aria-selected={false}
-                        title={preset.content}
-                        onClick={() => insertTextAtCursor(preset.content)}
-                        className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-                      >
-                        <span className="block truncate font-medium text-[var(--text)]">{preset.title}</span>
-                        <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">{preset.content}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="px-3 py-2 text-sm text-[var(--muted)]">暂无预设</div>
-                )}
-                {canManagePromptPresets ? (
-                  <button
-                    type="button"
-                    onClick={openPresetEditor}
-                    className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
-                  >
-                    <Settings className="h-4 w-4 text-[var(--muted)]" />
-                    配置预设
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         <div className="relative flex-1">
           <textarea
             ref={textareaRef}
@@ -359,9 +306,62 @@ export function ChatComposer({
               form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             }}
             className={expanded
-              ? "max-h-72 w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"
-              : "w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"}
+              ? `max-h-72 w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60`
+              : `w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60`}
           />
+          {showPromptPresetControls ? (
+            <button
+              type="button"
+              aria-label="打开提示词预设"
+              aria-expanded={presetMenuOpen}
+              title="提示词预设"
+              disabled={inputDisabled}
+              onClick={() => setPresetMenuOpen((value) => !value)}
+              className={expanded
+                ? "absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--accent)] disabled:opacity-50"
+                : "absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--accent)] disabled:opacity-50"}
+            >
+              <ChevronDown className="h-4 w-4" />
+            </button>
+          ) : null}
+          {presetMenuOpen ? (
+            <div
+              role="listbox"
+              aria-label="提示词预设"
+              className="absolute bottom-full right-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+            >
+              {promptPresets.length > 0 ? (
+                <div className="max-h-64 overflow-y-auto">
+                  {promptPresets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      title={preset.content}
+                      onClick={() => insertTextAtCursor(preset.content)}
+                      className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      <span className="block truncate font-medium text-[var(--text)]">{preset.title}</span>
+                      <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">{preset.content}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-3 py-2 text-sm text-[var(--muted)]">暂无预设</div>
+              )}
+              {canManagePromptPresets ? (
+                <button
+                  type="button"
+                  onClick={openPresetEditor}
+                  className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                >
+                  <Settings className="h-4 w-4 text-[var(--muted)]" />
+                  配置预设
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {mentionOptions.length > 0 ? (
             <div
               role="listbox"
