@@ -447,6 +447,58 @@ describe("RealWebBotClient", () => {
     expect(body.mentions[0]).toMatchObject({ agent_id: "reviewer", label: "代码审查" });
   });
 
+  test("maps context_usage from history and stream done message", async () => {
+    const encoder = new TextEncoder();
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        items: [{
+          id: "assistant-history",
+          role: "assistant",
+          content: "历史回复",
+          created_at: "2026-05-08T09:05:00+08:00",
+          state: "done",
+          meta: {
+            context_usage: {
+              provider: "codex",
+              source: "codex_session_token_count",
+              session_id: "thread-1",
+              used_tokens: 76593,
+              context_window: 258400,
+              context_left_percent: 74,
+              used_display: "76.6K",
+              window_display: "258K",
+              status_text: "74% context left · 76.6K / 258K",
+            },
+          },
+        }],
+      }))
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: vi.fn()
+              .mockResolvedValueOnce({
+                value: encoder.encode(
+                  "data: {\"type\":\"done\",\"message\":{\"id\":\"assistant-stream\",\"role\":\"assistant\",\"content\":\"流式回复\",\"created_at\":\"2026-05-08T09:06:00+08:00\",\"state\":\"done\",\"meta\":{\"context_usage\":{\"provider\":\"codex\",\"source\":\"codex_session_token_count\",\"session_id\":\"thread-2\",\"used_tokens\":76593,\"context_window\":258400,\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\"}}}}\n\n",
+                ),
+                done: false,
+              })
+              .mockResolvedValueOnce({ value: undefined, done: true }),
+            cancel: vi.fn().mockResolvedValue(undefined),
+          }),
+        },
+      });
+
+    const client = new RealWebBotClient();
+    const history = await client.listMessages("main");
+    const sent = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(history[0].meta?.contextUsage?.sessionId).toBe("thread-1");
+    expect(history[0].meta?.contextUsage?.statusText).toBe("74% context left · 76.6K / 258K");
+    expect(sent.meta?.contextUsage?.sessionId).toBe("thread-2");
+    expect(sent.meta?.contextUsage?.usedTokens).toBe(76593);
+  });
+
   test("executePlan posts plan content and maps execution payload", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       plan_path: "docs/plan/2026-05-21-1010-plan-mode.md",

@@ -207,6 +207,7 @@ class ChatHistoryService:
         native_session_id: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        context_usage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.store.complete_turn(
             handle,
@@ -215,6 +216,7 @@ class ChatHistoryService:
             native_session_id=native_session_id,
             error_code=error_code,
             error_message=error_message,
+            context_usage=context_usage,
         )
 
     def list_history(self, profile: BotProfile, session: UserSession, limit: int = 50) -> list[dict[str, Any]]:

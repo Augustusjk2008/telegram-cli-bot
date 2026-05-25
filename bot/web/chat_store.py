@@ -222,6 +222,7 @@ class ChatStore:
                 error_message TEXT,
                 trace_recovery_attempted_at TEXT,
                 trace_recovery_status TEXT,
+                context_usage_json TEXT,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
@@ -274,6 +275,7 @@ class ChatStore:
         self._ensure_column(conn, "conversations", "archived_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
+        self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
         conn.execute("DROP INDEX IF EXISTS idx_conversations_scope_updated")
         conn.execute(
             """
@@ -996,10 +998,12 @@ class ChatStore:
         native_session_id: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        context_usage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         started_at = time.perf_counter()
         now = _utc_now()
         message_state = "done" if completion_state == "completed" else "error"
+        context_usage_json = json.dumps(context_usage, ensure_ascii=False) if isinstance(context_usage, dict) else None
         with self._connect_for_write() as conn:
             conn.execute(
                 "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
@@ -1014,7 +1018,8 @@ class ChatStore:
                     updated_at = ?,
                     completed_at = ?,
                     error_code = ?,
-                    error_message = ?
+                    error_message = ?,
+                    context_usage_json = ?
                 WHERE id = ?
                 """,
                 (
@@ -1025,6 +1030,7 @@ class ChatStore:
                     now,
                     error_code,
                     error_message,
+                    context_usage_json,
                     handle.turn_id,
                 ),
             )
@@ -1106,6 +1112,21 @@ class ChatStore:
         if trace_stats_by_turn is None:
             trace_stats_by_turn = self._load_trace_stats(conn, [turn_id])
         trace_stats = trace_stats_by_turn.get(turn_id, {})
+        meta = {
+            "completion_state": row["completion_state"],
+            "native_provider": row["native_provider"],
+            "native_session_id": row["native_session_id"],
+            "trace_count": int(trace_stats.get("trace_count", 0) or 0),
+            "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
+            "process_count": int(trace_stats.get("process_count", 0) or 0),
+        }
+        if str(row["role"] or "") == "assistant":
+            try:
+                parsed_context_usage = _parse_json(row["context_usage_json"])
+            except (KeyError, TypeError, json.JSONDecodeError):
+                parsed_context_usage = None
+            if isinstance(parsed_context_usage, dict):
+                meta["context_usage"] = parsed_context_usage
         return {
             "id": row["id"],
             "role": row["role"],
@@ -1113,14 +1134,7 @@ class ChatStore:
             "state": row["state"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-            "meta": {
-                "completion_state": row["completion_state"],
-                "native_provider": row["native_provider"],
-                "native_session_id": row["native_session_id"],
-                "trace_count": int(trace_stats.get("trace_count", 0) or 0),
-                "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
-                "process_count": int(trace_stats.get("process_count", 0) or 0),
-            },
+            "meta": meta,
         }
 
     def _list_message_rows(
@@ -1144,7 +1158,8 @@ class ChatStore:
                     t.seq,
                     t.completion_state,
                     t.native_provider,
-                    t.native_session_id
+                    t.native_session_id,
+                    t.context_usage_json
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
                 WHERE m.conversation_id = ?
@@ -1172,6 +1187,7 @@ class ChatStore:
                 recent.completion_state,
                 recent.native_provider,
                 recent.native_session_id,
+                recent.context_usage_json,
                 recent.role_order
             FROM (
                 SELECT
@@ -1186,6 +1202,7 @@ class ChatStore:
                     t.completion_state,
                     t.native_provider,
                     t.native_session_id,
+                    t.context_usage_json,
                     CASE m.role WHEN 'user' THEN 0 ELSE 1 END AS role_order
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
@@ -1229,7 +1246,8 @@ class ChatStore:
                     m.updated_at,
                     t.completion_state,
                     t.native_provider,
-                    t.native_session_id
+                    t.native_session_id,
+                    t.context_usage_json
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
                 WHERE m.id = ?

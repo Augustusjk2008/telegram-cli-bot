@@ -132,6 +132,7 @@ from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
+from bot.web.cli_context_usage import resolve_cli_context_usage
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.native_history_locator import locate_kimi_transcript
@@ -4210,6 +4211,7 @@ async def _stream_cli_chat(
                 if completion_state == "completed" or should_force_error_output
                 else (response or latest_preview_text)
             )
+            context_usage = resolve_cli_context_usage(cli_type, native_session_id, cwd_hint=session.working_dir)
             complete_started_at = time.perf_counter()
             done_message = service.complete_turn(
                 turn_handle,
@@ -4218,6 +4220,7 @@ async def _stream_cli_chat(
                 native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
+                context_usage=context_usage,
             )
             assistant_stage_durations["db_ms"] += max(
                 0,
@@ -4633,6 +4636,7 @@ async def run_cli_chat(
                 native_session_id=native_session_id,
             )
             assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
+            context_usage = resolve_cli_context_usage(cli_type, native_session_id, cwd_hint=session.working_dir)
             complete_started_at = time.perf_counter()
             done_message = service.complete_turn(
                 turn_handle,
@@ -4645,6 +4649,7 @@ async def run_cli_chat(
                 native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else response,
+                context_usage=context_usage,
             )
             assistant_stage_durations["db_ms"] += max(
                 0,

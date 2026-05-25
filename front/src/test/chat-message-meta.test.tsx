@@ -39,6 +39,30 @@ test("shows date and time for messages from another day", () => {
   expect(screen.getByText(`${expectedDate} ${expectedTime}`)).toBeInTheDocument();
 });
 
+test("shows assistant context usage after time", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-05-08T15:30:00+08:00"));
+
+  render(<ChatMessageMeta
+    name="助手"
+    createdAt="2026-05-08T09:05:00+08:00"
+    contextUsage={{
+      provider: "codex",
+      source: "codex_session_token_count",
+      sessionId: "thread-1",
+      usedTokens: 76593,
+      contextWindow: 258400,
+      contextLeftPercent: 74,
+      usedDisplay: "76.6K",
+      windowDisplay: "258K",
+      statusText: "74% context left · 76.6K / 258K",
+    }}
+  />);
+
+  expect(screen.getByText("74% context left · 76.6K / 258K")).toBeInTheDocument();
+  expect(screen.getByTitle("76.6K used / 258K window")).toBeInTheDocument();
+});
+
 test("chat trace preview resolves defaults and valid env overrides", () => {
   expect(resolveChatTracePreviewConfig({})).toEqual({
     maxLines: 5,

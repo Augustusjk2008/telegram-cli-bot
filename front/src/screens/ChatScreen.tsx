@@ -460,6 +460,7 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
       trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length,
     ),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
+    contextUsage: incoming?.contextUsage || base?.contextUsage,
     trace,
   };
 
@@ -832,6 +833,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           createdAt={chatMessageDisplayTime(item)}
           align={isUser ? "right" : "left"}
           avatar={inlineAvatar}
+          contextUsage={!isUser ? item.meta?.contextUsage : undefined}
         />
         <div
           data-streaming={item.state === "streaming" ? "true" : "false"}

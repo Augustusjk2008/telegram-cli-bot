@@ -66,6 +66,7 @@ import type {
   ChatAttachmentUploadResult,
   ChatSendOptions,
   ChatMessage,
+  ChatMessageContextUsage,
   ChatTraceDetails,
   ChatMessageMetaInfo,
   ChatStatusUpdate,
@@ -341,6 +342,19 @@ type RawChatMessageMeta = {
     provider?: string;
     session_id?: string;
   };
+  context_usage?: RawChatMessageContextUsage | null;
+};
+
+type RawChatMessageContextUsage = {
+  provider?: string;
+  source?: string;
+  session_id?: string;
+  used_tokens?: number;
+  context_window?: number;
+  context_left_percent?: number;
+  used_display?: string;
+  window_display?: string;
+  status_text?: string;
 };
 
 type RawChatTraceDetails = {
@@ -1659,6 +1673,41 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
   return event;
 }
 
+function mapContextUsage(raw?: RawChatMessageContextUsage | null): ChatMessageContextUsage | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const contextUsage: ChatMessageContextUsage = {};
+  if (raw.provider) {
+    contextUsage.provider = raw.provider;
+  }
+  if (raw.source) {
+    contextUsage.source = raw.source;
+  }
+  if (raw.session_id) {
+    contextUsage.sessionId = raw.session_id;
+  }
+  if (typeof raw.used_tokens === "number") {
+    contextUsage.usedTokens = raw.used_tokens;
+  }
+  if (typeof raw.context_window === "number") {
+    contextUsage.contextWindow = raw.context_window;
+  }
+  if (typeof raw.context_left_percent === "number") {
+    contextUsage.contextLeftPercent = raw.context_left_percent;
+  }
+  if (raw.used_display) {
+    contextUsage.usedDisplay = raw.used_display;
+  }
+  if (raw.window_display) {
+    contextUsage.windowDisplay = raw.window_display;
+  }
+  if (raw.status_text) {
+    contextUsage.statusText = raw.status_text;
+  }
+  return Object.keys(contextUsage).length > 0 ? contextUsage : undefined;
+}
+
 function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | undefined {
   if (!raw) {
     return undefined;
@@ -1702,6 +1751,10 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
       provider: raw.native_source.provider || undefined,
       sessionId: raw.native_source.session_id || undefined,
     };
+  }
+  const contextUsage = mapContextUsage(raw.context_usage);
+  if (contextUsage) {
+    meta.contextUsage = contextUsage;
   }
 
   return Object.keys(meta).length > 0 ? meta : undefined;
@@ -1764,6 +1817,7 @@ function mergeMessageMeta(
     toolCallCount: maxDefinedNumber(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
     processCount: maxDefinedNumber(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
+    contextUsage: incoming?.contextUsage || base?.contextUsage,
     trace,
   };
 

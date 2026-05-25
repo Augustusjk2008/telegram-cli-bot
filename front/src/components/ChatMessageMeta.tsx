@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
+import type { ChatMessageContextUsage } from "../services/types";
 
 type Props = {
   name: string;
   createdAt: string;
   align?: "left" | "right";
   avatar?: ReactNode;
+  contextUsage?: ChatMessageContextUsage;
 };
 
 function formatTime(createdAt: string) {
@@ -33,7 +35,28 @@ function formatTime(createdAt: string) {
   return `${dateText} ${timeText}`;
 }
 
-export function ChatMessageMeta({ name, createdAt, align = "left", avatar }: Props) {
+function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
+  if (!contextUsage) {
+    return null;
+  }
+  const percent = typeof contextUsage.contextLeftPercent === "number"
+    ? `${contextUsage.contextLeftPercent}% context left`
+    : "";
+  const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
+    ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
+    : "";
+  const text = contextUsage.statusText || [percent, usage].filter(Boolean).join(" · ");
+  if (!text) {
+    return null;
+  }
+  const title = contextUsage.usedDisplay && contextUsage.windowDisplay
+    ? `${contextUsage.usedDisplay} used / ${contextUsage.windowDisplay} window`
+    : text;
+  return { text, title };
+}
+
+export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage }: Props) {
+  const context = formatContextUsage(contextUsage);
   return (
     <div
       className={align === "right"
@@ -43,6 +66,9 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar }: Pro
       {align === "left" ? avatar : null}
       <span className="max-w-[12rem] truncate text-[var(--text)]">{name}</span>
       <span className="text-[var(--muted)]">{formatTime(createdAt)}</span>
+      {context ? (
+        <span className="text-[var(--muted)]" title={context.title}>{context.text}</span>
+      ) : null}
       {align === "right" ? avatar : null}
     </div>
   );

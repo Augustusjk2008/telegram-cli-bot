@@ -6503,6 +6503,36 @@ async def test_run_cli_chat_persists_assistant_elapsed_seconds(web_manager: Mult
     assert data["message"]["role"] == "assistant"
     assert data["message"]["content"] == "完成回复"
 
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_includes_context_usage(web_manager: MultiBotManager):
+    fake_process = MagicMock()
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service.resolve_cli_context_usage", return_value=context_usage), \
+         patch(
+             "bot.web.api_service._communicate_codex_process",
+             new_callable=AsyncMock,
+             return_value=("完成回复", "thread-1", 0),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert data["message"]["meta"]["context_usage"] == context_usage
+
+
 @pytest.mark.asyncio
 async def test_run_cli_chat_suggests_new_conversation_for_codex_resume_upstream_error(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -8270,6 +8300,68 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
     assert trace_events[1]["event"]["kind"] == "tool_result"
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "目录已读取完成。"
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_done_message_includes_context_usage(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", return_value=context_usage), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["message"]["meta"]["context_usage"] == context_usage
 
 
 def test_codex_done_candidate_ignores_event_msg_commentary():

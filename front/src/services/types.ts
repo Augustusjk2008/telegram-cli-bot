@@ -507,6 +507,18 @@ export type ChatMessageNativeSource = {
   sessionId?: string;
 };
 
+export type ChatMessageContextUsage = {
+  provider?: string;
+  source?: string;
+  sessionId?: string;
+  usedTokens?: number;
+  contextWindow?: number;
+  contextLeftPercent?: number;
+  usedDisplay?: string;
+  windowDisplay?: string;
+  statusText?: string;
+};
+
 export type ChatMessageMetaInfo = {
   completionState?: string;
   summaryKind?: string;
@@ -516,6 +528,7 @@ export type ChatMessageMetaInfo = {
   processCount?: number;
   trace?: ChatTraceEvent[];
   nativeSource?: ChatMessageNativeSource;
+  contextUsage?: ChatMessageContextUsage;
 };
 
 export type ChatTraceDetails = {

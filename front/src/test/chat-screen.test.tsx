@@ -525,6 +525,49 @@ test("shows assistant completed message time from updatedAt", async () => {
   expect(screen.queryByText("10:01")).not.toBeInTheDocument();
 });
 
+test("does not show context usage on user messages", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-context",
+        role: "user",
+        text: "继续",
+        createdAt: "2026-05-08T10:00:00",
+        state: "done",
+        meta: {
+          contextUsage: {
+            contextLeftPercent: 74,
+            usedDisplay: "76.6K",
+            windowDisplay: "258K",
+            statusText: "74% context left · 76.6K / 258K",
+          },
+        },
+      },
+      {
+        id: "assistant-context",
+        role: "assistant",
+        text: "完成",
+        createdAt: "2026-05-08T10:01:00",
+        state: "done",
+        meta: {
+          contextUsage: {
+            contextLeftPercent: 74,
+            usedDisplay: "76.6K",
+            windowDisplay: "258K",
+            statusText: "74% context left · 76.6K / 258K",
+          },
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  expect(screen.getByText("74% context left · 76.6K / 258K")).toBeInTheDocument();
+  expect(screen.getAllByText("74% context left · 76.6K / 258K")).toHaveLength(1);
+});
+
 test("treats inactive history streaming rows as completed", async () => {
   const client = createClient({
     getBotOverview: async () => ({
