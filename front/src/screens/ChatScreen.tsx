@@ -31,6 +31,7 @@ import type {
   ConversationSummary,
   FileDownloadProgress,
   FileReadResult,
+  PromptPreset,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -2565,6 +2566,19 @@ export function ChatScreen({
     }
   }
 
+  const handleSavePromptPresets = useCallback(async (presets: PromptPreset[]) => {
+    const updated = await client.updateBotPromptPresets(botAlias, presets);
+    const nextPresets = updated.promptPresets || [];
+    setBotOverview((prev) => {
+      if (!prev || prev.alias !== botAlias) {
+        return prev;
+      }
+      const next = { ...prev, promptPresets: nextPresets };
+      botOverviewRef.current = next;
+      return next;
+    });
+  }, [botAlias, client]);
+
   const killTaskActive = isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
@@ -2579,6 +2593,9 @@ export function ChatScreen({
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
+  const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
+    ? botOverview.effectiveCapabilities.includes("admin_ops")
+    : true);
   const modelOptions = cliParams?.schema.model?.enum ?? [];
   const selectedModel = toModelOptionValue(cliParams?.params.model, modelOptions);
   const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
@@ -2868,6 +2885,9 @@ export function ChatScreen({
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
           placeholder={clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
+          promptPresets={botOverview?.promptPresets || []}
+          canManagePromptPresets={canManagePromptPresets}
+          onSavePromptPresets={handleSavePromptPresets}
         />
       </div>
 

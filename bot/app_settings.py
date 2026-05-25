@@ -17,6 +17,7 @@ from bot.cluster.config import (
     normalize_bot_cluster_config,
 )
 from bot.config import MANAGED_BOTS_FILE
+from bot.models import normalize_prompt_presets
 
 APP_SETTINGS_FILE = Path(MANAGED_BOTS_FILE).resolve().parent / ".web_admin_settings.json"
 _SETTINGS_LOCK = threading.Lock()
@@ -191,6 +192,10 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
         cluster = normalize_bot_cluster_config(value.get("cluster"))
         if cluster != BotClusterConfig():
             normalized["cluster"] = cluster.to_dict()
+
+    prompt_presets = normalize_prompt_presets(value.get("prompt_presets", value.get("promptPresets")))
+    if prompt_presets:
+        normalized["prompt_presets"] = prompt_presets
 
     return normalized
 

@@ -6,7 +6,7 @@
 
 import time
 
-from bot.models import BotProfile, UserSession
+from bot.models import BotProfile, UserSession, normalize_prompt_presets
 
 class TestBotProfile:
     """测试 BotProfile"""
@@ -21,6 +21,46 @@ class TestBotProfile:
         assert d["cli_path"] == "/usr/bin/claude"
         assert d["working_dir"] == "/work"
         assert d["enabled"] is False
+
+    def test_prompt_presets_round_trip_and_trim(self):
+        p = BotProfile.from_dict(
+            {
+                "alias": "sub1",
+                "prompt_presets": [
+                    {
+                        "id": " preset-1 ",
+                        "title": "  审查  ",
+                        "content": "  请审查代码  ",
+                        "ignored": True,
+                    }
+                ],
+            }
+        )
+
+        assert p.prompt_presets == [
+            {"id": "preset-1", "title": "审查", "content": "请审查代码"}
+        ]
+        assert BotProfile.from_dict(p.to_dict()).prompt_presets == p.prompt_presets
+
+    def test_prompt_presets_normalizer_enforces_limits(self):
+        items = [
+            {"id": f"id-{index}", "title": "T" * 100, "content": "C" * 13000}
+            for index in range(60)
+        ]
+
+        normalized = normalize_prompt_presets(items)
+
+        assert len(normalized) == 50
+        assert len(normalized[0]["title"]) == 80
+        assert len(normalized[0]["content"]) == 12000
+
+    def test_prompt_presets_strict_mode_rejects_blank_fields(self):
+        try:
+            normalize_prompt_presets([{"id": "p1", "title": "", "content": "内容"}], strict=True)
+        except ValueError as exc:
+            assert "标题不能为空" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
 
 class TestUserSession:
     """测试 UserSession"""

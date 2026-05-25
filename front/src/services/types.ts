@@ -170,6 +170,13 @@ export type BotSummary = {
   ownerUsername?: string;
   isOwnedByCurrentUser?: boolean;
   cluster?: BotClusterConfig;
+  promptPresets?: PromptPreset[];
+};
+
+export type PromptPreset = {
+  id: string;
+  title: string;
+  content: string;
 };
 
 export type AgentSummary = {
@@ -477,6 +484,9 @@ export type BotOverview = {
   busyAgentIds?: string[];
   busyAgentNames?: string[];
   busyAgentCount?: number;
+  canOperate?: boolean;
+  effectiveCapabilities?: Capability[];
+  promptPresets?: PromptPreset[];
 };
 
 export type ChatTraceEvent = {

@@ -648,6 +648,7 @@ def build_bot_summary(
         "cli_path": profile.cli_path,
         "working_dir": working_dir,
         "avatar_name": profile.avatar_name or "",
+        "prompt_presets": [dict(item) for item in profile.prompt_presets],
         "is_main": alias == manager.main_profile.alias,
         "status": run_status,
         "service_status": service_status,
@@ -5510,6 +5511,20 @@ async def update_bot_avatar(
 ) -> dict[str, Any]:
     resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=True)
     await manager.set_bot_avatar(alias, resolved_avatar_name)
+    return {"bot": build_bot_summary(manager, alias, user_id)}
+
+
+async def update_bot_prompt_presets(
+    manager: MultiBotManager,
+    alias: str,
+    presets: Any,
+    user_id: Optional[int] = None,
+) -> dict[str, Any]:
+    get_profile_or_raise(manager, alias)
+    try:
+        await manager.set_bot_prompt_presets(alias, presets)
+    except ValueError as exc:
+        _raise(400, "invalid_prompt_presets", str(exc))
     return {"bot": build_bot_summary(manager, alias, user_id)}
 
 

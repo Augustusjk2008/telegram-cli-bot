@@ -860,6 +860,55 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("maps and saves bot prompt presets", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({ user_id: 1001 }))
+      .mockResolvedValueOnce(jsonOk([
+        {
+          alias: "main",
+          cli_type: "codex",
+          status: "running",
+          working_dir: "C:\\workspace\\demo",
+          prompt_presets: [{ id: "review", title: "审查", content: "请审查代码" }],
+        },
+      ]))
+      .mockResolvedValueOnce(jsonOk({
+        bot: {
+          alias: "main",
+          cli_type: "codex",
+          status: "running",
+          working_dir: "C:\\workspace\\demo",
+          prompt_presets: [{ id: "plan", title: "方案", content: "请按方案执行" }],
+        },
+      }));
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    await expect(client.listBots()).resolves.toMatchObject([
+      {
+        alias: "main",
+        promptPresets: [{ id: "review", title: "审查", content: "请审查代码" }],
+      },
+    ]);
+    await expect(client.updateBotPromptPresets("main", [
+      { id: "plan", title: "方案", content: "请按方案执行" },
+    ])).resolves.toMatchObject({
+      alias: "main",
+      promptPresets: [{ id: "plan", title: "方案", content: "请按方案执行" }],
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/bots/main/prompt-presets",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          prompt_presets: [{ id: "plan", title: "方案", content: "请按方案执行" }],
+        }),
+      }),
+    );
+  });
+
   test("listBots marks assistant with queued runtime work as busy", async () => {
     fetchMock
       .mockResolvedValueOnce({

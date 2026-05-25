@@ -20,7 +20,7 @@ from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
-from bot.models import AgentProfile, BotProfile, GitCommitMessageCliConfig
+from bot.models import AgentProfile, BotProfile, GitCommitMessageCliConfig, normalize_prompt_presets
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
@@ -517,6 +517,19 @@ class MultiBotManager:
             app_settings.update_bot_avatar_name(normalized_alias, normalized_avatar_name, self.app_settings_file)
             if normalized_alias != self.main_profile.alias:
                 self._save_profiles()
+
+    async def set_bot_prompt_presets(self, alias: str, presets: Any) -> list[dict[str, str]]:
+        normalized_alias = str(alias or "").strip().lower()
+        normalized_presets = normalize_prompt_presets(presets, strict=True)
+
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            profile.prompt_presets = normalized_presets
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
+            return [dict(item) for item in normalized_presets]
 
     async def remove_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()

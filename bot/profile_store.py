@@ -13,7 +13,7 @@ from bot.cli import validate_cli_type
 from bot.cli_params import CliParamsConfig
 from bot.cluster.config import normalize_bot_cluster_config
 from bot.config import CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
-from bot.models import AgentProfile, BotProfile
+from bot.models import AgentProfile, BotProfile, normalize_prompt_presets
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,8 @@ def load_managed_profiles(
             profile_data["agents"] = item["agents"]
         if "cluster" in item:
             profile_data["cluster"] = item["cluster"]
+        if "prompt_presets" in item or "promptPresets" in item:
+            profile_data["prompt_presets"] = item.get("prompt_presets", item.get("promptPresets"))
         profiles[alias] = BotProfile.from_dict(profile_data)
 
     assistant_aliases = [alias for alias, profile in profiles.items() if profile.bot_mode == "assistant"]
@@ -153,7 +155,9 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
     if isinstance(cluster, dict):
         main_profile.cluster = normalize_bot_cluster_config(cluster)
 
+    if "prompt_presets" in profile_data:
+        main_profile.prompt_presets = normalize_prompt_presets(profile_data.get("prompt_presets"))
+
 
 def persist_main_profile(main_profile: BotProfile, app_settings_file: Path) -> None:
     app_settings.update_main_bot_profile(main_profile.to_dict(), app_settings_file)
-

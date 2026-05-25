@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ChatComposer } from "../components/ChatComposer";
@@ -82,4 +82,83 @@ test("typing at in cluster mode opens agent picker", async () => {
   await user.click(await screen.findByRole("option", { name: "@reviewer 代码审查" }));
 
   expect(input).toHaveValue("@reviewer ");
+});
+
+test("can expand and collapse the message textarea", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <ChatComposer
+      onSend={() => {}}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+    />,
+  );
+
+  const input = screen.getByPlaceholderText("输入消息") as HTMLTextAreaElement;
+  expect(input.rows).toBe(1);
+
+  await user.click(screen.getByRole("button", { name: "展开输入框" }));
+  expect(input.rows).toBe(6);
+
+  await user.click(screen.getByRole("button", { name: "收起输入框" }));
+  expect(input.rows).toBe(1);
+});
+
+test("inserts a prompt preset at the cursor", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <ChatComposer
+      onSend={() => {}}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      promptPresets={[{ id: "review", title: "审查", content: "请审查" }]}
+    />,
+  );
+
+  const input = screen.getByPlaceholderText("输入消息") as HTMLTextAreaElement;
+  await user.type(input, "前后");
+  input.setSelectionRange(1, 1);
+  fireEvent.select(input);
+
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  await user.click(screen.getByText("审查"));
+
+  expect(input).toHaveValue("前请审查后");
+});
+
+test("saves prompt preset edits from the config dialog", async () => {
+  const user = userEvent.setup();
+  const onSavePromptPresets = vi.fn(async () => {});
+
+  render(
+    <ChatComposer
+      onSend={() => {}}
+      onAttachFiles={() => {}}
+      onRemoveAttachment={() => {}}
+      attachments={[]}
+      canManagePromptPresets
+      onSavePromptPresets={onSavePromptPresets}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  await user.click(screen.getByRole("button", { name: "配置预设" }));
+  await user.click(screen.getByRole("button", { name: "新增预设" }));
+  await user.type(screen.getByLabelText("预设标题 1"), "方案执行");
+  await user.type(screen.getByLabelText("预设内容 1"), "请按方案执行");
+  await user.click(screen.getByRole("button", { name: "保存预设" }));
+
+  await waitFor(() => {
+    expect(onSavePromptPresets).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "方案执行",
+        content: "请按方案执行",
+      }),
+    ]);
+  });
+  expect(screen.queryByRole("dialog", { name: "配置提示词预设" })).not.toBeInTheDocument();
 });

@@ -24,6 +24,54 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 PersistHook = Callable[["UserSession"], None]
 SESSION_PERSIST_DEBOUNCE_SECONDS = 0.25
+PROMPT_PRESET_MAX_ITEMS = 50
+PROMPT_PRESET_TITLE_MAX_LENGTH = 80
+PROMPT_PRESET_CONTENT_MAX_LENGTH = 12000
+PROMPT_PRESET_ID_MAX_LENGTH = 128
+
+
+def normalize_prompt_presets(value: Any, *, strict: bool = False) -> list[dict[str, str]]:
+    """规范化聊天预设提示词。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        if strict:
+            raise ValueError("prompt_presets 必须是数组")
+        return []
+
+    normalized: list[dict[str, str]] = []
+    for item in value:
+        if len(normalized) >= PROMPT_PRESET_MAX_ITEMS:
+            break
+        if not isinstance(item, dict):
+            if strict:
+                raise ValueError("预设提示词必须是对象")
+            continue
+
+        preset_id = str(item.get("id") or "").strip()
+        title = str(item.get("title") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if not preset_id:
+            if strict:
+                raise ValueError("预设 ID 不能为空")
+            continue
+        if not title:
+            if strict:
+                raise ValueError("预设标题不能为空")
+            continue
+        if not content:
+            if strict:
+                raise ValueError("预设内容不能为空")
+            continue
+
+        normalized.append(
+            {
+                "id": preset_id[:PROMPT_PRESET_ID_MAX_LENGTH],
+                "title": title[:PROMPT_PRESET_TITLE_MAX_LENGTH],
+                "content": content[:PROMPT_PRESET_CONTENT_MAX_LENGTH],
+            }
+        )
+    return normalized
 
 
 @dataclass
@@ -103,6 +151,7 @@ class BotProfile:
     git_commit_cli_config: Optional[GitCommitMessageCliConfig] = None
     agents: List[AgentProfile] = field(default_factory=list)
     cluster: BotClusterConfig = field(default_factory=BotClusterConfig)
+    prompt_presets: List[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         result = {
@@ -132,6 +181,9 @@ class BotProfile:
             result["agents"] = child_agents
         if self.cluster != BotClusterConfig():
             result["cluster"] = self.cluster.to_dict()
+        prompt_presets = normalize_prompt_presets(self.prompt_presets)
+        if prompt_presets:
+            result["prompt_presets"] = prompt_presets
         return result
 
     def normalized_agents(self) -> list[AgentProfile]:
@@ -170,6 +222,7 @@ class BotProfile:
             cli_params=cli_params,
             agents=agents,
             cluster=normalize_bot_cluster_config(data.get("cluster")),
+            prompt_presets=normalize_prompt_presets(data.get("prompt_presets", data.get("promptPresets"))),
         )
 
 

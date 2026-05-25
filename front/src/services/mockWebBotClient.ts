@@ -116,6 +116,7 @@ import type {
   PluginAction,
   PluginActionInvokeInput,
   PluginActionResult,
+  PromptPreset,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
   PluginRenderResult,
@@ -841,6 +842,10 @@ function clonePluginActions(actions: PluginAction[] | undefined) {
   }));
 }
 
+function clonePromptPresets(presets: PromptPreset[] = []) {
+  return presets.map((preset) => ({ ...preset }));
+}
+
 function buildMockTimingRows(offset: number, limit: number, query = "", sort?: { columnId?: string; direction?: string }) {
   let rows = TIMING_ROWS.filter((row) =>
     !query.trim() || String(row.cells.endpoint || "").toLowerCase().includes(query.trim().toLowerCase()),
@@ -1261,6 +1266,7 @@ export class MockWebBotClient implements WebBotClient {
         busyAgentIds: [],
         busyAgentNames: [],
         busyAgentCount: item.status === "busy" ? 1 : 0,
+        promptPresets: clonePromptPresets(item.promptPresets),
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -2074,6 +2080,7 @@ export class MockWebBotClient implements WebBotClient {
         botMode: "cli",
         enabled: true,
         isMain: false,
+        promptPresets: [],
         cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
       };
     }
@@ -2097,6 +2104,7 @@ export class MockWebBotClient implements WebBotClient {
       ownerAccountId,
       ownerUsername: base.ownerUsername || this.adminUsers.get(ownerAccountId)?.username || "",
       isOwnedByCurrentUser: ownerAccountId !== "" && ownerAccountId === this.currentAccountId(),
+      promptPresets: clonePromptPresets(base.promptPresets),
       cluster: base.cluster
         ? { ...base.cluster, modelTiers: { ...base.cluster.modelTiers } }
         : { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
@@ -5267,6 +5275,18 @@ export class MockWebBotClient implements WebBotClient {
     this.bots.set(botAlias, {
       ...current,
       avatarName: avatarName.trim(),
+    });
+    return this.getBotSummary(botAlias);
+  }
+
+  async updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权保存提示词预设", { status: 403, code: "forbidden" });
+    }
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      promptPresets: clonePromptPresets(presets),
     });
     return this.getBotSummary(botAlias);
   }

@@ -133,6 +133,7 @@ import type {
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
+  PromptPreset,
   PersistentTerminalSnapshot,
   PublicHostInfo,
   RegisterCodeCreateResult,
@@ -214,6 +215,14 @@ type RawBotSummary = {
   is_owned_by_current_user?: boolean;
   isOwnedByCurrentUser?: boolean;
   cluster?: Record<string, unknown>;
+  prompt_presets?: RawPromptPreset[];
+  promptPresets?: RawPromptPreset[];
+};
+
+type RawPromptPreset = {
+  id?: unknown;
+  title?: unknown;
+  content?: unknown;
 };
 
 type RawAgentSummary = {
@@ -1157,6 +1166,28 @@ function mapStatusText(status: BotStatus): string {
   return "运行中";
 }
 
+function mapPromptPresets(raw: unknown): PromptPreset[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.map((item, index) => {
+    const value = item && typeof item === "object" ? item as RawPromptPreset : {};
+    return {
+      id: String(value.id || `preset-${index + 1}`),
+      title: String(value.title || ""),
+      content: String(value.content || ""),
+    };
+  }).filter((item) => item.title.trim() && item.content.trim());
+}
+
+function serializePromptPresets(presets: PromptPreset[]) {
+  return presets.map((preset) => ({
+    id: preset.id,
+    title: preset.title,
+    content: preset.content,
+  }));
+}
+
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const hasPendingAssistantRun = Number(raw.assistant_runtime?.pending_count || 0) > 0;
   const busyAgentIds = (raw.busy_agent_ids ?? raw.busyAgentIds ?? []).map((item) => String(item));
@@ -1193,6 +1224,10 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   }
   if (raw.cluster) {
     summary.cluster = mapBotClusterConfig(raw.cluster);
+  }
+  const rawPromptPresets = raw.prompt_presets ?? raw.promptPresets;
+  if (Array.isArray(rawPromptPresets)) {
+    summary.promptPresets = mapPromptPresets(rawPromptPresets);
   }
   if (raw.cli_path) {
     summary.cliPath = raw.cli_path;
@@ -5016,6 +5051,17 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ avatar_name: avatarName }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/prompt-presets`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt_presets: serializePromptPresets(presets) }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }

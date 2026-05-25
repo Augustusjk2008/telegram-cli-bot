@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview } from "../services/types";
+import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
@@ -3330,5 +3330,81 @@ test("assistant queued send keeps the pending row visible while runtime queue is
 
   await act(async () => {
     await Promise.resolve();
+  });
+});
+
+test("prompt presets save into current overview cache and stay bot scoped", async () => {
+  const user = userEvent.setup();
+  const presetsByBot: Record<string, PromptPreset[]> = {
+    main: [{ id: "main-1", title: "主预设", content: "主内容" }],
+    team2: [{ id: "team-1", title: "团队预设", content: "团队内容" }],
+  };
+  const overviewFor = (botAlias: string): BotOverview => ({
+    alias: botAlias,
+    cliType: "codex",
+    status: "running",
+    workingDir: botAlias === "team2" ? "C:\\team2" : "C:\\workspace",
+    isProcessing: false,
+    effectiveCapabilities: ["admin_ops"],
+    promptPresets: presetsByBot[botAlias].map((preset) => ({ ...preset })),
+  });
+  const updateBotPromptPresets = vi.fn(async (botAlias: string, presets: PromptPreset[]) => {
+    presetsByBot[botAlias] = presets.map((preset) => ({ ...preset }));
+    return {
+      alias: botAlias,
+      cliType: "codex" as const,
+      status: "running" as const,
+      workingDir: overviewFor(botAlias).workingDir,
+      lastActiveText: "运行中",
+      promptPresets: presetsByBot[botAlias].map((preset) => ({ ...preset })),
+    };
+  });
+  const client = createClient({
+    getBotOverview: async (botAlias: string) => overviewFor(botAlias),
+    updateBotPromptPresets,
+  });
+
+  const { rerender } = render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByPlaceholderText("输入消息");
+
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  await user.click(screen.getByRole("button", { name: "配置预设" }));
+  await user.click(screen.getByRole("button", { name: "新增预设" }));
+  await user.type(screen.getByLabelText("预设标题 2"), "补充");
+  await user.type(screen.getByLabelText("预设内容 2"), "补充内容");
+  await user.click(screen.getByRole("button", { name: "保存预设" }));
+
+  await waitFor(() => {
+    expect(updateBotPromptPresets).toHaveBeenCalledWith("main", [
+      expect.objectContaining({ title: "主预设", content: "主内容" }),
+      expect.objectContaining({ title: "补充", content: "补充内容" }),
+    ]);
+  });
+
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  expect(screen.getByText("补充")).toBeInTheDocument();
+  await user.click(screen.getByText("补充"));
+  expect(screen.getByRole("textbox")).toHaveValue("补充内容");
+
+  rerender(<ChatScreen botAlias="team2" client={client} />);
+  await waitFor(() => {
+    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+  });
+  await user.click(screen.getByRole("button", { name: "打开提示词预设" }));
+  expect(screen.getByText("团队预设")).toBeInTheDocument();
+  expect(screen.queryByText("补充")).not.toBeInTheDocument();
+});
+
+test("mock client stores prompt presets independently per bot", async () => {
+  const client = new MockWebBotClient();
+
+  await client.updateBotPromptPresets("main", [{ id: "main", title: "主预设", content: "主内容" }]);
+  await client.updateBotPromptPresets("team2", [{ id: "team", title: "团队预设", content: "团队内容" }]);
+
+  await expect(client.getBotOverview("main")).resolves.toMatchObject({
+    promptPresets: [{ id: "main", title: "主预设", content: "主内容" }],
+  });
+  await expect(client.getBotOverview("team2")).resolves.toMatchObject({
+    promptPresets: [{ id: "team", title: "团队预设", content: "团队内容" }],
   });
 });

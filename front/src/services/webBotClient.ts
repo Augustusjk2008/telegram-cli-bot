@@ -112,6 +112,7 @@ import type {
   PluginUpdateInput,
   PluginActionInvokeInput,
   PluginActionResult,
+  PromptPreset,
   RegisterCodeCreateResult,
   RegisterCodeItem,
   SessionState,
@@ -164,6 +165,7 @@ export interface WebBotClient {
   getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus>;
   prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult>;
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
+  updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary>;
   getClusterTemplates(botAlias: string): Promise<ClusterTemplateListResult>;
   getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult>;
   previewClusterTemplate(botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult>;

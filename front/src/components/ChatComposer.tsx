@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
-import { LoaderCircle, Paperclip, X } from "lucide-react";
-import type { AgentMention, AgentSummary } from "../services/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, LoaderCircle, Maximize2, Minimize2, Paperclip, Plus, Settings, Trash2, X } from "lucide-react";
+import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
 
 type ComposerAttachment = {
   id: string;
@@ -20,6 +20,9 @@ type Props = {
   pulse?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
+  promptPresets?: PromptPreset[];
+  canManagePromptPresets?: boolean;
+  onSavePromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
 };
 
 function collectMentions(text: string, agents: AgentSummary[] = []): AgentMention[] {
@@ -63,6 +66,9 @@ export function ChatComposer({
   pulse = false,
   uploadingAttachments = false,
   placeholder = "输入消息",
+  promptPresets = [],
+  canManagePromptPresets = false,
+  onSavePromptPresets,
 }: Props) {
   const shellClassName = compact
     ? "chat-composer-delight border-t border-[var(--border)] bg-[var(--surface-strong)] px-2 py-2"
@@ -70,8 +76,15 @@ export function ChatComposer({
   const formClassName = compact ? "flex items-end gap-2" : "flex items-end gap-2";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const [presetEditorOpen, setPresetEditorOpen] = useState(false);
+  const [draftPresets, setDraftPresets] = useState<PromptPreset[]>([]);
+  const [presetSaving, setPresetSaving] = useState(false);
+  const [presetError, setPresetError] = useState("");
   const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const presetIdCounterRef = useRef(1);
   const clusterAgents = useMemo(
     () => agents.filter((agent) => agent.enabled && !agent.isMain),
     [agents],
@@ -85,10 +98,83 @@ export function ChatComposer({
       return agent.id.toLowerCase().includes(query) || agent.name.toLowerCase().includes(query);
     }).slice(0, 8);
   }, [clusterAgents, clusterMode, mentionQuery]);
+  const showPromptPresetControls = promptPresets.length > 0 || canManagePromptPresets;
 
   function updateMessage(next: string, cursor: number) {
     setMessage(next);
     setMentionQuery(clusterMode ? getMentionQuery(next, cursor) : null);
+  }
+
+  useEffect(() => {
+    if (inputDisabled) {
+      setPresetMenuOpen(false);
+    }
+  }, [inputDisabled]);
+
+  function focusTextarea(cursor: number) {
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function insertTextAtCursor(content: string) {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? message.length;
+    const end = textarea?.selectionEnd ?? start;
+    const next = `${message.slice(0, start)}${content}${message.slice(end)}`;
+    const cursor = start + content.length;
+    updateMessage(next, cursor);
+    setPresetMenuOpen(false);
+    focusTextarea(cursor);
+  }
+
+  function openPresetEditor() {
+    setDraftPresets(promptPresets.map((preset) => ({ ...preset })));
+    setPresetError("");
+    setPresetMenuOpen(false);
+    setPresetEditorOpen(true);
+  }
+
+  function updateDraftPreset(index: number, patch: Partial<PromptPreset>) {
+    setDraftPresets((current) => current.map((preset, itemIndex) => (
+      itemIndex === index ? { ...preset, ...patch } : preset
+    )));
+  }
+
+  function addDraftPreset() {
+    if (draftPresets.length >= 50) {
+      return;
+    }
+    const id = `preset-${Date.now().toString(36)}-${presetIdCounterRef.current}`;
+    presetIdCounterRef.current += 1;
+    setDraftPresets((current) => [...current, { id, title: "", content: "" }]);
+  }
+
+  function removeDraftPreset(index: number) {
+    setDraftPresets((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  async function saveDraftPresets() {
+    const normalized = draftPresets.map((preset) => ({
+      id: preset.id.trim() || `preset-${Date.now().toString(36)}`,
+      title: preset.title.trim(),
+      content: preset.content,
+    }));
+    if (normalized.some((preset) => !preset.title || !preset.content.trim())) {
+      setPresetError("标题和内容不能为空");
+      return;
+    }
+    setPresetSaving(true);
+    setPresetError("");
+    try {
+      await onSavePromptPresets?.(normalized);
+      setPresetEditorOpen(false);
+    } catch (err) {
+      setPresetError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setPresetSaving(false);
+    }
   }
 
   function insertMention(agent: AgentSummary) {
@@ -102,11 +188,7 @@ export function ChatComposer({
       : `${current}${prefix}${token}`;
     setMessage(next);
     setMentionQuery(null);
-    requestAnimationFrame(() => {
-      const cursor = (range ? range.start : current.length + prefix.length) + token.length;
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(cursor, cursor);
-    });
+    focusTextarea((range ? range.start : current.length + prefix.length) + token.length);
   }
 
   return (
@@ -190,13 +272,66 @@ export function ChatComposer({
             }}
           />
         </label>
+        {showPromptPresetControls ? (
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              aria-label="打开提示词预设"
+              aria-expanded={presetMenuOpen}
+              disabled={inputDisabled}
+              onClick={() => setPresetMenuOpen((value) => !value)}
+              className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+            >
+              <span>预设</span>
+              <ChevronDown className="h-4 w-4" />
+            </button>
+            {presetMenuOpen ? (
+              <div
+                role="listbox"
+                aria-label="提示词预设"
+                className="absolute bottom-full left-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+              >
+                {promptPresets.length > 0 ? (
+                  <div className="max-h-64 overflow-y-auto">
+                    {promptPresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        role="option"
+                        aria-selected={false}
+                        title={preset.content}
+                        onClick={() => insertTextAtCursor(preset.content)}
+                        className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                      >
+                        <span className="block truncate font-medium text-[var(--text)]">{preset.title}</span>
+                        <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">{preset.content}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-3 py-2 text-sm text-[var(--muted)]">暂无预设</div>
+                )}
+                {canManagePromptPresets ? (
+                  <button
+                    type="button"
+                    onClick={openPresetEditor}
+                    className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                  >
+                    <Settings className="h-4 w-4 text-[var(--muted)]" />
+                    配置预设
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="relative flex-1">
           <textarea
             ref={textareaRef}
             name="message"
             value={message}
             placeholder={placeholder}
-            rows={1}
+            rows={expanded ? 6 : 1}
             disabled={inputDisabled}
             onChange={(event) => updateMessage(event.currentTarget.value, event.currentTarget.selectionStart)}
             onSelect={(event) => {
@@ -223,7 +358,9 @@ export function ChatComposer({
               }
               form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             }}
-            className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"
+            className={expanded
+              ? "max-h-72 w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"
+              : "w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"}
           />
           {mentionOptions.length > 0 ? (
             <div
@@ -249,6 +386,16 @@ export function ChatComposer({
           ) : null}
         </div>
         <button
+          type="button"
+          aria-label={expanded ? "收起输入框" : "展开输入框"}
+          title={expanded ? "收起输入框" : "展开输入框"}
+          onClick={() => setExpanded((value) => !value)}
+          disabled={inputDisabled}
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+        >
+          {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </button>
+        <button
           type="submit"
           disabled={inputDisabled}
           className={compact
@@ -258,6 +405,106 @@ export function ChatComposer({
           {uploadingAttachments ? "上传中..." : "发送"}
         </button>
       </form>
+      {presetEditorOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 py-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="配置提示词预设"
+            className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)]"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">提示词预设</h2>
+                <p className="mt-0.5 text-xs text-[var(--muted)]">{draftPresets.length}/50</p>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭提示词预设配置"
+                onClick={() => setPresetEditorOpen(false)}
+                disabled={presetSaving}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)] disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+              {draftPresets.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[var(--border)] px-4 py-8 text-center text-sm text-[var(--muted)]">
+                  暂无预设
+                </div>
+              ) : null}
+              {draftPresets.map((preset, index) => (
+                <div key={preset.id || index} className="rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-3">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <label className="block text-sm font-medium text-[var(--text)]">
+                        {`预设标题 ${index + 1}`}
+                        <input
+                          value={preset.title}
+                          maxLength={80}
+                          onChange={(event) => updateDraftPreset(index, { title: event.currentTarget.value })}
+                          className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-[var(--text)]">
+                        {`预设内容 ${index + 1}`}
+                        <textarea
+                          value={preset.content}
+                          maxLength={12000}
+                          rows={4}
+                          onChange={(event) => updateDraftPreset(index, { content: event.currentTarget.value })}
+                          className="mt-1 max-h-56 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+                        />
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`删除预设 ${preset.title || index + 1}`}
+                      onClick={() => removeDraftPreset(index)}
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-red-50 hover:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {presetError ? (
+              <div className="border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{presetError}</div>
+            ) : null}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
+              <button
+                type="button"
+                onClick={addDraftPreset}
+                disabled={presetSaving || draftPresets.length >= 50}
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+                新增预设
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPresetEditorOpen(false)}
+                  disabled={presetSaving}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveDraftPresets()}
+                  disabled={presetSaving}
+                  className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-50"
+                >
+                  {presetSaving ? "保存中..." : "保存预设"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
