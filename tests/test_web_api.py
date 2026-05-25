@@ -5565,7 +5565,8 @@ async def test_web_server_start_schedules_auto_update_refresh_when_enabled(web_m
     server = WebApiServer(web_manager)
     created_coroutines: list[Any] = []
 
-    def fake_create_task(coro):
+    def fake_create_task(coro, *args, **kwargs):
+        _ = args, kwargs
         created_coroutines.append(coro)
         coro.close()
         return MagicMock()
