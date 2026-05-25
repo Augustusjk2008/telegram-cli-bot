@@ -104,6 +104,7 @@ type Props = {
   userAvatarName?: string;
   client?: WebBotClient;
   structureOnly?: boolean;
+  canOpenSystemFolder?: boolean;
   chatReadOnly?: boolean;
   botCanOperate?: boolean;
   allowTrace?: boolean;
@@ -141,6 +142,7 @@ export function DesktopWorkbench({
   botAlias,
   userAvatarName,
   structureOnly = false,
+  canOpenSystemFolder = false,
   chatReadOnly = false,
   botCanOperate = true,
   allowTrace = true,
@@ -735,6 +737,10 @@ export function DesktopWorkbench({
     await refreshGitDecorations();
   }
 
+  async function handleOpenSystemFolder() {
+    await client.openBotWorkdir(botAlias);
+  }
+
   function renderSidebarContent() {
     if (structureOnly || activeSidebarView === "files") {
       return (
@@ -763,6 +769,7 @@ export function DesktopWorkbench({
           }}
           onRequestUpload={handleUpload}
           onRequestHome={handleFileTreeHome}
+          onRequestOpenSystemFolder={canOpenSystemFolder ? handleOpenSystemFolder : undefined}
           gitDecorations={gitDecorations}
           onRefreshGitDecorations={refreshGitDecorations}
           onRequestSetWorkdir={(path) => {

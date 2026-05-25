@@ -448,6 +448,38 @@ test("desktop file tree home button resets to the bot working directory", async 
   expect(screen.getByRole("button", { name: "打开 root.txt" })).toBeInTheDocument();
 });
 
+test("desktop local admin can open the bot workdir in system folder", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 12 }],
+  });
+  const openBotWorkdir = vi.spyOn(client, "openBotWorkdir").mockResolvedValue({
+    opened: true,
+    path: "/workspace",
+    platform: "windows",
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      canOpenSystemFolder
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "在系统文件夹中打开" }));
+
+  expect(openBotWorkdir).toHaveBeenCalledWith("main");
+});
+
 test("clicking desktop file tree rows marks exactly one selected row", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

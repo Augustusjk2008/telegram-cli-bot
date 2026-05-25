@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { FilePlus, FolderPlus, House, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
+import { FilePlus, FolderOpen, FolderPlus, House, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
@@ -17,6 +17,7 @@ type Props = {
   onRequestDiff?: (path: string, absolutePath: string) => void | Promise<void>;
   onRequestUpload: (files: File[]) => Promise<void>;
   onRequestHome: () => Promise<void>;
+  onRequestOpenSystemFolder?: () => Promise<void>;
   gitDecorations: Record<string, GitTreeDecorationKind>;
   onRefreshGitDecorations: () => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
@@ -888,6 +889,7 @@ export function FileTreePane({
   onRequestDiff,
   onRequestUpload,
   onRequestHome,
+  onRequestOpenSystemFolder,
   gitDecorations,
   onRefreshGitDecorations,
   onRequestSetWorkdir,
@@ -1150,6 +1152,18 @@ export function FileTreePane({
     }
   }
 
+  async function handleOpenSystemFolder() {
+    if (!onRequestOpenSystemFolder) {
+      return;
+    }
+    setActionError("");
+    try {
+      await onRequestOpenSystemFolder();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "打开系统文件夹失败");
+    }
+  }
+
   function flattenBranch(entries: FileTreeNode[], depth: number): FileTreeVisibleRow[] {
     const rows: FileTreeVisibleRow[] = [];
     for (const entry of entries) {
@@ -1360,6 +1374,17 @@ export function FileTreePane({
           >
             <House className="h-3.5 w-3.5" />
           </button>
+          {!structureOnly && onRequestOpenSystemFolder ? (
+            <button
+              type="button"
+              aria-label="在系统文件夹中打开"
+              title="在系统文件夹中打开"
+              onClick={() => void handleOpenSystemFolder()}
+              className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label="刷新文件树"

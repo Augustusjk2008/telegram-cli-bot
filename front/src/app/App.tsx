@@ -971,6 +971,7 @@ export function App() {
             userAvatarName={userAvatarName}
             client={client}
             structureOnly={structureOnly}
+            canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops")}
             chatReadOnly={chatReadOnly || !canOperateCurrentBot}
             botCanOperate={canOperateCurrentBot}
             allowTrace={allowTrace}
