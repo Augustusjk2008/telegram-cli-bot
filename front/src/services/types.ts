@@ -1389,6 +1389,7 @@ export type SessionState = {
   capabilities: Capability[];
   tokenProtected?: boolean;
   allowedUserIds?: number[];
+  isLocalAdmin?: boolean;
 };
 
 export type PersistentTerminalSnapshot = {
@@ -1514,6 +1515,12 @@ export type DirectoryListing = {
   workingDir: string;
   entries: FileEntry[];
   isVirtualRoot?: boolean;
+};
+
+export type BotWorkdirOpenResult = {
+  opened: boolean;
+  path: string;
+  platform: string;
 };
 
 export type FileTreeRevealResult = {

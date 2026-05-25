@@ -5,6 +5,7 @@ import type {
   AnnouncementListResult,
   CreateAnnouncementInput,
   BotOverview,
+  BotWorkdirOpenResult,
   BotSummary,
   AgentInput,
   AgentListResult,
@@ -198,6 +199,7 @@ export interface WebBotClient {
   runTerminalAction(botAlias: string, actionId: string, input: TerminalActionRunInput): Promise<TerminalActionRunResult>;
   getCurrentPath(botAlias: string): Promise<string>;
   listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
+  openBotWorkdir(botAlias: string): Promise<BotWorkdirOpenResult>;
   revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult>;
   changeDirectory(botAlias: string, path: string): Promise<string>;
   createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void>;

@@ -4290,6 +4290,133 @@ async def test_files_reveal_route_returns_root_and_ancestor_branches(
 
 
 @pytest.mark.asyncio
+async def test_open_workdir_route_allows_loopback_local_admin(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    web_manager.main_profile.working_dir = str(workspace)
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+    opened: list[str] = []
+
+    def fake_open(path: str):
+        opened.append(path)
+        return {"opened": True, "path": path, "platform": "windows"}
+
+    monkeypatch.setattr("bot.web.server.open_directory_in_desktop", fake_open)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/open-workdir")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"] == {"opened": True, "path": str(workspace), "platform": "windows"}
+    assert opened == [str(workspace)]
+
+
+@pytest.mark.asyncio
+async def test_open_workdir_route_rejects_non_loopback(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/open-workdir", headers={"Authorization": "Bearer secret"})
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "loopback_required"
+
+
+@pytest.mark.asyncio
+async def test_open_workdir_route_rejects_non_local_admin(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", isolated_web_auth_store)
+    invite = isolated_web_auth_store.create_register_code(created_by="local-admin", code="INVITE-OPEN")
+    session = isolated_web_auth_store.register_member("alice", "pw-123", invite["code"])
+    permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
+    permissions.set_allowed_bots(session.account.account_id, ["main"])
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post(
+                "/api/bots/main/files/open-workdir",
+                headers={"Authorization": f"Bearer {session.token}", "Host": "example.test"},
+            )
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "local_admin_required"
+
+
+@pytest.mark.asyncio
+async def test_open_workdir_route_returns_not_found_for_missing_workdir(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    missing = temp_dir / "missing"
+    web_manager.main_profile.working_dir = str(missing)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(missing)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/bots/main/files/open-workdir")
+            payload = await resp.json()
+
+    assert resp.status == 404
+    assert payload["error"]["code"] == "working_dir_not_found"
+
+
+def test_linux_open_directory_without_desktop_returns_conflict(monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+    from bot.web.os_open_service import DesktopOpenError, open_directory_in_desktop
+
+    monkeypatch.setattr("bot.web.os_open_service.sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    with pytest.raises(DesktopOpenError) as exc_info:
+        open_directory_in_desktop(temp_dir)
+
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "desktop_open_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_create_text_file_route_invalidates_workspace_indexes(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

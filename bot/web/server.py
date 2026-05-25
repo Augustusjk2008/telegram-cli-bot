@@ -63,6 +63,7 @@ from .diagnostics import diag_enabled, diag_log_slow, diag_loop_lag_ms
 from .env_service import EnvConfigService, EnvValidationError
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
+from .os_open_service import DesktopOpenError, open_directory_in_desktop
 from .pushplus_client import PushPlusClient
 from .auth_store import (
     AuthStoreError,
@@ -2650,6 +2651,20 @@ class WebApiServer:
             body.get("name", ""),
             parent_path=body.get("parent_path"),
         )
+        return _json({"ok": True, "data": data})
+
+    async def open_workdir_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        if not self._is_local_admin(auth):
+            raise WebApiError(403, "local_admin_required", "仅本地管理员可打开系统文件夹")
+        if not _is_loopback_request(request):
+            raise WebApiError(403, "loopback_required", "仅本机访问可打开系统文件夹")
+        alias = self._manager_alias(request)
+        working_dir = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        try:
+            data = open_directory_in_desktop(working_dir)
+        except DesktopOpenError as exc:
+            raise WebApiError(exc.status, exc.code, exc.message) from exc
         return _json({"ok": True, "data": data})
 
     async def post_files_reveal(self, request: web.Request) -> web.Response:

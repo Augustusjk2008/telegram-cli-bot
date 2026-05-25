@@ -50,6 +50,7 @@ import type {
   ConversationSummary,
   CreateAssistantCronJobInput,
   BotOverview,
+  BotWorkdirOpenResult,
   BotSummary,
   ChatAttachmentDeleteResult,
   ChatAttachmentUploadResult,
@@ -1711,6 +1712,7 @@ export class MockWebBotClient implements WebBotClient {
     username: "demo",
     role: "member",
     capabilities: [...MEMBER_CAPABILITIES],
+    isLocalAdmin: false,
   };
   private lanChatConfig: LanChatConfig = {
     mode: "host",
@@ -2579,6 +2581,7 @@ export class MockWebBotClient implements WebBotClient {
       username,
       role: "member",
       capabilities: resolveMemberCapabilities(username),
+      isLocalAdmin: username === "127.0.0.1",
     };
     this.ensureAdminUser(this.currentAccountId(), username);
     return { ...this.session };
@@ -2595,6 +2598,7 @@ export class MockWebBotClient implements WebBotClient {
       username: input.username,
       role: "member",
       capabilities: resolveMemberCapabilities(input.username),
+      isLocalAdmin: input.username === "127.0.0.1",
     };
     this.ensureAdminUser(this.currentAccountId(), input.username);
     return { ...this.session };
@@ -2611,6 +2615,7 @@ export class MockWebBotClient implements WebBotClient {
       username: "guest",
       role: "guest",
       capabilities: [...GUEST_CAPABILITIES],
+      isLocalAdmin: false,
     };
     return { ...this.session };
   }
@@ -2631,6 +2636,7 @@ export class MockWebBotClient implements WebBotClient {
       username: "",
       role: "guest",
       capabilities: [],
+      isLocalAdmin: false,
     };
   }
 
@@ -3674,6 +3680,14 @@ export class MockWebBotClient implements WebBotClient {
     return {
       workingDir: currentPath,
       entries: botFiles[currentPath] || [],
+    };
+  }
+
+  async openBotWorkdir(botAlias: string): Promise<BotWorkdirOpenResult> {
+    return {
+      opened: true,
+      path: this.getBotSummary(botAlias).workingDir,
+      platform: "windows",
     };
   }
 

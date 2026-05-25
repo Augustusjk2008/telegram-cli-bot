@@ -59,6 +59,7 @@ import type {
   GitStashList,
   GitTreeStatus,
   BotOverview,
+  BotWorkdirOpenResult,
   BotStatus,
   BotSummary,
   ChatAttachmentDeleteResult,
@@ -513,6 +514,7 @@ type RawAuthSession = {
   token?: string;
   token_protected?: boolean;
   allowed_user_ids?: number[];
+  is_local_admin?: boolean;
 };
 
 type RawRegisterCodeUsage = {
@@ -2058,6 +2060,7 @@ function mapSessionState(raw: RawAuthSession): SessionState {
     capabilities: Array.isArray(raw.capabilities) ? raw.capabilities : [],
     ...(typeof raw.token_protected === "boolean" ? { tokenProtected: raw.token_protected } : {}),
     ...(Array.isArray(raw.allowed_user_ids) ? { allowedUserIds: raw.allowed_user_ids } : {}),
+    ...(typeof raw.is_local_admin === "boolean" ? { isLocalAdmin: raw.is_local_admin } : {}),
   };
 }
 
@@ -4086,6 +4089,12 @@ export class RealWebBotClient implements WebBotClient {
       entries: data.entries.map(mapFileEntry),
       ...(data.is_virtual_root ? { isVirtualRoot: true } : {}),
     };
+  }
+
+  async openBotWorkdir(botAlias: string): Promise<BotWorkdirOpenResult> {
+    return this.requestJson<BotWorkdirOpenResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/open-workdir`, {
+      method: "POST",
+    });
   }
 
   async revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult> {

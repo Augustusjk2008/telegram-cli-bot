@@ -248,6 +248,11 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
         { name: "notes.txt", isDir: false, size: 128, updatedAt: "2026-04-09T10:00:00Z" },
       ],
     }),
+    openBotWorkdir: async () => ({
+      opened: true,
+      path: "C:\\workspace",
+      platform: "windows",
+    }),
     changeDirectory: async () => "C:\\workspace",
     createDirectory: async () => undefined,
     deletePath: async () => undefined,
@@ -423,6 +428,50 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     ...overrides,
   });
 }
+
+test("local admin can request opening the bot workdir in system folder", async () => {
+  const user = userEvent.setup();
+  const openBotWorkdir = vi.fn(async () => ({
+    opened: true,
+    path: "C:\\workspace",
+    platform: "windows",
+  }));
+
+  render(<FilesScreen botAlias="main" client={createClient({ openBotWorkdir })} canOpenSystemFolder />);
+
+  await user.click(await screen.findByRole("button", { name: "在系统文件夹中打开" }));
+
+  expect(openBotWorkdir).toHaveBeenCalledWith("main");
+  expect(await screen.findByText("已请求系统打开工作目录")).toBeInTheDocument();
+});
+
+test("system folder open button is hidden without admin or in structure-only mode", async () => {
+  const client = createClient();
+  const { rerender } = render(<FilesScreen botAlias="main" client={client} />);
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+  expect(screen.queryByRole("button", { name: "在系统文件夹中打开" })).not.toBeInTheDocument();
+
+  rerender(<FilesScreen botAlias="main" client={client} structureOnly canOpenSystemFolder />);
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+  expect(screen.queryByRole("button", { name: "在系统文件夹中打开" })).not.toBeInTheDocument();
+});
+
+test("system folder open failure shows backend error", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    openBotWorkdir: async () => {
+      throw new Error("当前 Linux 环境未检测到桌面显示会话");
+    },
+  });
+
+  render(<FilesScreen botAlias="main" client={client} canOpenSystemFolder />);
+
+  await user.click(await screen.findByRole("button", { name: "在系统文件夹中打开" }));
+
+  expect(await screen.findByText("当前 Linux 环境未检测到桌面显示会话")).toBeInTheDocument();
+});
 
 test("renders markdown files as formatted content", async () => {
   const user = userEvent.setup();

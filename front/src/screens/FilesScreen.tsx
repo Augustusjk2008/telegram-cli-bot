@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, FilePlus, FolderPlus, House, Upload } from "lucide-react";
+import { ChevronLeft, FilePlus, FolderOpen, FolderPlus, House, Upload } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
@@ -21,6 +21,7 @@ type Props = {
   botAvatarName?: string;
   client?: WebBotClient;
   structureOnly?: boolean;
+  canOpenSystemFolder?: boolean;
 };
 
 function joinBrowserPath(basePath: string, name: string) {
@@ -73,7 +74,13 @@ function formatDownloadDetail(progress: ActiveDownload) {
   return formatBytes(progress.downloadedBytes);
 }
 
-export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotClient(), structureOnly = false }: Props) {
+export function FilesScreen({
+  botAlias,
+  botAvatarName,
+  client = new MockWebBotClient(),
+  structureOnly = false,
+  canOpenSystemFolder = false,
+}: Props) {
   const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [isVirtualRoot, setIsVirtualRoot] = useState(false);
@@ -103,6 +110,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
+  const [statusText, setStatusText] = useState("");
   const listingRequestSeqRef = useRef(0);
 
   async function loadListing(targetPath?: string) {
@@ -110,6 +118,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     listingRequestSeqRef.current = requestSeq;
     setLoading(true);
     setError("");
+    setStatusText("");
     try {
       const listing = structureOnly
         ? await client.listFiles(botAlias, targetPath || currentPath || await client.getCurrentPath(botAlias))
@@ -148,6 +157,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : "切换目录失败");
+      setStatusText("");
     }
   };
 
@@ -161,12 +171,14 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : "返回上级目录失败");
+      setStatusText("");
     }
   };
 
   const handleHome = async () => {
     try {
       setError("");
+      setStatusText("");
       const workingDir = await client.getCurrentPath(botAlias);
       if (structureOnly) {
         await loadListing(workingDir);
@@ -176,6 +188,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : "返回工作目录失败");
+      setStatusText("");
     }
   };
 
@@ -186,11 +199,13 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     }
 
     setError("");
+    setStatusText("");
     try {
       await client.createDirectory(botAlias, name);
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : "新建文件夹失败");
+      setStatusText("");
     }
   };
 
@@ -203,6 +218,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     }
 
     setError("");
+    setStatusText("");
     try {
       await client.deletePath(botAlias, file.name);
       if (previewName === file.name) {
@@ -213,12 +229,14 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : file.isDir ? "删除文件夹失败" : "删除文件失败");
+      setStatusText("");
     }
   };
 
   const handleDownloadEntry = async (file: FileEntry) => {
     try {
       setError("");
+      setStatusText("");
       setDownloadProgress({
         filename: file.name,
         downloadedBytes: 0,
@@ -232,6 +250,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "下载文件失败");
+      setStatusText("");
     } finally {
       setDownloadProgress(null);
     }
@@ -253,6 +272,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
       setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
+      setStatusText("");
     } finally {
       setPreviewLoading(false);
     }
@@ -270,6 +290,17 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
     await loadPreview(name, "preview");
   };
 
+  const handleOpenWorkdir = async () => {
+    setError("");
+    setStatusText("");
+    try {
+      await client.openBotWorkdir(botAlias);
+      setStatusText("已请求系统打开工作目录");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "系统文件夹打开失败");
+    }
+  };
+
   const clearEditor = () => {
     setEditorPath("");
     setEditorContent("");
@@ -284,6 +315,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
 
   const handleOpenEditor = async (name: string) => {
     setError("");
+    setStatusText("");
     setEditorError("");
     setEditorStatusText("");
     setEditorLoading(true);
@@ -301,6 +333,7 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
       const message = err instanceof Error ? err.message : "读取文件失败";
       setEditorError(message);
       setError(message);
+      setStatusText("");
       if (previewName === name) {
         setPreviewName("");
         setPreviewContent("");
@@ -467,6 +500,17 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
             >
               <House className="w-5 h-5" />
             </button>
+            {!structureOnly && canOpenSystemFolder ? (
+              <button
+                type="button"
+                aria-label="在系统文件夹中打开"
+                title="在系统文件夹中打开"
+                onClick={() => void handleOpenWorkdir()}
+                className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+              >
+                <FolderOpen className="w-5 h-5" />
+              </button>
+            ) : null}
             {!structureOnly && !isVirtualRoot ? (
               <button
                 type="button"
@@ -528,6 +572,11 @@ export function FilesScreen({ botAlias, botAvatarName, client = new MockWebBotCl
           {error ? (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
+            </div>
+          ) : null}
+          {statusText ? (
+            <div role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {statusText}
             </div>
           ) : null}
           {downloadProgress ? (

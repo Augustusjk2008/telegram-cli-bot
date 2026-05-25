@@ -57,6 +57,29 @@ describe("RealWebBotClient", () => {
     expect(session.currentBotAlias).toBe("");
   });
 
+  test("openBotWorkdir posts to bot workdir open endpoint", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      opened: true,
+      path: "C:\\workspace",
+      platform: "windows",
+    }));
+
+    const client = new RealWebBotClient();
+    const result = await client.openBotWorkdir("main");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/files/open-workdir",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(result).toEqual({
+      opened: true,
+      path: "C:\\workspace",
+      platform: "windows",
+    });
+  });
+
   test("cluster setup endpoints map snake case responses", async () => {
     const statusData = createClusterStatus({
       mcp: {

@@ -833,6 +833,7 @@ export function App() {
           botAvatarName={currentBotSummary?.avatarName}
           client={client}
           structureOnly={structureOnly}
+          canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops")}
         />
       </div>
     );
