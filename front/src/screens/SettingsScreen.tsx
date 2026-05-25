@@ -73,6 +73,8 @@ type Props = {
   onOpenBotManager?: () => void;
 };
 
+const TUNNEL_STATUS_REFRESH_INTERVAL_MS = 5000;
+
 function isValidGitProxyAddress(value: string) {
   const address = value.trim();
   if (!address) return true;
@@ -239,6 +241,34 @@ export function SettingsScreen({
       cancelled = true;
     };
   }, [botAlias, client, isMainBot, prefilledWorkdir]);
+
+  useEffect(() => {
+    if (tunnel?.status !== "starting" || !tunnel.publicUrl || tunnelAction !== "") {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void client.getTunnelStatus()
+        .then((next) => {
+          if (cancelled) return;
+          setError("");
+          setTunnel(next);
+          if (next.status === "running") {
+            setNotice("Tunnel 已连接");
+          }
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setError(getErrorMessage(err, "刷新 Tunnel 状态失败"));
+        });
+    }, TUNNEL_STATUS_REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [client, tunnel?.status, tunnel?.publicUrl, tunnelAction]);
 
   useEffect(() => {
     if (!prefilledWorkdir) {

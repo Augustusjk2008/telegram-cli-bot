@@ -5645,6 +5645,58 @@ async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBo
             assert payload["data"]["public_url"] == "https://demo.trycloudflare.com"
             assert payload["data"]["source"] == "manual_config"
 
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_route_refreshes_starting_public_url(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    class FakeTunnelService:
+        def __init__(self):
+            self.wait_timeout = None
+
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "starting",
+                "source": "quick_tunnel",
+                "public_url": "https://ready.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "公网地址仍在传播: https://ready.trycloudflare.com",
+                "pid": 1234,
+            }
+
+        async def wait_until_public_ready(self, *, timeout=90.0):
+            self.wait_timeout = timeout
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://ready.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+    fake_tunnel = FakeTunnelService()
+    server = WebApiServer(web_manager, tunnel_service=fake_tunnel)
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/tunnel")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert fake_tunnel.wait_timeout == 1.0
+    assert payload["data"]["status"] == "running"
+    assert payload["data"]["last_error"] == ""
+
+
 @pytest.mark.asyncio
 async def test_admin_git_proxy_routes_support_get_and_patch(
     web_manager: MultiBotManager,

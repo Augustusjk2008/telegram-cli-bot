@@ -267,6 +267,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TERMINAL_OWNER_ID = "default"
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
+_TUNNEL_STATUS_REFRESH_TIMEOUT = 1.0
 _TERMINAL_OUTPUT_EOF = object()
 _CLIENT_DISCONNECT_ERRORS = (
     ClientConnectionResetError,
@@ -1236,6 +1237,12 @@ class WebApiServer:
             await self._notify_tunnel_public_url(snapshot, reason=reason)
             return
         self._schedule_tunnel_ready_notification(snapshot, reason=reason)
+
+    async def _fresh_tunnel_snapshot(self) -> dict[str, Any]:
+        snapshot = self._tunnel_service.snapshot()
+        if snapshot.get("status") == "starting" and str(snapshot.get("public_url") or "").strip():
+            return await self._tunnel_service.wait_until_public_ready(timeout=_TUNNEL_STATUS_REFRESH_TIMEOUT)
+        return snapshot
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -3107,7 +3114,7 @@ class WebApiServer:
 
     async def admin_tunnel(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": self._tunnel_service.snapshot()})
+        return _json({"ok": True, "data": await self._fresh_tunnel_snapshot()})
 
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

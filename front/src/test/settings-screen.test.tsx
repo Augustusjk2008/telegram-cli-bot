@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
@@ -8,6 +8,7 @@ import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationE
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   localStorage.removeItem(CHAT_COMPLETION_WEB_NOTIFICATION_KEY);
 });
 
@@ -313,6 +314,97 @@ test("main settings saves Git proxy address and port shortcut", async () => {
     expect(updateGitProxySettings).toHaveBeenLastCalledWith("7898");
   });
   expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
+});
+
+test("settings screen refreshes starting tunnel until running", async () => {
+  vi.useFakeTimers();
+
+  const client = new MockWebBotClient();
+  const getTunnelStatus = vi.fn()
+    .mockResolvedValueOnce({
+      mode: "cloudflare_quick",
+      status: "starting",
+      source: "quick_tunnel",
+      publicUrl: "https://ready.trycloudflare.com",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "公网地址仍在传播: https://ready.trycloudflare.com",
+      pid: 1234,
+    })
+    .mockResolvedValueOnce({
+      mode: "cloudflare_quick",
+      status: "running",
+      source: "quick_tunnel",
+      publicUrl: "https://ready.trycloudflare.com",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "",
+      pid: 1234,
+    });
+
+  Object.assign(client, { getTunnelStatus });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText(/公网地址仍在传播/)).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+
+  expect(screen.getByText("状态: 运行中")).toBeInTheDocument();
+  expect(screen.queryByText(/公网地址仍在传播/)).not.toBeInTheDocument();
+  expect(getTunnelStatus).toHaveBeenCalledTimes(2);
+});
+
+test("settings screen clears tunnel refresh error after reconnects", async () => {
+  vi.useFakeTimers();
+
+  const client = new MockWebBotClient();
+  const getTunnelStatus = vi.fn()
+    .mockResolvedValueOnce({
+      mode: "cloudflare_quick",
+      status: "starting",
+      source: "quick_tunnel",
+      publicUrl: "https://ready.trycloudflare.com",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "公网地址仍在传播: https://ready.trycloudflare.com",
+      pid: 1234,
+    })
+    .mockRejectedValueOnce(new Error("刷新失败"))
+    .mockResolvedValueOnce({
+      mode: "cloudflare_quick",
+      status: "running",
+      source: "quick_tunnel",
+      publicUrl: "https://ready.trycloudflare.com",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "",
+      pid: 1234,
+    });
+
+  Object.assign(client, { getTunnelStatus });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+
+  expect(screen.getByText("刷新失败")).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+
+  expect(screen.getByText("状态: 运行中")).toBeInTheDocument();
+  expect(screen.queryByText("刷新失败")).not.toBeInTheDocument();
+  expect(getTunnelStatus).toHaveBeenCalledTimes(3);
 });
 
 test("settings screen exposes notification permission and PushPlus status", async () => {

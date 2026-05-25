@@ -535,11 +535,12 @@ async def test_tunnel_service_start_skips_cleanup_outside_quick_mode(
 
 @pytest.mark.asyncio
 async def test_tunnel_service_wait_until_public_ready_marks_running(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
     service = TunnelService(
         host="127.0.0.1",
         port=8765,
         mode="cloudflare_quick",
-        state_file=str(tmp_path / "web-tunnel-state.json"),
+        state_file=str(state_file),
         startup_timeout=0.01,
         local_health_timeout=0.01,
         public_health_timeout=0.01,
@@ -588,6 +589,10 @@ async def test_tunnel_service_wait_until_public_ready_marks_running(tmp_path: Pa
     assert ready["status"] == "running"
     assert ready["public_url"] == "https://fresh.trycloudflare.com"
     assert ready["last_error"] == ""
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert persisted["status"] == "running"
+    assert persisted["public_url"] == "https://fresh.trycloudflare.com"
+    assert persisted["pid"] == 5555
 
 
 @pytest.mark.asyncio
