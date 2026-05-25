@@ -63,6 +63,27 @@ test("shows assistant context usage after time", () => {
   expect(screen.getByTitle("76.6K used / 258K window")).toBeInTheDocument();
 });
 
+test("renders claude context usage text", () => {
+  render(<ChatMessageMeta
+    name="Claude"
+    createdAt="2026-05-25T18:30:00+08:00"
+    contextUsage={{
+      provider: "claude",
+      source: "claude_context_command",
+      sessionId: "58bed16f-7910-4a12-9aa9-43f64eb39e70",
+      usedTokens: 80100,
+      contextWindow: 1000000,
+      contextLeftPercent: 92,
+      usedDisplay: "80.1k",
+      windowDisplay: "1m",
+      statusText: "92% context left · 80.1k / 1m",
+    }}
+  />);
+
+  expect(screen.getByText("92% context left · 80.1k / 1m")).toBeInTheDocument();
+  expect(screen.getByTitle("80.1k used / 1m window")).toBeInTheDocument();
+});
+
 test("chat trace preview resolves defaults and valid env overrides", () => {
   expect(resolveChatTracePreviewConfig({})).toEqual({
     maxLines: 5,

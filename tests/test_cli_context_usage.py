@@ -76,10 +76,9 @@ def test_resolve_codex_context_usage_returns_none_without_token_count(monkeypatc
     assert resolve_cli_context_usage("codex", "thread-1") is None
 
 
-def test_resolve_cli_context_usage_ignores_non_codex():
+def test_resolve_cli_context_usage_ignores_unknown_and_kimi():
     from bot.web.cli_context_usage import resolve_cli_context_usage
 
-    assert resolve_cli_context_usage("claude", "thread-1") is None
     assert resolve_cli_context_usage("kimi", "thread-1") is None
     assert resolve_cli_context_usage("unknown", "thread-1") is None
 
@@ -90,3 +89,150 @@ def test_resolve_codex_context_usage_returns_none_when_session_missing(monkeypat
     monkeypatch.setattr("bot.web.cli_context_usage.locate_codex_transcript", lambda session_id: None)
 
     assert resolve_cli_context_usage("codex", "missing") is None
+
+
+def test_resolve_claude_context_usage_reads_latest_context_meta(monkeypatch, tmp_path: Path):
+    from bot.web.cli_context_usage import resolve_cli_context_usage
+
+    transcript = tmp_path / "claude-session.jsonl"
+    _write_jsonl(
+        transcript,
+        [
+            {
+                "type": "user",
+                "isMeta": True,
+                "message": {
+                    "role": "user",
+                    "content": "## Context Usage\n\n**Model:** claude-opus-4-7[1m]\n**Tokens:** 12.0k / 1m (1%)\n\n| Free space | 988.0k | 98.8% |",
+                },
+                "sessionId": "claude-1",
+            },
+            {
+                "type": "user",
+                "isMeta": True,
+                "message": {
+                    "role": "user",
+                    "content": "## Context Usage\n\n**Model:** claude-opus-4-7[1m]\n**Tokens:** 80.1k / 1m (8%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| Skills | 7.2k | 0.7% |\n| Messages | 72.9k | 7.3% |\n| Free space | 919.9k | 92.0% |\n",
+                },
+                "sessionId": "claude-1",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "bot.web.cli_context_usage.locate_claude_transcript",
+        lambda session_id, cwd_hint=None: LocatedTranscript("claude", session_id, transcript, cwd_hint),
+    )
+
+    usage = resolve_cli_context_usage("claude", "claude-1", cwd_hint=str(tmp_path))
+
+    assert usage == {
+        "provider": "claude",
+        "source": "claude_context_command",
+        "session_id": "claude-1",
+        "used_tokens": 80100,
+        "context_window": 1000000,
+        "context_left_percent": 92,
+        "used_display": "80.1k",
+        "window_display": "1m",
+        "status_text": "92% context left · 80.1k / 1m",
+    }
+
+
+def test_resolve_claude_context_usage_reads_context_stdout(monkeypatch, tmp_path: Path):
+    from bot.web.cli_context_usage import resolve_cli_context_usage
+
+    transcript = tmp_path / "claude-session.jsonl"
+    _write_jsonl(
+        transcript,
+        [
+            {
+                "type": "system",
+                "subtype": "local_command",
+                "content": "<command-name>/context</command-name>",
+                "sessionId": "claude-1",
+            },
+            {
+                "type": "system",
+                "subtype": "local_command",
+                "content": "<local-command-stdout>\u001b[1mContext Usage\u001b[22m\n80.1k/1m tokens (8%)\nFree space: 919.9k (92.0%)</local-command-stdout>",
+                "sessionId": "claude-1",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "bot.web.cli_context_usage.locate_claude_transcript",
+        lambda session_id, cwd_hint=None: LocatedTranscript("claude", session_id, transcript, cwd_hint),
+    )
+
+    usage = resolve_cli_context_usage("claude", "claude-1", cwd_hint=str(tmp_path))
+
+    assert usage["source"] == "claude_context_command"
+    assert usage["used_tokens"] == 80100
+    assert usage["context_window"] == 1000000
+    assert usage["context_left_percent"] == 92
+    assert usage["status_text"] == "92% context left · 80.1k / 1m"
+
+
+def test_resolve_claude_context_usage_falls_back_to_latest_message_usage(monkeypatch, tmp_path: Path):
+    from bot.web.cli_context_usage import resolve_cli_context_usage
+
+    transcript = tmp_path / "claude-session.jsonl"
+    _write_jsonl(
+        transcript,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "model": "gpt-5.4",
+                    "usage": {
+                        "input_tokens": 98809,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                    },
+                },
+                "sessionId": "claude-1",
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "model": "gpt-5.4",
+                    "usage": {
+                        "input_tokens": 358148,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                    },
+                },
+                "sessionId": "claude-1",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "bot.web.cli_context_usage.locate_claude_transcript",
+        lambda session_id, cwd_hint=None: LocatedTranscript("claude", session_id, transcript, cwd_hint),
+    )
+
+    usage = resolve_cli_context_usage("claude", "claude-1", cwd_hint=str(tmp_path))
+
+    assert usage == {
+        "provider": "claude",
+        "source": "claude_message_usage_estimate",
+        "session_id": "claude-1",
+        "used_tokens": 358148,
+        "context_window": 1000000,
+        "context_left_percent": 64,
+        "used_display": "358.1k",
+        "window_display": "1m",
+        "status_text": "64% context left · 358.1k / 1m",
+    }
+
+
+def test_resolve_claude_context_usage_returns_none_when_session_missing(monkeypatch):
+    from bot.web.cli_context_usage import resolve_cli_context_usage
+
+    monkeypatch.setattr("bot.web.cli_context_usage.locate_claude_transcript", lambda session_id, cwd_hint=None: None)
+
+    assert resolve_cli_context_usage("claude", "missing", cwd_hint="C:\\repo") is None
