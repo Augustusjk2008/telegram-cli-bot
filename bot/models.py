@@ -256,7 +256,7 @@ class UserSession:
     local_history_backend: str = "local_v1"
     session_epoch: int = 0
     active_conversation_id: Optional[str] = None
-    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _lock: threading.RLock = field(default_factory=threading.RLock)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
     _persist_timer: Optional[threading.Timer] = field(default=None, repr=False, compare=False)

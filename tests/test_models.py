@@ -4,6 +4,7 @@
 直接导入 bot.models 中的 BotProfile 和 UserSession 进行测试
 """
 
+import threading
 import time
 
 from bot.models import BotProfile, UserSession, normalize_prompt_presets
@@ -107,3 +108,21 @@ class TestUserSession:
         assert called == [s]
         assert s.process is None
         assert s.is_processing is False
+
+    def test_persist_is_safe_when_called_while_session_lock_is_held(self):
+        s = UserSession(bot_id=1, bot_alias="m", user_id=2, working_dir="/tmp")
+        persisted = []
+        finished = threading.Event()
+        s.persist_hook = lambda current: persisted.append(current)
+
+        def worker():
+            with s._lock:
+                s.codex_session_id = "codex-session"
+                s.persist()
+            finished.set()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        assert finished.wait(timeout=0.5), "持有 session 锁时调用 persist 会死锁"
+        assert persisted == [s]
