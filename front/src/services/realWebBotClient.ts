@@ -1146,7 +1146,15 @@ type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
   | RawAppUpdateDownloadProgress & { type: "progress" }
-  | { type: "status"; elapsed_seconds?: number; preview_text?: string; phase?: string; message?: string; lifecycle?: string }
+  | {
+      type: "status";
+      elapsed_seconds?: number;
+      preview_text?: string;
+      context_usage?: RawChatMessageContextUsage | null;
+      phase?: string;
+      message?: string;
+      lifecycle?: string;
+    }
   | { type: "trace"; event?: RawChatTraceEvent }
   | { type: "log"; text?: string }
   | {
@@ -3913,6 +3921,7 @@ export class RealWebBotClient implements WebBotClient {
     let finalElapsedSeconds: number | undefined;
     let finalMessage: ChatMessage | null = null;
     const streamedTrace: ChatTraceEvent[] = [];
+    let streamedContextUsage: ChatMessageContextUsage | undefined;
     let streamFinished = false;
 
     while (!streamFinished) {
@@ -3945,10 +3954,18 @@ export class RealWebBotClient implements WebBotClient {
           if (typeof event.elapsed_seconds === "number") {
             finalElapsedSeconds = event.elapsed_seconds;
           }
-          onStatus?.({
+          const contextUsage = mapContextUsage(event.context_usage);
+          if (contextUsage) {
+            streamedContextUsage = contextUsage;
+          }
+          const statusUpdate: ChatStatusUpdate = {
             elapsedSeconds: event.elapsed_seconds,
             previewText: event.preview_text,
-          });
+          };
+          if (contextUsage) {
+            statusUpdate.contextUsage = contextUsage;
+          }
+          onStatus?.(statusUpdate);
         } else if (event.type === "trace") {
           const traceEvent = mapTraceEvent(event.event);
           if (traceEvent) {
@@ -3958,7 +3975,11 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "done") {
           if (event.message) {
             finalMessage = mapChatMessage(event.message, 0);
-            finalMessage.meta = mergeMessageMeta(undefined, finalMessage.meta, streamedTrace);
+            finalMessage.meta = mergeMessageMeta(
+              streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+              finalMessage.meta,
+              streamedTrace,
+            );
             finalText = finalMessage.text;
           } else {
             finalText = event.output || streamedText;
@@ -3981,12 +4002,20 @@ export class RealWebBotClient implements WebBotClient {
       return {
         ...finalMessage,
         elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
-        meta: mergeMessageMeta(undefined, finalMessage.meta, streamedTrace),
+        meta: mergeMessageMeta(
+          streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+          finalMessage.meta,
+          streamedTrace,
+        ),
       };
     }
 
     const messageText = finalText || streamedText;
-    const meta = mergeMessageMeta(undefined, undefined, streamedTrace);
+    const meta = mergeMessageMeta(
+      streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+      undefined,
+      streamedTrace,
+    );
     return {
       id: `assistant-${Date.now()}`,
       role: "assistant",

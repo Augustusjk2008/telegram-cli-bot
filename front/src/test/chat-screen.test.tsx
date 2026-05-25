@@ -564,8 +564,8 @@ test("does not show context usage on user messages", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("完成")).toBeInTheDocument();
-  expect(screen.getByText("74% context left · 76.6K / 258K")).toBeInTheDocument();
-  expect(screen.getAllByText("74% context left · 76.6K / 258K")).toHaveLength(1);
+  expect(screen.getByText("74% left · 76.6K / 258K")).toBeInTheDocument();
+  expect(screen.getAllByText("74% left · 76.6K / 258K")).toHaveLength(1);
 });
 
 test("treats inactive history streaming rows as completed", async () => {
@@ -2080,6 +2080,46 @@ test("keeps showing a visible streaming badge while preview text is updating", a
 
   expect(await screen.findByText("正在整理上下文")).toBeInTheDocument();
   expect(screen.getByText("正在输出")).toBeInTheDocument();
+});
+
+test("shows streaming context usage from status updates", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void, onStatus) =>
+      new Promise<ChatMessage>((resolve) => {
+        onStatus?.({
+          contextUsage: {
+            provider: "codex",
+            source: "codex_session_token_count",
+            sessionId: "thread-1",
+            usedTokens: 76593,
+            contextWindow: 258400,
+            contextLeftPercent: 74,
+            usedDisplay: "76.6K",
+            windowDisplay: "258K",
+            statusText: "74% context left · 76.6K / 258K",
+          },
+        });
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-done",
+            role: "assistant",
+            text: "完成",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 300);
+      }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("74% left · 76.6K / 258K")).toBeInTheDocument();
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  expect(screen.getByText("74% left · 76.6K / 258K")).toBeInTheDocument();
 });
 
 test("assistant send does not let an old idle poll replace the finishing reply with a stale streaming row", async () => {

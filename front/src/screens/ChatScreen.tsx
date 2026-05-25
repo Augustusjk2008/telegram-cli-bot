@@ -2266,13 +2266,18 @@ export function ChatScreen({
           setClusterTaskError("");
           void pollClusterTasks();
         }
-        if (status.previewText) {
-          usingPreviewReplace = true;
-          usingTracePreview = false;
+        if (status.previewText || status.contextUsage) {
+          if (status.previewText) {
+            usingPreviewReplace = true;
+            usingTracePreview = false;
+          }
           setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
             text: status.previewText || item.text,
             state: "streaming",
+            meta: status.contextUsage
+              ? mergeMessageMeta(item.meta, { contextUsage: status.contextUsage })
+              : item.meta,
           })));
         }
       };

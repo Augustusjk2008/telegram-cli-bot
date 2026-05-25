@@ -2470,6 +2470,48 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     return ""
 
 
+def _status_context_session_id(
+    session: UserSession,
+    cli_type: str,
+    attempt: CliAttemptState,
+    *,
+    thread_id: Optional[str] = None,
+) -> str:
+    normalized = normalize_cli_type(cli_type)
+    if normalized == "codex":
+        candidate = str(thread_id or attempt.cli_session_id or "").strip()
+        if candidate:
+            return candidate
+        with session._lock:
+            return str(session.codex_session_id or "").strip()
+    if normalized == "claude":
+        candidate = str(attempt.cli_session_id or "").strip()
+        if candidate:
+            return candidate
+        with session._lock:
+            return str(session.claude_session_id or "").strip()
+    if normalized == "kimi":
+        candidate = str(attempt.kimi_session_id or attempt.cli_session_id or "").strip()
+        if candidate:
+            return candidate
+        with session._lock:
+            return str(session.kimi_session_id or "").strip()
+    return ""
+
+
+def _context_usage_signature(context_usage: dict[str, Any] | None) -> tuple[tuple[str, str], ...] | None:
+    if not context_usage:
+        return None
+    items: list[tuple[str, str]] = []
+    for key, value in sorted(context_usage.items()):
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            encoded = str(value)
+        items.append((str(key), encoded))
+    return tuple(items)
+
+
 def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session: UserSession, cli_type: str) -> str:
     if agent.id == "main" or _current_native_session_id(session, cli_type):
         return prompt_text
@@ -3912,7 +3954,7 @@ async def _stream_cli_chat(
                 loop_time=loop.time,
             )
             thread_id: Optional[str] = None
-            last_status_signature: tuple[int, Optional[str]] | None = None
+            last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
@@ -4059,9 +4101,25 @@ async def _stream_cli_chat(
                             status_event["preview_text"] = preview_text[-800:]
                     else:
                         status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
+                    status_context_usage = None
+                    status_session_id = _status_context_session_id(
+                        session,
+                        cli_type,
+                        attempt,
+                        thread_id=thread_id,
+                    )
+                    if status_session_id:
+                        status_context_usage = resolve_cli_context_usage(
+                            cli_type,
+                            status_session_id,
+                            cwd_hint=session.working_dir,
+                        )
+                        if status_context_usage:
+                            status_event["context_usage"] = status_context_usage
                     status_signature = (
                         int(status_event.get("elapsed_seconds", 0)),
                         status_event.get("preview_text"),
+                        _context_usage_signature(status_context_usage),
                     )
                     if status_signature != last_status_signature and (
                         status_signature[0] > 0 or status_signature[1]

@@ -586,6 +586,7 @@ export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;
   clusterRunId?: string;
+  contextUsage?: ChatMessageContextUsage;
 };
 
 export type ChatTaskMode = "standard" | "dream" | "proposal_patch" | "plan";

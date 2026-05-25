@@ -59,7 +59,7 @@ test("shows assistant context usage after time", () => {
     }}
   />);
 
-  expect(screen.getByText("74% context left · 76.6K / 258K")).toBeInTheDocument();
+  expect(screen.getByText("74% left · 76.6K / 258K")).toBeInTheDocument();
   expect(screen.getByTitle("76.6K used / 258K window")).toBeInTheDocument();
 });
 
@@ -80,8 +80,36 @@ test("renders claude context usage text", () => {
     }}
   />);
 
-  expect(screen.getByText("92% context left · 80.1k / 1m")).toBeInTheDocument();
+  expect(screen.getByText("92% left · 80.1k / 1m")).toBeInTheDocument();
   expect(screen.getByTitle("80.1k used / 1m window")).toBeInTheDocument();
+});
+
+test("marks low remaining context red below 25 percent", () => {
+  render(<ChatMessageMeta
+    name="助手"
+    createdAt="2026-05-08T09:05:00+08:00"
+    contextUsage={{
+      contextLeftPercent: 24,
+      usedDisplay: "196K",
+      windowDisplay: "258K",
+    }}
+  />);
+
+  expect(screen.getByText("24% left · 196K / 258K")).toHaveClass("text-red-600", "font-medium");
+});
+
+test("does not mark 25 percent context as low", () => {
+  render(<ChatMessageMeta
+    name="助手"
+    createdAt="2026-05-08T09:05:00+08:00"
+    contextUsage={{
+      contextLeftPercent: 25,
+      usedDisplay: "194K",
+      windowDisplay: "258K",
+    }}
+  />);
+
+  expect(screen.getByText("25% left · 194K / 258K")).not.toHaveClass("text-red-600");
 });
 
 test("chat trace preview resolves defaults and valid env overrides", () => {

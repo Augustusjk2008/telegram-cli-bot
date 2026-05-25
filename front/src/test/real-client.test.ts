@@ -3005,7 +3005,7 @@ describe("RealWebBotClient", () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(encoder.encode("event: meta\ndata: {\"type\":\"meta\",\"cli_type\":\"codex\"}\n\n"));
-        controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"preview_text\":\"处理中预览\"}\n\n"));
+        controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"preview_text\":\"处理中预览\",\"context_usage\":{\"provider\":\"codex\",\"source\":\"codex_session_token_count\",\"session_id\":\"thread-1\",\"used_tokens\":76593,\"context_window\":258400,\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\"}}\n\n"));
         controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\",\"elapsed_seconds\":4}\n\n"));
         controller.close();
       },
@@ -3033,7 +3033,7 @@ describe("RealWebBotClient", () => {
     const client = new RealWebBotClient();
     await client.login("secret-token");
 
-    const statuses: Array<{ elapsedSeconds?: number; previewText?: string }> = [];
+    const statuses: Array<{ elapsedSeconds?: number; previewText?: string; contextUsage?: { sessionId?: string; statusText?: string } }> = [];
     const message = await client.sendMessage("main", "hello", () => undefined, (status) => {
       statuses.push(status);
     });
@@ -3042,10 +3042,53 @@ describe("RealWebBotClient", () => {
       {
         elapsedSeconds: 2,
         previewText: "处理中预览",
+        contextUsage: expect.objectContaining({
+          sessionId: "thread-1",
+          statusText: "74% context left · 76.6K / 258K",
+        }),
       },
     ]);
     expect(message.text).toBe("最终结果");
     expect(message.elapsedSeconds).toBe(4);
+  });
+
+  test("sendMessage keeps streamed context usage when done has no message meta", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"context_usage\":{\"provider\":\"codex\",\"session_id\":\"thread-1\",\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\",\"elapsed_seconds\":4}\n\n"));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const message = await client.sendMessage("main", "hello", () => undefined);
+
+    expect(message.text).toBe("最终结果");
+    expect(message.meta?.contextUsage?.sessionId).toBe("thread-1");
+    expect(message.meta?.contextUsage?.contextLeftPercent).toBe(74);
   });
 
   test("sendMessage resolves once done arrives even if the stream stays open", async () => {

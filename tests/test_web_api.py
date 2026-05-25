@@ -8416,6 +8416,147 @@ async def test_stream_cli_chat_done_message_includes_context_usage(web_manager: 
     assert done_event["message"]["meta"]["context_usage"] == context_usage
 
 
+@pytest.mark.asyncio
+async def test_stream_cli_chat_status_includes_context_usage_from_codex_thread_id(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+    context_calls: list[tuple[str, str, str | None]] = []
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+            ]
+
+        def readline(self):
+            time.sleep(0.02)
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        context_calls.append((cli_type, session_id, cwd_hint))
+        return context_usage if session_id == "thread-1" else None
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    status_events = [event for event in events if event["type"] == "status"]
+    assert any(event.get("context_usage") == context_usage for event in status_events)
+    assert any(call[0] == "codex" and call[1] == "thread-1" for call in context_calls)
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_status_includes_context_usage_from_claude_session_id(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "claude"
+    _, _, session = get_chat_session_for_alias(web_manager, "main", 1001, "main")
+    session.claude_session_id = "claude-1"
+    context_usage = {
+        "provider": "claude",
+        "source": "claude_context_command",
+        "session_id": "claude-1",
+        "used_tokens": 80100,
+        "context_window": 1000000,
+        "context_left_percent": 92,
+        "used_display": "80.1k",
+        "window_display": "1m",
+        "status_text": "92% context left · 80.1k / 1m",
+    }
+    context_calls: list[tuple[str, str, str | None]] = []
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"stream_event","session_id":"claude-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}}\n',
+                '{"type":"result","subtype":"success","session_id":"claude-1","result":"你好"}\n',
+            ]
+
+        def readline(self):
+            time.sleep(0.02)
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        context_calls.append((cli_type, session_id, cwd_hint))
+        return context_usage if session_id == "claude-1" else None
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=MagicMock(enabled=False, prompt_text="hello")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    status_events = [event for event in events if event["type"] == "status"]
+    assert any(event.get("context_usage") == context_usage for event in status_events)
+    assert any(call[0] == "claude" and call[1] == "claude-1" for call in context_calls)
+
+
 def test_codex_done_candidate_ignores_event_msg_commentary():
     thread_id, candidate_text, candidate_seen_at = api_service._advance_codex_done_candidate(
         '{"type":"event_msg","payload":{"type":"agent_message","message":"我先检查目录结构。","phase":"commentary"}}',

@@ -40,19 +40,20 @@ function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
     return null;
   }
   const percent = typeof contextUsage.contextLeftPercent === "number"
-    ? `${contextUsage.contextLeftPercent}% context left`
+    ? `${contextUsage.contextLeftPercent}% left`
     : "";
   const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
     : "";
-  const text = contextUsage.statusText || [percent, usage].filter(Boolean).join(" · ");
+  const text = (contextUsage.statusText || [percent, usage].filter(Boolean).join(" · "))
+    .replace(/\bcontext left\b/g, "left");
   if (!text) {
     return null;
   }
   const title = contextUsage.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} used / ${contextUsage.windowDisplay} window`
     : text;
-  return { text, title };
+  return { text, title, isLow: typeof contextUsage.contextLeftPercent === "number" && contextUsage.contextLeftPercent < 25 };
 }
 
 export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage }: Props) {
@@ -67,7 +68,12 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
       <span className="max-w-[12rem] truncate text-[var(--text)]">{name}</span>
       <span className="text-[var(--muted)]">{formatTime(createdAt)}</span>
       {context ? (
-        <span className="text-[var(--muted)]" title={context.title}>{context.text}</span>
+        <span
+          className={context.isLow ? "font-medium text-red-600" : "text-[var(--muted)]"}
+          title={context.title}
+        >
+          {context.text}
+        </span>
       ) : null}
       {align === "right" ? avatar : null}
     </div>
