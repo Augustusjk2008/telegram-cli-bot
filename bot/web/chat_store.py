@@ -102,7 +102,7 @@ class ChatStore:
         if self._db_exists() or not self.legacy_db_path.is_file():
             return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.legacy_db_path) as source, sqlite3.connect(self.db_path) as target:
+        with closing(sqlite3.connect(self.legacy_db_path)) as source, closing(sqlite3.connect(self.db_path)) as target:
             source.backup(target)
         self._write_workspace_metadata(
             migrated_from_legacy_project_store=True,

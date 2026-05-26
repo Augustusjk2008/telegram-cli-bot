@@ -23,6 +23,9 @@ class TrackingConnection:
     def __exit__(self, exc_type, exc, tb):
         return self._conn.__exit__(exc_type, exc, tb)
 
+    def backup(self, target, *args, **kwargs):
+        return self._conn.backup(getattr(target, "_conn", target), *args, **kwargs)
+
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
@@ -513,6 +516,16 @@ def test_legacy_project_store_is_migrated_to_home_store_on_first_read(monkeypatc
     monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: migrated_home))
     metadata_path = runtime_paths.get_chat_workspace_metadata_path(workspace)
 
+    original_connect = chat_store_module.sqlite3.connect
+    tracked = []
+
+    def tracked_connect(*args, **kwargs):
+        conn = TrackingConnection(original_connect(*args, **kwargs))
+        tracked.append(conn)
+        return conn
+
+    monkeypatch.setattr(chat_store_module.sqlite3, "connect", tracked_connect)
+
     migrated_store = ChatStore(workspace)
     items = migrated_store.list_active_history(
         bot_id=1,
@@ -527,6 +540,8 @@ def test_legacy_project_store_is_migrated_to_home_store_on_first_read(monkeypatc
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["migrated_from_legacy_project_store"] is True
     assert metadata["legacy_project_db_path"] == str(legacy_db)
+    assert tracked
+    assert all(conn.closed for conn in tracked)
 
 
 def test_finalize_turn_reuses_same_assistant_message_and_exposes_trace(monkeypatch, tmp_path: Path):

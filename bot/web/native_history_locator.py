@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -46,7 +47,7 @@ def locate_codex_transcript(
     home = codex_home or (Path.home() / ".codex")
     for db_path in _iter_codex_state_databases(home):
         try:
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn:
                 row = conn.execute(
                     "SELECT rollout_path, cwd FROM threads WHERE id = ?",
                     (session_id,),
