@@ -3447,11 +3447,25 @@ def _close_process_stdout(process: Any) -> None:
         pass
 
 
+def _close_process_streams(process: Any) -> None:
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(process, stream_name, None)
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
     stdout = getattr(process, "stdout", None)
     if stdout is None or not hasattr(stdout, "readline"):
-        output, _ = process.communicate()
-        return str(output or ""), getattr(process, "returncode", None) or process.wait() or 0
+        try:
+            output, _ = process.communicate()
+            return str(output or ""), getattr(process, "returncode", None) or process.wait() or 0
+        finally:
+            _close_process_streams(process)
 
     output_queue: queue.Queue[Any] = queue.Queue()
     reader_done = threading.Event()
@@ -3501,6 +3515,8 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
     except asyncio.CancelledError:
         _terminate_process_sync(process)
         raise
+    finally:
+        _close_process_streams(process)
 
     return "".join(chunks), process.poll() or 0
 
@@ -3610,6 +3626,8 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
     except asyncio.CancelledError:
         _terminate_process_sync(process)
         raise
+    finally:
+        _close_process_streams(process)
 
 
 async def _communicate_claude_process(
@@ -3655,48 +3673,51 @@ async def _communicate_claude_process(
     reader_thread = threading.Thread(target=read_stdout, daemon=True)
     reader_thread.start()
 
-    while not reader_done.is_set() or not output_queue.empty():
-        now = loop.time()
-        drained = False
-        while True:
-            try:
-                item = output_queue.get_nowait()
-            except queue.Empty:
-                break
-            drained = True
-            if isinstance(item, Exception):
-                raise item
-            collector.consume_chunk(str(item), now=now)
+    try:
+        while not reader_done.is_set() or not output_queue.empty():
+            now = loop.time()
+            drained = False
+            while True:
+                try:
+                    item = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained = True
+                if isinstance(item, Exception):
+                    raise item
+                collector.consume_chunk(str(item), now=now)
 
-        if (
-            collector.detector is not None
-            and done_terminate_started_at is None
-            and collector.detector.poll(now=now)
-            and process.poll() is None
-        ):
-            done_terminate_started_at = now
-            process.terminate()
-        elif (
-            done_terminate_started_at is not None
-            and not done_force_killed
-            and process.poll() is None
-            and (now - done_terminate_started_at) >= 1.0
-        ):
-            done_force_killed = True
-            await loop.run_in_executor(None, _terminate_process_sync, process)
+            if (
+                collector.detector is not None
+                and done_terminate_started_at is None
+                and collector.detector.poll(now=now)
+                and process.poll() is None
+            ):
+                done_terminate_started_at = now
+                process.terminate()
+            elif (
+                done_terminate_started_at is not None
+                and not done_force_killed
+                and process.poll() is None
+                and (now - done_terminate_started_at) >= 1.0
+            ):
+                done_force_killed = True
+                await loop.run_in_executor(None, _terminate_process_sync, process)
 
-        if not drained:
-            await asyncio.sleep(0.1)
+            if not drained:
+                await asyncio.sleep(0.1)
 
-    waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
-    returncode = _resolve_process_returncode(process, waited_returncode)
-    if done_terminate_started_at is not None:
-        returncode = 0
+        waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+        returncode = _resolve_process_returncode(process, waited_returncode)
+        if done_terminate_started_at is not None:
+            returncode = 0
 
-    final_text = collector.final_text
-    if not final_text:
-        final_text = msg("chat", "no_output")
-    return final_text, collector.session_id, returncode
+        final_text = collector.final_text
+        if not final_text:
+            final_text = msg("chat", "no_output")
+        return final_text, collector.session_id, returncode
+    finally:
+        _close_process_streams(process)
 
 
 async def _communicate_kimi_process(process: subprocess.Popen) -> tuple[str, int]:

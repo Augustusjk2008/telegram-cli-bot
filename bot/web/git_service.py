@@ -171,12 +171,25 @@ def _terminate_process_sync(process: subprocess.Popen) -> None:
         pass
 
 
+def _close_process_streams(process: Any) -> None:
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(process, stream_name, None)
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
     try:
         output, _ = await asyncio.to_thread(process.communicate)
     except Exception:
         _terminate_process_sync(process)
         raise
+    finally:
+        _close_process_streams(process)
     return str(output or ""), int(process.returncode or 0)
 
 

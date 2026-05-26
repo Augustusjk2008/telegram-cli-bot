@@ -111,6 +111,16 @@ class PtyWrapper:
                 self.process.close()
             except Exception:
                 pass
+            return
+
+        for stream_name in ("stdin", "stdout", "stderr"):
+            stream = getattr(self.process, stream_name, None)
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     @property
     def pid(self) -> int:
