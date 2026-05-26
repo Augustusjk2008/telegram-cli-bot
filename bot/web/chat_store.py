@@ -5,6 +5,8 @@ import logging
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -147,10 +149,13 @@ class ChatStore:
                 workspace_key=self.workspace_key,
             )
 
-    def _connect_for_write(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect_for_write(self) -> Iterator[sqlite3.Connection]:
         conn = self._connect(create=True)
         assert conn is not None
-        return conn
+        with closing(conn):
+            with conn:
+                yield conn
 
     def _ensure_schema_once(self, conn: sqlite3.Connection) -> None:
         with _STORE_PREPARE_LOCK:
@@ -575,14 +580,15 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(conversation_id)
-        with conn:
-            row = conn.execute(
-                "SELECT * FROM conversations WHERE id = ?",
-                (conversation_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(conversation_id)
-            return self._conversation_from_row(row)
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM conversations WHERE id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(conversation_id)
+                return self._conversation_from_row(row)
 
     def list_conversations(
         self,
@@ -610,19 +616,20 @@ class ChatStore:
             params.extend([query_value, query_value])
         params.append(safe_limit)
 
-        with conn:
-            rows = conn.execute(
-                f"""
-                SELECT *
-                FROM conversations
-                WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ?
-                {archived_clause}
-                {query_clause}
-                ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
-                LIMIT ?
-                """,
-                params,
-            ).fetchall()
+        with closing(conn):
+            with conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM conversations
+                    WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ?
+                    {archived_clause}
+                    {query_clause}
+                    ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    params,
+                ).fetchall()
         return [self._conversation_from_row(row) for row in rows]
 
     def begin_turn(
@@ -1264,38 +1271,40 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
-        with conn:
-            row = conn.execute(
-                """
-                SELECT
-                    m.id,
-                    m.turn_id,
-                    m.role,
-                    m.content,
-                    m.state,
-                    m.created_at,
-                    m.updated_at,
-                    t.completion_state,
-                    t.native_provider,
-                    t.native_session_id,
-                    t.context_usage_json
-                FROM messages AS m
-                JOIN turns AS t ON t.id = m.turn_id
-                WHERE m.id = ?
-                """,
-                (message_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(message_id)
-            return self._messages_from_rows(conn, [row])[0]
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        m.id,
+                        m.turn_id,
+                        m.role,
+                        m.content,
+                        m.state,
+                        m.created_at,
+                        m.updated_at,
+                        t.completion_state,
+                        t.native_provider,
+                        t.native_session_id,
+                        t.context_usage_json
+                    FROM messages AS m
+                    JOIN turns AS t ON t.id = m.turn_id
+                    WHERE m.id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(message_id)
+                return self._messages_from_rows(conn, [row])[0]
 
     def list_messages(self, conversation_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
         conn = self._connect(create=False)
         if conn is None:
             return []
-        with conn:
-            rows = self._list_message_rows(conn, conversation_id, limit=limit)
-            return self._messages_from_rows(conn, rows)
+        with closing(conn):
+            with conn:
+                rows = self._list_message_rows(conn, conversation_id, limit=limit)
+                return self._messages_from_rows(conn, rows)
 
     def list_active_history(
         self,
@@ -1312,16 +1321,17 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             return []
-        with conn:
-            resolved_conversation_id = self._get_scoped_conversation_id(
-                conn,
-                conversation_id=conversation_id,
-                bot_id=bot_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                working_dir=working_dir,
-                session_epoch=session_epoch,
-            )
+        with closing(conn):
+            with conn:
+                resolved_conversation_id = self._get_scoped_conversation_id(
+                    conn,
+                    conversation_id=conversation_id,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
+                )
         if resolved_conversation_id is None:
             return []
         items = self.list_messages(resolved_conversation_id, limit=max(1, limit))
@@ -1353,23 +1363,24 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             return 0
-        with conn:
-            resolved_conversation_id = self._get_scoped_conversation_id(
-                conn,
-                conversation_id=conversation_id,
-                bot_id=bot_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                working_dir=working_dir,
-                session_epoch=session_epoch,
-            )
-            if resolved_conversation_id is None:
-                return 0
-            row = conn.execute(
-                "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
-                (resolved_conversation_id,),
-            ).fetchone()
-            count = int(row["count"])
+        with closing(conn):
+            with conn:
+                resolved_conversation_id = self._get_scoped_conversation_id(
+                    conn,
+                    conversation_id=conversation_id,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
+                )
+                if resolved_conversation_id is None:
+                    return 0
+                row = conn.execute(
+                    "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
+                    (resolved_conversation_id,),
+                ).fetchone()
+                count = int(row["count"])
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -1400,50 +1411,51 @@ class ChatStore:
         if conn is None:
             return 0
         now = _utc_now()
-        with conn:
-            resolved_conversation_id = self._get_scoped_conversation_id(
-                conn,
-                conversation_id=conversation_id,
-                bot_id=bot_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                working_dir=working_dir,
-                session_epoch=session_epoch,
-            )
-            if resolved_conversation_id is None:
-                return 0
-            rows = conn.execute(
-                """
-                SELECT
-                    t.id AS turn_id,
-                    t.assistant_message_id AS assistant_message_id,
-                    m.content AS assistant_content
-                FROM turns AS t
-                JOIN messages AS m ON m.id = t.assistant_message_id
-                WHERE t.conversation_id = ? AND m.role = ? AND m.state = ?
-                """,
-                (resolved_conversation_id, "assistant", "streaming"),
-            ).fetchall()
-            for row in rows:
-                content = str(row["assistant_content"] or "").strip() or fallback_content
-                conn.execute(
-                    "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
-                    (content, "error", now, row["assistant_message_id"]),
+        with closing(conn):
+            with conn:
+                resolved_conversation_id = self._get_scoped_conversation_id(
+                    conn,
+                    conversation_id=conversation_id,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
                 )
-                conn.execute(
+                if resolved_conversation_id is None:
+                    return 0
+                rows = conn.execute(
                     """
-                    UPDATE turns
-                    SET assistant_state = ?,
-                        completion_state = ?,
-                        completed_at = ?,
-                        updated_at = ?,
-                        error_code = ?,
-                        error_message = ?
-                    WHERE id = ?
+                    SELECT
+                        t.id AS turn_id,
+                        t.assistant_message_id AS assistant_message_id,
+                        m.content AS assistant_content
+                    FROM turns AS t
+                    JOIN messages AS m ON m.id = t.assistant_message_id
+                    WHERE t.conversation_id = ? AND m.role = ? AND m.state = ?
                     """,
-                    ("error", error_code, now, now, error_code, content, row["turn_id"]),
-                )
-            row_count = len(rows)
+                    (resolved_conversation_id, "assistant", "streaming"),
+                ).fetchall()
+                for row in rows:
+                    content = str(row["assistant_content"] or "").strip() or fallback_content
+                    conn.execute(
+                        "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
+                        (content, "error", now, row["assistant_message_id"]),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE turns
+                        SET assistant_state = ?,
+                            completion_state = ?,
+                            completed_at = ?,
+                            updated_at = ?,
+                            error_code = ?,
+                            error_message = ?
+                        WHERE id = ?
+                        """,
+                        ("error", error_code, now, now, error_code, content, row["turn_id"]),
+                    )
+                row_count = len(rows)
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -1471,42 +1483,43 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             return None
-        with conn:
-            resolved_conversation_id = self._get_scoped_conversation_id(
-                conn,
-                conversation_id=conversation_id,
-                bot_id=bot_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                working_dir=working_dir,
-                session_epoch=session_epoch,
-            )
-            if resolved_conversation_id is None:
-                return None
-            row = conn.execute(
-                """
-                SELECT
-                    assistant.content AS preview_text,
-                    assistant.created_at AS started_at,
-                    assistant.updated_at AS updated_at,
-                    user.content AS user_text
-                FROM turns AS t
-                JOIN messages AS assistant ON assistant.id = t.assistant_message_id
-                JOIN messages AS user ON user.id = t.user_message_id
-                WHERE t.conversation_id = ? AND assistant.state = ?
-                ORDER BY t.seq DESC
-                LIMIT 1
-                """,
-                (resolved_conversation_id, "streaming"),
-            ).fetchone()
-            if row is None:
-                return None
-            result = {
-                "user_text": row["user_text"] or "",
-                "preview_text": row["preview_text"] or "",
-                "started_at": row["started_at"],
-                "updated_at": row["updated_at"] or row["started_at"],
-            }
+        with closing(conn):
+            with conn:
+                resolved_conversation_id = self._get_scoped_conversation_id(
+                    conn,
+                    conversation_id=conversation_id,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
+                )
+                if resolved_conversation_id is None:
+                    return None
+                row = conn.execute(
+                    """
+                    SELECT
+                        assistant.content AS preview_text,
+                        assistant.created_at AS started_at,
+                        assistant.updated_at AS updated_at,
+                        user.content AS user_text
+                    FROM turns AS t
+                    JOIN messages AS assistant ON assistant.id = t.assistant_message_id
+                    JOIN messages AS user ON user.id = t.user_message_id
+                    WHERE t.conversation_id = ? AND assistant.state = ?
+                    ORDER BY t.seq DESC
+                    LIMIT 1
+                    """,
+                    (resolved_conversation_id, "streaming"),
+                ).fetchone()
+                if row is None:
+                    return None
+                result = {
+                    "user_text": row["user_text"] or "",
+                    "preview_text": row["preview_text"] or "",
+                    "started_at": row["started_at"],
+                    "updated_at": row["updated_at"] or row["started_at"],
+                }
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -1611,45 +1624,46 @@ class ChatStore:
             return 0
 
         moved = 0
-        with conn:
-            if old_bot_id == new_bot_id:
-                return conn.execute(
-                    "UPDATE conversations SET bot_alias = ?, updated_at = ? WHERE bot_id = ? AND bot_alias = ?",
-                    (new_alias, _utc_now(), new_bot_id, old_alias),
-                ).rowcount
+        with closing(conn):
+            with conn:
+                if old_bot_id == new_bot_id:
+                    return conn.execute(
+                        "UPDATE conversations SET bot_alias = ?, updated_at = ? WHERE bot_id = ? AND bot_alias = ?",
+                        (new_alias, _utc_now(), new_bot_id, old_alias),
+                    ).rowcount
 
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM conversations
-                WHERE bot_id = ?
-                ORDER BY created_at ASC, id ASC
-                """,
-                (old_bot_id,),
-            ).fetchall()
-            for source in rows:
-                target = conn.execute(
+                rows = conn.execute(
                     """
                     SELECT *
                     FROM conversations
-                    WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
+                    WHERE bot_id = ?
+                    ORDER BY created_at ASC, id ASC
                     """,
-                    (
-                        new_bot_id,
-                        source["user_id"],
-                        source["agent_id"],
-                        source["working_dir"],
-                        source["session_epoch"],
-                    ),
-                ).fetchone()
-                if target is None:
-                    conn.execute(
-                        "UPDATE conversations SET bot_id = ?, bot_alias = ?, updated_at = ? WHERE id = ?",
-                        (new_bot_id, new_alias, _utc_now(), str(source["id"])),
-                    )
-                else:
-                    self._merge_conversation_into_target(conn, source=source, target=target, new_alias=new_alias)
-                moved += 1
+                    (old_bot_id,),
+                ).fetchall()
+                for source in rows:
+                    target = conn.execute(
+                        """
+                        SELECT *
+                        FROM conversations
+                        WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
+                        """,
+                        (
+                            new_bot_id,
+                            source["user_id"],
+                            source["agent_id"],
+                            source["working_dir"],
+                            source["session_epoch"],
+                        ),
+                    ).fetchone()
+                    if target is None:
+                        conn.execute(
+                            "UPDATE conversations SET bot_id = ?, bot_alias = ?, updated_at = ? WHERE id = ?",
+                            (new_bot_id, new_alias, _utc_now(), str(source["id"])),
+                        )
+                    else:
+                        self._merge_conversation_into_target(conn, source=source, target=target, new_alias=new_alias)
+                    moved += 1
         return moved
 
     def delete_conversation(
@@ -1664,134 +1678,139 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             return
-        with conn:
-            conn.execute(
-                """
-                DELETE FROM conversations
-                WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
-                """,
-                (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
-            )
+        with closing(conn):
+            with conn:
+                conn.execute(
+                    """
+                    DELETE FROM conversations
+                    WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
+                    """,
+                    (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
+                )
 
     def delete_conversation_by_id(self, conversation_id: str) -> None:
         conn = self._connect(create=False)
         if conn is None:
             return
-        with conn:
-            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        with closing(conn):
+            with conn:
+                conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
 
     def delete_bot_history(self, *, bot_id: int) -> int:
         conn = self._connect(create=False)
         if conn is None:
             return 0
-        with conn:
-            result = conn.execute(
-                "DELETE FROM conversations WHERE bot_id = ?",
-                (bot_id,),
-            )
-            return int(result.rowcount or 0)
+        with closing(conn):
+            with conn:
+                result = conn.execute(
+                    "DELETE FROM conversations WHERE bot_id = ?",
+                    (bot_id,),
+                )
+                return int(result.rowcount or 0)
 
     def get_message_trace(self, message_id: str) -> dict[str, Any]:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
-        with conn:
-            row = conn.execute(
-                "SELECT turn_id FROM messages WHERE id = ?",
-                (message_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(message_id)
-            turn_id = str(row["turn_id"])
-            trace_rows = conn.execute(
-                """
-                SELECT
-                    id,
-                    ordinal,
-                    kind,
-                    raw_type,
-                    title,
-                    tool_name,
-                    call_id,
-                    summary,
-                    payload_json,
-                    created_at
-                FROM trace_events
-                WHERE turn_id = ?
-                ORDER BY ordinal ASC, created_at ASC, id ASC
-                """,
-                (turn_id,),
-            ).fetchall()
-            trace = [
-                {
-                    "id": trace_row["id"],
-                    "ordinal": int(trace_row["ordinal"]),
-                    "kind": trace_row["kind"],
-                    "raw_type": trace_row["raw_type"],
-                    "title": trace_row["title"],
-                    "tool_name": trace_row["tool_name"],
-                    "call_id": trace_row["call_id"],
-                    "summary": trace_row["summary"],
-                    "payload": _parse_json(trace_row["payload_json"]),
-                    "created_at": trace_row["created_at"],
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    "SELECT turn_id FROM messages WHERE id = ?",
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(message_id)
+                turn_id = str(row["turn_id"])
+                trace_rows = conn.execute(
+                    """
+                    SELECT
+                        id,
+                        ordinal,
+                        kind,
+                        raw_type,
+                        title,
+                        tool_name,
+                        call_id,
+                        summary,
+                        payload_json,
+                        created_at
+                    FROM trace_events
+                    WHERE turn_id = ?
+                    ORDER BY ordinal ASC, created_at ASC, id ASC
+                    """,
+                    (turn_id,),
+                ).fetchall()
+                trace = [
+                    {
+                        "id": trace_row["id"],
+                        "ordinal": int(trace_row["ordinal"]),
+                        "kind": trace_row["kind"],
+                        "raw_type": trace_row["raw_type"],
+                        "title": trace_row["title"],
+                        "tool_name": trace_row["tool_name"],
+                        "call_id": trace_row["call_id"],
+                        "summary": trace_row["summary"],
+                        "payload": _parse_json(trace_row["payload_json"]),
+                        "created_at": trace_row["created_at"],
+                    }
+                    for trace_row in trace_rows
+                ]
+                tool_call_count = sum(1 for item in trace if str(item["kind"] or "") == "tool_call")
+                process_count = sum(1 for item in trace if str(item["kind"] or "") not in {"tool_call", "tool_result"})
+                return {
+                    "message_id": message_id,
+                    "trace_count": len(trace),
+                    "tool_call_count": tool_call_count,
+                    "process_count": process_count,
+                    "trace": trace,
                 }
-                for trace_row in trace_rows
-            ]
-            tool_call_count = sum(1 for item in trace if str(item["kind"] or "") == "tool_call")
-            process_count = sum(1 for item in trace if str(item["kind"] or "") not in {"tool_call", "tool_result"})
-            return {
-                "message_id": message_id,
-                "trace_count": len(trace),
-                "tool_call_count": tool_call_count,
-                "process_count": process_count,
-                "trace": trace,
-            }
 
     def get_trace_recovery_context(self, message_id: str) -> dict[str, Any]:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
-        with conn:
-            row = conn.execute(
-                """
-                SELECT
-                    assistant.id AS message_id,
-                    assistant.turn_id AS turn_id,
-                    assistant.conversation_id AS conversation_id,
-                    assistant.role AS role,
-                    assistant.content AS assistant_text,
-                    user.content AS user_text,
-                    conversation.working_dir AS working_dir,
-                    turn.native_provider AS native_provider,
-                    turn.native_session_id AS native_session_id,
-                    turn.completion_state AS completion_state,
-                    turn.trace_recovery_attempted_at AS trace_recovery_attempted_at,
-                    turn.trace_recovery_status AS trace_recovery_status
-                FROM messages AS assistant
-                JOIN turns AS turn ON turn.id = assistant.turn_id
-                JOIN conversations AS conversation ON conversation.id = assistant.conversation_id
-                JOIN messages AS user ON user.id = turn.user_message_id
-                WHERE assistant.id = ?
-                """,
-                (message_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(message_id)
-            trace_stats = self._load_trace_stats(conn, [str(row["turn_id"])]).get(str(row["turn_id"]), {})
-            return {
-                "message_id": str(row["message_id"]),
-                "turn_id": str(row["turn_id"]),
-                "conversation_id": str(row["conversation_id"]),
-                "role": str(row["role"] or ""),
-                "assistant_text": str(row["assistant_text"] or ""),
-                "user_text": str(row["user_text"] or ""),
-                "working_dir": str(row["working_dir"] or ""),
-                "native_provider": str(row["native_provider"] or ""),
-                "native_session_id": str(row["native_session_id"] or ""),
-                "completion_state": str(row["completion_state"] or ""),
-                "trace_recovery_attempted_at": str(row["trace_recovery_attempted_at"] or ""),
-                "trace_recovery_status": str(row["trace_recovery_status"] or ""),
-                "trace_count": int(trace_stats.get("trace_count", 0) or 0),
-                "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
-                "process_count": int(trace_stats.get("process_count", 0) or 0),
-            }
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        assistant.id AS message_id,
+                        assistant.turn_id AS turn_id,
+                        assistant.conversation_id AS conversation_id,
+                        assistant.role AS role,
+                        assistant.content AS assistant_text,
+                        user.content AS user_text,
+                        conversation.working_dir AS working_dir,
+                        turn.native_provider AS native_provider,
+                        turn.native_session_id AS native_session_id,
+                        turn.completion_state AS completion_state,
+                        turn.trace_recovery_attempted_at AS trace_recovery_attempted_at,
+                        turn.trace_recovery_status AS trace_recovery_status
+                    FROM messages AS assistant
+                    JOIN turns AS turn ON turn.id = assistant.turn_id
+                    JOIN conversations AS conversation ON conversation.id = assistant.conversation_id
+                    JOIN messages AS user ON user.id = turn.user_message_id
+                    WHERE assistant.id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(message_id)
+                trace_stats = self._load_trace_stats(conn, [str(row["turn_id"])]).get(str(row["turn_id"]), {})
+                return {
+                    "message_id": str(row["message_id"]),
+                    "turn_id": str(row["turn_id"]),
+                    "conversation_id": str(row["conversation_id"]),
+                    "role": str(row["role"] or ""),
+                    "assistant_text": str(row["assistant_text"] or ""),
+                    "user_text": str(row["user_text"] or ""),
+                    "working_dir": str(row["working_dir"] or ""),
+                    "native_provider": str(row["native_provider"] or ""),
+                    "native_session_id": str(row["native_session_id"] or ""),
+                    "completion_state": str(row["completion_state"] or ""),
+                    "trace_recovery_attempted_at": str(row["trace_recovery_attempted_at"] or ""),
+                    "trace_recovery_status": str(row["trace_recovery_status"] or ""),
+                    "trace_count": int(trace_stats.get("trace_count", 0) or 0),
+                    "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
+                    "process_count": int(trace_stats.get("process_count", 0) or 0),
+                }

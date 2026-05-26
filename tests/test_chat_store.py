@@ -7,6 +7,117 @@ from bot.web import chat_store as chat_store_module
 from bot.web.chat_store import ChatStore, LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH
 
 
+class TrackingConnection:
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "closed", False)
+
+    def close(self):
+        object.__setattr__(self, "closed", True)
+        return self._conn.close()
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._conn.__exit__(exc_type, exc, tb)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_conn", "closed"}:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._conn, name, value)
+
+
+def test_chat_store_closes_sqlite_connections(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    original_connect = chat_store_module.sqlite3.connect
+    tracked = []
+
+    def tracked_connect(*args, **kwargs):
+        conn = TrackingConnection(original_connect(*args, **kwargs))
+        tracked.append(conn)
+        return conn
+
+    monkeypatch.setattr(chat_store_module.sqlite3, "connect", tracked_connect)
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=0,
+        user_text="查目录",
+        native_provider="codex",
+    )
+    store.list_messages(handle.conversation_id)
+    store.count_history(bot_id=1, user_id=1001, working_dir=str(workspace), session_epoch=0)
+
+    assert tracked
+    assert all(conn.closed for conn in tracked)
+
+
+def test_chat_store_write_exception_rolls_back_and_closes_connection(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    original_connect = chat_store_module.sqlite3.connect
+    tracked = []
+
+    def tracked_connect(*args, **kwargs):
+        conn = TrackingConnection(original_connect(*args, **kwargs))
+        tracked.append(conn)
+        return conn
+
+    monkeypatch.setattr(chat_store_module.sqlite3, "connect", tracked_connect)
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=0,
+        user_text="查目录",
+        native_provider="codex",
+    )
+
+    def fail_derive_title(self, conn, conversation_id):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ChatStore, "_derive_title", fail_derive_title)
+
+    try:
+        store.complete_turn(handle, content="完成", completion_state="completed")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    message = store.get_message(handle.assistant_message_id)
+    assert message["content"] == ""
+    assert message["state"] == "streaming"
+    assert tracked
+    assert all(conn.closed for conn in tracked)
+
+
 def test_begin_turn_creates_home_scoped_db_and_workspace_metadata(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

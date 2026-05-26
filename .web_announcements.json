@@ -281,6 +281,33 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ann-2026-05-26-13-56",
+      "published_at": "2026-05-26T13:56:00+08:00",
+      "publisher": "CLI Bridge",
+      "title": "版本更新公告 v1.2.13",
+      "category": "fix",
+      "severity": "info",
+      "summary": "修复聊天历史 SQLite 连接未关闭风险，降低 Windows 下文件句柄占用，并补充异常回滚验证。",
+      "sections": [
+        {
+          "label": "聊天历史存储",
+          "items": [
+            "`ChatStore` 写入连接改为自动关闭的上下文管理器，事务提交或回滚后会释放 SQLite 连接。",
+            "读取和按需写入入口统一关闭连接，覆盖会话列表、消息读取、历史计数、运行中回复、过期流式恢复、删除和 trace 查询等路径。",
+            "保留现有 `context_usage_json`、`update_context_usage` 和 trace recovery 逻辑，不回退当前聊天历史能力。"
+          ]
+        },
+        {
+          "label": "稳定性和测试",
+          "items": [
+            "新增 SQLite 连接追踪测试，覆盖正常读写路径连接关闭。",
+            "新增写入异常测试，确认异常时会回滚并关闭连接，避免留下半完成的聊天消息。",
+            "通过聊天存储全量测试和 context usage / trace recovery / stale streaming 相关回归筛选。"
+          ]
+        }
+      ]
     }
   ],
   "reads": {
