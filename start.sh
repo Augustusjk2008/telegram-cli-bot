@@ -63,6 +63,14 @@ fi
 export CLI_BRIDGE_SUPERVISOR=1
 export WEB_ENABLED="true"
 
+raise_nofile_limit() {
+  local target="${TCB_NOFILE_LIMIT:-8192}"
+  if ! [[ "$target" =~ ^[0-9]+$ ]] || [[ "$target" -le 0 ]]; then
+    return
+  fi
+  ulimit -n "$target" >/dev/null 2>&1 || true
+}
+
 get_dotenv_value() {
   local name="$1"
   awk -F= -v key="$name" '
@@ -107,6 +115,7 @@ fi
 
 "$PYTHON_BIN" -m bot.updater apply-pending --repo-root "$SCRIPT_DIR"
 show_tunnel_hint
+raise_nofile_limit
 
 while true; do
   set +e
