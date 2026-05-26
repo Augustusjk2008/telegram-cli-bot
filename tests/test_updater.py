@@ -558,6 +558,27 @@ def test_prepare_offline_update_sets_pending_update(monkeypatch, tmp_path: Path)
     assert status["pending_update_package_kind"] == updater.detect_update_package_kind(repo_root)
 
 
+def test_read_package_distribution_from_zip_reads_only_marker(monkeypatch, tmp_path: Path):
+    package = tmp_path / "offline.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("large.bin", b"x" * 1024)
+        _write_distribution_marker(archive, version="1.2.3")
+
+    original_read = zipfile.ZipFile.read
+    read_names: list[str] = []
+
+    def tracking_read(self, name, *args, **kwargs):
+        read_names.append(getattr(name, "filename", str(name)))
+        return original_read(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", tracking_read)
+
+    distribution = updater._read_package_distribution_from_package(package)
+
+    assert distribution["version"] == "1.2.3"
+    assert read_names == [".distribution.json"]
+
+
 def test_prepare_offline_update_rejects_wrong_package_kind(monkeypatch, tmp_path: Path):
     settings_file = tmp_path / ".web_admin_settings.json"
     monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)

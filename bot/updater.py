@@ -716,8 +716,40 @@ def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
 
 
 def _read_package_distribution_from_package(package_path: Path) -> dict[str, str]:
-    entries = _iter_package_entries(package_path)
-    return _read_package_distribution_from_entries(entries, package_name=package_path.name)
+    raw_bytes = _read_distribution_marker_from_package(package_path)
+    return _read_package_distribution_from_bytes(raw_bytes, package_name=package_path.name)
+
+
+def _read_distribution_marker_from_package(package_path: Path) -> bytes:
+    if _is_zip_package(package_path):
+        if not zipfile.is_zipfile(package_path):
+            raise RuntimeError(_format_invalid_package_message(package_path))
+        try:
+            with zipfile.ZipFile(package_path) as archive:
+                for member in archive.infolist():
+                    if member.is_dir():
+                        continue
+                    if _normalize_archive_path(member.filename) == DISTRIBUTION_MARKER_FILE:
+                        return archive.read(member)
+        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+            raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
+        raise RuntimeError(f"更新包缺少分发标记: {package_path.name}")
+    if _is_tar_gz_package(package_path):
+        try:
+            with tarfile.open(package_path, "r:gz") as archive:
+                for member in archive:
+                    if not member.isfile():
+                        continue
+                    if _normalize_archive_path(member.name) != DISTRIBUTION_MARKER_FILE:
+                        continue
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        break
+                    return extracted.read()
+        except (OSError, tarfile.TarError) as exc:
+            raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
+        raise RuntimeError(f"更新包缺少分发标记: {package_path.name}")
+    raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
 
 
 def _read_package_distribution_from_entries(
@@ -728,6 +760,10 @@ def _read_package_distribution_from_entries(
     raw_bytes = next((data for relative_path, data in package_entries if relative_path == DISTRIBUTION_MARKER_FILE), None)
     if raw_bytes is None:
         raise RuntimeError(f"更新包缺少分发标记: {package_name}")
+    return _read_package_distribution_from_bytes(raw_bytes, package_name=package_name)
+
+
+def _read_package_distribution_from_bytes(raw_bytes: bytes, *, package_name: str) -> dict[str, str]:
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
