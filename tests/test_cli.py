@@ -29,7 +29,7 @@ from bot.cli import (
     should_reset_codex_session,
     validate_cli_type,
 )
-from bot.cli_params import CliParamsConfig
+from bot.cli_params import CliParamsConfig, with_global_extra_args
 
 class TestValidateCliType:
     """测试 validate_cli_type"""
@@ -280,6 +280,28 @@ class TestBuildCliCommand:
         )
 
         assert "--no-thinking" in cmd
+
+    def test_with_global_extra_args_copies_and_appends_by_type(self):
+        params_config = CliParamsConfig()
+        params_config.codex["extra_args"] = ["--bot-codex"]
+        params_config.claude["extra_args"] = ["--bot-claude"]
+        params_config.kimi["extra_args"] = ["--bot-kimi"]
+
+        merged = with_global_extra_args(
+            params_config,
+            {
+                "codex": ["--global-codex"],
+                "claude": ["--global-claude"],
+                "kimi": ["--global-kimi"],
+            },
+        )
+
+        assert params_config.codex["extra_args"] == ["--bot-codex"]
+        assert params_config.claude["extra_args"] == ["--bot-claude"]
+        assert params_config.kimi["extra_args"] == ["--bot-kimi"]
+        assert merged.codex["extra_args"] == ["--bot-codex", "--global-codex"]
+        assert merged.claude["extra_args"] == ["--bot-claude", "--global-claude"]
+        assert merged.kimi["extra_args"] == ["--bot-kimi", "--global-kimi"]
 
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""

@@ -1,11 +1,12 @@
 """全局配置、常量、日志初始化"""
 
 import asyncio
+import json
 import logging
 import os
 import re
 import sys
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 from bot.cli_params import normalize_cli_model_options
 
@@ -25,6 +26,32 @@ except ImportError:
 # ============ 环境变量读取 ============
 def _split_csv_env(raw_value: str) -> List[str]:
     return [item.strip() for item in (raw_value or "").split(",") if item.strip()]
+
+
+def _parse_cli_global_extra_args(raw_value: str) -> dict[str, list[str]]:
+    value = (raw_value or "").strip()
+    if not value:
+        return {}
+    try:
+        payload: Any = json.loads(value)
+    except json.JSONDecodeError as exc:
+        logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS JSON: %s", exc)
+        return {}
+    if not isinstance(payload, dict):
+        logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS：必须是 JSON object")
+        return {}
+
+    parsed: dict[str, list[str]] = {}
+    for key, args in payload.items():
+        cli_type = str(key or "").strip().lower()
+        if cli_type not in {"codex", "claude", "kimi"}:
+            logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：不支持的 CLI 类型", key)
+            return {}
+        if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
+            logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：必须是字符串数组", key)
+            return {}
+        parsed[cli_type] = [item for item in args if item.strip()]
+    return parsed
 
 
 def _get_project_config(name: str, default: str = "") -> str:
@@ -76,6 +103,7 @@ for uid in _allowed_raw.split(","):
 CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
 CLI_PATH = _get_project_config("CLI_PATH", "codex")
 CLI_MODEL_OPTIONS = normalize_cli_model_options(_split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", "")))
+CLI_GLOBAL_EXTRA_ARGS = _parse_cli_global_extra_args(_get_project_config("CLI_GLOBAL_EXTRA_ARGS", "{}"))
 WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))
 CLAUDE_DONE_DETECTOR_ENABLED = os.environ.get("CLAUDE_DONE_DETECTOR_ENABLED", "false").lower() == "true"
 CLAUDE_DONE_QUIET_SECONDS = float(os.environ.get("CLAUDE_DONE_QUIET_SECONDS", "2"))

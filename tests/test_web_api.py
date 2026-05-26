@@ -617,6 +617,27 @@ async def test_cluster_mcp_tool_rejects_old_run_when_cluster_disabled(web_manage
     api_service._CLUSTER_RUNTIME.finish_run(run.run_id)
 
 
+def test_effective_cli_params_appends_bot_global_then_cluster_args(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = web_manager.main_profile
+    profile.cli_type = "codex"
+    params = profile.cli_params
+    params.codex["extra_args"] = ["--bot"]
+    monkeypatch.setattr(api_service.config, "CLI_GLOBAL_EXTRA_ARGS", {"codex": ["--global"]})
+
+    with patch("bot.web.api_service.Path.home", lambda: tmp_path):
+        effective = api_service._effective_cli_params(profile, params, "clr_test")
+
+    extra_args = effective.codex["extra_args"]
+    assert extra_args[:2] == ["--bot", "--global"]
+    assert extra_args[2] == "-c"
+    assert "mcp_servers.tcb-cluster.command" in extra_args[3]
+    assert params.codex["extra_args"] == ["--bot"]
+
+
 @pytest.mark.asyncio
 async def test_cluster_ask_agent_uses_configured_model_tier(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     from bot.cluster.config import BotClusterConfig
@@ -2463,6 +2484,48 @@ async def test_generate_git_commit_message_uses_staged_diff_and_no_session_reuse
 
 
 @pytest.mark.asyncio
+async def test_generate_git_commit_message_applies_global_extra_args(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    git_config = web_manager.get_git_commit_cli_config("main")
+    git_config.cli_params.codex["extra_args"] = ["--bot"]
+    web_manager._git_commit_cli_config = git_config
+    monkeypatch.setattr("bot.web.git_service.config.CLI_GLOBAL_EXTRA_ARGS", {"codex": ["--global"]})
+    captured: dict[str, Any] = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["extra_args"] = kwargs["params_config"].codex["extra_args"]
+        return ["codex"], False
+
+    fake_process = MagicMock()
+    fake_process.communicate.return_value = (
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>\\nfeat(git): global args\\n</COMMIT_MESSAGE>"}}',
+        None,
+    )
+    fake_process.returncode = 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        result = await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert result["message"] == "feat(git): global args"
+    assert captured["extra_args"] == ["--bot", "--global"]
+
+
+@pytest.mark.asyncio
 async def test_generate_git_commit_message_uses_unstaged_draft_when_no_staged(
     web_manager: MultiBotManager,
     temp_dir: Path,
@@ -2600,6 +2663,93 @@ async def test_generate_git_commit_message_raises_failed_on_cli_error(
             await generate_git_commit_message(web_manager, "main", 1001)
 
     assert error.value.code == "git_commit_message_failed"
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_closes_streams_on_success(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    fake_process = RecordingProcess()
+    fake_process.communicate = MagicMock(return_value=(
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>\\nfeat(git): close streams\\n</COMMIT_MESSAGE>"}}',
+        None,
+    ))
+    fake_process.returncode = 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        result = await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert result["message"] == "feat(git): close streams"
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_closes_streams_on_timeout(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("x\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    fake_process = RecordingProcess()
+
+    async def never_finish(_process):
+        await asyncio.sleep(10)
+        return "", 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process), \
+         patch("bot.web.git_service.GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS", 0.01), \
+         patch("bot.web.git_service._communicate_process", side_effect=never_finish):
+        with pytest.raises(WebApiError) as error:
+            await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert error.value.code == "git_commit_message_timeout"
+    fake_process.terminate.assert_called()
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_closes_streams_on_stdin_broken_pipe(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    (repo_dir / "tracked.txt").write_text("x\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    fake_process = RecordingProcess(stdin_fails=True)
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", return_value=(["codex"], True)), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        with pytest.raises(WebApiError) as error:
+            await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert error.value.code == "git_commit_message_failed"
+    fake_process.terminate.assert_called()
+    assert_recording_process_closed(fake_process)
 
 
 @pytest.mark.asyncio
@@ -8758,6 +8908,74 @@ class FakeCodexProcessWithBlockingStdout:
         self.returncode = -9
 
 
+class RecordingStream:
+    def __init__(self, *, fail_write: bool = False):
+        self.closed = False
+        self.fail_write = fail_write
+
+    def write(self, _value):
+        if self.fail_write:
+            raise BrokenPipeError("pipe closed")
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+class RecordingStdout:
+    def __init__(self, owner, lines: list[str] | None = None, *, fail_read: bool = False):
+        self._owner = owner
+        self._lines = list(lines or [])
+        self.closed = False
+        self.fail_read = fail_read
+
+    def readline(self):
+        if self.fail_read:
+            raise OSError("read failed")
+        if self._lines:
+            return self._lines.pop(0)
+        self._owner.returncode = 0
+        return ""
+
+    def read(self):
+        return ""
+
+    def close(self):
+        self.closed = True
+
+
+class RecordingProcess:
+    def __init__(self, lines: list[str] | None = None, *, stdin_fails: bool = False, stdout_fails: bool = False):
+        self.returncode = None
+        self.stdin = RecordingStream(fail_write=stdin_fails)
+        self.stdout = RecordingStdout(self, lines, fail_read=stdout_fails)
+        self.stderr = RecordingStream()
+        self.terminate = MagicMock(side_effect=self._terminate)
+        self.kill = MagicMock(side_effect=self._kill)
+
+    def _terminate(self):
+        self.returncode = -15
+
+    def _kill(self):
+        self.returncode = -9
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+def assert_recording_process_closed(process: RecordingProcess):
+    assert process.stdin.closed is True
+    assert process.stdout.closed is True
+    assert process.stderr.closed is True
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_codex_final_event_finishes_when_stdout_never_eofs(
     web_manager: MultiBotManager,
@@ -8787,6 +9005,70 @@ async def test_stream_cli_chat_codex_final_event_finishes_when_stdout_never_eofs
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_closes_streams_on_done(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = RecordingProcess([
+        '{"type":"thread.started","thread_id":"thread-1"}\n',
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n',
+    ])
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    assert events[-1]["type"] == "done"
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_closes_streams_and_terminates_on_reader_error(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = RecordingProcess(stdout_fails=True)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        with pytest.raises(OSError):
+            [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    fake_process.terminate.assert_called()
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_closes_streams_and_terminates_on_cancel(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = RecordingProcess()
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        stream = _stream_cli_chat(web_manager, "main", 1001, "hello")
+        assert (await anext(stream))["type"] == "meta"
+        await stream.aclose()
+
+    fake_process.terminate.assert_called()
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_closes_streams_on_stdin_broken_pipe(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = RecordingProcess(stdin_fails=True)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], True)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        with pytest.raises(WebApiError) as error:
+            [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    assert error.value.code == "cli_write_failed"
+    fake_process.terminate.assert_called()
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_codex_final_event_finishes_when_stdout_never_eofs(
     web_manager: MultiBotManager,
 ):
@@ -8806,6 +9088,39 @@ async def test_run_cli_chat_codex_final_event_finishes_when_stdout_never_eofs(
     assert result["returncode"] == 0
     assert fake_process.stdout.closed.is_set()
     fake_process.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_closes_streams_on_done(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = RecordingProcess([
+        '{"type":"thread.started","thread_id":"thread-1"}\n',
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n',
+    ])
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        result = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert result["output"] == "完成"
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_closes_streams_on_stdin_broken_pipe(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = RecordingProcess(stdin_fails=True)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], True)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        with pytest.raises(WebApiError) as error:
+            await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert error.value.code == "cli_write_failed"
+    fake_process.terminate.assert_called()
+    assert_recording_process_closed(fake_process)
 
 
 @pytest.mark.asyncio

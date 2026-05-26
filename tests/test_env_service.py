@@ -43,6 +43,18 @@ def test_env_service_reads_example_defaults_when_env_missing(tmp_path: Path, mon
     assert cli_type["source"] == "example"
 
 
+def test_env_service_exposes_cli_global_extra_args_schema(tmp_path: Path):
+    _write_example(tmp_path / ".env.example")
+    service = EnvConfigService(tmp_path)
+
+    data = service.snapshot()
+    field = next(item for item in data["items"] if item["key"] == "CLI_GLOBAL_EXTRA_ARGS")
+
+    assert field["type"] == "string"
+    assert field["default"] == "{}"
+    assert field["restartRequired"] is True
+
+
 def test_env_service_masks_sensitive_values_and_preserves_unmodified_patch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -19,10 +19,12 @@ from bot.cli import (
     parse_kimi_stream_json_output,
     resolve_cli_executable,
 )
-from bot.cli_params import CliParamsConfig, coerce_param_value
+from bot import config
+from bot.cli_params import CliParamsConfig, coerce_param_value, with_global_extra_args
 from bot.app_settings import get_git_proxy_config_args
 from bot.manager import MultiBotManager
 from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
+from bot.platform.subprocess_streams import close_process_streams
 from .api_common import WebApiError, get_profile_or_raise
 from .git_commit_message import (
     build_commit_message_prompt,
@@ -177,6 +179,8 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
     except Exception:
         _terminate_process_sync(process)
         raise
+    finally:
+        close_process_streams(process)
     return str(output or ""), int(process.returncode or 0)
 
 
@@ -770,13 +774,14 @@ async def _generate_git_commit_message_from_context(
 
     prompt_text = build_commit_message_prompt(**context)
     env = _build_git_commit_cli_env()
+    params_config = with_global_extra_args(cli_config.cli_params, config.CLI_GLOBAL_EXTRA_ARGS)
     try:
         cmd, use_stdin = build_cli_command(
             cli_type=cli_type,
             resolved_cli=resolved_cli,
             user_text=prompt_text,
             env=env,
-            params_config=cli_config.cli_params,
+            params_config=params_config,
             session_id=None,
             resume_session=False,
             json_output=True,
@@ -802,7 +807,12 @@ async def _generate_git_commit_message_from_context(
             process.stdin.flush()
             process.stdin.close()
         except (BrokenPipeError, OSError) as exc:
-            process.wait()
+            close_process_streams(process)
+            _terminate_process_sync(process)
+            try:
+                process.wait(timeout=1)
+            except Exception:
+                pass
             _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
 
     try:
@@ -812,7 +822,10 @@ async def _generate_git_commit_message_from_context(
         )
     except TimeoutError:
         _terminate_process_sync(process)
+        close_process_streams(process)
         _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
+    finally:
+        close_process_streams(process)
 
     if cli_type == "codex":
         response_text, _ = parse_codex_json_output(raw_output)

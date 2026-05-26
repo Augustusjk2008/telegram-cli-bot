@@ -14,7 +14,8 @@ from bot.assistant.home import AssistantHome
 from bot.assistant.upgrade.service import ensure_upgrade_repo_clean, read_upgrade_metadata, write_upgrade_metadata
 from bot.assistant.upgrade.diff import parse_patch_files
 from bot.cli import build_cli_command, normalize_cli_type, resolve_cli_executable
-from bot.cli_params import CliParamsConfig
+from bot import config
+from bot.cli_params import CliParamsConfig, with_global_extra_args
 from bot.platform.processes import build_hidden_process_kwargs
 
 SENSITIVE_PATH_PATTERNS = (
@@ -170,12 +171,13 @@ def _run_generator_cli(worktree_path: Path, prompt: str, metadata: dict[str, Any
     if resolved_cli is None:
         raise FileNotFoundError(cli_path)
     env = os.environ.copy()
+    params_config = with_global_extra_args(CliParamsConfig(), config.CLI_GLOBAL_EXTRA_ARGS)
     cmd, use_stdin = build_cli_command(
         cli_type=cli_type,
         resolved_cli=resolved_cli,
         user_text=prompt,
         env=env,
-        params_config=CliParamsConfig(),
+        params_config=params_config,
         working_dir=str(worktree_path),
     )
     started_at = time.perf_counter()

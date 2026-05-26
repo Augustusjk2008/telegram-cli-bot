@@ -43,6 +43,38 @@ def test_pty_wrapper_resize_returns_false_for_pipe_process():
     assert wrapper.resize(120, 40) is False
 
 
+def test_pty_wrapper_close_closes_non_pty_streams_once():
+    closed: list[str] = []
+
+    process = SimpleNamespace(
+        stdin=SimpleNamespace(close=lambda: closed.append("stdin")),
+        stdout=SimpleNamespace(close=lambda: closed.append("stdout")),
+        stderr=SimpleNamespace(close=lambda: closed.append("stderr")),
+        pid=1234,
+    )
+    wrapper = PtyWrapper(process, is_pty=False)
+
+    wrapper.close()
+    wrapper.close()
+
+    assert closed == ["stdin", "stdout", "stderr"]
+
+
+def test_pty_wrapper_close_ignores_stream_close_errors():
+    def fail():
+        raise OSError("closed")
+
+    process = SimpleNamespace(
+        stdin=SimpleNamespace(close=fail),
+        stdout=SimpleNamespace(close=fail),
+        stderr=SimpleNamespace(close=fail),
+        pid=1234,
+    )
+    wrapper = PtyWrapper(process, is_pty=False)
+
+    wrapper.close()
+
+
 def test_posix_pty_process_resize_uses_ioctl(monkeypatch):
     calls: list[tuple[int, int, tuple[str, int, int, int, int]]] = []
 

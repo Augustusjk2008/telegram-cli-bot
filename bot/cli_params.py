@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.platform.executables import build_executable_invocation
@@ -216,6 +217,26 @@ def normalize_cli_model_options(options: Optional[List[str]]) -> List[str]:
         add_option(option)
 
     return normalized
+
+
+def _normalize_cli_type(cli_type: str) -> str:
+    return (cli_type or "").strip().lower()
+
+
+def with_global_extra_args(
+    params_config: CliParamsConfig,
+    global_extra_args: Mapping[str, Sequence[str]] | None,
+) -> CliParamsConfig:
+    """Return a copy with global extra args appended per CLI type."""
+    merged = CliParamsConfig.from_dict(params_config.to_dict())
+    for cli_type, args in (global_extra_args or {}).items():
+        params = getattr(merged, _normalize_cli_type(str(cli_type)), None)
+        if isinstance(params, dict):
+            params["extra_args"] = [
+                *[str(x) for x in params.get("extra_args", []) if str(x).strip()],
+                *[str(x) for x in args if str(x).strip()],
+            ]
+    return merged
 
 
 def normalize_codex_project_path(working_dir: Optional[str]) -> Optional[str]:

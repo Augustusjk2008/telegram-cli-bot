@@ -13,6 +13,7 @@ import threading
 from typing import Union
 
 from bot.platform.processes import build_subprocess_group_kwargs
+from bot.platform.subprocess_streams import close_process_streams
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +107,14 @@ class PtyWrapper:
             self.process.kill()
 
     def close(self) -> None:
-        if self.is_pty:
-            try:
-                self.process.close()
-            except Exception:
-                pass
+        with self._lock:
+            if self.is_pty:
+                try:
+                    self.process.close()
+                except Exception:
+                    pass
+                return
+            close_process_streams(self.process)
 
     @property
     def pid(self) -> int:

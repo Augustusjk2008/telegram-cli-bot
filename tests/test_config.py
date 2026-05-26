@@ -133,6 +133,23 @@ class TestConfigConstants:
 
         assert config.APP_UPDATE_REPOSITORY == "Augustusjk2008/telegram-cli-bot"
 
+    def test_cli_global_extra_args_parses_valid_json_and_ignores_invalid(self, monkeypatch):
+        import importlib
+        import dotenv
+        import bot.config as config
+
+        monkeypatch.setattr(dotenv, "dotenv_values", lambda *args, **kwargs: {})
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
+        monkeypatch.setenv("CLI_GLOBAL_EXTRA_ARGS", '{"codex":["-c","x=1"],"claude":[],"kimi":["--flag"]}')
+        importlib.reload(config)
+
+        assert config.CLI_GLOBAL_EXTRA_ARGS == {"codex": ["-c", "x=1"], "claude": [], "kimi": ["--flag"]}
+
+        monkeypatch.setenv("CLI_GLOBAL_EXTRA_ARGS", "{bad")
+        importlib.reload(config)
+
+        assert config.CLI_GLOBAL_EXTRA_ARGS == {}
+
 class TestRestartMechanism:
     """测试重启机制"""
 

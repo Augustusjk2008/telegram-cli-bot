@@ -426,6 +426,39 @@ def test_generate_pending_patch_writes_lf_patch_bytes(tmp_path, monkeypatch):
     subprocess.run(["git", "apply", "--check", str(patch_path)], cwd=repo, check=True)
 
 
+def test_patch_generator_cli_applies_global_extra_args(tmp_path, monkeypatch):
+    from bot.assistant.upgrade import patch_generation
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    captured = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["extra_args"] = kwargs["params_config"].codex["extra_args"]
+        return ["codex"], True
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs["input"]
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    monkeypatch.setattr(patch_generation.config, "CLI_GLOBAL_EXTRA_ARGS", {"codex": ["--global"]})
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation.resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation.build_cli_command", fake_build_cli_command)
+    monkeypatch.setattr("bot.assistant.upgrade.patch_generation.subprocess.run", fake_run)
+
+    result = patch_generation._run_generator_cli(
+        worktree,
+        "apply proposal",
+        {"cli_type": "codex", "cli_path": "codex"},
+    )
+
+    assert result["status"] == "succeeded"
+    assert captured["extra_args"] == ["--global"]
+    assert captured["cmd"] == ["codex"]
+    assert captured["input"] == "apply proposal\n"
+
+
 def test_generate_pending_patch_marks_sensitive_hits(tmp_path, monkeypatch):
     from bot.assistant.upgrade.patch_generation import generate_pending_patch
 

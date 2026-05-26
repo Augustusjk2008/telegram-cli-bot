@@ -10,6 +10,7 @@ __pycache__/
 .web_register_codes.json
 .web_auth_secret.json
 managed_bots.json
+.git_commit_cli_config.json
 .env
 *.log
 /docs/
