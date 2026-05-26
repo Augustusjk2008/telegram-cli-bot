@@ -3,11 +3,15 @@
 import os
 import sys
 
+from bot.bootstrap import ensure_nofile_limit
+
 # 确保 refactoring/ 在 sys.path 中
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _package_root = os.path.dirname(_this_dir)
 if _package_root not in sys.path:
     sys.path.insert(0, _package_root)
+
+ensure_nofile_limit()
 
 from bot.main import main
 
