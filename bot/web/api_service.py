@@ -3987,6 +3987,9 @@ async def _stream_cli_chat(
             )
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
+            last_context_usage: dict[str, Any] | None = None
+            last_context_usage_signature: tuple[tuple[str, str], ...] | None = None
+            last_context_usage_persisted_at = 0.0
             claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
@@ -4141,13 +4144,23 @@ async def _stream_cli_chat(
                         thread_id=thread_id,
                     )
                     if status_session_id:
-                        status_context_usage = resolve_cli_context_usage(
+                        status_context_usage = await asyncio.to_thread(
+                            resolve_cli_context_usage,
                             cli_type,
                             status_session_id,
                             cwd_hint=session.working_dir,
                         )
                         if status_context_usage:
                             status_event["context_usage"] = status_context_usage
+                            context_usage_signature = _context_usage_signature(status_context_usage)
+                            last_context_usage = status_context_usage
+                            if (
+                                context_usage_signature != last_context_usage_signature
+                                or loop.time() - last_context_usage_persisted_at >= 1.0
+                            ):
+                                await service.update_context_usage_async(turn_handle, status_context_usage)
+                                last_context_usage_signature = context_usage_signature
+                                last_context_usage_persisted_at = loop.time()
                     status_signature = (
                         int(status_event.get("elapsed_seconds", 0)),
                         status_event.get("preview_text"),
@@ -4302,9 +4315,17 @@ async def _stream_cli_chat(
                 if completion_state == "completed" or should_force_error_output
                 else (response or latest_preview_text)
             )
-            context_usage = resolve_cli_context_usage(cli_type, native_session_id, cwd_hint=session.working_dir)
+            context_usage = await asyncio.to_thread(
+                resolve_cli_context_usage,
+                cli_type,
+                native_session_id,
+                cwd_hint=session.working_dir,
+            )
+            if context_usage is None:
+                context_usage = last_context_usage
             complete_started_at = time.perf_counter()
-            done_message = service.complete_turn(
+            done_message = await asyncio.to_thread(
+                service.complete_turn,
                 turn_handle,
                 completion_state=completion_state,
                 content=fallback_output,

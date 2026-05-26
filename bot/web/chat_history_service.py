@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from bot.cli import normalize_cli_type
@@ -179,6 +180,12 @@ class ChatHistoryService:
 
     def replace_assistant_preview(self, handle: ChatTurnHandle, preview_text: str) -> None:
         self.store.replace_assistant_content(handle, preview_text[-800:], state="streaming")
+
+    def update_context_usage(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
+        return self.store.update_context_usage(handle.turn_id, context_usage)
+
+    async def update_context_usage_async(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
+        return await asyncio.to_thread(self.update_context_usage, handle, context_usage)
 
     def append_trace_event(self, handle: ChatTurnHandle, event: dict[str, Any]) -> None:
         self.store.append_trace_event(

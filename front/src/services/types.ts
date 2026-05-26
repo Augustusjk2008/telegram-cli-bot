@@ -1577,11 +1577,22 @@ export type AvatarAsset = {
 
 export type TunnelSnapshot = {
   mode: "disabled" | "cloudflare_quick" | "manual";
-  status: "stopped" | "starting" | "running" | "error";
+  status: "stopped" | "waiting_local" | "waiting_url" | "connected" | "verifying_public" | "starting" | "running" | "error";
+  phase?: string;
   source: "disabled" | "quick_tunnel" | "manual_config";
   publicUrl: string;
   localUrl: string;
   lastError: string;
+  verified?: boolean;
+  lastProbeAt?: string;
+  lastProbeElapsedMs?: number;
+  lastProbeError?: {
+    errorClass?: string;
+    errorText?: string;
+    statusCode?: number | null;
+  };
+  registeredAt?: string;
+  logTail?: string[];
   pid?: number | null;
 };
 

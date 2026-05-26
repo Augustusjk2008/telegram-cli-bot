@@ -94,6 +94,10 @@ function gitProxyStatusText(settings: GitProxySettings | null) {
 
 function tunnelStatusText(status: TunnelSnapshot["status"]) {
   if (status === "running") return "运行中";
+  if (status === "waiting_local") return "等待本地服务";
+  if (status === "waiting_url") return "等待公网地址";
+  if (status === "connected") return "公网地址已创建";
+  if (status === "verifying_public") return "正在验证公网地址";
   if (status === "starting") return "启动中";
   if (status === "error") return "异常";
   return "已停止";
@@ -243,7 +247,7 @@ export function SettingsScreen({
   }, [botAlias, client, isMainBot, prefilledWorkdir]);
 
   useEffect(() => {
-    if (tunnel?.status !== "starting" || !tunnel.publicUrl || tunnelAction !== "") {
+    if (!["starting", "connected", "verifying_public"].includes(tunnel?.status || "") || !tunnel?.publicUrl || tunnelAction !== "") {
       return;
     }
 
@@ -924,6 +928,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="space-y-2 text-sm text-[var(--muted)]">
               <p className="break-all"><span className="font-medium text-[var(--text)]">HTTPS 访问:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
               <p className="break-all"><span className="font-medium text-[var(--text)]">本地转发目标:</span> {tunnel.localUrl}</p>
+              {tunnel.publicUrl && tunnel.source === "quick_tunnel" && tunnel.status !== "running" && !tunnel.lastError ? (
+                <p className="break-all">公网地址已创建，正在验证</p>
+              ) : null}
               {tunnel.lastError ? (
                 <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
               ) : null}
@@ -935,7 +942,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   <button
                     type="button"
                     onClick={() => void runTunnelAction("start")}
-                    disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting"}
+                    disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting" || tunnel.status === "connected" || tunnel.status === "verifying_public" || tunnel.status === "waiting_url"}
                     className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                   >
                     启动 Tunnel

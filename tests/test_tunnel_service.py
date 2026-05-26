@@ -95,11 +95,11 @@ async def test_tunnel_service_reuses_persisted_starting_quick_tunnel(tmp_path: P
          patch("bot.web.tunnel_service.subprocess.Popen", side_effect=AssertionError("should not spawn cloudflared")):
         snapshot = await service.start()
 
-    assert snapshot["status"] == "starting"
+    assert snapshot["status"] == "verifying_public"
     assert snapshot["source"] == "quick_tunnel"
     assert snapshot["public_url"] == "https://slow.trycloudflare.com"
     assert snapshot["pid"] == 4321
-    assert "公网地址仍在传播" in snapshot["last_error"]
+    assert "正在验证" in snapshot["last_error"]
 
 
 @pytest.mark.asyncio
@@ -280,17 +280,78 @@ async def test_tunnel_service_start_keeps_slow_public_tunnel_starting(tmp_path: 
          patch("bot.web.tunnel_service.subprocess.Popen", return_value=process):
         snapshot = await service.start()
 
-    assert health_calls == ["http://127.0.0.1:8765", "https://fresh.trycloudflare.com"]
-    assert snapshot["status"] == "starting"
+    assert health_calls == ["http://127.0.0.1:8765"]
+    assert snapshot["status"] == "verifying_public"
     assert snapshot["public_url"] == "https://fresh.trycloudflare.com"
     assert snapshot["pid"] == 5555
-    assert "公网地址仍在传播" in snapshot["last_error"]
+    assert "正在验证" in snapshot["last_error"]
     assert process.terminated is False
     assert process.waited is False
     assert process.killed is False
     persisted = json.loads(state_file.read_text(encoding="utf-8"))
     assert persisted["public_url"] == "https://fresh.trycloudflare.com"
     assert persisted["pid"] == 5555
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_start_returns_after_url_without_waiting_public_health(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+        startup_timeout=0.01,
+        local_health_timeout=0.01,
+        public_health_timeout=30.0,
+    )
+
+    class FakeStdout:
+        def __init__(self):
+            self._first = True
+
+        def readline(self):
+            if self._first:
+                self._first = False
+                return "https://fresh.trycloudflare.com\n"
+            time.sleep(1.0)
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.pid = 5555
+            self.stdout = FakeStdout()
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    health_calls: list[str] = []
+
+    def fake_wait_for_health(base_url: str, *, timeout: float) -> bool:
+        health_calls.append(base_url)
+        if base_url != "http://127.0.0.1:8765":
+            raise AssertionError("public health should run in background")
+        return True
+
+    with patch.object(service, "_wait_for_health", side_effect=fake_wait_for_health), \
+         patch("bot.web.tunnel_service.subprocess.Popen", return_value=FakeProcess()):
+        snapshot = await service.start()
+
+    assert health_calls == ["http://127.0.0.1:8765"]
+    assert snapshot["status"] == "verifying_public"
+    assert snapshot["phase"] == "verifying_public"
+    assert snapshot["verified"] is False
+    assert snapshot["public_url"] == "https://fresh.trycloudflare.com"
+    assert state_file.exists()
 
 
 @pytest.mark.parametrize("status", ["starting", "running"])
@@ -573,26 +634,67 @@ async def test_tunnel_service_wait_until_public_ready_marks_running(tmp_path: Pa
         def kill(self):
             return None
 
-    public_checks = [False, True]
-
     def fake_wait_for_health(base_url: str, *, timeout: float) -> bool:
         if base_url == "http://127.0.0.1:8765":
             return True
-        return public_checks.pop(0)
+        raise AssertionError("public health should not use _wait_for_health")
 
     with patch.object(service, "_wait_for_health", side_effect=fake_wait_for_health), \
+         patch.object(service, "_can_fetch_health", return_value={"ok": True, "status_code": 200, "elapsed_ms": 3}), \
          patch("bot.web.tunnel_service.subprocess.Popen", return_value=FakeProcess()):
         starting = await service.start()
         ready = await service.wait_until_public_ready(timeout=0.01)
 
-    assert starting["status"] == "starting"
+    assert starting["status"] == "verifying_public"
     assert ready["status"] == "running"
     assert ready["public_url"] == "https://fresh.trycloudflare.com"
-    assert ready["last_error"] == ""
-    persisted = json.loads(state_file.read_text(encoding="utf-8"))
-    assert persisted["status"] == "running"
-    assert persisted["public_url"] == "https://fresh.trycloudflare.com"
-    assert persisted["pid"] == 5555
+
+
+@pytest.mark.asyncio
+async def test_tunnel_service_background_probe_marks_running(tmp_path: Path):
+    state_file = tmp_path / "web-tunnel-state.json"
+    service = TunnelService(
+        host="127.0.0.1",
+        port=8765,
+        mode="cloudflare_quick",
+        state_file=str(state_file),
+        startup_timeout=0.01,
+        local_health_timeout=0.01,
+        public_health_timeout=0.01,
+    )
+    service._set_snapshot(
+        status="verifying_public",
+        phase="verifying_public",
+        source="quick_tunnel",
+        public_url="https://fresh.trycloudflare.com",
+        pid=5555,
+        verified=False,
+    )
+
+    with patch.object(service, "_can_fetch_health", return_value={"ok": True, "status_code": 200, "elapsed_ms": 3}), \
+         patch.object(service, "_is_cloudflared_process", return_value=True):
+        snapshot = await service.wait_until_public_ready(timeout=0.01)
+
+    assert snapshot["status"] == "running"
+    assert snapshot["phase"] == "running"
+    assert snapshot["verified"] is True
+    assert snapshot["last_probe_elapsed_ms"] == 3
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_class"),
+    [
+        (TimeoutError("timed out"), "timeout"),
+        (OSError("dns failed"), "os_error"),
+    ],
+)
+def test_tunnel_service_can_fetch_health_returns_structured_error(error, expected_class):
+    with patch("bot.web.tunnel_service.urlopen", side_effect=error):
+        result = TunnelService._can_fetch_health("https://fresh.trycloudflare.com", timeout=0.01)
+
+    assert result["ok"] is False
+    assert result["error_class"] == expected_class
+    assert result["elapsed_ms"] >= 0
 
 
 @pytest.mark.asyncio

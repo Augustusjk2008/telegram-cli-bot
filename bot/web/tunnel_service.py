@@ -11,12 +11,14 @@ import os
 import re
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -30,6 +32,14 @@ _BENIGN_TUNNEL_WARNINGS = (
     "Failed to initialize DNS local resolver",
     "cloudflared does not support loading the system root certificate pool on Windows",
 )
+_ACTIVE_TUNNEL_STATUSES = {"waiting_local", "waiting_url", "connected", "verifying_public", "starting", "running"}
+_PUBLIC_PROBE_INTERVAL_SECONDS = 1.0
+_PUBLIC_PROBE_INITIAL_DELAY_SECONDS = 0.25
+_LOG_TAIL_LIMIT = 40
+
+
+def _utc_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _normalize_quick_public_url(value: str) -> str:
@@ -81,6 +91,7 @@ class TunnelService:
         self._state_lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
         self._expected_stop = False
+        self._public_probe_task: asyncio.Task[None] | None = None
         self._snapshot = self._build_initial_snapshot()
 
     @staticmethod
@@ -126,6 +137,16 @@ class TunnelService:
             return False
 
     @staticmethod
+    def _default_probe_error() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "status_code": None,
+            "error_class": "",
+            "error_text": "",
+            "elapsed_ms": 0,
+        }
+
+    @staticmethod
     def _build_health_url(base_url: str) -> str:
         parsed = urlsplit((base_url or "").strip())
         if not parsed.scheme or not parsed.netloc:
@@ -134,22 +155,91 @@ class TunnelService:
         return f"{parsed.scheme}://{parsed.netloc}{base_path}{_HEALTH_PATH}"
 
     @staticmethod
-    def _can_fetch_health(base_url: str, timeout: float = 1.0) -> bool:
+    def _can_fetch_health(base_url: str, timeout: float = 1.0) -> dict[str, Any]:
+        started_at = time.perf_counter()
         health_url = TunnelService._build_health_url(base_url)
         if not health_url:
-            return False
+            return {
+                "ok": False,
+                "status_code": None,
+                "error_class": "invalid_url",
+                "error_text": "公网地址无效",
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
         try:
             request = Request(health_url, headers={"Accept": "application/json"})
             with urlopen(request, timeout=timeout) as response:
                 status = getattr(response, "status", response.getcode())
-                return 200 <= int(status) < 300
-        except Exception:
-            return False
+                status_code = int(status)
+                return {
+                    "ok": 200 <= status_code < 300,
+                    "status_code": status_code,
+                    "error_class": "" if 200 <= status_code < 300 else "http_status",
+                    "error_text": "" if 200 <= status_code < 300 else f"HTTP {status_code}",
+                    "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+                }
+        except HTTPError as exc:
+            return {
+                "ok": False,
+                "status_code": int(getattr(exc, "code", 0) or 0) or None,
+                "error_class": "http_status",
+                "error_text": f"HTTP {getattr(exc, 'code', '')}".strip(),
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
+        except TimeoutError as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error_class": "timeout",
+                "error_text": str(exc) or "公网健康检查超时",
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
+        except ssl.SSLError as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error_class": "ssl",
+                "error_text": str(exc),
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
+        except URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            error_class = "url_error"
+            if isinstance(reason, TimeoutError):
+                error_class = "timeout"
+            elif isinstance(reason, ssl.SSLError):
+                error_class = "ssl"
+            elif isinstance(reason, socket.gaierror):
+                error_class = "dns"
+            return {
+                "ok": False,
+                "status_code": None,
+                "error_class": error_class,
+                "error_text": str(reason),
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
+        except OSError as exc:
+            error_class = "dns" if isinstance(exc, socket.gaierror) else "os_error"
+            return {
+                "ok": False,
+                "status_code": None,
+                "error_class": error_class,
+                "error_text": str(exc),
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error_class": type(exc).__name__,
+                "error_text": str(exc),
+                "elapsed_ms": int(round((time.perf_counter() - started_at) * 1000)),
+            }
 
     def _wait_for_health(self, base_url: str, *, timeout: float) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
         while True:
-            if self._can_fetch_health(base_url):
+            if self._can_fetch_health(base_url).get("ok"):
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -161,29 +251,50 @@ class TunnelService:
             return {
                 "mode": "manual",
                 "status": "running",
+                "phase": "running",
                 "source": "manual_config",
                 "public_url": self._manual_public_url,
                 "local_url": self._local_url,
                 "last_error": "",
+                "verified": True,
+                "last_probe_at": "",
+                "last_probe_elapsed_ms": 0,
+                "last_probe_error": {},
+                "registered_at": "",
+                "log_tail": [],
                 "pid": None,
             }
         if self._mode == "cloudflare_quick":
             return {
                 "mode": "cloudflare_quick",
                 "status": "stopped",
+                "phase": "stopped",
                 "source": "quick_tunnel",
                 "public_url": "",
                 "local_url": self._local_url,
                 "last_error": "",
+                "verified": False,
+                "last_probe_at": "",
+                "last_probe_elapsed_ms": 0,
+                "last_probe_error": {},
+                "registered_at": "",
+                "log_tail": [],
                 "pid": None,
             }
         return {
             "mode": "disabled",
             "status": "stopped",
+            "phase": "stopped",
             "source": "disabled",
             "public_url": "",
             "local_url": self._local_url,
             "last_error": "",
+            "verified": False,
+            "last_probe_at": "",
+            "last_probe_elapsed_ms": 0,
+            "last_probe_error": {},
+            "registered_at": "",
+            "log_tail": [],
             "pid": None,
         }
 
@@ -196,8 +307,83 @@ class TunnelService:
         return self._mode == "cloudflare_quick" and self._autostart and not self._manual_public_url
 
     def _set_snapshot(self, **changes: Any) -> None:
+        if "status" in changes and "phase" not in changes:
+            changes["phase"] = changes["status"]
         with self._state_lock:
             self._snapshot.update(changes)
+
+    def _append_log_tail(self, line: str) -> None:
+        text = str(line or "").strip()
+        if not text:
+            return
+        with self._state_lock:
+            tail = [str(item) for item in self._snapshot.get("log_tail") or []]
+            tail.append(text)
+            self._snapshot["log_tail"] = tail[-_LOG_TAIL_LIMIT:]
+
+    def _set_probe_result(self, result: dict[str, Any], *, status_on_failure: str = "verifying_public") -> dict[str, Any]:
+        normalized = result if isinstance(result, dict) else self._default_probe_error()
+        ok = bool(normalized.get("ok"))
+        elapsed_ms = int(normalized.get("elapsed_ms") or 0)
+        now = _utc_timestamp()
+        with self._state_lock:
+            public_url = str(self._snapshot.get("public_url") or "")
+            pid = self._coerce_pid(self._snapshot.get("pid")) or None
+            if ok:
+                self._snapshot.update(
+                    {
+                        "status": "running",
+                        "phase": "running",
+                        "public_url": public_url,
+                        "last_error": "",
+                        "verified": True,
+                        "last_probe_at": now,
+                        "last_probe_elapsed_ms": elapsed_ms,
+                        "last_probe_error": {},
+                        "pid": pid,
+                    }
+                )
+            else:
+                error = {
+                    "error_class": str(normalized.get("error_class") or ""),
+                    "error_text": str(normalized.get("error_text") or ""),
+                    "status_code": normalized.get("status_code"),
+                }
+                message = self._format_probe_error(error, public_url)
+                self._snapshot.update(
+                    {
+                        "status": status_on_failure,
+                        "phase": status_on_failure,
+                        "last_error": message,
+                        "verified": False,
+                        "last_probe_at": now,
+                        "last_probe_elapsed_ms": elapsed_ms,
+                        "last_probe_error": error,
+                        "pid": pid,
+                    }
+                )
+            snapshot = copy.deepcopy(self._snapshot)
+        if ok:
+            self._persist_running_state()
+        else:
+            self._persist_starting_state()
+        return snapshot
+
+    @staticmethod
+    def _format_probe_error(error: dict[str, Any], public_url: str) -> str:
+        error_class = str(error.get("error_class") or "").strip().lower()
+        error_text = str(error.get("error_text") or "").strip()
+        if error_class == "timeout":
+            return "公网健康检查超时"
+        if error_class == "dns":
+            return f"公网地址 DNS 解析失败: {error_text}" if error_text else "公网地址 DNS 解析失败"
+        if error_class == "ssl":
+            return f"公网地址 SSL 校验失败: {error_text}" if error_text else "公网地址 SSL 校验失败"
+        if error_class == "http_status":
+            return error_text or "公网健康检查返回异常状态"
+        if error_text:
+            return f"公网健康检查失败: {error_text}"
+        return f"公网地址已创建，正在验证: {public_url}" if public_url else "公网地址已创建，正在验证"
 
     @staticmethod
     def _extract_public_url(line: str) -> Optional[str]:
@@ -284,6 +470,12 @@ class TunnelService:
                 "public_url": public_url,
                 "local_url": self._local_url,
                 "pid": pid,
+                "phase": status,
+                "verified": bool(snapshot.get("verified")),
+                "last_probe_at": str(snapshot.get("last_probe_at") or ""),
+                "last_probe_elapsed_ms": int(snapshot.get("last_probe_elapsed_ms") or 0),
+                "last_probe_error": snapshot.get("last_probe_error") if isinstance(snapshot.get("last_probe_error"), dict) else {},
+                "registered_at": str(snapshot.get("registered_at") or ""),
             }
         )
 
@@ -291,7 +483,7 @@ class TunnelService:
         self._persist_active_tunnel_state(allowed_statuses={"running"})
 
     def _persist_starting_state(self) -> None:
-        self._persist_active_tunnel_state(allowed_statuses={"starting", "running"})
+        self._persist_active_tunnel_state(allowed_statuses={"starting", "connected", "verifying_public", "running"})
 
     def _query_process_name(self, pid: int) -> str:
         if pid <= 0:
@@ -369,7 +561,7 @@ class TunnelService:
                 pid = self._coerce_pid(getattr(process, "pid", 0))
             status = str(self._snapshot.get("status") or "")
 
-        if process is not None or pid <= 0 or status not in {"running", "starting"}:
+        if process is not None or pid <= 0 or status not in _ACTIVE_TUNNEL_STATUSES:
             return
         if self._is_cloudflared_process(pid):
             return
@@ -380,8 +572,10 @@ class TunnelService:
                 self._snapshot.update(
                     {
                         "status": "error",
+                        "phase": "error",
                         "last_error": "cloudflared 进程已退出",
                         "pid": None,
+                        "verified": False,
                     }
                 )
                 if current_status == "running":
@@ -419,8 +613,11 @@ class TunnelService:
             return False
 
         persisted_status = str(data.get("status") or "running").strip()
-        restored_status = "starting" if persisted_status == "starting" else "running"
-        restored_error = f"公网地址仍在传播: {public_url}" if restored_status == "starting" else ""
+        if persisted_status in {"starting", "connected", "verifying_public"}:
+            restored_status = "verifying_public"
+        else:
+            restored_status = "running"
+        restored_error = "公网地址已创建，正在验证" if restored_status == "verifying_public" else ""
 
         with self._state_lock:
             self._process = None
@@ -429,13 +626,21 @@ class TunnelService:
                 {
                     "mode": "cloudflare_quick",
                     "status": restored_status,
+                    "phase": restored_status,
                     "source": "quick_tunnel",
                     "public_url": public_url,
                     "local_url": self._local_url,
                     "last_error": restored_error,
+                    "verified": restored_status == "running",
+                    "last_probe_at": str(data.get("last_probe_at") or ""),
+                    "last_probe_elapsed_ms": int(data.get("last_probe_elapsed_ms") or 0),
+                    "last_probe_error": data.get("last_probe_error") if isinstance(data.get("last_probe_error"), dict) else {},
+                    "registered_at": str(data.get("registered_at") or ""),
                     "pid": pid,
                 }
             )
+        if restored_status == "verifying_public":
+            self._ensure_public_probe_task()
         return True
 
     def _consume_output(self, process: subprocess.Popen, ready_event: threading.Event) -> None:
@@ -450,10 +655,18 @@ class TunnelService:
                     break
                 line = raw_line.rstrip()
                 if line:
+                    self._append_log_tail(line)
                     self._log_cloudflared_line(line)
                 public_url = self._extract_public_url(line)
                 if public_url:
-                    self._set_snapshot(status="starting", public_url=public_url, last_error="", pid=process.pid)
+                    self._set_snapshot(
+                        status="connected",
+                        phase="connected",
+                        public_url=public_url,
+                        last_error="",
+                        pid=process.pid,
+                        registered_at=_utc_timestamp(),
+                    )
                     ready_event.set()
 
             returncode = process.poll()
@@ -472,8 +685,10 @@ class TunnelService:
                     self._snapshot.update(
                         {
                             "status": "error",
+                            "phase": "error",
                             "last_error": error_message,
                             "pid": None,
+                            "verified": False,
                         }
                     )
                     if not public_url:
@@ -487,9 +702,11 @@ class TunnelService:
                     self._snapshot.update(
                         {
                             "status": "error",
+                            "phase": "error",
                             "last_error": str(exc),
                             "pid": None,
                             "public_url": "",
+                            "verified": False,
                         }
                     )
             self._clear_state_file()
@@ -563,8 +780,10 @@ class TunnelService:
             self._snapshot.update(
                 {
                     "status": status,
+                    "phase": status,
                     "last_error": last_error,
                     "pid": None,
+                    "verified": False,
                 }
             )
             if clear_public_url:
@@ -573,6 +792,32 @@ class TunnelService:
             self._clear_state_file()
         else:
             self._persist_running_state()
+
+    def _ensure_public_probe_task(self) -> None:
+        if self._manual_public_url or self._mode != "cloudflare_quick":
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._public_probe_task is not None and not self._public_probe_task.done():
+            return
+        self._public_probe_task = loop.create_task(self._public_probe_loop(), name="web-tunnel-public-probe")
+
+    async def _public_probe_loop(self) -> None:
+        await asyncio.sleep(_PUBLIC_PROBE_INITIAL_DELAY_SECONDS)
+        while True:
+            snapshot = self.snapshot()
+            status = str(snapshot.get("status") or "")
+            public_url = str(snapshot.get("public_url") or "").strip()
+            if status == "running" or not public_url:
+                return
+            if status not in {"connected", "verifying_public", "starting"}:
+                return
+            ready = await self.wait_until_public_ready(timeout=min(5.0, max(0.1, self._public_health_timeout)))
+            if ready.get("status") == "running":
+                return
+            await asyncio.sleep(_PUBLIC_PROBE_INTERVAL_SECONDS)
 
     async def start(self) -> dict[str, Any]:
         if self._manual_public_url:
@@ -590,7 +835,13 @@ class TunnelService:
 
         local_ready = await asyncio.to_thread(self._wait_for_health, self._local_url, timeout=self._local_health_timeout)
         if not local_ready:
-            self._set_snapshot(status="error", last_error="本地 Web 未就绪，未启动 cloudflared", pid=None, public_url="")
+            self._set_snapshot(
+                status="error",
+                last_error="本地 Web 未就绪，未启动 cloudflared",
+                pid=None,
+                public_url="",
+                verified=False,
+            )
             self._clear_state_file()
             return self.snapshot()
 
@@ -598,7 +849,21 @@ class TunnelService:
 
         with self._state_lock:
             self._expected_stop = False
-            self._snapshot.update({"status": "starting", "last_error": "", "public_url": "", "pid": None})
+            self._snapshot.update(
+                {
+                    "status": "waiting_url",
+                    "phase": "waiting_url",
+                    "last_error": "",
+                    "public_url": "",
+                    "pid": None,
+                    "verified": False,
+                    "last_probe_at": "",
+                    "last_probe_elapsed_ms": 0,
+                    "last_probe_error": {},
+                    "registered_at": "",
+                    "log_tail": [],
+                }
+            )
 
         try:
             process = subprocess.Popen(
@@ -613,11 +878,11 @@ class TunnelService:
                 **build_subprocess_group_kwargs(),
             )
         except FileNotFoundError:
-            self._set_snapshot(status="error", last_error="未找到 cloudflared 可执行文件", pid=None, public_url="")
+            self._set_snapshot(status="error", last_error="未找到 cloudflared 可执行文件", pid=None, public_url="", verified=False)
             self._clear_state_file()
             return self.snapshot()
         except Exception as exc:
-            self._set_snapshot(status="error", last_error=str(exc), pid=None, public_url="")
+            self._set_snapshot(status="error", last_error=str(exc), pid=None, public_url="", verified=False)
             self._clear_state_file()
             return self.snapshot()
 
@@ -638,19 +903,15 @@ class TunnelService:
             await self._terminate_process(process, clear_public_url=True, status="error", last_error=last_error)
             return self.snapshot()
 
-        public_ready = await asyncio.to_thread(self._wait_for_health, public_url, timeout=self._public_health_timeout)
-        if not public_ready:
-            self._set_snapshot(
-                status="starting",
-                public_url=public_url,
-                last_error=f"公网地址仍在传播: {public_url}",
-                pid=process.pid,
-            )
-            self._persist_starting_state()
-            return self.snapshot()
-
-        self._set_snapshot(status="running", public_url=public_url, last_error="", pid=process.pid)
-        self._persist_running_state()
+        self._set_snapshot(
+            status="verifying_public",
+            public_url=public_url,
+            last_error="公网地址已创建，正在验证",
+            pid=process.pid,
+            verified=False,
+        )
+        self._persist_starting_state()
+        self._ensure_public_probe_task()
         return self.snapshot()
 
     async def wait_until_public_ready(self, *, timeout: float = 90.0) -> dict[str, Any]:
@@ -670,23 +931,16 @@ class TunnelService:
             pid = self._coerce_pid(self._snapshot.get("pid"))
 
         if process is not None and process.poll() is not None:
-            self._set_snapshot(status="error", last_error="cloudflared 进程已退出", pid=None)
+            self._set_snapshot(status="error", last_error="cloudflared 进程已退出", pid=None, verified=False)
             self._clear_state_file()
             return self.snapshot()
         if process is None and pid > 0 and not self._is_cloudflared_process(pid):
-            self._set_snapshot(status="error", last_error="cloudflared 进程已退出", pid=None)
+            self._set_snapshot(status="error", last_error="cloudflared 进程已退出", pid=None, verified=False)
             self._clear_state_file()
             return self.snapshot()
 
-        public_ready = await asyncio.to_thread(self._wait_for_health, public_url, timeout=timeout)
-        if not public_ready:
-            self._set_snapshot(status="starting", last_error=f"公网地址仍在传播: {public_url}")
-            self._persist_starting_state()
-            return self.snapshot()
-
-        self._set_snapshot(status="running", public_url=public_url, last_error="", pid=pid or None)
-        self._persist_running_state()
-        return self.snapshot()
+        result = await asyncio.to_thread(self._can_fetch_health, public_url, timeout=timeout)
+        return self._set_probe_result(result, status_on_failure="verifying_public")
 
     async def stop(self) -> dict[str, Any]:
         if self._manual_public_url:

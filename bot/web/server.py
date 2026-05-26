@@ -59,7 +59,7 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
-from .diagnostics import diag_enabled, diag_log_slow, diag_loop_lag_ms
+from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .env_service import EnvConfigService, EnvValidationError
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
@@ -1212,7 +1212,7 @@ class WebApiServer:
         return copied or qr_printed
 
     def _schedule_tunnel_ready_notification(self, snapshot: dict[str, Any], *, reason: str) -> None:
-        if snapshot.get("status") != "starting":
+        if snapshot.get("status") not in {"starting", "connected", "verifying_public"}:
             return
         if snapshot.get("source") != "quick_tunnel":
             return
@@ -1239,10 +1239,7 @@ class WebApiServer:
         self._schedule_tunnel_ready_notification(snapshot, reason=reason)
 
     async def _fresh_tunnel_snapshot(self) -> dict[str, Any]:
-        snapshot = self._tunnel_service.snapshot()
-        if snapshot.get("status") == "starting" and str(snapshot.get("public_url") or "").strip():
-            return await self._tunnel_service.wait_until_public_ready(timeout=_TUNNEL_STATUS_REFRESH_TIMEOUT)
-        return snapshot
+        return self._tunnel_service.snapshot()
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -3118,7 +3115,16 @@ class WebApiServer:
 
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        started_at = time.perf_counter()
+        diag_log_event(logger, "tunnel_start_stage", stage="request")
         snapshot = await self._tunnel_service.start()
+        diag_log_slow(
+            logger,
+            "tunnel_start",
+            int(round((time.perf_counter() - started_at) * 1000)),
+            stage=str(snapshot.get("status") or ""),
+            public_url=str(snapshot.get("public_url") or ""),
+        )
         await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_start")
         return _json({"ok": True, "data": snapshot})
 
@@ -3128,7 +3134,16 @@ class WebApiServer:
 
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        started_at = time.perf_counter()
+        diag_log_event(logger, "tunnel_restart_stage", stage="request")
         snapshot = await self._tunnel_service.restart()
+        diag_log_slow(
+            logger,
+            "tunnel_restart",
+            int(round((time.perf_counter() - started_at) * 1000)),
+            stage=str(snapshot.get("status") or ""),
+            public_url=str(snapshot.get("public_url") or ""),
+        )
         await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
         return _json({"ok": True, "data": snapshot})
 
@@ -3968,10 +3983,16 @@ class WebApiServer:
                 if task is not asyncio.current_task(loop) and not task.done()
             ]
             names: list[str] = []
+            stacks: list[str] = []
             for task in pending[:8]:
                 name = task.get_name()
                 coro = task.get_coro()
-                names.append(name or getattr(coro, "__qualname__", "") or type(coro).__name__)
+                task_name = name or getattr(coro, "__qualname__", "") or type(coro).__name__
+                names.append(task_name)
+                stack = task.get_stack(limit=2)
+                if stack:
+                    frame = stack[-1]
+                    stacks.append(f"{task_name}:{Path(frame.f_code.co_filename).name}:{frame.f_lineno}:{frame.f_code.co_name}")
             diag_log_slow(
                 logger,
                 "event_loop_lag",
@@ -3980,6 +4001,7 @@ class WebApiServer:
                 lag_ms=lag_ms,
                 pending_count=len(pending),
                 pending=",".join(names),
+                stacks="|".join(stacks),
             )
 
     async def stop(self, *, preserve_tunnel: bool = False):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,51 @@ _CLAUDE_FREE_RE = re.compile(
     r"\s*(?:\|)?\s*\(?(?P<free_percent>\d+(?:\.\d+)?)%",
     re.IGNORECASE,
 )
+_CACHE_LOCK = threading.Lock()
+_CONTEXT_USAGE_CACHE: dict[tuple[str, str, str, int, int], dict[str, Any] | None] = {}
+_CONTEXT_USAGE_CACHE_ORDER: list[tuple[str, str, str, int, int]] = []
+_CONTEXT_USAGE_CACHE_LIMIT = 128
+
+
+def clear_context_usage_cache() -> None:
+    with _CACHE_LOCK:
+        _CONTEXT_USAGE_CACHE.clear()
+        _CONTEXT_USAGE_CACHE_ORDER.clear()
+
+
+def _transcript_cache_key(provider: str, session_id: str, transcript_path: Path) -> tuple[str, str, str, int, int] | None:
+    try:
+        stat = transcript_path.stat()
+    except OSError:
+        return None
+    return (
+        provider,
+        session_id,
+        str(transcript_path),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
+
+
+def _get_cached_context_usage(key: tuple[str, str, str, int, int]) -> dict[str, Any] | None | object:
+    with _CACHE_LOCK:
+        if key not in _CONTEXT_USAGE_CACHE:
+            return _CACHE_MISS
+        value = _CONTEXT_USAGE_CACHE[key]
+        return dict(value) if isinstance(value, dict) else None
+
+
+def _set_cached_context_usage(key: tuple[str, str, str, int, int], value: dict[str, Any] | None) -> None:
+    with _CACHE_LOCK:
+        if key not in _CONTEXT_USAGE_CACHE:
+            _CONTEXT_USAGE_CACHE_ORDER.append(key)
+        _CONTEXT_USAGE_CACHE[key] = dict(value) if isinstance(value, dict) else None
+        while len(_CONTEXT_USAGE_CACHE_ORDER) > _CONTEXT_USAGE_CACHE_LIMIT:
+            old_key = _CONTEXT_USAGE_CACHE_ORDER.pop(0)
+            _CONTEXT_USAGE_CACHE.pop(old_key, None)
+
+
+_CACHE_MISS = object()
 
 
 def _as_int(value: Any) -> int | None:
@@ -269,13 +315,29 @@ def resolve_cli_context_usage(
             ref = locate_codex_transcript(normalized_session_id)
             if ref is None:
                 return None
-            return _resolve_codex_context_usage(normalized_session_id, ref.path)
+            key = _transcript_cache_key(provider, normalized_session_id, ref.path)
+            if key is not None:
+                cached = _get_cached_context_usage(key)
+                if cached is not _CACHE_MISS:
+                    return cached
+            result = _resolve_codex_context_usage(normalized_session_id, ref.path)
+            if key is not None:
+                _set_cached_context_usage(key, result)
+            return result
 
         if provider == "claude":
             ref = locate_claude_transcript(normalized_session_id, cwd_hint=cwd_hint)
             if ref is None:
                 return None
-            return _resolve_claude_context_usage(normalized_session_id, ref.path)
+            key = _transcript_cache_key(provider, normalized_session_id, ref.path)
+            if key is not None:
+                cached = _get_cached_context_usage(key)
+                if cached is not _CACHE_MISS:
+                    return cached
+            result = _resolve_claude_context_usage(normalized_session_id, ref.path)
+            if key is not None:
+                _set_cached_context_usage(key, result)
+            return result
 
         return None
     except Exception:

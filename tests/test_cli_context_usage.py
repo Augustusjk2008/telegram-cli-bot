@@ -14,7 +14,9 @@ def _write_jsonl(path: Path, items: list[dict]) -> None:
 
 
 def test_resolve_codex_context_usage_reads_latest_token_count(monkeypatch, tmp_path: Path):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     transcript = tmp_path / "session.jsonl"
     _write_jsonl(
@@ -64,7 +66,9 @@ def test_resolve_codex_context_usage_reads_latest_token_count(monkeypatch, tmp_p
 
 
 def test_resolve_codex_context_usage_returns_none_without_token_count(monkeypatch, tmp_path: Path):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     transcript = tmp_path / "session.jsonl"
     _write_jsonl(transcript, [{"type": "event_msg", "payload": {"type": "agent_message"}}])
@@ -76,15 +80,78 @@ def test_resolve_codex_context_usage_returns_none_without_token_count(monkeypatc
     assert resolve_cli_context_usage("codex", "thread-1") is None
 
 
+def test_resolve_codex_context_usage_reuses_cache_until_transcript_changes(monkeypatch, tmp_path: Path):
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
+    transcript = tmp_path / "session.jsonl"
+    _write_jsonl(
+        transcript,
+        [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {"total_tokens": 32000},
+                        "model_context_window": 258400,
+                    },
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "bot.web.cli_context_usage.locate_codex_transcript",
+        lambda session_id: LocatedTranscript("codex", session_id, transcript),
+    )
+    read_calls = 0
+    original_read_text = Path.read_text
+
+    def counting_read_text(path: Path, *args, **kwargs):
+        nonlocal read_calls
+        if path == transcript:
+            read_calls += 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    assert resolve_cli_context_usage("codex", "thread-1")["used_tokens"] == 32000
+    assert resolve_cli_context_usage("codex", "thread-1")["used_tokens"] == 32000
+    assert read_calls == 1
+
+    _write_jsonl(
+        transcript,
+        [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {"total_tokens": 64000},
+                        "model_context_window": 258400,
+                    },
+                },
+            },
+        ],
+    )
+
+    assert resolve_cli_context_usage("codex", "thread-1")["used_tokens"] == 64000
+    assert read_calls == 2
+
+
 def test_resolve_cli_context_usage_ignores_unknown_and_kimi():
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     assert resolve_cli_context_usage("kimi", "thread-1") is None
     assert resolve_cli_context_usage("unknown", "thread-1") is None
 
 
 def test_resolve_codex_context_usage_returns_none_when_session_missing(monkeypatch):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     monkeypatch.setattr("bot.web.cli_context_usage.locate_codex_transcript", lambda session_id: None)
 
@@ -92,7 +159,9 @@ def test_resolve_codex_context_usage_returns_none_when_session_missing(monkeypat
 
 
 def test_resolve_claude_context_usage_reads_latest_context_meta(monkeypatch, tmp_path: Path):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     transcript = tmp_path / "claude-session.jsonl"
     _write_jsonl(
@@ -139,7 +208,9 @@ def test_resolve_claude_context_usage_reads_latest_context_meta(monkeypatch, tmp
 
 
 def test_resolve_claude_context_usage_reads_context_stdout(monkeypatch, tmp_path: Path):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     transcript = tmp_path / "claude-session.jsonl"
     _write_jsonl(
@@ -174,7 +245,9 @@ def test_resolve_claude_context_usage_reads_context_stdout(monkeypatch, tmp_path
 
 
 def test_resolve_claude_context_usage_falls_back_to_latest_message_usage(monkeypatch, tmp_path: Path):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     transcript = tmp_path / "claude-session.jsonl"
     _write_jsonl(
@@ -231,7 +304,9 @@ def test_resolve_claude_context_usage_falls_back_to_latest_message_usage(monkeyp
 
 
 def test_resolve_claude_context_usage_returns_none_when_session_missing(monkeypatch):
-    from bot.web.cli_context_usage import resolve_cli_context_usage
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
 
     monkeypatch.setattr("bot.web.cli_context_usage.locate_claude_transcript", lambda session_id, cwd_hint=None: None)
 

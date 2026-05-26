@@ -513,6 +513,72 @@ def test_complete_turn_persists_context_usage_on_assistant_message_only(monkeypa
     assert message["meta"]["context_usage"] == context_usage
 
 
+def test_update_context_usage_persists_running_assistant_message(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+
+    store.update_context_usage(handle.turn_id, context_usage)
+
+    items = store.list_messages(handle.conversation_id)
+    assert "context_usage" not in items[0]["meta"]
+    assert items[1]["state"] == "streaming"
+    assert items[1]["meta"]["context_usage"] == context_usage
+
+
+def test_update_context_usage_ignores_empty_value(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    context_usage = {"provider": "codex", "session_id": "thread-1", "context_left_percent": 74}
+    store.update_context_usage(handle.turn_id, context_usage)
+    store.update_context_usage(handle.turn_id, None)
+
+    items = store.list_messages(handle.conversation_id)
+    assert items[1]["meta"]["context_usage"] == context_usage
+
+
 def test_get_trace_recovery_context_returns_turn_native_context(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

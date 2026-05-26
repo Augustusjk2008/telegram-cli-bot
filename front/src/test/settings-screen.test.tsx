@@ -316,18 +316,19 @@ test("main settings saves Git proxy address and port shortcut", async () => {
   expect(await screen.findByText("当前状态: 127.0.0.1:7898")).toBeInTheDocument();
 });
 
-test("settings screen refreshes starting tunnel until running", async () => {
+test("settings screen refreshes verifying tunnel until running", async () => {
   vi.useFakeTimers();
 
   const client = new MockWebBotClient();
   const getTunnelStatus = vi.fn()
     .mockResolvedValueOnce({
       mode: "cloudflare_quick",
-      status: "starting",
+      status: "verifying_public",
       source: "quick_tunnel",
       publicUrl: "https://ready.trycloudflare.com",
       localUrl: "http://127.0.0.1:8765",
-      lastError: "公网地址仍在传播: https://ready.trycloudflare.com",
+      lastError: "公网地址已创建，正在验证",
+      verified: false,
       pid: 1234,
     })
     .mockResolvedValueOnce({
@@ -337,6 +338,7 @@ test("settings screen refreshes starting tunnel until running", async () => {
       publicUrl: "https://ready.trycloudflare.com",
       localUrl: "http://127.0.0.1:8765",
       lastError: "",
+      verified: true,
       pid: 1234,
     });
 
@@ -348,14 +350,14 @@ test("settings screen refreshes starting tunnel until running", async () => {
     await Promise.resolve();
   });
 
-  expect(screen.getByText(/公网地址仍在传播/)).toBeInTheDocument();
+  expect(screen.getByText("状态: 正在验证公网地址")).toBeInTheDocument();
 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(5000);
   });
 
   expect(screen.getByText("状态: 运行中")).toBeInTheDocument();
-  expect(screen.queryByText(/公网地址仍在传播/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/正在验证/)).not.toBeInTheDocument();
   expect(getTunnelStatus).toHaveBeenCalledTimes(2);
 });
 
@@ -366,11 +368,12 @@ test("settings screen clears tunnel refresh error after reconnects", async () =>
   const getTunnelStatus = vi.fn()
     .mockResolvedValueOnce({
       mode: "cloudflare_quick",
-      status: "starting",
+      status: "verifying_public",
       source: "quick_tunnel",
       publicUrl: "https://ready.trycloudflare.com",
       localUrl: "http://127.0.0.1:8765",
-      lastError: "公网地址仍在传播: https://ready.trycloudflare.com",
+      lastError: "公网地址已创建，正在验证",
+      verified: false,
       pid: 1234,
     })
     .mockRejectedValueOnce(new Error("刷新失败"))
@@ -381,6 +384,7 @@ test("settings screen clears tunnel refresh error after reconnects", async () =>
       publicUrl: "https://ready.trycloudflare.com",
       localUrl: "http://127.0.0.1:8765",
       lastError: "",
+      verified: true,
       pid: 1234,
     });
 

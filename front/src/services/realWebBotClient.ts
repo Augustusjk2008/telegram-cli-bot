@@ -673,11 +673,22 @@ const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
 
 type RawTunnelSnapshot = {
   mode: "disabled" | "cloudflare_quick" | "manual";
-  status: "stopped" | "starting" | "running" | "error";
+  status: "stopped" | "waiting_local" | "waiting_url" | "connected" | "verifying_public" | "starting" | "running" | "error";
+  phase?: string;
   source: "disabled" | "quick_tunnel" | "manual_config";
   public_url?: string;
   local_url?: string;
   last_error?: string;
+  verified?: boolean;
+  last_probe_at?: string;
+  last_probe_elapsed_ms?: number;
+  last_probe_error?: {
+    error_class?: string;
+    error_text?: string;
+    status_code?: number | null;
+  };
+  registered_at?: string;
+  log_tail?: string[];
   pid?: number | null;
 };
 
@@ -1885,10 +1896,23 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
   return {
     mode: raw.mode,
     status: raw.status,
+    phase: raw.phase || raw.status,
     source: raw.source,
     publicUrl: raw.public_url || "",
     localUrl: raw.local_url || "",
     lastError: raw.last_error || "",
+    verified: Boolean(raw.verified),
+    lastProbeAt: raw.last_probe_at || "",
+    lastProbeElapsedMs: typeof raw.last_probe_elapsed_ms === "number" ? raw.last_probe_elapsed_ms : 0,
+    lastProbeError: raw.last_probe_error
+      ? {
+          errorClass: raw.last_probe_error.error_class || "",
+          errorText: raw.last_probe_error.error_text || "",
+          statusCode: raw.last_probe_error.status_code ?? null,
+        }
+      : undefined,
+    registeredAt: raw.registered_at || "",
+    logTail: Array.isArray(raw.log_tail) ? raw.log_tail.map(String) : [],
     pid: raw.pid ?? null,
   };
 }

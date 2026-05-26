@@ -167,6 +167,7 @@ def _seed_chat_turn(
     user_text: str,
     assistant_text: str,
     user_id: int = 1001,
+    context_usage: dict[str, Any] | None = None,
 ) -> None:
     web_manager.main_profile.working_dir = str(workspace)
     session = get_session_for_alias(web_manager, "main", user_id)
@@ -179,7 +180,7 @@ def _seed_chat_turn(
         user_text=user_text,
         native_provider=web_manager.main_profile.cli_type,
     )
-    service.complete_turn(handle, content=assistant_text, completion_state="completed")
+    service.complete_turn(handle, content=assistant_text, completion_state="completed", context_usage=context_usage)
 
 def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_dir: Path):
     import bot.session_store as session_store
@@ -4453,6 +4454,56 @@ async def test_history_delta_route_returns_items_after_last_id(
 
 
 @pytest.mark.asyncio
+async def test_history_and_delta_keep_context_usage(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    workspace = temp_dir / "workspace"
+    workspace.mkdir()
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+    _seed_chat_turn(web_manager, workspace, user_text="第一问", assistant_text="第一答", user_id=1001)
+    _seed_chat_turn(
+        web_manager,
+        workspace,
+        user_text="第二问",
+        assistant_text="带 context 的回复",
+        user_id=1001,
+        context_usage=context_usage,
+    )
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            history_resp = await client.get("/api/bots/main/history?limit=10")
+            assert history_resp.status == 200
+            history_payload = await history_resp.json()
+            marker = history_payload["data"]["items"][1]["id"]
+
+            delta_resp = await client.get(f"/api/bots/main/history/delta?after_id={marker}&limit=10")
+            assert delta_resp.status == 200
+            delta_payload = await delta_resp.json()
+
+    assert history_payload["data"]["items"][-1]["meta"]["context_usage"] == context_usage
+    assert delta_payload["data"]["reset"] is False
+    assert delta_payload["data"]["items"][-1]["meta"]["context_usage"] == context_usage
+
+
+@pytest.mark.asyncio
 async def test_history_delta_route_resets_when_after_id_missing(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -5797,7 +5848,7 @@ async def test_admin_tunnel_route_returns_manual_public_url(web_manager: MultiBo
 
 
 @pytest.mark.asyncio
-async def test_admin_tunnel_route_refreshes_starting_public_url(
+async def test_admin_tunnel_route_returns_starting_snapshot_without_refresh(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -5821,16 +5872,7 @@ async def test_admin_tunnel_route_refreshes_starting_public_url(
             }
 
         async def wait_until_public_ready(self, *, timeout=90.0):
-            self.wait_timeout = timeout
-            return {
-                "mode": "cloudflare_quick",
-                "status": "running",
-                "source": "quick_tunnel",
-                "public_url": "https://ready.trycloudflare.com",
-                "local_url": "http://127.0.0.1:8765",
-                "last_error": "",
-                "pid": 1234,
-            }
+            raise AssertionError("GET /api/admin/tunnel must not probe public health")
 
     fake_tunnel = FakeTunnelService()
     server = WebApiServer(web_manager, tunnel_service=fake_tunnel)
@@ -5842,9 +5884,121 @@ async def test_admin_tunnel_route_refreshes_starting_public_url(
             assert resp.status == 200
             payload = await resp.json()
 
-    assert fake_tunnel.wait_timeout == 1.0
-    assert payload["data"]["status"] == "running"
-    assert payload["data"]["last_error"] == ""
+    assert fake_tunnel.wait_timeout is None
+    assert payload["data"]["status"] == "starting"
+    assert payload["data"]["last_error"] == "公网地址仍在传播: https://ready.trycloudflare.com"
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_route_returns_snapshot_without_public_probe(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    class FakeTunnelService:
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "verifying_public",
+                "phase": "verifying_public",
+                "source": "quick_tunnel",
+                "public_url": "https://ready.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+                "verified": False,
+            }
+
+        async def wait_until_public_ready(self, *, timeout=90.0):
+            raise AssertionError("GET /api/admin/tunnel must not probe public health")
+
+    server = WebApiServer(web_manager, tunnel_service=FakeTunnelService())
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/tunnel")
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["status"] == "verifying_public"
+    assert payload["data"]["verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_start_returns_verifying_snapshot_without_public_probe(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    release_probe = asyncio.Event()
+
+    class FakeTunnelService:
+        def __init__(self):
+            self.start_called = False
+            self.wait_called = False
+
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+        async def start(self):
+            self.start_called = True
+            return {
+                "mode": "cloudflare_quick",
+                "status": "verifying_public",
+                "phase": "verifying_public",
+                "source": "quick_tunnel",
+                "public_url": "https://fresh.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "公网地址已创建，正在验证",
+                "pid": 1234,
+                "verified": False,
+            }
+
+        async def wait_until_public_ready(self, *, timeout=90.0):
+            self.wait_called = True
+            await release_probe.wait()
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://fresh.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+    fake_tunnel = FakeTunnelService()
+    server = WebApiServer(web_manager, tunnel_service=fake_tunnel)
+    server._notify_tunnel_public_url = AsyncMock(return_value=False)
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await asyncio.wait_for(client.post("/api/admin/tunnel/start"), timeout=1.0)
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert fake_tunnel.start_called is True
+    assert payload["data"]["status"] == "verifying_public"
+    assert payload["data"]["verified"] is False
+    assert fake_tunnel.wait_called is True
+    release_probe.set()
+    if server._tunnel_ready_task is not None:
+        await asyncio.gather(server._tunnel_ready_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -6268,6 +6422,77 @@ async def test_admin_tunnel_restart_uses_tunnel_service(web_manager: MultiBotMan
             assert fake_tunnel.restart_called is True
             assert payload["data"]["status"] == "running"
             assert payload["data"]["public_url"] == "https://fresh.trycloudflare.com"
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_restart_returns_verifying_snapshot_without_public_probe(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    release_probe = asyncio.Event()
+
+    class FakeTunnelService:
+        def __init__(self):
+            self.restart_called = False
+            self.wait_called = False
+
+        def snapshot(self):
+            return {
+                "mode": "cloudflare_quick",
+                "status": "stopped",
+                "source": "quick_tunnel",
+                "public_url": "",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": None,
+            }
+
+        async def restart(self):
+            self.restart_called = True
+            return {
+                "mode": "cloudflare_quick",
+                "status": "verifying_public",
+                "phase": "verifying_public",
+                "source": "quick_tunnel",
+                "public_url": "https://fresh.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "公网地址已创建，正在验证",
+                "pid": 1234,
+                "verified": False,
+            }
+
+        async def wait_until_public_ready(self, *, timeout=90.0):
+            self.wait_called = True
+            await release_probe.wait()
+            return {
+                "mode": "cloudflare_quick",
+                "status": "running",
+                "source": "quick_tunnel",
+                "public_url": "https://fresh.trycloudflare.com",
+                "local_url": "http://127.0.0.1:8765",
+                "last_error": "",
+                "pid": 1234,
+            }
+
+    fake_tunnel = FakeTunnelService()
+    server = WebApiServer(web_manager, tunnel_service=fake_tunnel)
+    server._notify_tunnel_public_url = AsyncMock(return_value=False)
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await asyncio.wait_for(client.post("/api/admin/tunnel/restart"), timeout=1.0)
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert fake_tunnel.restart_called is True
+    assert payload["data"]["status"] == "verifying_public"
+    assert payload["data"]["verified"] is False
+    assert fake_tunnel.wait_called is True
+    release_probe.set()
+    if server._tunnel_ready_task is not None:
+        await asyncio.gather(server._tunnel_ready_task, return_exceptions=True)
+
 
 @pytest.mark.asyncio
 async def test_admin_tunnel_restart_copies_public_url(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -8559,6 +8784,149 @@ async def test_stream_cli_chat_done_message_includes_context_usage(web_manager: 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
          patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
          patch("bot.web.api_service.resolve_cli_context_usage", return_value=context_usage), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["message"]["meta"]["context_usage"] == context_usage
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_persists_status_context_usage_before_done(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+    _, _, session = get_chat_session_for_alias(web_manager, "main", 1001, "main")
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+            ]
+
+        def readline(self):
+            time.sleep(0.02)
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        return context_usage if session_id == "thread-1" else None
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        seen_status = False
+        async for event in _stream_cli_chat(web_manager, "main", 1001, "hello"):
+            if event["type"] == "status" and event.get("context_usage") == context_usage:
+                seen_status = True
+                history = ChatHistoryService(ChatStore(session.working_dir)).list_history(web_manager.main_profile, session)
+                assert history[-1]["meta"]["context_usage"] == context_usage
+
+    assert seen_status is True
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_uses_last_status_context_usage_when_final_resolve_empty(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    context_usage = {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": 74,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": "74% context left · 76.6K / 258K",
+    }
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
+            ]
+
+        def readline(self):
+            time.sleep(0.02)
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    calls = 0
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        nonlocal calls
+        calls += 1
+        if session_id == "thread-1" and calls == 1:
+            return context_usage
+        return None
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
          patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
         events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
 

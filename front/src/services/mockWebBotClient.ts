@@ -6251,6 +6251,7 @@ export class MockWebBotClient implements WebBotClient {
       publicUrl: "https://demo.trycloudflare.com",
       localUrl: "http://127.0.0.1:8765",
       lastError: "",
+      verified: true,
       pid: 1234,
     };
   }
@@ -6267,6 +6268,7 @@ export class MockWebBotClient implements WebBotClient {
       publicUrl: "",
       localUrl: "http://127.0.0.1:8765",
       lastError: "",
+      verified: false,
       pid: null,
     };
   }

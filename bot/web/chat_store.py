@@ -810,6 +810,37 @@ class ChatStore:
                 content_chars=len(str(content or "")),
             )
 
+    def update_context_usage(self, turn_id: str, context_usage: dict[str, Any] | None) -> bool:
+        if not isinstance(context_usage, dict) or not context_usage:
+            return False
+
+        started_at = time.perf_counter()
+        now = _utc_now()
+        context_usage_json = json.dumps(context_usage, ensure_ascii=False)
+        try:
+            with self._connect_for_write() as conn:
+                result = conn.execute(
+                    """
+                    UPDATE turns
+                    SET context_usage_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (context_usage_json, now, turn_id),
+                )
+                if result.rowcount == 0:
+                    raise KeyError(turn_id)
+            return True
+        finally:
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "chat_store",
+                elapsed_ms,
+                op="update_context_usage",
+                turn_id=turn_id,
+            )
+
     def append_trace_event(
         self,
         turn_id: str,
