@@ -3906,6 +3906,7 @@ async def _stream_cli_chat(
                     json_output=(cli_type in ("codex", "claude", "kimi")),
                     params_config=params_for_attempt,
                     working_dir=session.working_dir,
+                    task_mode=request.task_mode if request is not None else "standard",
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
@@ -4594,6 +4595,7 @@ async def run_cli_chat(
                     json_output=(cli_type in ("codex", "claude", "kimi")),
                     params_config=params_for_attempt,
                     working_dir=session.working_dir,
+                    task_mode=request.task_mode if request is not None else "standard",
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))

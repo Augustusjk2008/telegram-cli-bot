@@ -48,6 +48,7 @@ def build_cli_command(
     resume_session: bool = False,
     json_output: bool = False,
     working_dir: Optional[str] = None,
+    task_mode: str = "standard",
 ) -> Tuple[List[str], bool]:
     """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。
 
@@ -71,6 +72,7 @@ def build_cli_command(
         session_id=session_id,
         resume_session=resume_session,
         working_dir=working_dir,
+        task_mode=task_mode,
     )
     if kind == "claude":
         params = params_config.get_params("claude")

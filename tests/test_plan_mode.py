@@ -7,7 +7,7 @@ import pytest
 from bot.assistant.runtime import AssistantRunRequest
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
-from bot.web.api_service import build_assistant_run_request, execute_plan, run_chat
+from bot.web.api_service import build_assistant_run_request, execute_plan, run_chat, run_cli_chat, stream_chat
 from bot.web.plan_mode import (
     PLAN_MODE_TASK_MODE,
     build_plan_execution_prompt,
@@ -133,6 +133,101 @@ async def test_run_chat_passes_plan_request_to_cli(monkeypatch: pytest.MonkeyPat
     assert isinstance(request, AssistantRunRequest)
     assert request.task_mode == "plan"
     assert request.text == "先出方案"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_passes_plan_task_mode_to_command_builder(monkeypatch: pytest.MonkeyPatch, web_manager):
+    captured: dict[str, object] = {}
+
+    def fake_resolve_cli_executable(cli_path, working_dir=None):
+        return cli_path
+
+    def fake_build_cli_command(**kwargs):
+        captured["task_mode"] = kwargs.get("task_mode")
+        return ["codex"], False
+
+    class FakeProcess:
+        pid = 1234
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    async def fake_communicate_codex_process(process):
+        return "ok", "thread-1", 0
+
+    monkeypatch.setattr("bot.web.api_service.resolve_cli_executable", fake_resolve_cli_executable)
+    monkeypatch.setattr("bot.web.api_service.build_cli_command", fake_build_cli_command)
+    monkeypatch.setattr("bot.web.api_service.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("bot.web.api_service._communicate_codex_process", fake_communicate_codex_process)
+
+    request = build_assistant_run_request("main", 1001, "先出方案", task_mode="plan")
+    await run_cli_chat(web_manager, "main", 1001, "先出方案", request=request)
+
+    assert captured["task_mode"] == "plan"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_passes_plan_task_mode_to_command_builder(monkeypatch: pytest.MonkeyPatch, web_manager):
+    captured: dict[str, object] = {}
+
+    def fake_resolve_cli_executable(cli_path, working_dir=None):
+        return cli_path
+
+    def fake_build_cli_command(**kwargs):
+        captured["task_mode"] = kwargs.get("task_mode")
+        return ["codex"], False
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._lines = [
+                '{"type":"thread.started","thread_id":"thread-1"}\n',
+                '{"type":"item.completed","item":{"type":"assistant_message","text":"ok"}}\n',
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._owner.returncode = 0
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        pid = 1234
+
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr("bot.web.api_service.resolve_cli_executable", fake_resolve_cli_executable)
+    monkeypatch.setattr("bot.web.api_service.build_cli_command", fake_build_cli_command)
+    monkeypatch.setattr("bot.web.api_service.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+
+    events = [event async for event in stream_chat(web_manager, "main", 1001, "先出方案", task_mode="plan")]
+
+    assert captured["task_mode"] == "plan"
+    assert any(event["type"] == "done" for event in events)
 
 
 def test_execute_plan_saves_plan_and_creates_fresh_conversation(web_manager):

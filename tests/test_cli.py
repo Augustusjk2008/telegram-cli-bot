@@ -136,6 +136,66 @@ class TestBuildCliCommand:
         )
         assert any("sess-123" in str(a) for a in cmd)
 
+    def test_claude_plan_mode_overrides_native_plan_permission_mode(self):
+        params_config = CliParamsConfig()
+        params_config.claude["extra_args"] = [
+            "--permission-mode",
+            "plan",
+            "--keep",
+            "--permission-mode=plan",
+            "--permission-mode",
+            "acceptEdits",
+        ]
+
+        cmd, _ = build_cli_command(
+            cli_type="claude",
+            resolved_cli="claude",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+            task_mode="plan",
+        )
+
+        assert "--keep" in cmd
+        plan_arg_pairs = list(zip(cmd, cmd[1:]))
+        assert ("--permission-mode", "plan") not in plan_arg_pairs
+        assert "--permission-mode=plan" not in cmd
+        permission_mode_index = cmd.index("--permission-mode")
+        assert cmd[permission_mode_index + 1] == "bypassPermissions"
+        assert cmd.count("--permission-mode") == 1
+
+    def test_claude_plan_mode_uses_default_permission_when_yolo_is_off(self):
+        params_config = CliParamsConfig()
+        params_config.claude["yolo"] = False
+        params_config.claude["extra_args"] = ["--permission-mode", "plan"]
+
+        cmd, _ = build_cli_command(
+            cli_type="claude",
+            resolved_cli="claude",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+            task_mode="plan",
+        )
+
+        permission_mode_index = cmd.index("--permission-mode")
+        assert cmd[permission_mode_index + 1] == "default"
+
+    def test_claude_standard_mode_preserves_permission_extra_args(self):
+        params_config = CliParamsConfig()
+        params_config.claude["extra_args"] = ["--permission-mode", "plan"]
+
+        cmd, _ = build_cli_command(
+            cli_type="claude",
+            resolved_cli="claude",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+        )
+
+        permission_mode_index = cmd.index("--permission-mode")
+        assert cmd[permission_mode_index + 1] == "plan"
+
     def test_codex_json_output(self):
         env = {}
         cmd, use_stdin = build_cli_command(

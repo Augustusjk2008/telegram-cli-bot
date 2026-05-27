@@ -10,6 +10,7 @@ def test_load_prompt_template_reads_markdown_body():
 
     assert "Plan Mode" in text
     assert "{user_text}" in text
+    assert "不要使用 Claude Code 自带 Plan Mode" in text
 
 
 def test_render_prompt_substitutes_variables_without_stripping_newlines():

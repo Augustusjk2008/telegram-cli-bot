@@ -6961,6 +6961,76 @@ async def test_run_cli_chat_includes_context_usage(web_manager: MultiBotManager)
 
 
 @pytest.mark.asyncio
+async def test_run_cli_chat_includes_known_claude_context_usage(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "claude"
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.claude_session_id = "claude-1"
+    session.claude_session_initialized = True
+    context_usage = {
+        "provider": "claude",
+        "source": "claude_message_usage_estimate",
+        "session_id": "claude-1",
+        "used_tokens": 358148,
+        "context_window": 1000000,
+        "context_left_percent": 64,
+        "used_display": "358.1k",
+        "window_display": "1m",
+        "status_text": "64% context left · 358.1k / 1m",
+    }
+    context_calls: list[tuple[str, str, str | None]] = []
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        context_calls.append((cli_type, session_id, cwd_hint))
+        return context_usage
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=MagicMock(enabled=False, prompt_text="hello")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=MagicMock()), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch(
+             "bot.web.api_service._communicate_claude_process",
+             new_callable=AsyncMock,
+             return_value=("完成回复", "claude-1", 0),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert data["message"]["meta"]["context_usage"] == context_usage
+    assert context_calls[-1] == ("claude", "claude-1", session.working_dir)
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_includes_default_claude_context_usage(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "claude"
+    context_usage = {
+        "provider": "claude",
+        "source": "claude_message_usage_estimate",
+        "session_id": "claude-1",
+        "used_tokens": 358148,
+        "context_window": 256000,
+        "context_left_percent": 0,
+        "used_display": "358.1k",
+        "window_display": "256k",
+        "status_text": "0% context left · 358.1k / 256k",
+    }
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=MagicMock(enabled=False, prompt_text="hello")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=MagicMock()), \
+         patch("bot.web.api_service.resolve_cli_context_usage", return_value=context_usage), \
+         patch(
+             "bot.web.api_service._communicate_claude_process",
+             new_callable=AsyncMock,
+             return_value=("完成回复", "claude-1", 0),
+         ):
+        data = await run_cli_chat(web_manager, "main", 1001, "hello")
+
+    assert data["message"]["meta"]["context_usage"] == context_usage
+    assert data["message"]["meta"]["context_usage"]["context_window"] == 256000
+
+
+@pytest.mark.asyncio
 async def test_run_cli_chat_suggests_new_conversation_for_codex_resume_upstream_error(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     session.codex_session_id = "thread-stuck"
@@ -9073,6 +9143,7 @@ async def test_stream_cli_chat_status_includes_context_usage_from_claude_session
     status_events = [event for event in events if event["type"] == "status"]
     assert any(event.get("context_usage") == context_usage for event in status_events)
     assert any(call[0] == "claude" and call[1] == "claude-1" for call in context_calls)
+    assert any(call[2] == session.working_dir for call in context_calls)
 
 
 def test_codex_done_candidate_ignores_event_msg_commentary():
@@ -10736,6 +10807,11 @@ async def test_plan_execute_endpoint_returns_plan_path(
     assert response.status == 200
     assert payload["ok"] is True
     assert payload["data"]["plan_path"].startswith("docs/plan/")
+    assert payload["data"]["execution_message"].startswith("请按方案执行。方案文件：")
+    assert payload["data"]["plan_path"] in payload["data"]["execution_message"]
+    assert payload["data"]["bot_mode"] == "cli"
+    assert payload["data"]["conversation"]["active"] is True
+    assert payload["data"]["messages"] == []
 
 
 @pytest.mark.asyncio

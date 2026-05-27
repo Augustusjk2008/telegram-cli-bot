@@ -11,7 +11,11 @@ from bot.cli import normalize_cli_type
 from bot.web.native_history_locator import locate_claude_transcript, locate_codex_transcript
 
 _CODEX_CONTEXT_BASELINE_TOKENS = 12_000
-_CLAUDE_CONTEXT_WINDOW_TOKENS = 1_000_000
+_CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
+_CLAUDE_MODEL_CONTEXT_WINDOWS = {
+    "claude-opus-4-7": 1_000_000,
+    "opus": 1_000_000,
+}
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CLAUDE_TOKENS_RE = re.compile(
     r"(?:Tokens\s*:\s*)?(?P<used>\d+(?:\.\d+)?\s*[kKmM]?)\s*/\s*"
@@ -245,7 +249,25 @@ def _extract_claude_context_from_line(session_id: str, line: str) -> dict[str, A
     return _parse_claude_context_text(session_id, content)
 
 
-def _extract_claude_message_usage(line: str) -> int | None:
+def _normalize_claude_model_name(model: str | None) -> str:
+    text = str(model or "").strip().lower()
+    text = re.sub(r"\[[^\]]+\]\s*$", "", text).strip()
+    if not text:
+        return ""
+    for key in _CLAUDE_MODEL_CONTEXT_WINDOWS:
+        if text == key or text.startswith(f"{key}-"):
+            return key
+    return text
+
+
+def _lookup_claude_context_window(model: str | None) -> int | None:
+    normalized = _normalize_claude_model_name(model)
+    if not normalized:
+        return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
+    return _CLAUDE_MODEL_CONTEXT_WINDOWS.get(normalized, _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS)
+
+
+def _extract_claude_message_usage(line: str) -> tuple[int, str] | None:
     try:
         item = json.loads(line)
     except json.JSONDecodeError:
@@ -260,25 +282,34 @@ def _extract_claude_message_usage(line: str) -> int | None:
     if not isinstance(usage, dict):
         return None
 
-    return _as_int(usage.get("input_tokens"))
+    used_tokens = _as_int(usage.get("input_tokens"))
+    if used_tokens is None:
+        return None
+    return used_tokens, str(message.get("model") or "").strip()
 
 
-def _build_claude_usage_estimate(session_id: str, used_tokens: int) -> dict[str, Any] | None:
-    context_window = _CLAUDE_CONTEXT_WINDOW_TOKENS
-    left_percent = _clamp_percent(_round_half_up((context_window - used_tokens) / context_window * 100))
+def _build_claude_usage_estimate(session_id: str, used_tokens: int, model: str | None) -> dict[str, Any] | None:
     used_display = _format_tokens_claude(used_tokens)
-    window_display = _format_tokens_claude(context_window)
-    return {
+    context_window = _lookup_claude_context_window(model)
+    result = {
         "provider": "claude",
         "source": "claude_message_usage_estimate",
         "session_id": session_id,
         "used_tokens": used_tokens,
-        "context_window": context_window,
-        "context_left_percent": left_percent,
         "used_display": used_display,
-        "window_display": window_display,
-        "status_text": f"{left_percent}% context left · {used_display} / {window_display}",
+        "status_text": f"{used_display} context used",
     }
+    left_percent = _clamp_percent(_round_half_up((context_window - used_tokens) / context_window * 100))
+    window_display = _format_tokens_claude(context_window)
+    result.update(
+        {
+            "context_window": context_window,
+            "context_left_percent": left_percent,
+            "window_display": window_display,
+            "status_text": f"{left_percent}% context left · {used_display} / {window_display}",
+        }
+    )
+    return result
 
 
 def _resolve_claude_context_usage(session_id: str, transcript_path: Path) -> dict[str, Any] | None:
@@ -293,9 +324,10 @@ def _resolve_claude_context_usage(session_id: str, transcript_path: Path) -> dic
             return context_usage
 
     for line in reversed(lines):
-        used_tokens = _extract_claude_message_usage(line.strip())
-        if used_tokens is not None:
-            return _build_claude_usage_estimate(session_id, used_tokens)
+        message_usage = _extract_claude_message_usage(line.strip())
+        if message_usage is not None:
+            used_tokens, model = message_usage
+            return _build_claude_usage_estimate(session_id, used_tokens, model)
 
     return None
 

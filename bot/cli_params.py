@@ -348,6 +348,7 @@ def build_cli_args_from_config(
     session_id: Optional[str] = None,
     resume_session: bool = False,
     working_dir: Optional[str] = None,
+    task_mode: str = "standard",
 ) -> Tuple[List[str], bool]:
     """根据配置构建 CLI 命令行参数
     
@@ -361,7 +362,15 @@ def build_cli_args_from_config(
     is_cli_subcommand = user_text.startswith("/") and len(user_text.split()) == 1
 
     if cli_type == "claude":
-        return _build_claude_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, resume_session)
+        return _build_claude_args(
+            resolved_cli,
+            params,
+            user_text,
+            is_cli_subcommand,
+            session_id,
+            resume_session,
+            task_mode=task_mode,
+        )
 
     if cli_type == "codex":
         return _build_codex_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, working_dir)
@@ -379,6 +388,7 @@ def _build_claude_args(
     is_cli_subcommand: bool,
     session_id: Optional[str],
     resume_session: bool,
+    task_mode: str = "standard",
 ) -> Tuple[List[str], bool]:
     """构建 Claude CLI 参数
     
@@ -418,15 +428,37 @@ def _build_claude_args(
         else:
             cmd.extend(["--session-id", session_id])
     
-    # 添加额外参数
     extra_args = params.get("extra_args", [])
     if extra_args:
-        cmd.extend([str(arg) for arg in extra_args])
+        if task_mode == "plan":
+            cmd.extend(_filter_claude_plan_mode_extra_args(extra_args))
+        else:
+            cmd.extend([str(arg) for arg in extra_args])
+
+    if task_mode == "plan":
+        cmd.extend(["--permission-mode", "bypassPermissions" if params.get("yolo") else "default"])
     
     # 从 stdin 读取提示
     cmd.append("-")
     
     return cmd, True
+
+
+def _filter_claude_plan_mode_extra_args(extra_args: Sequence[Any]) -> List[str]:
+    filtered: List[str] = []
+    skip_next = False
+    for item in extra_args:
+        arg = str(item)
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--permission-mode":
+            skip_next = True
+            continue
+        if arg.startswith("--permission-mode="):
+            continue
+        filtered.append(arg)
+    return filtered
 
 
 def _build_codex_args(
