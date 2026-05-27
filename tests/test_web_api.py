@@ -4921,6 +4921,66 @@ async def test_write_file_route_updates_file(web_manager: MultiBotManager, monke
     assert payload["data"]["path"] == "notes.md"
     assert target.read_text(encoding="utf-8") == "# updated\n"
 
+
+@pytest.mark.asyncio
+async def test_ungranted_bot_file_read_write_and_terminal_rebuild_are_forbidden(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    web_manager.managed_profiles["sub1"] = BotProfile(
+        alias="sub1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(temp_dir),
+        enabled=True,
+    )
+    (temp_dir / "notes.md").write_text("# hello\n", encoding="utf-8")
+    change_working_directory(web_manager, "sub1", 1001, str(temp_dir))
+
+    permissions = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permissions.set_allowed_bots("member", ["main"])
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    def member_auth(_self, _request):
+        return AuthContext(
+            user_id=1001,
+            token_used=True,
+            account_id="member",
+            username="member",
+            role="member",
+            capabilities={"view_file_tree", "read_file_content", "write_files", "terminal_exec"},
+        )
+
+    monkeypatch.setattr("bot.web.server.WebApiServer._auth_context", member_auth)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            read_resp = await client.get("/api/bots/sub1/files/read?filename=notes.md&mode=cat&lines=0")
+            write_resp = await client.post(
+                "/api/bots/sub1/files/write",
+                json={"path": "notes.md", "content": "# updated\n"},
+            )
+            rebuild_resp = await client.post(
+                "/api/bots/sub1/terminal/session/rebuild",
+                json={"owner_id": "owner-1", "cwd": str(temp_dir), "shell": "bash"},
+            )
+            read_payload = await read_resp.json()
+            write_payload = await write_resp.json()
+            rebuild_payload = await rebuild_resp.json()
+
+    assert read_resp.status == 403
+    assert read_payload["error"]["code"] == "forbidden"
+    assert write_resp.status == 403
+    assert write_payload["error"]["code"] == "forbidden"
+    assert rebuild_resp.status == 403
+    assert rebuild_payload["error"]["code"] == "forbidden"
+    assert (temp_dir / "notes.md").read_text(encoding="utf-8") == "# hello\n"
+
 @pytest.mark.asyncio
 async def test_api_routes_disable_cache(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")

@@ -22,6 +22,7 @@ type Props = {
   onRefreshGitDecorations: () => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
   structureOnly?: boolean;
+  canWriteFiles?: boolean;
   focused: boolean;
   onToggleFocus: () => void;
 };
@@ -881,6 +882,7 @@ export function FileTreePane({
   onRefreshGitDecorations,
   onRequestSetWorkdir,
   structureOnly = false,
+  canWriteFiles = true,
   focused,
   onToggleFocus,
 }: Props) {
@@ -923,6 +925,8 @@ export function FileTreePane({
   const contextMenuDecoration = contextMenu
     ? resolveGitDecoration(contextMenu.entry.path, contextMenu.entry.isDir, gitDecorations, inheritedDirDecorations)
     : undefined;
+  const canPreviewFiles = !structureOnly;
+  const canMutateFiles = canPreviewFiles && canWriteFiles;
 
   function closeContextMenu() {
     setContextMenu(null);
@@ -960,7 +964,7 @@ export function FileTreePane({
   }
 
   function handleEntryContextMenu(event: MouseEvent<HTMLButtonElement>, entry: FileTreeNode, absolutePath: string) {
-    if (structureOnly) {
+    if (!canPreviewFiles) {
       return;
     }
     event.preventDefault();
@@ -969,7 +973,7 @@ export function FileTreePane({
   }
 
   function handleEntryContextMenuKey(event: KeyboardEvent<HTMLButtonElement>, entry: FileTreeNode, absolutePath: string) {
-    if (structureOnly) {
+    if (!canPreviewFiles) {
       return;
     }
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
@@ -982,6 +986,10 @@ export function FileTreePane({
   }
 
   async function handleCreateFile() {
+    if (!canMutateFiles) {
+      setCreateFileError("无文件写入权限");
+      return;
+    }
     setCreateFileBusy(true);
     setCreateFileError("");
     setActionError("");
@@ -999,6 +1007,10 @@ export function FileTreePane({
   }
 
   async function handleRenameFile() {
+    if (!canMutateFiles) {
+      setRenameError("无文件写入权限");
+      return;
+    }
     setRenameBusy(true);
     setRenameError("");
     setActionError("");
@@ -1018,6 +1030,10 @@ export function FileTreePane({
   }
 
   async function handleCreateDirectory() {
+    if (!canMutateFiles) {
+      setActionError("无文件写入权限");
+      return;
+    }
     const name = window.prompt("请输入新文件夹名称", "")?.trim();
     if (!name) {
       return;
@@ -1032,6 +1048,10 @@ export function FileTreePane({
   }
 
   async function handleDelete(entry: FileTreeNode) {
+    if (!canMutateFiles) {
+      setActionError("无文件写入权限");
+      return;
+    }
     const message = entry.isDir
       ? `确定删除文件夹 ${entry.path} 吗？此操作会递归删除其中的所有内容。`
       : `确定删除文件 ${entry.path} 吗？`;
@@ -1052,6 +1072,10 @@ export function FileTreePane({
   }
 
   async function handleCopyFile(path: string) {
+    if (!canMutateFiles) {
+      setActionError("无文件写入权限");
+      return;
+    }
     setActionError("");
     try {
       await tree.copyFile(path);
@@ -1074,6 +1098,11 @@ export function FileTreePane({
   }
 
   async function handleMoveFile(path: string, targetParentPath: string) {
+    if (!canMutateFiles) {
+      setActionError("无文件写入权限");
+      resetInternalDrag();
+      return;
+    }
     if (!canMoveTreeEntryToDirectory(path, targetParentPath)) {
       return;
     }
@@ -1090,7 +1119,7 @@ export function FileTreePane({
   }
 
   function handleEntryDragStart(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (structureOnly) {
+    if (!canMutateFiles) {
       event.preventDefault();
       return;
     }
@@ -1101,7 +1130,7 @@ export function FileTreePane({
   }
 
   function handleDirectoryDragOver(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (structureOnly || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
+    if (!canMutateFiles || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
       return;
     }
     const sourcePath = draggedEntryPath || event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
@@ -1126,7 +1155,7 @@ export function FileTreePane({
   }
 
   function handleDirectoryDrop(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (structureOnly || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
+    if (!canMutateFiles || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
       return;
     }
     event.preventDefault();
@@ -1137,6 +1166,10 @@ export function FileTreePane({
 
   async function handleUpload(files: File[]) {
     if (files.length === 0) {
+      return;
+    }
+    if (!canMutateFiles) {
+      setActionError("无文件写入权限");
       return;
     }
     setActionError("");
@@ -1235,7 +1268,7 @@ export function FileTreePane({
         {entry.isDir ? (
           <button
             type="button"
-            draggable={!structureOnly}
+            draggable={canMutateFiles}
             aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
             aria-current={selected ? "true" : undefined}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
@@ -1263,7 +1296,7 @@ export function FileTreePane({
         ) : (
           <button
             type="button"
-            draggable={!structureOnly}
+            draggable={canMutateFiles}
             aria-label={`打开 ${entry.path}`}
             aria-current={selected ? "true" : undefined}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
@@ -1272,7 +1305,7 @@ export function FileTreePane({
             onDragEnd={resetInternalDrag}
             onClick={() => {
               tree.selectPath(entry.path);
-              if (!structureOnly) {
+              if (canPreviewFiles) {
                 onOpenFile(entry.path);
               }
             }}
@@ -1300,11 +1333,17 @@ export function FileTreePane({
         if (hasInternalTreeEntryDrag(event)) {
           return;
         }
+        if (!canMutateFiles) {
+          return;
+        }
         event.preventDefault();
         setDragDepth((current) => current + 1);
       }}
       onDragOver={(event) => {
         if (hasInternalTreeEntryDrag(event)) {
+          return;
+        }
+        if (!canMutateFiles) {
           return;
         }
         event.preventDefault();
@@ -1323,7 +1362,7 @@ export function FileTreePane({
           return;
         }
         event.preventDefault();
-        if (structureOnly) {
+        if (!canMutateFiles) {
           return;
         }
         setDragDepth(0);
@@ -1348,7 +1387,7 @@ export function FileTreePane({
           </button>
         </div>
         <div className="mt-2 flex items-center gap-2">
-          {!structureOnly ? (
+          {canMutateFiles ? (
             <>
               <input
                 ref={uploadInputRef}
@@ -1383,7 +1422,7 @@ export function FileTreePane({
           >
             <House className="h-3.5 w-3.5" />
           </button>
-          {!structureOnly && onRequestOpenSystemFolder ? (
+          {canMutateFiles && onRequestOpenSystemFolder ? (
             <button
               type="button"
               aria-label="在系统文件夹中打开"
@@ -1403,7 +1442,7 @@ export function FileTreePane({
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          {!structureOnly ? (
+          {canMutateFiles ? (
             <>
               <button
                 type="button"
@@ -1488,16 +1527,18 @@ export function FileTreePane({
                 >
                   复制路径
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onRequestSetWorkdir(contextMenu.absolutePath);
-                    closeContextMenu();
-                  }}
-                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-                >
-                  设为工作目录
-                </button>
+                {canMutateFiles ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onRequestSetWorkdir(contextMenu.absolutePath);
+                      closeContextMenu();
+                    }}
+                    className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    设为工作目录
+                  </button>
+                ) : null}
               </>
             ) : (
               <>
@@ -1523,16 +1564,18 @@ export function FileTreePane({
                     Diff
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    openRenameDialog(contextMenu.entry.path, contextMenu.entry.name);
-                    closeContextMenu();
-                  }}
-                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-                >
-                  改名
-                </button>
+                {canMutateFiles ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openRenameDialog(contextMenu.entry.path, contextMenu.entry.name);
+                      closeContextMenu();
+                    }}
+                    className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    改名
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -1544,17 +1587,19 @@ export function FileTreePane({
                 >
                   复制路径
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const path = contextMenu.entry.path;
-                    closeContextMenu();
-                    void handleCopyFile(path);
-                  }}
-                  className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-                >
-                  复制
-                </button>
+                {canMutateFiles ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const path = contextMenu.entry.path;
+                      closeContextMenu();
+                      void handleCopyFile(path);
+                    }}
+                    className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    复制
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -1567,23 +1612,25 @@ export function FileTreePane({
                 </button>
               </>
             )}
-            <button
-              type="button"
-              onClick={() => {
-                closeContextMenu();
-                void handleDelete(contextMenu.entry);
-              }}
-              className="flex w-full rounded-sm px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-            >
-              删除
-            </button>
+            {canMutateFiles ? (
+              <button
+                type="button"
+                onClick={() => {
+                  closeContextMenu();
+                  void handleDelete(contextMenu.entry);
+                }}
+                className="flex w-full rounded-sm px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+              >
+                删除
+              </button>
+            ) : null}
           </div>
           </>,
           document.body,
         )
         : null}
 
-      {!structureOnly && dragDepth > 0 ? (
+      {canMutateFiles && dragDepth > 0 ? (
         <div
           data-testid="desktop-file-drop-overlay"
           className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-2xl border border-dashed border-[var(--accent)] bg-[var(--accent-soft)] text-sm font-medium text-[var(--text)]"
@@ -1592,7 +1639,7 @@ export function FileTreePane({
         </div>
       ) : null}
 
-      {!structureOnly && showCreateFileDialog ? (
+      {canMutateFiles && showCreateFileDialog ? (
         <FileNameDialog
           title="新建文件"
           label="文件名"
@@ -1613,7 +1660,7 @@ export function FileTreePane({
         />
       ) : null}
 
-      {!structureOnly && showRenameDialog ? (
+      {canMutateFiles && showRenameDialog ? (
         <FileNameDialog
           title="重命名文件"
           label="文件名"

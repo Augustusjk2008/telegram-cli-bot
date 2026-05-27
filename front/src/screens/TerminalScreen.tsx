@@ -26,6 +26,7 @@ type Props = {
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
   isImmersive?: boolean;
+  disabledReason?: string;
   embedded?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -81,6 +82,7 @@ export function TerminalScreen({
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
   isImmersive = false,
+  disabledReason = "",
   embedded = false,
   focused = false,
   onToggleFocus,
@@ -119,6 +121,7 @@ export function TerminalScreen({
   const [savingActionsConfig, setSavingActionsConfig] = useState(false);
   const [actionsConfigError, setActionsConfigError] = useState("");
   const terminalFontSize = getTerminalFontSize();
+  const terminalDisabled = Boolean(disabledReason);
   const runtimePlatform: TerminalRuntimePlatform = actionsConfig?.runtimePlatform ?? "windows";
   const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
   const runningWorkingDir = terminal.snapshot.cwd.trim();
@@ -280,6 +283,9 @@ export function TerminalScreen({
   }
 
   async function rebuildTerminal() {
+    if (terminalDisabled) {
+      return;
+    }
     const nextWorkingDir = stagedWorkingDir || preferredTerminalDir || runningWorkingDir;
     if (!nextWorkingDir) {
       return;
@@ -291,6 +297,9 @@ export function TerminalScreen({
   }
 
   async function closeTerminal() {
+    if (terminalDisabled) {
+      return;
+    }
     disposeSession();
     setError("");
     setFollowing(true);
@@ -298,6 +307,9 @@ export function TerminalScreen({
   }
 
   async function runTerminalAction(action: TerminalAction) {
+    if (terminalDisabled) {
+      return;
+    }
     const command = resolveTerminalActionCommand(action, runtimePlatform);
     if (!command) {
       setActionsError("当前平台未配置命令");
@@ -323,7 +335,7 @@ export function TerminalScreen({
   }
 
   async function saveTerminalActionsConfig(nextConfig: TerminalActionsEditableConfig) {
-    if (!actionsConfig) {
+    if (!actionsConfig || terminalDisabled) {
       return;
     }
     setSavingActionsConfig(true);
@@ -341,6 +353,15 @@ export function TerminalScreen({
   }
 
   useEffect(() => {
+    if (terminalDisabled) {
+      disposeSession();
+      setError("");
+      setFollowing(true);
+      return;
+    }
+  }, [terminalDisabled]);
+
+  useEffect(() => {
     if (terminal.snapshot.started || sessionRef.current === null) {
       return;
     }
@@ -348,6 +369,9 @@ export function TerminalScreen({
   }, [terminal.snapshot.closed, terminal.snapshot.started]);
 
   useEffect(() => {
+    if (terminalDisabled) {
+      return;
+    }
     if ((!isVisible && sessionRef.current === null) || !terminal.snapshot.started || terminal.snapshot.closed) {
       return;
     }
@@ -406,7 +430,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [authToken, isVisible, terminal.attachNonce, terminal.ownerId, terminal.snapshot.closed, terminal.snapshot.started, terminalFontSize, themeName]);
+  }, [authToken, isVisible, terminal.attachNonce, terminal.ownerId, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize, themeName]);
 
   useEffect(() => {
     const becameVisible = !previousVisibleRef.current && isVisible;
@@ -487,13 +511,14 @@ export function TerminalScreen({
     };
   }, []);
 
-  const effectiveError = error || terminal.error || actionsError;
+  const effectiveError = disabledReason || error || terminal.error || actionsError;
   const connectionText = effectiveError
-    ? "连接失败"
+    ? (terminalDisabled ? "无权限" : "连接失败")
     : isConnected
       ? "已连接"
       : terminal.snapshot.connectionText || "未启动";
-  const canCloseTerminal = terminal.snapshot.started && !terminal.snapshot.closed;
+  const canCloseTerminal = !terminalDisabled && terminal.snapshot.started && !terminal.snapshot.closed;
+  const canRebuildTerminal = !terminalDisabled && Boolean(stagedWorkingDir || preferredTerminalDir || runningWorkingDir);
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
@@ -530,7 +555,8 @@ export function TerminalScreen({
             <TerminalActionsBar
               actions={[]}
               runtimePlatform={runtimePlatform}
-              canEdit={Boolean(actionsConfig?.editable)}
+              canEdit={Boolean(actionsConfig?.editable) && !terminalDisabled}
+              disabled={terminalDisabled}
               runningActionId=""
               onRunAction={() => {}}
               onOpenConfig={() => {
@@ -561,6 +587,7 @@ export function TerminalScreen({
             <button
               type="button"
               onClick={rebuildTerminal}
+              disabled={!canRebuildTerminal}
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface)] disabled:opacity-60"
             >
               <RefreshCw className="h-3.5 w-3.5" />
@@ -575,6 +602,7 @@ export function TerminalScreen({
             <button
               type="button"
               onClick={onAcceptPendingWorkingDir}
+              disabled={terminalDisabled}
               className="rounded border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
             >
               设为下次重建
@@ -582,6 +610,7 @@ export function TerminalScreen({
             <button
               type="button"
               onClick={onCancelPendingWorkingDir}
+              disabled={terminalDisabled}
               className="rounded border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
             >
               取消
@@ -635,6 +664,7 @@ export function TerminalScreen({
             actions={visibleActions}
             runtimePlatform={runtimePlatform}
             canEdit={false}
+            disabled={terminalDisabled}
             runningActionId={runningActionId}
             onRunAction={(action) => void runTerminalAction(action)}
             onOpenConfig={() => {}}
@@ -657,63 +687,87 @@ export function TerminalScreen({
         <div className="grid grid-cols-4 gap-2 border-t border-[var(--border)] bg-[var(--surface)] p-3 pb-safe">
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\u0003")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u0003");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             Ctrl+C
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\t")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\t");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             Tab
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\u001b")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             Esc
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.focus()}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.focus();
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             键盘
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\u001b[A")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[A");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             ↑
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\u001b[B")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[B");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             ↓
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\u001b[D")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[D");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             ←
           </button>
           <button
             type="button"
-            onClick={() => sessionRef.current?.sendControl("\u001b[C")}
+            onClick={() => {
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[C");
+            }}
+            disabled={terminalDisabled}
             className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
           >
             →
           </button>
         </div>
       ) : null}
-      {showActionsConfig && actionsConfig ? (
+      {showActionsConfig && actionsConfig && !terminalDisabled ? (
         <TerminalActionsConfigDialog
           config={actionsConfig}
           saving={savingActionsConfig}

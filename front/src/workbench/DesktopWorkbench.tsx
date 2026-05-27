@@ -105,9 +105,11 @@ type Props = {
   userAvatarName?: string;
   client?: WebBotClient;
   structureOnly?: boolean;
+  canWriteFiles?: boolean;
   canOpenSystemFolder?: boolean;
   chatReadOnly?: boolean;
   botCanOperate?: boolean;
+  terminalDisabledReason?: string;
   allowTrace?: boolean;
   allowCodeJump?: boolean;
   themeName?: UiThemeName;
@@ -143,9 +145,11 @@ export function DesktopWorkbench({
   botAlias,
   userAvatarName,
   structureOnly = false,
+  canWriteFiles = true,
   canOpenSystemFolder = false,
   chatReadOnly = false,
   botCanOperate = true,
+  terminalDisabledReason = "",
   allowTrace = true,
   allowCodeJump = true,
   themeName,
@@ -175,7 +179,7 @@ export function DesktopWorkbench({
 }: Props) {
   const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly });
-  const tabs = useEditorTabs({ botAlias, client, structureOnly });
+  const tabs = useEditorTabs({ botAlias, client, structureOnly, canWriteFiles });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const editorPaneRef = useRef<HTMLElement | null>(null);
@@ -228,6 +232,8 @@ export function DesktopWorkbench({
     containerHeightPx: layoutBounds.centerHeightPx,
   });
   const canViewPlugins = sessionCapabilities.includes("view_plugins");
+  const canPreviewFiles = !structureOnly;
+  const canMutateFiles = canPreviewFiles && canWriteFiles;
   const activeSidebarView = !canViewPlugins && layoutState.sidebarView === "plugins"
     ? "files"
     : layoutState.sidebarView;
@@ -299,8 +305,8 @@ export function DesktopWorkbench({
     : previewResult?.previewKind === "html"
       ? "已加载 HTML 预览"
       : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
-  const canLoadFull = !structureOnly && !isFilePreviewFullyLoaded(previewResult);
-  const canEditPreview = !structureOnly && previewResult?.previewKind !== "image";
+  const canLoadFull = canPreviewFiles && !isFilePreviewFullyLoaded(previewResult);
+  const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
   const previewDownloadProgress = fileTree.downloadProgress?.path === previewName ? fileTree.downloadProgress : null;
   const showSidebarContent = !showGuideWorkspace && (focusedPane === "sidebar" || !layoutState.sidebarCollapsed);
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
@@ -582,7 +588,7 @@ export function DesktopWorkbench({
   }
 
   const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
-    if (structureOnly && mode === "full") {
+    if (!canPreviewFiles) {
       return;
     }
     setPreviewLoading(true);
@@ -601,7 +607,7 @@ export function DesktopWorkbench({
     } finally {
       setPreviewLoading(false);
     }
-  }, [botAlias, client, structureOnly]);
+  }, [botAlias, canPreviewFiles, client]);
 
   const handleRequestPreview = useCallback((path: string) => {
     void loadPreview(path, "preview");
@@ -622,12 +628,12 @@ export function DesktopWorkbench({
 
   async function openWorkspaceFile(path: string, line?: number) {
     const target = await client.resolveFileOpenTarget(botAlias, path);
+    if (!canPreviewFiles) {
+      await fileTree.revealPath(path);
+      setEditorReveal(null);
+      return;
+    }
     if (target.kind === "plugin_view") {
-      if (structureOnly) {
-        await fileTree.revealPath(path);
-        setEditorReveal(null);
-        return;
-      }
       await Promise.allSettled([
         tabs.openPluginView(target),
         fileTree.revealPath(path),
@@ -645,7 +651,7 @@ export function DesktopWorkbench({
       return;
     }
 
-    if (structureOnly) {
+    if (!canWriteFiles) {
       await Promise.allSettled([
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
@@ -753,6 +759,9 @@ export function DesktopWorkbench({
   }
 
   async function handleUpload(files: File[]) {
+    if (!canMutateFiles) {
+      return;
+    }
     for (const file of files) {
       await client.uploadFile(botAlias, file);
       fileTree.highlightPath(file.name);
@@ -808,6 +817,7 @@ export function DesktopWorkbench({
             setSidebarView("settings");
           }}
           structureOnly={structureOnly}
+          canWriteFiles={canWriteFiles}
           focused={focusedPane === "sidebar"}
           onToggleFocus={() => toggleFocusedPane("sidebar")}
         />
@@ -1148,6 +1158,7 @@ export function DesktopWorkbench({
                   preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
                   pendingWorkingDir={pendingTerminalOverride?.cwd}
                   themeName={themeName}
+                  disabledReason={terminalDisabledReason}
                   visible={showTerminalPane}
                   focused={focusedPane === "terminal"}
                   onToggleFocus={() => toggleFocusedPane("terminal")}

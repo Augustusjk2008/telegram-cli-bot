@@ -7,6 +7,8 @@ import type { BotSummary, CreateBotInput, DirectoryListing } from "../services/t
 
 class DesktopManagerClient extends MockWebBotClient {
   browserPath = "C:\\workspace";
+  listPaths: Array<string | undefined> = [];
+  changeDirectoryCalls: Array<{ botAlias: string; path: string }> = [];
   addBotCalls: CreateBotInput[] = [];
   createDirectoryCalls: Array<{ botAlias: string; name: string; parentPath?: string }> = [];
   removeBotCalls: Array<{ botAlias: string; deleteHistory: boolean }> = [];
@@ -66,14 +68,17 @@ class DesktopManagerClient extends MockWebBotClient {
     return "C:\\workspace";
   }
 
-  async listFiles(): Promise<DirectoryListing> {
+  async listFiles(_botAlias?: string, path?: string): Promise<DirectoryListing> {
+    this.listPaths.push(path);
+    const nextPath = path || this.browserPath;
     return {
-      workingDir: this.browserPath,
-      entries: this.directoryMap[this.browserPath] || [],
+      workingDir: nextPath,
+      entries: this.directoryMap[nextPath] || [],
     };
   }
 
   async changeDirectory(_botAlias: string, path: string): Promise<string> {
+    this.changeDirectoryCalls.push({ botAlias: _botAlias, path });
     if (path === "..") {
       this.browserPath = "C:\\workspace";
       return this.browserPath;
@@ -367,6 +372,24 @@ test("desktop bot manager directory picker can create folder", async () => {
     { botAlias: "main", name: "new-folder", parentPath: "C:\\workspace" },
   ]);
   expect(await screen.findByRole("button", { name: "进入目录 new-folder" })).toBeInTheDocument();
+});
+
+test("desktop bot manager directory picker browses parent without mutating browser state", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
+  await user.click(await screen.findByRole("button", { name: "进入目录 team3" }));
+  await user.click(screen.getByRole("button", { name: "上一级" }));
+
+  expect(await screen.findByRole("button", { name: "进入目录 team3" })).toBeInTheDocument();
+  expect(client.changeDirectoryCalls).toEqual([]);
+  expect(client.listPaths).toContain("C:\\workspace\\team3");
+  expect(client.listPaths).toContain("C:\\workspace");
 });
 
 test("desktop bot manager edits alias and blocks main destructive actions", async () => {

@@ -9,6 +9,7 @@ type Props = {
   botAlias: string;
   client: WebBotClient;
   initialPath?: string;
+  mutateBrowseState?: boolean;
   onPick: (path: string) => void;
   onClose: () => void;
 };
@@ -17,11 +18,45 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function joinBrowserPath(basePath: string, name: string) {
+  if (!basePath || basePath === "/") {
+    return `/${name}`;
+  }
+  if (/^[A-Za-z]:[\\/]?$/.test(basePath)) {
+    return `${basePath.replace(/[\\/]+$/, "\\")}${name}`;
+  }
+  const separator = basePath.includes("\\") ? "\\" : "/";
+  return `${basePath.replace(/[\\/]+$/, "")}${separator}${name}`;
+}
+
+function getParentBrowserPath(path: string) {
+  const normalized = path.replace(/[\\/]+$/, "");
+  if (!normalized || normalized === "/") {
+    return normalized || "/";
+  }
+  const parts = normalized.split(/[\\/]+/);
+  if (parts.length <= 1) {
+    return normalized;
+  }
+  if (/^[A-Za-z]:$/.test(parts[0])) {
+    return parts.length <= 2 ? `${parts[0]}\\` : `${parts[0]}\\${parts.slice(1, -1).join("\\")}`;
+  }
+  if (normalized.startsWith("/")) {
+    return `/${parts.slice(1, -1).join("/")}` || "/";
+  }
+  return parts.slice(0, -1).join("/");
+}
+
+function isAbsoluteBrowserPath(path: string) {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/") || path.startsWith("\\\\");
+}
+
 export function DirectoryPickerDialog({
   title,
   botAlias,
   client,
   initialPath = "",
+  mutateBrowseState = true,
   onPick,
   onClose,
 }: Props) {
@@ -46,6 +81,9 @@ export function DirectoryPickerDialog({
   }
 
   async function restoreOriginalPath() {
+    if (!mutateBrowseState) {
+      return true;
+    }
     if (restoredRef.current) {
       return true;
     }
@@ -76,7 +114,9 @@ export function DirectoryPickerDialog({
   }
 
   async function loadCurrentDirectory() {
-    const listing = await client.listFiles(botAlias);
+    const listing = mutateBrowseState
+      ? await client.listFiles(botAlias)
+      : await client.listFiles(botAlias, currentPathRef.current || homePathRef.current || undefined);
     applyListing(listing);
   }
 
@@ -104,6 +144,17 @@ export function DirectoryPickerDialog({
     setLoading(true);
     setError("");
     try {
+      if (!mutateBrowseState) {
+        const normalized = normalizePathInput(path);
+        const targetPath = normalized === ".."
+          ? getParentBrowserPath(currentPathRef.current)
+          : isAbsoluteBrowserPath(normalized)
+            ? normalized
+            : joinBrowserPath(currentPathRef.current, normalized);
+        const listing = await client.listFiles(botAlias, targetPath);
+        applyListing(listing);
+        return;
+      }
       await client.changeDirectory(botAlias, path);
       await loadCurrentDirectory();
     } catch (nextError) {
@@ -149,6 +200,14 @@ export function DirectoryPickerDialog({
         const preferredPath = normalizePathInput(initialPath) || homePath || originListing.workingDir;
         if (preferredPath && preferredPath !== originListing.workingDir) {
           try {
+            if (!mutateBrowseState) {
+              const listing = await client.listFiles(botAlias, preferredPath);
+              if (!active) {
+                return;
+              }
+              applyListing(listing);
+              return;
+            }
             await client.changeDirectory(botAlias, preferredPath);
             if (!active) {
               return;
@@ -181,7 +240,7 @@ export function DirectoryPickerDialog({
       active = false;
       void restoreOriginalPath();
     };
-  }, [botAlias, client, initialPath]);
+  }, [botAlias, client, initialPath, mutateBrowseState]);
 
   const directories = entries.filter((entry) => entry.isDir);
 

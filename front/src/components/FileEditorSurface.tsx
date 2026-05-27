@@ -9,6 +9,7 @@ type Props = {
   saving?: boolean;
   dirty?: boolean;
   canSave?: boolean;
+  readOnly?: boolean;
   breakpointLines?: number[];
   currentLine?: number | null;
   statusText?: string;
@@ -239,6 +240,7 @@ export function FileEditorSurface({
   saving = false,
   dirty = false,
   canSave = false,
+  readOnly = false,
   breakpointLines,
   currentLine = null,
   statusText = "",
@@ -413,7 +415,7 @@ export function FileEditorSurface({
               theme={codeMirrorTheme}
               extensions={editorExtensions}
               autoFocus
-              editable={!loading && !saving}
+              editable={!loading && !saving && !readOnly}
               onCreateEditor={(view) => {
                 setEditorView(view);
               }}
@@ -426,6 +428,7 @@ export function FileEditorSurface({
             key={path}
             aria-label="文件内容"
             value={value}
+            readOnly={readOnly}
             onChange={(event) => onChange(event.target.value)}
             onClick={(event) => {
               if (!onResolveDefinition || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {

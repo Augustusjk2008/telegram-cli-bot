@@ -906,7 +906,7 @@ class WebApiServer:
             return False
         method = request.method.upper()
         path = request.path
-        if capability in {CAP_READ_FILE_CONTENT, CAP_VIEW_CHAT_TRACE} and method == "GET":
+        if capability == CAP_VIEW_CHAT_TRACE and method == "GET":
             return True
         if capability == CAP_GIT_OPS and method == "GET":
             return True

@@ -148,6 +148,55 @@ test("初次渲染不自动启动终端", () => {
   expect(createTerminalSessionMock).not.toHaveBeenCalled();
 });
 
+test("disabled terminal blocks rebuild, close, shortcut controls and actions", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const rebuildSpy = vi.spyOn(client, "rebuildTerminalSession");
+  const closeSpy = vi.spyOn(client, "closeTerminalSession");
+  vi.spyOn(client, "getTerminalActionsConfig").mockResolvedValue({
+    schemaVersion: 1,
+    configPath: "scripts/terminal-actions.json",
+    exists: true,
+    editable: true,
+    runtimePlatform: "windows",
+    mtimeNs: "1",
+    errors: [],
+    actions: [
+      {
+        id: "build",
+        label: "构建",
+        icon: "Terminal",
+        windowsCommand: "npm run build",
+        linuxCommand: "",
+        macosCommand: "",
+        cwd: ".",
+        confirm: false,
+        enabled: true,
+      },
+    ],
+  });
+
+  renderTerminalScreen({ disabledReason: "你无权限使用此智能体终端" }, client);
+
+  expect(await screen.findByText("你无权限使用此智能体终端")).toBeInTheDocument();
+  const rebuildButton = screen.getByRole("button", { name: "重建终端" });
+  const closeButton = screen.getByRole("button", { name: "关闭终端" });
+  expect(rebuildButton).toBeDisabled();
+  expect(closeButton).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Ctrl+C" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "构建" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "编辑快捷命令" })).not.toBeInTheDocument();
+
+  await user.click(rebuildButton);
+  await user.click(closeButton);
+  await user.click(screen.getByRole("button", { name: "Ctrl+C" }));
+  await user.click(screen.getByRole("button", { name: "构建" }));
+
+  expect(rebuildSpy).not.toHaveBeenCalled();
+  expect(closeSpy).not.toHaveBeenCalled();
+  expect(terminalSessionMock.sendControl).not.toHaveBeenCalled();
+});
+
 test("shows mobile terminal controls in the shared terminal screen", async () => {
   const user = userEvent.setup();
   renderTerminalScreen();

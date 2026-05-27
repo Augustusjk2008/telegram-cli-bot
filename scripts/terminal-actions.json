@@ -7,6 +7,7 @@
       "icon": "SquareTerminal",
       "windowsCommand": "codex",
       "linuxCommand": "codex",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -17,6 +18,7 @@
       "icon": "Server",
       "windowsCommand": "cd front; npm run build",
       "linuxCommand": "cd front && npm run build",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -27,6 +29,7 @@
       "icon": "Rocket",
       "windowsCommand": ".\\scripts\\codex_switch_source.bat",
       "linuxCommand": "",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -37,6 +40,7 @@
       "icon": "Terminal",
       "windowsCommand": "",
       "linuxCommand": "sudo shutdown now",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -47,6 +51,7 @@
       "icon": "Terminal",
       "windowsCommand": "$next = ([version]((Get-Content VERSION -Raw).Trim())); $v = \"{0}.{1}.{2}\" -f $next.Major, $next.Minor, ($next.Build + 1); pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version $v -RunChecks -AutoConfirmDirtyWorktree -ReleaseNotesFile \".\\docs\\release-notes\\v$($v).md\"",
       "linuxCommand": "",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -57,6 +62,7 @@
       "icon": "Terminal",
       "windowsCommand": ".\\scripts\\start_todesk_admin.bat",
       "linuxCommand": "",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -67,6 +73,7 @@
       "icon": "RefreshCw",
       "windowsCommand": ".\\scripts\\codex_sync_current_source_to_backup.bat",
       "linuxCommand": "",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true
@@ -76,7 +83,8 @@
       "label": "重启程序",
       "icon": "Terminal",
       "windowsCommand": "Invoke-RestMethod -Method Post \"http://127.0.0.1:8765/api/admin/restart\" -Headers @{ Authorization = \"Bearer adsadaqda2ii2ijdfq0rj1ejdsad1\" }",
-      "linuxCommand": "",
+      "linuxCommand": "sudo bash -lc 'cd /home/ubuntu/telegram-cli-bot-master && if [ -f .host.pid ]; then old=$(cat .host.pid); kill -TERM -- -$old 2>/dev/null || kill -TERM $old 2>/dev/null || true; sleep 2; kill -KILL -- -$old 2>/dev/null || true; fi; mkdir -p logs; CLI_BRIDGE_ALLOW_ROOT=1 setsid bash ./start.sh >> logs/host.log 2>&1 < /dev/null & echo $! > .host.pid'",
+      "macosCommand": "",
       "cwd": ".",
       "confirm": false,
       "enabled": true

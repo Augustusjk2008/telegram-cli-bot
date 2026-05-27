@@ -21,6 +21,7 @@ type Props = {
   botAvatarName?: string;
   client?: WebBotClient;
   structureOnly?: boolean;
+  canWriteFiles?: boolean;
   canOpenSystemFolder?: boolean;
 };
 
@@ -79,6 +80,7 @@ export function FilesScreen({
   botAvatarName,
   client = new MockWebBotClient(),
   structureOnly = false,
+  canWriteFiles = true,
   canOpenSystemFolder = false,
 }: Props) {
   const [currentPath, setCurrentPath] = useState("");
@@ -112,6 +114,8 @@ export function FilesScreen({
   const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
   const [statusText, setStatusText] = useState("");
   const listingRequestSeqRef = useRef(0);
+  const canPreviewFiles = !structureOnly;
+  const canMutateFiles = canPreviewFiles && canWriteFiles;
 
   async function loadListing(targetPath?: string) {
     const requestSeq = listingRequestSeqRef.current + 1;
@@ -193,6 +197,11 @@ export function FilesScreen({
   };
 
   const handleCreateDirectory = async () => {
+    if (!canMutateFiles) {
+      setError("无文件写入权限");
+      setStatusText("");
+      return;
+    }
     const name = window.prompt("请输入新文件夹名称", "")?.trim();
     if (!name) {
       return;
@@ -210,6 +219,11 @@ export function FilesScreen({
   };
 
   const handleDeleteEntry = async (file: FileEntry) => {
+    if (!canMutateFiles) {
+      setError("无文件写入权限");
+      setStatusText("");
+      return;
+    }
     const message = file.isDir
       ? `确定删除文件夹 ${file.name} 吗？此操作会递归删除其中的所有内容。`
       : `确定删除文件 ${file.name} 吗？`;
@@ -234,6 +248,9 @@ export function FilesScreen({
   };
 
   const handleDownloadEntry = async (file: FileEntry) => {
+    if (!canPreviewFiles) {
+      return;
+    }
     try {
       setError("");
       setStatusText("");
@@ -257,6 +274,9 @@ export function FilesScreen({
   };
 
   const loadPreview = async (name: string, mode: "preview" | "full") => {
+    if (!canPreviewFiles) {
+      return;
+    }
     setPreviewLoading(true);
     try {
       let result = mode === "full"
@@ -279,12 +299,12 @@ export function FilesScreen({
   };
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
-  const canEditPreview = previewResult?.previewKind !== "image";
+  const canLoadFull = canPreviewFiles && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
+  const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
   const previewDownloadProgress = downloadProgress?.filename === previewName ? downloadProgress : null;
 
   const handleFileClick = async (name: string) => {
-    if (structureOnly) {
+    if (!canPreviewFiles) {
       return;
     }
     await loadPreview(name, "preview");
@@ -314,6 +334,11 @@ export function FilesScreen({
   };
 
   const handleOpenEditor = async (name: string) => {
+    if (!canMutateFiles) {
+      setError("无文件写入权限");
+      setStatusText("");
+      return;
+    }
     setError("");
     setStatusText("");
     setEditorError("");
@@ -345,6 +370,9 @@ export function FilesScreen({
   };
 
   const handleEditorChange = (value: string) => {
+    if (!canMutateFiles) {
+      return;
+    }
     setEditorContent(value);
     setEditorStatusText("");
   };
@@ -358,6 +386,11 @@ export function FilesScreen({
 
   const handleSaveEditor = async () => {
     if (!editorPath) {
+      return;
+    }
+    if (!canMutateFiles) {
+      setEditorError("无文件写入权限");
+      setEditorSaving(false);
       return;
     }
 
@@ -391,6 +424,11 @@ export function FilesScreen({
   };
 
   const handleOpenCreateFileDialog = () => {
+    if (!canMutateFiles) {
+      setError("无文件写入权限");
+      setStatusText("");
+      return;
+    }
     setPendingFileName("");
     setCreateFileError("");
     setShowCreateFileDialog(true);
@@ -406,6 +444,10 @@ export function FilesScreen({
   };
 
   const handleCreateFile = async () => {
+    if (!canMutateFiles) {
+      setCreateFileError("无文件写入权限");
+      return;
+    }
     setCreateFileBusy(true);
     setCreateFileError("");
     try {
@@ -427,6 +469,11 @@ export function FilesScreen({
   };
 
   const handleOpenRenameDialog = (path: string) => {
+    if (!canMutateFiles) {
+      setError("无文件写入权限");
+      setStatusText("");
+      return;
+    }
     setRenameTargetPath(path);
     setRenameValue(path);
     setRenameError("");
@@ -444,6 +491,10 @@ export function FilesScreen({
   };
 
   const handleRenameFile = async () => {
+    if (!canMutateFiles) {
+      setRenameError("无文件写入权限");
+      return;
+    }
     setRenameBusy(true);
     setRenameError("");
     try {
@@ -500,7 +551,7 @@ export function FilesScreen({
             >
               <House className="w-5 h-5" />
             </button>
-            {!structureOnly && canOpenSystemFolder ? (
+            {canMutateFiles && canOpenSystemFolder ? (
               <button
                 type="button"
                 aria-label="在系统文件夹中打开"
@@ -511,7 +562,7 @@ export function FilesScreen({
                 <FolderOpen className="w-5 h-5" />
               </button>
             ) : null}
-            {!structureOnly && !isVirtualRoot ? (
+            {canMutateFiles && !isVirtualRoot ? (
               <button
                 type="button"
                 aria-label="新建文件"
@@ -522,7 +573,7 @@ export function FilesScreen({
                 <FilePlus className="w-5 h-5" />
               </button>
             ) : null}
-            {!structureOnly && !isVirtualRoot ? (
+            {canMutateFiles && !isVirtualRoot ? (
               <button
                 type="button"
                 aria-label="新建文件夹"
@@ -533,7 +584,7 @@ export function FilesScreen({
                 <FolderPlus className="w-5 h-5" />
               </button>
             ) : null}
-            {!structureOnly && !isVirtualRoot ? (
+            {canMutateFiles && !isVirtualRoot ? (
               <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
                 <Upload className="w-5 h-5" />
                 <input
@@ -542,6 +593,7 @@ export function FilesScreen({
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     if (!file) return;
+                    if (!canMutateFiles) return;
                     void client.uploadFile(botAlias, file)
                       .then(() => loadListing())
                       .catch((err: Error) => setError(err.message || "上传失败"));
@@ -614,17 +666,17 @@ export function FilesScreen({
               files={files}
               onDirClick={(name) => void handleDirClick(name)}
               onFileClick={(name) => void handleFileClick(name)}
-              onEdit={structureOnly ? undefined : (file) => void handleOpenEditor(file.name)}
-              onRename={structureOnly ? undefined : (file) => void handleOpenRenameDialog(file.name)}
-              onDownload={structureOnly ? undefined : (file) => void handleDownloadEntry(file)}
-              onDelete={structureOnly ? undefined : (file) => void handleDeleteEntry(file)}
-              allowDelete={!structureOnly && !isVirtualRoot}
+              onEdit={canMutateFiles ? (file) => void handleOpenEditor(file.name) : undefined}
+              onRename={canMutateFiles ? (file) => void handleOpenRenameDialog(file.name) : undefined}
+              onDownload={canPreviewFiles ? (file) => void handleDownloadEntry(file) : undefined}
+              onDelete={canMutateFiles ? (file) => void handleDeleteEntry(file) : undefined}
+              allowDelete={canMutateFiles && !isVirtualRoot}
             />
           )}
         </section>
       )}
 
-      {!structureOnly && previewName ? (
+      {canPreviewFiles && previewName ? (
         <FilePreviewDialog
           title={previewName}
           content={previewContent}
@@ -642,12 +694,12 @@ export function FilesScreen({
           statusText={previewStatusText}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
-          onDownload={() => void handleDownloadEntry({ name: previewName, isDir: false })}
+          onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
           downloadProgressText={previewDownloadProgress ? formatDownloadDetail(previewDownloadProgress) : ""}
           downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}
-      {!structureOnly && showCreateFileDialog ? (
+      {canMutateFiles && showCreateFileDialog ? (
         <FileNameDialog
           title="新建文件"
           label="文件名"
@@ -660,7 +712,7 @@ export function FilesScreen({
           onClose={handleCloseCreateFileDialog}
         />
       ) : null}
-      {!structureOnly && showRenameDialog ? (
+      {canMutateFiles && showRenameDialog ? (
         <FileNameDialog
           title="重命名文件"
           label="文件名"

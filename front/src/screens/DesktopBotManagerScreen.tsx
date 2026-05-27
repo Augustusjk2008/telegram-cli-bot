@@ -357,6 +357,7 @@ function CreatePanel({
           botAlias={directoryBrowserAlias}
           client={manager.client}
           initialPath={draft.workingDir}
+          mutateBrowseState={false}
           onPick={(workingDir) => setDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />
@@ -589,6 +590,7 @@ function EditPanel({
           botAlias={directoryBrowserAlias}
           client={manager.client}
           initialPath={draft.workingDir}
+          mutateBrowseState={false}
           onPick={(workingDir) => setDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />

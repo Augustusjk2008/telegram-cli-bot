@@ -389,6 +389,7 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           botAlias={directoryBrowserAlias}
           client={client}
           initialPath={createDraft.workingDir}
+          mutateBrowseState={false}
           onPick={(workingDir) => setCreateDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />

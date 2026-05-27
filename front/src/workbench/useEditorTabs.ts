@@ -13,6 +13,7 @@ type Props = {
   botAlias: string;
   client: WebBotClient;
   structureOnly?: boolean;
+  canWriteFiles?: boolean;
 };
 
 function basename(path: string) {
@@ -79,7 +80,7 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
   });
 }
 
-export function useEditorTabs({ botAlias, client, structureOnly = false }: Props) {
+export function useEditorTabs({ botAlias, client, structureOnly = false, canWriteFiles = true }: Props) {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState("");
   const [closedTabs, setClosedTabs] = useState<PersistedWorkbenchTab[]>([]);
@@ -183,6 +184,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
               encoding: result.encoding,
               cold: false,
               missing: false,
+              readOnly: !canWriteFiles,
               contentPersistence: "none",
             }
           : item)
@@ -205,6 +207,9 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
   }
 
   function openCreatedFile(path: string, content: string, lastModifiedNs?: string) {
+    if (structureOnly || !canWriteFiles) {
+      return;
+    }
     setTabs((current) => {
       const nextTab = createTab(path, content, lastModifiedNs, {
         contentPersistence: "none",
@@ -245,6 +250,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
       createTab(path, "", undefined, {
         loading: true,
         cold: true,
+        readOnly: !canWriteFiles,
         pluginTargets: nextPluginTargets,
       }),
     ]);
@@ -365,6 +371,9 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
       if (item.readOnly) {
         return item;
       }
+      if (!canWriteFiles) {
+        return item;
+      }
       return {
         ...item,
         content,
@@ -383,6 +392,12 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
       return;
     }
     if (target.readOnly) {
+      return;
+    }
+    if (!canWriteFiles) {
+      setTabs((current) => current.map((item) => item.path === target.path
+        ? { ...item, saving: false, error: "无文件写入权限", statusText: "" }
+        : item));
       return;
     }
 
@@ -466,7 +481,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
   }
 
   async function reopenLastClosedTab() {
-    if (structureOnly) {
+    if (structureOnly || !canWriteFiles) {
       return;
     }
     const target = closedTabsRef.current[0];
@@ -496,7 +511,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false }: Props
     restoredActiveTabPath: string,
     options?: { append?: boolean },
   ) {
-    if (structureOnly) {
+    if (structureOnly || !canWriteFiles) {
       if (!options?.append) {
         setTabs([]);
         setActiveTabPath("");

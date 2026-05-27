@@ -208,6 +208,32 @@ test("structureOnly hides editing and preview-only actions", async () => {
   expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
 });
 
+test("read-only file permission allows preview but hides write actions", async () => {
+  const user = userEvent.setup();
+  const writeFile = vi.fn();
+  const deletePath = vi.fn();
+  const client = createClient({ writeFile, deletePath });
+
+  render(<FilesScreen botAlias="main" client={client} canWriteFiles={false} canOpenSystemFolder />);
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建文件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建文件夹" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "在系统文件夹中打开" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "编辑 README.md" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重命名 README.md" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "删除 README.md" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "打开 README.md" }));
+
+  expect(await screen.findByRole("heading", { name: "Markdown Title" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "全文读取" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "下载" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "在编辑器中打开" })).not.toBeInTheDocument();
+  expect(writeFile).not.toHaveBeenCalled();
+  expect(deletePath).not.toHaveBeenCalled();
+});
+
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   const client = new MockWebBotClient();
   return Object.assign(client, {

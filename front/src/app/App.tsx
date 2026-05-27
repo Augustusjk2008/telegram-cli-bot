@@ -278,7 +278,6 @@ export function App() {
   const isLoggedIn = Boolean(session?.isLoggedIn);
   const chatReadOnly = !hasCapability(session, "chat_send");
   const allowTrace = hasCapability(session, "view_chat_trace");
-  const structureOnly = !hasCapability(session, "read_file_content");
   const canUseTerminal = hasCapability(session, "terminal_exec");
   const canUseDebug = hasCapability(session, "debug_exec");
   const canUseGit = hasCapability(session, "git_ops");
@@ -315,6 +314,15 @@ export function App() {
     ? currentBot
     : null;
   const canOperateCurrentBot = currentBotSummary?.canOperate !== false;
+  const canReadCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "read_file_content");
+  const canWriteCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "write_files");
+  const structureOnly = !canReadCurrentBotFiles;
+  const canUseCurrentBotTerminal = canUseTerminal && canOperateCurrentBot;
+  const terminalDisabledReason = !canUseTerminal
+    ? "你无权限使用终端"
+    : canUseCurrentBotTerminal
+      ? ""
+      : "你无权限使用此智能体终端";
   const canViewAssistantOps = effectiveLayoutMode === "desktop"
     && currentBotSummary?.botMode === "assistant"
     && hasCapability(session, "admin_ops");
@@ -844,7 +852,8 @@ export function App() {
           botAvatarName={currentBotSummary?.avatarName}
           client={client}
           structureOnly={structureOnly}
-          canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops")}
+          canWriteFiles={canWriteCurrentBotFiles}
+          canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
         />
       </div>
     );
@@ -870,6 +879,7 @@ export function App() {
             preferredWorkingDir={currentBotSummary?.workingDir || ""}
             themeName={themeName}
             isImmersive={isTerminalImmersive}
+            disabledReason={terminalDisabledReason}
             onToggleImmersive={() => setIsTerminalImmersive((prev) => !prev)}
           />
         </Suspense>
@@ -982,9 +992,11 @@ export function App() {
             userAvatarName={userAvatarName}
             client={client}
             structureOnly={structureOnly}
-            canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops")}
+            canWriteFiles={canWriteCurrentBotFiles}
+            canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
             chatReadOnly={chatReadOnly || !canOperateCurrentBot}
             botCanOperate={canOperateCurrentBot}
+            terminalDisabledReason={terminalDisabledReason}
             allowTrace={allowTrace}
             allowCodeJump={!structureOnly && !isGuest(session)}
             themeName={themeName}

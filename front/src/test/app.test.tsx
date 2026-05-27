@@ -401,6 +401,44 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
 
+test("ungranted bot blocks mobile file content and terminal actions", async () => {
+  const user = userEvent.setup();
+  const seedClient = new MockWebBotClient();
+  const baseBots = await seedClient.listBots();
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue(
+    baseBots.map((bot) => (bot.alias === "team2" ? { ...bot, canOperate: false } : bot)),
+  );
+  const readFile = vi.spyOn(MockWebBotClient.prototype, "readFile");
+  const writeFile = vi.spyOn(MockWebBotClient.prototype, "writeFile");
+  const rebuildTerminalSession = vi.spyOn(MockWebBotClient.prototype, "rebuildTerminalSession");
+
+  render(<App />);
+
+  await loginAsMember(user);
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: /team2/i }));
+  await user.click(screen.getByRole("button", { name: "文件" }));
+
+  const fileButton = (await screen.findAllByRole("button", { name: /^打开 / }))[0];
+  expect(fileButton).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建文件" })).not.toBeInTheDocument();
+  await user.click(fileButton);
+
+  expect(readFile).not.toHaveBeenCalled();
+  expect(writeFile).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: "plans.md" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "终端" }));
+  const rebuildButton = await screen.findByRole("button", { name: "重建终端" });
+  expect(await screen.findByText("你无权限使用此智能体终端")).toBeInTheDocument();
+  expect(rebuildButton).toBeDisabled();
+  await user.click(rebuildButton);
+
+  expect(rebuildTerminalSession).not.toHaveBeenCalled();
+});
+
 test("main settings can switch and persist appearance preferences", async () => {
   const user = userEvent.setup();
   render(<App />);

@@ -403,7 +403,8 @@ export function EditorPane({
             loading={activeTab.loading}
             saving={activeTab.saving}
             dirty={activeTab.dirty}
-            canSave={activeTab.dirty && !activeTab.missing}
+            canSave={activeTab.dirty && !activeTab.missing && !activeTab.readOnly}
+            readOnly={Boolean(activeTab.readOnly)}
             breakpointLines={breakpointLines}
             currentLine={currentLine}
             statusText=""
