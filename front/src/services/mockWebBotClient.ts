@@ -43,6 +43,7 @@ import type {
   AgentScopedOptions,
   AgentSummary,
   ChatSendOptions,
+  ConversationDeleteResult,
   ConversationListResult,
   PlanExecuteInput,
   PlanExecuteResult,
@@ -3298,6 +3299,39 @@ export class MockWebBotClient implements WebBotClient {
     this.conversationsByBot.set(key, items);
     this.activeConversationByBot.set(key, conversationId);
     return { conversation, messages: this.getAgentMessages(botAlias, agentId) };
+  }
+
+  async deleteConversation(
+    botAlias: string,
+    conversationId: string,
+    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
+  ): Promise<ConversationDeleteResult> {
+    const agentId = options.agentId || "main";
+    const key = this.getConversationKey(botAlias, agentId);
+    const items = this.ensureConversations(botAlias, agentId);
+    const activeConversationId = this.activeConversationByBot.get(key) || "";
+    const conversation = items.find((item) => item.id === conversationId);
+    if (!conversation) {
+      throw new WebApiClientError("未找到会话", { status: 404, code: "conversation_not_found" });
+    }
+    const wasActive = activeConversationId === conversationId || conversation.active;
+    const nextItems = items.filter((item) => item.id !== conversationId);
+    this.conversationsByBot.set(key, nextItems);
+    if (wasActive) {
+      this.activeConversationByBot.set(key, "");
+      if (agentId === "main") {
+        mockChatMessages[botAlias] = [];
+      } else {
+        mockChatMessages[this.agentKey(botAlias, agentId)] = [];
+      }
+    }
+    return {
+      deletedConversationId: conversationId,
+      activeConversationId: this.activeConversationByBot.get(key) || "",
+      nativeSessionCleared: Boolean(options.deleteNativeSession),
+      items: nextItems,
+      ...(wasActive ? { messages: [] } : {}),
+    };
   }
 
   async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {

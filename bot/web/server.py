@@ -124,6 +124,7 @@ from .api_service import (
     change_working_directory,
     create_agent,
     create_conversation,
+    delete_conversation,
     execute_plan,
     create_directory,
     create_text_file,
@@ -2273,6 +2274,22 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         return _json({"ok": True, "data": select_conversation(self.manager, alias, auth.user_id, conversation_id, agent_id=agent_id)})
+
+    async def delete_conversation_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        conversation_id = request.match_info.get("conversation_id", "")
+        agent_id = self._request_agent_id(request)
+        delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
+        data = delete_conversation(
+            self.manager,
+            alias,
+            auth.user_id,
+            conversation_id,
+            agent_id=agent_id,
+            delete_native_session=delete_native,
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_debug_profile(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_DEBUG_EXEC)

@@ -271,6 +271,20 @@ function createScopedConversation(client: WebBotClient, botAlias: string, agentI
   return options ? client.createConversation(botAlias, "", options) : client.createConversation(botAlias);
 }
 
+function deleteScopedConversation(
+  client: WebBotClient,
+  botAlias: string,
+  conversationId: string,
+  agentId: string,
+  deleteNativeSession: boolean,
+) {
+  const options = agentOptions(agentId);
+  return client.deleteConversation(botAlias, conversationId, {
+    ...(options || {}),
+    deleteNativeSession,
+  });
+}
+
 function pendingCronUserId(runId: string) {
   return `assistant-cron-user-${runId}`;
 }
@@ -1064,6 +1078,7 @@ export function ChatScreen({
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
   const [conversationQuery, setConversationQuery] = useState("");
   const [conversationLoading, setConversationLoading] = useState(false);
+  const [deletingConversationId, setDeletingConversationId] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
   const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias));
@@ -2088,6 +2103,47 @@ export function ChatScreen({
     }
   }
 
+  async function handleDeleteConversation(conversation: ConversationSummary, deleteNativeSession: boolean) {
+    if (isStreamingRef.current) {
+      setError("当前任务运行中，先终止或等待完成");
+      return;
+    }
+    setDeletingConversationId(conversation.id);
+    setConversationLoading(true);
+    setError("");
+    try {
+      const data = await deleteScopedConversation(
+        client,
+        botAlias,
+        conversation.id,
+        activeAgentIdRef.current,
+        deleteNativeSession,
+      );
+      setConversations(data.items);
+      if (conversation.active || data.messages) {
+        const nextMessages = data.messages || [];
+        stopAssistantPoll();
+        stopSseRecoveryWatch();
+        stopClusterTaskPoll();
+        setClusterRunId("");
+        setClusterTaskStatus(null);
+        setClusterTaskError("");
+        clusterRunIdRef.current = "";
+        setExpandedTracePanels({});
+        setTraceLoadState({});
+        setPendingCronRuns([]);
+        setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+        setItems(nextMessages);
+        itemsRef.current = nextMessages;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除会话失败");
+    } finally {
+      setConversationLoading(false);
+      setDeletingConversationId("");
+    }
+  }
+
   const handleSelectAgent = useCallback((agentId: string) => {
     const normalized = agentId || "main";
     const previousAgentId = activeAgentIdRef.current || "main";
@@ -2968,6 +3024,7 @@ export function ChatScreen({
         conversations={conversations}
         query={conversationQuery}
         disabled={isStreaming}
+        deletingConversationId={deletingConversationId}
         onQueryChange={(nextQuery) => {
           setConversationQuery(nextQuery);
           void loadConversations(nextQuery);
@@ -2975,6 +3032,7 @@ export function ChatScreen({
         onClose={() => setHistoryPanelOpen(false)}
         onNewConversation={() => void handleNewConversation()}
         onSelectConversation={(conversationId) => void handleSelectConversation(conversationId)}
+        onDeleteConversation={(conversation, deleteNativeSession) => void handleDeleteConversation(conversation, deleteNativeSession)}
       />
       {showImmersiveButton ? (
         <button

@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { History, LoaderCircle, MessageSquarePlus, Pin, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { History, LoaderCircle, MessageSquarePlus, Pin, Search, Trash2, X } from "lucide-react";
 import type { ConversationSummary } from "../services/types";
 
 type Props = {
@@ -8,10 +8,12 @@ type Props = {
   conversations: ConversationSummary[];
   query: string;
   disabled?: boolean;
+  deletingConversationId?: string;
   onQueryChange: (query: string) => void;
   onClose: () => void;
   onNewConversation: () => void;
   onSelectConversation: (conversationId: string) => void;
+  onDeleteConversation: (conversation: ConversationSummary, deleteNativeSession: boolean) => void;
 };
 
 function formatConversationTime(value: string) {
@@ -33,13 +35,19 @@ export function ConversationHistoryPanel({
   conversations,
   query,
   disabled = false,
+  deletingConversationId = "",
   onQueryChange,
   onClose,
   onNewConversation,
   onSelectConversation,
+  onDeleteConversation,
 }: Props) {
+  const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
+  const [deleteNativeSession, setDeleteNativeSession] = useState(true);
+
   useEffect(() => {
     if (!open) {
+      setPendingDelete(null);
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -51,9 +59,20 @@ export function ConversationHistoryPanel({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
+  useEffect(() => {
+    if (!pendingDelete) {
+      return;
+    }
+    if (!conversations.some((item) => item.id === pendingDelete.id)) {
+      setPendingDelete(null);
+    }
+  }, [conversations, pendingDelete]);
+
   if (!open) {
     return null;
   }
+
+  const deleting = Boolean(deletingConversationId);
 
   return (
     <div className="workbench-dialog-backdrop absolute inset-0 z-30 flex items-end bg-black/20 sm:items-stretch sm:bg-black/10">
@@ -103,36 +122,96 @@ export function ConversationHistoryPanel({
             <div className="mt-10 text-center text-sm text-[var(--muted)]">暂无历史</div>
           ) : null}
           <div className="space-y-1">
-            {conversations.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                aria-current={item.active ? "true" : undefined}
-                aria-label={`${item.title || "新会话"} ${item.lastMessagePreview || ""}`.trim()}
-                disabled={disabled}
-                onClick={() => onSelectConversation(item.id)}
-                className={item.active
-                  ? "w-full rounded-lg border border-[var(--accent)] bg-[var(--surface-strong)] p-3 text-left disabled:opacity-60"
-                  : "w-full rounded-lg border border-transparent p-3 text-left hover:bg-[var(--surface-strong)] disabled:opacity-60"}
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  {item.pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" /> : null}
-                  <span className="truncate text-sm font-medium text-[var(--text)]">{item.title || "新会话"}</span>
-                  <span className="ml-auto shrink-0 text-[11px] text-[var(--muted)]">{formatConversationTime(item.updatedAt)}</span>
+            {conversations.map((item) => {
+              const title = item.title || "新会话";
+              const itemDeleting = deletingConversationId === item.id;
+              return (
+                <div
+                  key={item.id}
+                  aria-current={item.active ? "true" : undefined}
+                  className={item.active
+                    ? "flex rounded-lg border border-[var(--accent)] bg-[var(--surface-strong)] disabled:opacity-60"
+                    : "flex rounded-lg border border-transparent hover:bg-[var(--surface-strong)] disabled:opacity-60"}
+                >
+                  <button
+                    type="button"
+                    aria-label={`${title} ${item.lastMessagePreview || ""}`.trim()}
+                    disabled={disabled || deleting}
+                    onClick={() => onSelectConversation(item.id)}
+                    className="min-w-0 flex-1 p-3 text-left disabled:opacity-60"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      {item.pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" /> : null}
+                      <span className="truncate text-sm font-medium text-[var(--text)]">{title}</span>
+                      <span className="ml-auto shrink-0 text-[11px] text-[var(--muted)]">{formatConversationTime(item.updatedAt)}</span>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
+                      {item.lastMessagePreview || "尚无消息"}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--muted)]">
+                      <span>{item.messageCount} 条</span>
+                      {item.nativeSource?.provider ? <span>{item.nativeSource.provider}</span> : null}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`删除会话 ${title}`}
+                    disabled={disabled || deleting}
+                    onClick={() => {
+                      setDeleteNativeSession(true);
+                      setPendingDelete(item);
+                    }}
+                    className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--bg)] hover:text-red-600 disabled:opacity-60"
+                  >
+                    {itemDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  </button>
                 </div>
-                <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
-                  {item.lastMessagePreview || "尚无消息"}
-                </div>
-                <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--muted)]">
-                  <span>{item.messageCount} 条</span>
-                  {item.nativeSource?.provider ? <span>{item.nativeSource.provider}</span> : null}
-                </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       </aside>
       <button type="button" aria-label="关闭历史会话" className="hidden flex-1 sm:block" onClick={onClose} />
+      {pendingDelete ? (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/30 px-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-conversation-title"
+            className="w-full max-w-sm rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-card)]"
+          >
+            <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">删除会话</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">将删除此历史会话和本地消息记录。</p>
+            <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={deleteNativeSession}
+                onChange={(event) => setDeleteNativeSession(event.target.checked)}
+                className="h-4 w-4 rounded border-[var(--border)]"
+              />
+              <span>同时清除关联 CLI session 存储</span>
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setPendingDelete(null)}
+                className="inline-flex h-9 items-center rounded-lg border border-[var(--border)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => onDeleteConversation(pendingDelete, deleteNativeSession)}
+                className="inline-flex h-9 items-center rounded-lg bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

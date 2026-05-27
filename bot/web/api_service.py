@@ -2128,6 +2128,67 @@ def select_conversation(
     }
 
 
+def delete_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+    *,
+    agent_id: str = "main",
+    delete_native_session: bool = False,
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    with session._lock:
+        is_processing = bool(session.is_processing)
+    if is_processing:
+        _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+
+    store = ChatStore(Path(session.working_dir))
+    try:
+        conversation = store.get_conversation(conversation_id)
+    except KeyError:
+        _raise(404, "conversation_not_found", "未找到会话")
+
+    if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("agent_id") or "main") != session.agent_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("working_dir") or "") != session.working_dir:
+        _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
+    if str(conversation.get("archived_at") or "").strip():
+        _raise(404, "conversation_not_found", "未找到会话")
+
+    native_cleared = False
+    is_active = str(session.active_conversation_id or "") == str(conversation_id or "")
+    native_provider = normalize_cli_type(str(conversation.get("native_provider") or profile.cli_type))
+    native_session_id = str(conversation.get("native_session_id") or "").strip()
+    with session._lock:
+        if is_active:
+            session.active_conversation_id = None
+        if delete_native_session and native_session_id:
+            if native_provider == "codex" and session.codex_session_id == native_session_id:
+                session.codex_session_id = None
+                native_cleared = True
+            elif native_provider == "claude" and session.claude_session_id == native_session_id:
+                session.claude_session_id = None
+                session.claude_session_initialized = False
+                native_cleared = True
+            elif native_provider == "kimi" and session.kimi_session_id == native_session_id:
+                session.kimi_session_id = None
+                native_cleared = True
+    session.persist()
+
+    store.delete_conversation_by_id(conversation_id)
+    listed = list_conversations(manager, alias, user_id, agent_id=agent_id)
+    return {
+        "deleted_conversation_id": conversation_id,
+        "active_conversation_id": str(session.active_conversation_id or ""),
+        "native_session_cleared": native_cleared,
+        "items": listed["items"],
+        "messages": [] if is_active else None,
+    }
+
+
 def get_history_delta(
     manager: MultiBotManager,
     alias: str,

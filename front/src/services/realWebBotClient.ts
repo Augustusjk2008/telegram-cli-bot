@@ -94,6 +94,7 @@ import type {
   ClusterTemplateListResult,
   ClusterTemplateSummary,
   ConversationListResult,
+  ConversationDeleteResult,
   PlanExecuteInput,
   PlanExecuteResult,
   ConversationSelectResult,
@@ -317,6 +318,14 @@ type RawPlanExecuteResult = {
   conversation: RawConversationSummary;
   messages: RawHistoryItem[];
   execution_message?: string;
+};
+
+type RawConversationDeleteResult = {
+  deleted_conversation_id?: string;
+  active_conversation_id?: string;
+  native_session_cleared?: boolean;
+  items?: RawConversationSummary[];
+  messages?: RawHistoryItem[] | null;
 };
 
 type RawChatTraceEvent = {
@@ -3873,6 +3882,33 @@ export class RealWebBotClient implements WebBotClient {
     return {
       conversation: mapConversationSummary(data.conversation),
       messages: data.messages.map((item, index) => mapChatMessage(item, index)),
+    };
+  }
+
+  async deleteConversation(
+    botAlias: string,
+    conversationId: string,
+    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
+  ): Promise<ConversationDeleteResult> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    if (options.deleteNativeSession) {
+      params.set("delete_native_session", "true");
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<RawConversationDeleteResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}${suffix}`,
+      {
+        method: "DELETE",
+        headers: this.headers(),
+      },
+    );
+    return {
+      deletedConversationId: String(data.deleted_conversation_id || ""),
+      activeConversationId: String(data.active_conversation_id || ""),
+      nativeSessionCleared: Boolean(data.native_session_cleared),
+      items: (data.items || []).map(mapConversationSummary),
+      ...(Array.isArray(data.messages) ? { messages: data.messages.map((item, index) => mapChatMessage(item, index)) } : {}),
     };
   }
 

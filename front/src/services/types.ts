@@ -583,6 +583,14 @@ export type ConversationSelectResult = {
   messages: ChatMessage[];
 };
 
+export type ConversationDeleteResult = {
+  deletedConversationId: string;
+  activeConversationId: string;
+  nativeSessionCleared: boolean;
+  items: ConversationSummary[];
+  messages?: ChatMessage[];
+};
+
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;

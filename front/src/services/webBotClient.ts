@@ -99,6 +99,7 @@ import type {
   ClusterTaskStatus,
   ClusterTemplateListResult,
   ConversationListResult,
+  ConversationDeleteResult,
   PlanExecuteInput,
   PlanExecuteResult,
   ConversationSelectResult,
@@ -178,6 +179,11 @@ export interface WebBotClient {
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
   createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
   selectConversation(botAlias: string, conversationId: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
+  deleteConversation(
+    botAlias: string,
+    conversationId: string,
+    options?: AgentScopedOptions & { deleteNativeSession?: boolean },
+  ): Promise<ConversationDeleteResult>;
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: AgentScopedOptions): Promise<HistoryDeltaResult>;

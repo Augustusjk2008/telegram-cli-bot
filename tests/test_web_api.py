@@ -52,6 +52,7 @@ from bot.web.api_service import (
     change_working_directory,
     create_agent,
     create_conversation,
+    delete_conversation,
     delete_agent,
     get_directory_listing,
     get_chat_session_for_alias,
@@ -8260,6 +8261,93 @@ def test_conversation_api_create_list_and_select(web_manager: MultiBotManager, t
     assert selected["conversation"]["active"] is True
     assert selected["messages"] == []
     assert session.active_conversation_id == conversation_id
+
+
+def test_delete_conversation_removes_history_record(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    created = create_conversation(web_manager, "main", 1001, "待删除")
+    conversation_id = created["conversation"]["id"]
+
+    deleted = delete_conversation(web_manager, "main", 1001, conversation_id)
+
+    assert deleted["deleted_conversation_id"] == conversation_id
+    assert deleted["items"] == []
+    assert list_conversations(web_manager, "main", 1001)["items"] == []
+    with pytest.raises(WebApiError) as exc_info:
+        select_conversation(web_manager, "main", 1001, conversation_id)
+    assert exc_info.value.status == 404
+
+
+def test_delete_active_conversation_clears_matching_codex_session_id(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    service = ChatHistoryService(ChatStore(tmp_path))
+    handle = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="hi",
+        native_provider="codex",
+    )
+    service.complete_turn(handle, content="ok", completion_state="completed", native_session_id="thread-1")
+    with session._lock:
+        session.codex_session_id = "thread-1"
+    session.persist()
+
+    deleted = delete_conversation(web_manager, "main", 1001, handle.conversation_id, delete_native_session=True)
+    persisted = load_session(session.bot_id, 1001)
+
+    assert deleted["active_conversation_id"] == ""
+    assert deleted["native_session_cleared"] is True
+    assert deleted["messages"] == []
+    assert session.active_conversation_id is None
+    assert session.codex_session_id is None
+    assert persisted is not None
+    assert "active_conversation_id" not in persisted
+    assert "codex_session_id" not in persisted
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_is_agent_scoped(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    await create_agent(web_manager, "main", {"id": "reviewer", "name": "代码审查"})
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(web_manager, "main", 1001, agent_id="reviewer")
+    reviewer_session.working_dir = str(tmp_path)
+    reviewer_created = create_conversation(web_manager, "main", 1001, "审查会话", agent_id="reviewer")
+    conversation_id = reviewer_created["conversation"]["id"]
+
+    with pytest.raises(WebApiError) as exc_info:
+        delete_conversation(web_manager, "main", 1001, conversation_id, agent_id="main")
+
+    assert exc_info.value.status == 404
+    reviewer_list = list_conversations(web_manager, "main", 1001, agent_id="reviewer")
+    assert [item["id"] for item in reviewer_list["items"]] == [conversation_id]
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_route_returns_deleted_payload(web_manager: MultiBotManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    created = create_conversation(web_manager, "main", 1001, "路由删除")
+    conversation_id = created["conversation"]["id"]
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.delete(f"/api/bots/main/conversations/{conversation_id}?delete_native_session=true")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["deleted_conversation_id"] == conversation_id
+    assert payload["data"]["items"] == []
 
 
 @pytest.mark.asyncio

@@ -1755,6 +1755,56 @@ describe("RealWebBotClient", () => {
     expect(data.items[0].nativeSource?.sessionId).toBe("thread-1");
   });
 
+  test("deleteConversation sends delete query and maps result", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          deleted_conversation_id: "conv 1",
+          active_conversation_id: "",
+          native_session_cleared: true,
+          items: [{
+            id: "conv-2",
+            title: "保留",
+            last_message_preview: "ok",
+            message_count: 2,
+            pinned: false,
+            active: false,
+            status: "active",
+            bot_alias: "main",
+            bot_mode: "cli",
+            cli_type: "codex",
+            working_dir: "C:\\repo",
+            created_at: "2026-05-03T00:00:00Z",
+            updated_at: "2026-05-03T00:01:00Z",
+          }],
+          messages: [{
+            id: "msg-1",
+            role: "assistant",
+            content: "已清空",
+            created_at: "2026-05-03T00:02:00Z",
+          }],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const data = await client.deleteConversation("main", "conv 1", {
+      agentId: "reviewer",
+      deleteNativeSession: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/conversations/conv%201?agent_id=reviewer&delete_native_session=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(data.deletedConversationId).toBe("conv 1");
+    expect(data.nativeSessionCleared).toBe(true);
+    expect(data.items[0].id).toBe("conv-2");
+    expect(data.messages?.[0].text).toBe("已清空");
+  });
+
   test("listMessages maps rich native history meta and lazy trace counters", async () => {
     fetchMock
       .mockResolvedValueOnce({

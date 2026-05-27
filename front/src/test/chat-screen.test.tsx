@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
+import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
@@ -81,6 +81,13 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
+      messages: [],
+    }),
+    deleteConversation: async (): Promise<ConversationDeleteResult> => ({
+      deletedConversationId: "conv-deleted",
+      activeConversationId: "",
+      nativeSessionCleared: true,
+      items: [],
       messages: [],
     }),
     getMessageTrace: async (): Promise<ChatTraceDetails> => ({
@@ -1665,7 +1672,7 @@ test("chat screen opens history and switches conversation", async () => {
 
   render(<ChatScreen botAlias="main" client={client} />);
   await user.click(await screen.findByRole("button", { name: "历史" }));
-  await user.click(await screen.findByRole("button", { name: /旧会话/ }));
+  await user.click(await screen.findByRole("button", { name: "旧会话 旧回答" }));
 
   expect(await screen.findByText("旧回答")).toBeInTheDocument();
 });
@@ -1712,6 +1719,65 @@ test("chat screen creates a new conversation from the action bar", async () => {
   expect(screen.queryByText("已有会话")).not.toBeInTheDocument();
 });
 
+test("chat screen deletes active conversation and clears messages", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const deleteConversation = vi.fn(async (): Promise<ConversationDeleteResult> => ({
+    deletedConversationId: "conv-id",
+    activeConversationId: "",
+    nativeSessionCleared: true,
+    items: [],
+    messages: [],
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-existing",
+      role: "assistant",
+      text: "已有消息",
+      createdAt: now,
+      state: "done",
+    }],
+    listConversations: async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-id",
+      items: [{
+        id: "conv-id",
+        title: "当前会话",
+        lastMessagePreview: "已有消息",
+        messageCount: 1,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }),
+    deleteConversation,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("已有消息")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "历史" }));
+  await user.click(await screen.findByRole("button", { name: "删除会话 当前会话" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "删除会话" });
+  expect(within(dialog).getByLabelText("同时清除关联 CLI session 存储")).toBeChecked();
+
+  await user.click(within(dialog).getByRole("button", { name: "删除" }));
+
+  await waitFor(() => {
+    expect(deleteConversation).toHaveBeenCalledWith("main", "conv-id", {
+      deleteNativeSession: true,
+    });
+  });
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  expect(screen.queryByText("已有消息")).not.toBeInTheDocument();
+});
+
 test("chat screen blocks conversation switch while streaming", async () => {
   const user = userEvent.setup();
   const now = new Date().toISOString();
@@ -1742,7 +1808,7 @@ test("chat screen blocks conversation switch while streaming", async () => {
   await user.click(screen.getByRole("button", { name: "发送" }));
   await user.click(await screen.findByRole("button", { name: "历史" }));
 
-  expect(await screen.findByRole("button", { name: /旧会话/ })).toBeDisabled();
+  expect(await screen.findByRole("button", { name: "旧会话 旧回答" })).toBeDisabled();
 });
 
 test("shows waiting time while a reply is still pending", async () => {
