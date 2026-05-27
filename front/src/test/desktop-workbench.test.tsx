@@ -231,6 +231,57 @@ test("desktop workbench persists and restores the selected tree path", async () 
   });
 });
 
+test("desktop workbench keeps session persistence active while guide is open", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 12 }],
+  });
+  vi.spyOn(client, "readFileFull").mockResolvedValue({
+    content: "original",
+    mode: "cat",
+    fileSizeBytes: 8,
+    isFullContent: true,
+    lastModifiedNs: "1",
+  });
+  const storageKey = buildWorkbenchSessionStorageKey("main", "/workspace");
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  const editor = await screen.findByLabelText("文件内容");
+  fireEvent.change(editor, { target: { value: "dirty draft" } });
+  await user.click(screen.getByRole("button", { name: "指南" }));
+
+  expect(await screen.findByRole("heading", { name: "欢迎使用面向协作开发的智能体操作系统" })).toBeInTheDocument();
+  await waitFor(() => {
+    const raw = localStorage.getItem(storageKey);
+    const session = raw ? JSON.parse(raw) : null;
+    expect(session?.sidebarView).toBe("files");
+    expect(session?.activeTabPath).toBe("README.md");
+    expect(session?.tabs).toEqual([
+      expect.objectContaining({
+        path: "README.md",
+        dirty: true,
+        draftContent: "dirty draft",
+        contentPersistence: "dirty_snapshot",
+      }),
+    ]);
+  });
+});
+
 test("desktop structureOnly does not restore editor tabs from local session", async () => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
@@ -398,6 +449,43 @@ test("desktop workbench restores sidebar view from bot session instead of global
   expect(screen.queryByTestId("git-scroll-region")).not.toBeInTheDocument();
 });
 
+test("desktop workbench falls back to files for legacy guide sidebar sessions", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [{ name: "README.md", isDir: false, size: 12 }],
+  });
+
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", "/workspace"), JSON.stringify({
+    version: 1,
+    botAlias: "main",
+    workspaceRoot: "/workspace",
+    sidebarView: "guide",
+    expandedPaths: [],
+    selectedTreePath: "",
+    activeTabPath: "",
+    tabs: [],
+    focusedPane: null,
+  }));
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "文件" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("heading", { name: "欢迎使用面向协作开发的智能体操作系统" })).not.toBeInTheDocument();
+});
+
 test("desktop workbench falls back to files when the next bot workspace has no saved session", async () => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
@@ -535,6 +623,19 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   expect(screen.getByTestId("desktop-workbench-activity-rail")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-workbench-statusbar")).toBeInTheDocument();
   expect(screen.getByText("AI 等待中")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "指南" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "指南" }));
+  expect(await screen.findByRole("heading", { name: "欢迎使用面向协作开发的智能体操作系统" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "指南" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
+    gridTemplateColumns: "48px 0px minmax(0, 1fr) 0px 0px",
+  });
+  expect(screen.getByTestId("desktop-pane-guide")).toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-sidebar-scroll")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-pane-terminal")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("desktop-pane-chat")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Git" }));
   expect(await screen.findByText("当前分支")).toBeInTheDocument();
@@ -558,6 +659,23 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
 
   await user.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
+});
+
+test("desktop structureOnly hides guide activity item", async () => {
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={new MockWebBotClient()}
+      structureOnly
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  expect(await screen.findByTestId("desktop-workbench-activity-rail")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "指南" })).not.toBeInTheDocument();
 });
 
 test("desktop debug pane renders provider label and schema fields", async () => {
@@ -1541,7 +1659,7 @@ test("desktop assistant bot with admin ops opens assistant ops from the activity
   const labels = within(rail)
     .getAllByRole("button")
     .map((button) => button.getAttribute("aria-label"));
-  expect(labels).toEqual(["折叠侧边栏", "文件", "搜索", "大纲", "调试", "Git", "运维", "插件", "设置"]);
+  expect(labels).toEqual(["折叠侧边栏", "文件", "搜索", "大纲", "指南", "调试", "Git", "运维", "插件", "设置"]);
 
   await user.click(screen.getByRole("button", { name: "运维" }));
 

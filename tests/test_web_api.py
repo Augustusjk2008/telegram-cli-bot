@@ -9200,6 +9200,26 @@ async def test_stream_cli_chat_context_usage_counts_compaction(web_manager: Mult
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_context_usage_ignores_small_left_increase(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    readings = [_codex_context_usage(60), _codex_context_usage(71), _codex_context_usage(70)]
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        return readings.pop(0) if len(readings) > 1 else readings[0]
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", side_effect=lambda *_args, **_kwargs: _ScheduledFakeProcess(_quick_codex_schedule())):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    context_usage = done_event["message"]["meta"]["context_usage"]
+    assert context_usage["context_left_percent"] == 71
+    assert "compaction_count" not in context_usage
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_context_usage_counts_multiple_compactions(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"
     readings = [

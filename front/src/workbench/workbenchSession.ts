@@ -2,6 +2,7 @@ import {
   WORKBENCH_CLEAN_TAB_SNAPSHOT_LIMIT_BYTES,
   WORKBENCH_SESSION_VERSION,
   WORKBENCH_SNAPSHOT_TOTAL_LIMIT_BYTES,
+  isDesktopSidebarView,
   type PersistedWorkbenchSession,
   type PersistedWorkbenchTab,
 } from "./workbenchTypes";
@@ -112,12 +113,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
 
   const botAlias = typeof candidate.botAlias === "string" ? candidate.botAlias.trim() : "";
   const workspaceRoot = typeof candidate.workspaceRoot === "string" ? candidate.workspaceRoot.trim() : "";
-  const sidebarView = candidate.sidebarView === "debug"
-    || candidate.sidebarView === "git"
-    || candidate.sidebarView === "plugins"
-    || candidate.sidebarView === "settings"
-    ? candidate.sidebarView
-    : "files";
+  const sidebarView = isDesktopSidebarView(candidate.sidebarView) ? candidate.sidebarView : "files";
   if (!botAlias || !workspaceRoot) {
     return null;
   }

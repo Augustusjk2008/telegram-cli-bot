@@ -2614,7 +2614,7 @@ def _with_compaction_count(
         return dict(context_usage), previous_left_percent, compaction_count
 
     next_count = compaction_count
-    if previous_left_percent is not None and current_left_percent > previous_left_percent:
+    if previous_left_percent is not None and current_left_percent >= previous_left_percent + 20:
         next_count += 1
 
     next_usage = dict(context_usage)
