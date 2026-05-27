@@ -109,7 +109,6 @@ from bot.cli import (
     normalize_cli_type,
     parse_claude_stream_json_line,
     parse_claude_stream_json_output,
-    parse_codex_json_line,
     parse_codex_json_output,
     parse_kimi_stream_json_line,
     parse_kimi_stream_json_output,
@@ -161,6 +160,14 @@ from bot.web.api_common import (
     get_session_for_alias,
     resolve_session_bot_id,
 )
+
+_CODEX_EMPTY_PARSED: dict[str, Optional[str]] = {
+    "thread_id": None,
+    "completed_text": None,
+    "delta_text": None,
+    "error_text": None,
+}
+
 from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_TERMINAL_EXEC, CAP_VIEW_PLUGINS, CAP_WRITE_FILES
 from bot.web.files_service import (
     change_working_directory,
@@ -2945,6 +2952,133 @@ def _extract_kimi_error_detail(raw_output: str) -> Optional[str]:
     return extract_kimi_error_output(raw_output) or _extract_plain_error_output(raw_output)
 
 
+def _parse_codex_event(line: str) -> tuple[dict[str, Optional[str]], dict[str, Any]]:
+    try:
+        event: Any = json.loads(line)
+    except json.JSONDecodeError:
+        return dict(_CODEX_EMPTY_PARSED), {}
+    if not isinstance(event, dict):
+        return dict(_CODEX_EMPTY_PARSED), {}
+    return _parse_codex_event_dict(event), event
+
+
+def _extract_codex_content_text_from_event(content: Any) -> Optional[str]:
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if not isinstance(content, list):
+        return None
+
+    text_parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = str(block.get("type") or "").strip()
+        if block_type not in {"text", "output_text"}:
+            continue
+        text_value = block.get("text")
+        if isinstance(text_value, str) and text_value.strip():
+            text_parts.append(text_value.strip())
+    return "\n".join(text_parts).strip() or None
+
+
+def _extract_codex_thread_id_from_event(event: dict[str, Any]) -> Optional[str]:
+    for key in ("thread_id", "threadId", "session_id", "sessionId", "conversation_id", "conversationId"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    for nested_key in ("thread", "session", "conversation"):
+        nested = event.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in ("id", "thread_id", "threadId", "session_id", "sessionId", "conversation_id", "conversationId"):
+            value = nested.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _extract_codex_error_text_from_event(event: dict[str, Any]) -> Optional[str]:
+    values: list[str] = []
+
+    def append(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+
+    append(event.get("message"))
+    append(event.get("error"))
+    error = event.get("error")
+    if isinstance(error, dict):
+        append(error.get("message"))
+        append(error.get("detail"))
+        append(error.get("code"))
+    for key in ("detail", "details", "reason"):
+        append(event.get(key))
+    return "\n".join(dict.fromkeys(values)).strip() or None
+
+
+def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
+    result = dict(_CODEX_EMPTY_PARSED)
+    result["thread_id"] = _extract_codex_thread_id_from_event(event)
+    event_type = str(event.get("type") or "").strip()
+
+    if event_type == "error":
+        result["error_text"] = _extract_codex_error_text_from_event(event)
+        return result
+
+    if event_type in {"response_item", "event_msg"}:
+        payload = event.get("item")
+        if not isinstance(payload, dict):
+            payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return result
+        payload_type = str(payload.get("type") or "").strip()
+        if payload_type == "message":
+            role = str(payload.get("role") or "").strip().lower()
+            if role != "assistant":
+                return result
+            text_value = _extract_codex_content_text_from_event(payload.get("content"))
+            if not text_value:
+                return result
+            phase = str(payload.get("phase") or "").strip().lower()
+            if phase in {"final", "final_answer"}:
+                result["completed_text"] = text_value
+            result["delta_text"] = text_value
+            return result
+        if payload_type == "agent_message":
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip():
+                text_value = message.strip()
+                result["completed_text"] = text_value
+                result["delta_text"] = text_value
+            return result
+        return result
+
+    if not event_type.startswith("item."):
+        return result
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return result
+    item_type = str(item.get("type") or "").strip()
+    if item_type not in {"agent_message", "assistant_message"}:
+        return result
+    text_value = item.get("text")
+    delta_value = item.get("delta")
+
+    if event_type == "item.completed":
+        if isinstance(text_value, str) and text_value:
+            result["completed_text"] = text_value
+            result["delta_text"] = text_value
+        return result
+
+    if event_type == "item.delta":
+        if isinstance(delta_value, str) and delta_value:
+            result["delta_text"] = delta_value
+        elif isinstance(text_value, str) and text_value:
+            result["delta_text"] = text_value
+    return result
+
+
 def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
     preview_text = ""
     current_delta = ""
@@ -2953,19 +3087,14 @@ def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
         stripped = line.strip()
         if not stripped:
             continue
-        parsed = parse_codex_json_line(stripped)
+        parsed, event = _parse_codex_event(stripped)
         if parsed["error_text"]:
             fallback_parts.append(parsed["error_text"])
             continue
 
-        try:
-            event = json.loads(stripped)
-        except json.JSONDecodeError:
+        if not event:
             if not stripped.startswith("{"):
                 fallback_parts.append(stripped)
-            continue
-
-        if not isinstance(event, dict):
             continue
 
         event_type = str(event.get("type") or "").strip()
@@ -3116,19 +3245,14 @@ class _StreamPreviewState:
             stripped = line.strip()
             if not stripped:
                 continue
-            parsed = parse_codex_json_line(stripped)
+            parsed, event = _parse_codex_event(stripped)
             if parsed["error_text"]:
                 fallback_parts.append(parsed["error_text"])
                 continue
 
-            try:
-                event = json.loads(stripped)
-            except json.JSONDecodeError:
+            if not event:
                 if not stripped.startswith("{"):
                     fallback_parts.append(stripped)
-                continue
-
-            if not isinstance(event, dict):
                 continue
 
             event_type = str(event.get("type") or "").strip()
@@ -3198,7 +3322,7 @@ def _extract_final_codex_completed_message(raw_output: str) -> Optional[str]:
         stripped = line.strip()
         if not stripped:
             continue
-        parsed = parse_codex_json_line(stripped)
+        parsed, _event = _parse_codex_event(stripped)
         completed_text = str(parsed.get("completed_text") or "").strip()
         if completed_text:
             last_completed = completed_text
@@ -3206,15 +3330,17 @@ def _extract_final_codex_completed_message(raw_output: str) -> Optional[str]:
 
 
 def _load_codex_json_event(line: str) -> dict[str, Any]:
-    try:
-        event: Any = json.loads(line)
-    except json.JSONDecodeError:
-        return {}
-    return event if isinstance(event, dict) else {}
+    _parsed, event = _parse_codex_event(line)
+    return event
 
 
-def _codex_line_allows_quiet_finish(line: str, completed_text: str) -> bool:
-    event = _load_codex_json_event(line)
+def _codex_line_allows_quiet_finish(
+    line: str,
+    completed_text: str,
+    event: dict[str, Any] | None = None,
+) -> bool:
+    if event is None:
+        event = _load_codex_json_event(line)
     event_type = str(event.get("type") or "").strip()
     if event_type == "turn.completed":
         return True
@@ -3250,7 +3376,7 @@ def _advance_codex_done_candidate(
     if not stripped:
         return thread_id, candidate_text, candidate_seen_at
 
-    parsed = parse_codex_json_line(stripped)
+    parsed, event = _parse_codex_event(stripped)
     next_thread_id = thread_id
     if parsed["thread_id"]:
         next_thread_id = parsed["thread_id"]
@@ -3259,7 +3385,7 @@ def _advance_codex_done_candidate(
     if completed_text:
         candidate_text = completed_text
 
-    if _codex_line_allows_quiet_finish(stripped, completed_text):
+    if _codex_line_allows_quiet_finish(stripped, completed_text, event):
         return next_thread_id, candidate_text, now
 
     return next_thread_id, candidate_text, candidate_seen_at
@@ -3999,7 +4125,9 @@ async def _stream_cli_chat(
             codex_done_seen_at: Optional[float] = None
             trace_state = create_stream_trace_state(cli_type)
             live_trace_events: list[dict[str, Any]] = []
+            live_trace_event_keys: set[tuple[str, str, str, str]] = set()
             latest_preview_text = ""
+            last_context_usage_resolved_at = 0.0
             kimi_wire_tail = (
                 _KimiWireTail(attempt.cli_session_id or "", skip_existing=attempt.resume_session)
                 if cli_type == "kimi"
@@ -4008,8 +4136,9 @@ async def _stream_cli_chat(
 
             def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
                 event_key = _trace_event_key(trace_event)
-                if any(_trace_event_key(existing) == event_key for existing in live_trace_events):
+                if event_key in live_trace_event_keys:
                     return None
+                live_trace_event_keys.add(event_key)
                 live_trace_events.append(trace_event)
                 persistence_buffer.queue_trace(trace_event)
                 persistence_buffer.maybe_flush()
@@ -4144,24 +4273,35 @@ async def _stream_cli_chat(
                         attempt,
                         thread_id=thread_id,
                     )
-                    if status_session_id:
+                    now = loop.time()
+                    should_refresh_context_usage = (
+                        bool(status_session_id)
+                        and (
+                            last_context_usage is None
+                            or (now - last_context_usage_resolved_at) >= 1.0
+                        )
+                    )
+                    if should_refresh_context_usage and status_session_id:
                         status_context_usage = await asyncio.to_thread(
                             resolve_cli_context_usage,
                             cli_type,
                             status_session_id,
                             cwd_hint=session.working_dir,
                         )
-                        if status_context_usage:
-                            status_event["context_usage"] = status_context_usage
-                            context_usage_signature = _context_usage_signature(status_context_usage)
-                            last_context_usage = status_context_usage
-                            if (
-                                context_usage_signature != last_context_usage_signature
-                                or loop.time() - last_context_usage_persisted_at >= 1.0
-                            ):
-                                await service.update_context_usage_async(turn_handle, status_context_usage)
-                                last_context_usage_signature = context_usage_signature
-                                last_context_usage_persisted_at = loop.time()
+                        last_context_usage_resolved_at = now
+                    elif status_session_id:
+                        status_context_usage = last_context_usage
+                    if status_context_usage:
+                        status_event["context_usage"] = status_context_usage
+                        context_usage_signature = _context_usage_signature(status_context_usage)
+                        last_context_usage = status_context_usage
+                        if (
+                            context_usage_signature != last_context_usage_signature
+                            or loop.time() - last_context_usage_persisted_at >= 1.0
+                        ):
+                            await service.update_context_usage_async(turn_handle, status_context_usage)
+                            last_context_usage_signature = context_usage_signature
+                            last_context_usage_persisted_at = loop.time()
                     status_signature = (
                         int(status_event.get("elapsed_seconds", 0)),
                         status_event.get("preview_text"),

@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -35,6 +37,10 @@ from .git_commit_message import (
 
 GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
+GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
+_GIT_STATUS_CACHE_TTL_SECONDS = 0.75
+_GIT_STATUS_CACHE_LOCK = threading.Lock()
+_GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 
 
 class GitCommandError(RuntimeError):
@@ -363,6 +369,110 @@ def _parse_tree_status_items(lines: list[str], *, working_dir: str, repo_root: s
     return items
 
 
+def _read_git_head_token(repo_root: str) -> str:
+    git_dir = Path(repo_root) / ".git"
+    head_path = git_dir / "HEAD"
+    try:
+        head_value = head_path.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        return ""
+    if head_value.startswith("ref: "):
+        ref_path = git_dir / head_value.removeprefix("ref: ").strip()
+        try:
+            return ref_path.read_text(encoding="utf-8", errors="ignore").strip()
+        except OSError:
+            return head_value
+    return head_value
+
+
+def _status_path_token(repo_root: str, lines: list[str]) -> tuple[tuple[str, int, int], ...]:
+    tokens: list[tuple[str, int, int]] = []
+    for raw_line in lines:
+        entry = _parse_porcelain_entry(raw_line)
+        if entry is None:
+            continue
+        path_text = str(entry.get("path") or "").replace("\\", "/").strip()
+        if not path_text:
+            continue
+        path = Path(repo_root) / path_text
+        try:
+            stat_result = path.stat()
+            token = (path_text, int(stat_result.st_mtime_ns), int(stat_result.st_size))
+        except OSError:
+            token = (path_text, 0, 0)
+        tokens.append(token)
+    return tuple(sorted(tokens))
+
+
+def _git_status_cache_key(repo_root: str) -> str:
+    return os.path.normcase(os.path.abspath(repo_root))
+
+
+def _read_git_status_cache(repo_root: str) -> dict[str, Any] | None:
+    cache_key = _git_status_cache_key(repo_root)
+    now = time.monotonic()
+    with _GIT_STATUS_CACHE_LOCK:
+        entry = dict(_GIT_STATUS_CACHE.get(cache_key) or {})
+    if not entry:
+        return None
+    if now - float(entry.get("created_at") or 0.0) > _GIT_STATUS_CACHE_TTL_SECONDS:
+        return None
+    return entry
+
+
+def _write_git_status_cache(repo_root: str, entry: dict[str, Any]) -> None:
+    cache_key = _git_status_cache_key(repo_root)
+    with _GIT_STATUS_CACHE_LOCK:
+        _GIT_STATUS_CACHE[cache_key] = dict(entry)
+
+
+def _invalidate_git_status_cache(repo_root: str) -> None:
+    cache_key = _git_status_cache_key(repo_root)
+    with _GIT_STATUS_CACHE_LOCK:
+        _GIT_STATUS_CACHE.pop(cache_key, None)
+
+
+def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
+    cached = _read_git_status_cache(repo_root)
+    head_token = _read_git_head_token(repo_root)
+    index_path = Path(repo_root) / ".git" / "index"
+    try:
+        index_stat = index_path.stat()
+        index_token = (int(index_stat.st_mtime_ns), int(index_stat.st_size))
+    except OSError:
+        index_token = (0, 0)
+    if (
+        cached
+        and cached.get("head_token") == head_token
+        and cached.get("index_token") == index_token
+        and cached.get("status_path_token") == _status_path_token(repo_root, cached.get("tree_lines") or [])
+    ):
+        return cached
+
+    branch_result = _run_git(repo_root, ["status", "--porcelain=1", "--branch"])
+    tree_result = _run_git(
+        repo_root,
+        [
+            "status",
+            "--porcelain=1",
+            "--ignored=matching",
+            "--untracked-files=all",
+        ],
+    )
+    tree_lines = (tree_result.stdout or "").splitlines()
+    entry = {
+        "created_at": time.monotonic(),
+        "head_token": head_token,
+        "index_token": index_token,
+        "branch_lines": (branch_result.stdout or "").splitlines(),
+        "tree_lines": tree_lines,
+        "status_path_token": _status_path_token(repo_root, tree_lines),
+    }
+    if tree_lines:
+        _write_git_status_cache(repo_root, entry)
+    return entry
+
+
 def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]:
     result = _run_git(
         repo_root,
@@ -508,8 +618,7 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
             "recent_commits": [],
         }
 
-    status_result = _run_git(repo_root, ["status", "--porcelain=1", "--branch"])
-    status_lines = (status_result.stdout or "").splitlines()
+    status_lines = _build_repo_status_snapshot(repo_root)["branch_lines"]
     header = status_lines[0] if status_lines else ""
     current_branch, ahead_count, behind_count = _parse_status_header(header)
     changed_files = _parse_changed_files(status_lines[1:] if status_lines else [])
@@ -599,25 +708,12 @@ def get_git_tree_status(manager: MultiBotManager, alias: str, user_id: int) -> d
             "items": {},
         }
 
-    try:
-        result = _run_git(
-            repo_root,
-            [
-                "status",
-                "--porcelain=1",
-                "--ignored=matching",
-                "--untracked-files=all",
-            ],
-        )
-    except GitCommandError as exc:
-        _raise(400, "git_tree_status_failed", str(exc))
-
     return {
         "repo_found": True,
         "working_dir": working_dir,
         "repo_path": repo_root,
         "items": _parse_tree_status_items(
-            (result.stdout or "").splitlines(),
+            _build_repo_status_snapshot(repo_root)["tree_lines"],
             working_dir=working_dir,
             repo_root=repo_root,
         ),
@@ -636,6 +732,8 @@ def init_git_repository(manager: MultiBotManager, alias: str, user_id: int) -> d
         _raise(400, "git_init_failed", str(exc))
 
     repo_root = _resolve_repo_root(working_dir)
+    if repo_root:
+        _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -681,14 +779,17 @@ def _extract_untracked_paths(status_text: str) -> list[str]:
 def _read_untracked_file_preview(repo_root: str, relative_path: str) -> str:
     target_path = _resolve_repo_worktree_path(repo_root, relative_path)
     try:
-        raw = Path(target_path).read_bytes()
+        target = Path(target_path)
+        size = target.stat().st_size
+        with target.open("rb") as handle:
+            raw = handle.read(GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT + 1)
     except OSError:
         return f"--- {relative_path} ---\n[unreadable]"
     if b"\x00" in raw:
         return f"--- {relative_path} ---\n[binary file]"
 
     preview = raw[:GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT].decode("utf-8", errors="replace").strip()
-    if len(raw) > GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT:
+    if size > GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT or len(raw) > GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT:
         preview = f"{preview}\n...[truncated]".strip()
     return f"--- {relative_path} ---\n{preview or '[empty file]'}"
 
@@ -1143,10 +1244,13 @@ def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, 
     except GitCommandError as exc:
         _raise(400, "git_diff_failed", str(exc))
 
+    diff_text, truncated = truncate_diff_text(result.stdout or "", limit=GIT_DIFF_OUTPUT_CHAR_LIMIT)
+
     return {
         "path": relative_path,
         "staged": staged,
-        "diff": result.stdout or "",
+        "diff": diff_text,
+        "truncated": truncated,
     }
 
 
@@ -1161,6 +1265,7 @@ def stage_git_paths(manager: MultiBotManager, alias: str, user_id: int, paths: l
     except GitCommandError as exc:
         _raise(400, "git_stage_failed", str(exc))
 
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1178,6 +1283,7 @@ def unstage_git_paths(manager: MultiBotManager, alias: str, user_id: int, paths:
         except GitCommandError as exc:
             _raise(400, "git_unstage_failed", str(exc))
 
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1189,6 +1295,7 @@ def discard_git_paths(manager: MultiBotManager, alias: str, user_id: int, paths:
 
     entries = _get_status_entries(repo_root, normalized)
     _discard_status_entries(repo_root, entries, error_code="git_discard_failed")
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1196,6 +1303,7 @@ def discard_all_git_changes(manager: MultiBotManager, alias: str, user_id: int) 
     working_dir, repo_root = _require_repo_root(manager, alias, user_id)
     entries = _get_status_entries(repo_root)
     _discard_status_entries(repo_root, entries, error_code="git_discard_all_failed")
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1210,6 +1318,7 @@ def commit_git_changes(manager: MultiBotManager, alias: str, user_id: int, messa
     except GitCommandError as exc:
         _raise(400, "git_commit_failed", str(exc))
 
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1227,6 +1336,7 @@ def _run_git_action(
         _run_git(repo_root, args)
     except GitCommandError as exc:
         _raise(400, error_code, str(exc))
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1299,6 +1409,7 @@ def apply_git_stash(manager: MultiBotManager, alias: str, user_id: int, ref: str
         _run_git(repo_root, ["stash", "apply", stash_ref])
     except GitCommandError as exc:
         _raise(400, "git_stash_apply_failed", str(exc))
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
@@ -1309,6 +1420,7 @@ def drop_git_stash(manager: MultiBotManager, alias: str, user_id: int, ref: str)
         _run_git(repo_root, ["stash", "drop", stash_ref])
     except GitCommandError as exc:
         _raise(400, "git_stash_drop_failed", str(exc))
+    _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 

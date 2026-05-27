@@ -21,6 +21,27 @@ def test_build_source_fingerprint_can_skip_file_content_hash(tmp_path: Path) -> 
     assert '"sha256":""' in fingerprint
 
 
+def test_build_source_fingerprint_reuses_content_hash_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "large.vcd"
+    target.write_bytes(b"0!" * 1024)
+
+    opens = {"count": 0}
+    original_open = Path.open
+
+    def tracked_open(self, *args, **kwargs):
+        if self == target and args and args[0] == "rb":
+            opens["count"] += 1
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    first = build_source_fingerprint({"path": str(target)}, hash_file_contents=True)
+    second = build_source_fingerprint({"path": str(target)}, hash_file_contents=True)
+
+    assert first == second
+    assert opens["count"] == 1
+
+
 def test_view_sessions_keep_same_source_for_different_plugins() -> None:
     store = PluginViewSessionStore()
     first = PluginViewSessionRecord(
@@ -915,6 +936,53 @@ async def test_snapshot_render_view_uses_fingerprint_cache(tmp_path: Path, monke
 
     assert calls == 2
     assert third != first
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_skips_frequent_idle_eviction_on_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    target = repo_root / "demo.txt"
+    target.write_text("v1", encoding="utf-8")
+    plugins_root = tmp_path / "plugins"
+    plugin_dir = plugins_root / "doc-plugin"
+    _write_document_plugin(plugin_dir, plugin_id="doc-plugin")
+
+    service = PluginService(repo_root, plugins_root=plugins_root)
+    service.list_plugins(refresh=True)
+
+    async def fake_render_view(bot_alias, manifest, view_id, input_payload):
+        return {
+            "renderer": "document",
+            "title": "Demo",
+            "payload": {"path": input_payload["path"], "blocks": []},
+        }
+
+    evictions = {"count": 0}
+
+    async def fake_evict():
+        evictions["count"] += 1
+        return 0
+
+    monkeypatch.setattr(service.runtime, "render_view", fake_render_view)
+    monkeypatch.setattr(service.runtime, "evict_idle_processes", fake_evict)
+
+    await service.render_view(
+        bot_alias="main",
+        plugin_id="doc-plugin",
+        view_id="document",
+        input_payload={"path": "demo.txt"},
+        audit_context={"account_id": "u1", "bot_alias": "main"},
+    )
+    await service.render_view(
+        bot_alias="main",
+        plugin_id="doc-plugin",
+        view_id="document",
+        input_payload={"path": "demo.txt"},
+        audit_context={"account_id": "u1", "bot_alias": "main"},
+    )
+
+    assert evictions["count"] == 1
 
 
 @pytest.mark.asyncio

@@ -100,98 +100,30 @@ def get_or_create_session(
     should_persist_migration = False
 
     with sessions_lock:
-        if key not in sessions:
-            # 尝试从持久化存储恢复会话
-            stored_data = load_session(bot_id, user_id, agent_id=normalized_agent_id) if load_persisted_state else None
-            
-            codex_session_id = None
-            claude_session_id = None
-            kimi_session_id = None
-            claude_session_initialized = False
-            working_dir = default_working_dir
-            browse_dir = None
-            history = []
-            web_turn_overlays = []
-            message_count = 0
-            last_activity = datetime.now()
-            running_user_text = None
-            running_preview_text = ""
-            running_started_at = None
-            running_updated_at = None
-            local_history_backend = LOCAL_HISTORY_BACKEND
-            session_epoch = 0
-            active_conversation_id = None
-            managed_prompt_hash_seen = None
-            agent_prompt_hash_seen = None
-            
-            if stored_data:
-                original_stored_data = dict(stored_data)
-                stored_data = migrate_local_history_snapshot(
-                    stored_data,
-                    default_working_dir=default_working_dir,
-                )
-                should_persist_migration = (
-                    original_stored_data.get("local_history_backend") != LOCAL_HISTORY_BACKEND
-                )
-                codex_session_id = stored_data.get("codex_session_id")
-                claude_session_id = stored_data.get("claude_session_id")
-                kimi_session_id = stored_data.get("kimi_session_id")
-                working_dir = stored_data.get("working_dir") or default_working_dir
-                browse_dir = stored_data.get("browse_dir") or None
-                try:
-                    message_count = max(0, int(stored_data.get("message_count", 0) or 0))
-                except (TypeError, ValueError):
-                    message_count = 0
-                last_activity = _parse_stored_datetime(stored_data.get("last_activity"))
-                local_history_backend = stored_data.get("local_history_backend") or LOCAL_HISTORY_BACKEND
-                try:
-                    session_epoch = max(0, int(stored_data.get("session_epoch", 0) or 0))
-                except (TypeError, ValueError):
-                    session_epoch = 0
-                active_conversation_id = stored_data.get("active_conversation_id") or None
-                managed_prompt_hash_seen = stored_data.get("managed_prompt_hash_seen") or None
-                agent_prompt_hash_seen = stored_data.get("agent_prompt_hash_seen") or None
-                # 恢复时标记为已初始化（因为我们有 session_id）
-                claude_session_initialized = bool(claude_session_id)
-                if (
-                    codex_session_id
-                    or claude_session_id
-                    or kimi_session_id
-                    or working_dir != default_working_dir
-                ):
-                    logger.info(f"已恢复会话: bot={bot_id}, user={user_id}, "
-                              f"codex={codex_session_id is not None}, "
-                              f"claude={claude_session_id is not None}, "
-                              f"kimi={kimi_session_id is not None}, "
-                              f"epoch={session_epoch}")
-            
-            sessions[key] = UserSession(
-                bot_id=bot_id,
-                bot_alias=bot_alias,
-                user_id=user_id,
-                working_dir=working_dir,
-                agent_id=normalized_agent_id,
-                browse_dir=browse_dir,
-                history=[],
-                codex_session_id=codex_session_id,
-                claude_session_id=claude_session_id,
-                kimi_session_id=kimi_session_id,
-                claude_session_initialized=claude_session_initialized,
-                web_turn_overlays=web_turn_overlays,
-                running_user_text=running_user_text,
-                running_preview_text=running_preview_text,
-                running_started_at=running_started_at,
-                running_updated_at=running_updated_at,
-                last_activity=last_activity,
-                message_count=message_count,
-                local_history_backend=local_history_backend,
-                session_epoch=session_epoch,
-                active_conversation_id=active_conversation_id,
-                managed_prompt_hash_seen=managed_prompt_hash_seen,
-                agent_prompt_hash_seen=agent_prompt_hash_seen,
-            )
-            session = sessions[key]
+        session = sessions.get(key)
+
+    if session is not None:
+        return session
+
+    stored_data = load_session(bot_id, user_id, agent_id=normalized_agent_id) if load_persisted_state else None
+    (
+        session,
+        should_persist_migration,
+    ) = _build_session_from_store(
+        bot_id=bot_id,
+        bot_alias=bot_alias,
+        user_id=user_id,
+        normalized_agent_id=normalized_agent_id,
+        default_working_dir=default_working_dir,
+        stored_data=stored_data,
+    )
+
+    with sessions_lock:
+        existing = sessions.get(key)
+        if existing is not None:
+            session = existing
         else:
+            sessions[key] = session
             session = sessions[key]
 
     if should_persist_migration:
@@ -223,6 +155,107 @@ def _save_session_to_store(session: UserSession):
             managed_prompt_hash_seen=session.managed_prompt_hash_seen,
             agent_prompt_hash_seen=session.agent_prompt_hash_seen,
         )
+
+
+def _build_session_from_store(
+    *,
+    bot_id: int,
+    bot_alias: str,
+    user_id: int,
+    normalized_agent_id: str,
+    default_working_dir: str | None,
+    stored_data: dict | None,
+) -> tuple[UserSession, bool]:
+    should_persist_migration = False
+    codex_session_id = None
+    claude_session_id = None
+    kimi_session_id = None
+    claude_session_initialized = False
+    working_dir = default_working_dir
+    browse_dir = None
+    web_turn_overlays = []
+    message_count = 0
+    last_activity = datetime.now()
+    running_user_text = None
+    running_preview_text = ""
+    running_started_at = None
+    running_updated_at = None
+    local_history_backend = LOCAL_HISTORY_BACKEND
+    session_epoch = 0
+    active_conversation_id = None
+    managed_prompt_hash_seen = None
+    agent_prompt_hash_seen = None
+
+    if stored_data:
+        original_stored_data = dict(stored_data)
+        stored_data = migrate_local_history_snapshot(
+            stored_data,
+            default_working_dir=default_working_dir,
+        )
+        should_persist_migration = (
+            original_stored_data.get("local_history_backend") != LOCAL_HISTORY_BACKEND
+        )
+        codex_session_id = stored_data.get("codex_session_id")
+        claude_session_id = stored_data.get("claude_session_id")
+        kimi_session_id = stored_data.get("kimi_session_id")
+        working_dir = stored_data.get("working_dir") or default_working_dir
+        browse_dir = stored_data.get("browse_dir") or None
+        try:
+            message_count = max(0, int(stored_data.get("message_count", 0) or 0))
+        except (TypeError, ValueError):
+            message_count = 0
+        last_activity = _parse_stored_datetime(stored_data.get("last_activity"))
+        local_history_backend = stored_data.get("local_history_backend") or LOCAL_HISTORY_BACKEND
+        try:
+            session_epoch = max(0, int(stored_data.get("session_epoch", 0) or 0))
+        except (TypeError, ValueError):
+            session_epoch = 0
+        active_conversation_id = stored_data.get("active_conversation_id") or None
+        managed_prompt_hash_seen = stored_data.get("managed_prompt_hash_seen") or None
+        agent_prompt_hash_seen = stored_data.get("agent_prompt_hash_seen") or None
+        claude_session_initialized = bool(claude_session_id)
+        if (
+            codex_session_id
+            or claude_session_id
+            or kimi_session_id
+            or working_dir != default_working_dir
+        ):
+            logger.info(
+                f"已恢复会话: bot={bot_id}, user={user_id}, "
+                f"codex={codex_session_id is not None}, "
+                f"claude={claude_session_id is not None}, "
+                f"kimi={kimi_session_id is not None}, "
+                f"epoch={session_epoch}"
+            )
+
+    return (
+        UserSession(
+            bot_id=bot_id,
+            bot_alias=bot_alias,
+            user_id=user_id,
+            working_dir=working_dir,
+            agent_id=normalized_agent_id,
+            browse_dir=browse_dir,
+            history=[],
+            codex_session_id=codex_session_id,
+            claude_session_id=claude_session_id,
+            kimi_session_id=kimi_session_id,
+            claude_session_initialized=claude_session_initialized,
+            web_turn_overlays=web_turn_overlays,
+            running_user_text=running_user_text,
+            running_preview_text=running_preview_text,
+            running_started_at=running_started_at,
+            running_updated_at=running_updated_at,
+            last_activity=last_activity,
+            message_count=message_count,
+            local_history_backend=local_history_backend,
+            session_epoch=session_epoch,
+            active_conversation_id=active_conversation_id,
+            managed_prompt_hash_seen=managed_prompt_hash_seen,
+            agent_prompt_hash_seen=agent_prompt_hash_seen,
+        ),
+        should_persist_migration,
+    )
 
 
 def reset_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:

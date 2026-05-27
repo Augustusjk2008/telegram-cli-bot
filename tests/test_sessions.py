@@ -411,3 +411,48 @@ class TestSessionPersistence:
             assert session.running_started_at is None
             assert session.running_updated_at is None
             assert session.is_processing is False
+
+    def test_get_session_does_not_hold_global_lock_during_store_load(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        import bot.sessions as session_module
+
+        load_entered = threading.Event()
+        load_release = threading.Event()
+        access_finished = threading.Event()
+        done = threading.Event()
+        access_state: dict[str, object] = {}
+        other_dir = temp_dir / "other"
+        other_dir.mkdir()
+
+        def slow_load(bot_id, user_id, agent_id="main"):
+            if (bot_id, user_id, agent_id) == (1, 100, "main"):
+                load_entered.set()
+                load_release.wait(timeout=2)
+            return None
+
+        monkeypatch.setattr(session_module, "load_session", slow_load)
+
+        def load_job():
+            get_session(1, "main", 100, str(temp_dir))
+            done.set()
+
+        worker = threading.Thread(target=load_job)
+        worker.start()
+        assert load_entered.wait(timeout=1)
+
+        def access_job():
+            try:
+                session = get_session(2, "sub", 200, str(other_dir))
+                access_state["working_dir"] = session.working_dir
+            finally:
+                access_finished.set()
+
+        accessor = threading.Thread(target=access_job)
+        accessor.start()
+
+        assert access_finished.wait(timeout=0.3), "无关 session 访问被全局锁阻塞"
+        assert access_state["working_dir"] == str(other_dir)
+
+        load_release.set()
+        assert done.wait(timeout=1)
+        worker.join(timeout=1)
+        accessor.join(timeout=1)

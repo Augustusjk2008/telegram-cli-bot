@@ -331,6 +331,15 @@ export function DesktopWorkbench({
     }
   }, [botAlias, client]);
 
+  const refreshWorkspaceChrome = useCallback(async (options?: { preserveExpandedPaths?: boolean; rootPath?: string; gitDelayMs?: number }) => {
+    const nextRootPath = await fileTree.refreshTreeAndRoot({
+      preserveExpandedPaths: options?.preserveExpandedPaths,
+      rootPath: options?.rootPath,
+    });
+    await refreshGitDecorations();
+    return nextRootPath;
+  }, [fileTree, refreshGitDecorations]);
+
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);
   }, [onDirtyTabsChange, tabs.hasDirtyTabs]);
@@ -644,10 +653,12 @@ export function DesktopWorkbench({
     tabs.openReadOnlyTab({
       path: tabPath,
       basename: `${basename}.diff`,
-      content: diff.diff || "当前没有可显示的差异",
+      content: diff.truncated && diff.diff
+        ? `${diff.diff}\n\n...[diff truncated]`
+        : (diff.diff || "当前没有可显示的差异"),
       sourcePath: path,
       kind: "git-diff",
-      statusText: `${path} · ${staged ? "已暂存" : "工作区"} Diff · 只读`,
+      statusText: `${path} · ${staged ? "已暂存" : "工作区"} Diff · 只读${diff.truncated ? " · 已截断" : ""}`,
     });
   }
 
@@ -724,8 +735,7 @@ export function DesktopWorkbench({
       await client.uploadFile(botAlias, file);
       fileTree.highlightPath(file.name);
     }
-    await fileTree.refreshRoot({ preserveExpandedPaths: true });
-    await refreshGitDecorations();
+    await refreshWorkspaceChrome({ preserveExpandedPaths: true });
   }
 
   async function handleFileTreeHome() {
@@ -733,8 +743,7 @@ export function DesktopWorkbench({
     if (!structureOnly) {
       await client.changeDirectory(botAlias, workingDir);
     }
-    await fileTree.refreshRoot({ rootPath: workingDir });
-    await refreshGitDecorations();
+    await refreshWorkspaceChrome({ rootPath: workingDir });
   }
 
   async function handleOpenSystemFolder() {
@@ -885,8 +894,7 @@ export function DesktopWorkbench({
           prefilledWorkdir={pendingSidebarWorkdir || fileTree.rootPath}
           onWorkdirUpdated={(nextWorkdir) => {
             setPendingSidebarWorkdir(nextWorkdir);
-            void fileTree.refreshRoot({ preserveExpandedPaths: true });
-            void refreshGitDecorations();
+            void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: nextWorkdir });
           }}
           themeName={themeName}
           onThemeChange={onThemeChange}

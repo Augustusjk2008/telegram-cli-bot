@@ -2107,7 +2107,8 @@ class WebApiServer:
         target_path = request.query.get("path") or None
         if auth.role == ROLE_GUEST:
             base_dir = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
-            data = get_directory_listing(
+            data = await asyncio.to_thread(
+                get_directory_listing,
                 self.manager,
                 alias,
                 auth.user_id,
@@ -2116,7 +2117,8 @@ class WebApiServer:
                 restrict_to_base_dir=True,
             )
             return _json({"ok": True, "data": data})
-        return _json({"ok": True, "data": get_directory_listing(self.manager, alias, auth.user_id, path=target_path)})
+        data = await asyncio.to_thread(get_directory_listing, self.manager, alias, auth.user_id, path=target_path)
+        return _json({"ok": True, "data": data})
 
     def _workspace_file_root(self, alias: str, auth: WebAuthSession) -> str:
         if auth.role == ROLE_GUEST:
@@ -2154,14 +2156,16 @@ class WebApiServer:
         alias = self._manager_alias(request)
         workspace = self._workspace_file_root(alias, auth)
         path = request.query.get("path", "")
-        return _json({"ok": True, "data": build_file_outline(workspace, path)})
+        data = await asyncio.to_thread(build_file_outline, workspace, path)
+        return _json({"ok": True, "data": data})
 
     async def post_workspace_resolve_definition(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         workspace = self._workspace_file_root(alias, auth)
-        data = resolve_workspace_definition(
+        data = await asyncio.to_thread(
+            resolve_workspace_definition,
             workspace,
             str(body.get("path", "")),
             line=int(body.get("line") or 1),
@@ -2394,23 +2398,27 @@ class WebApiServer:
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_git_overview(self.manager, alias, auth.user_id)})
+        data = await asyncio.to_thread(get_git_overview, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def get_git_tree_status_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_git_tree_status(self.manager, alias, auth.user_id)})
+        data = await asyncio.to_thread(get_git_tree_status, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def get_git_branches_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": list_git_branches(self.manager, alias, auth.user_id)})
+        data = await asyncio.to_thread(list_git_branches, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def post_git_branch_create(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = create_git_branch(
+        data = await asyncio.to_thread(
+            create_git_branch,
             self.manager,
             alias,
             auth.user_id,
@@ -2423,38 +2431,41 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = switch_git_branch(self.manager, alias, auth.user_id, str(body.get("name") or ""))
+        data = await asyncio.to_thread(switch_git_branch, self.manager, alias, auth.user_id, str(body.get("name") or ""))
         return _json({"ok": True, "data": data})
 
     async def get_git_stashes_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": list_git_stashes(self.manager, alias, auth.user_id)})
+        data = await asyncio.to_thread(list_git_stashes, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def post_git_stash_apply(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = apply_git_stash(self.manager, alias, auth.user_id, str(body.get("ref") or ""))
+        overview = await asyncio.to_thread(apply_git_stash, self.manager, alias, auth.user_id, str(body.get("ref") or ""))
         return _json({"ok": True, "data": {"message": "已应用 stash", "overview": overview}})
 
     async def post_git_stash_drop(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = drop_git_stash(self.manager, alias, auth.user_id, str(body.get("ref") or ""))
+        overview = await asyncio.to_thread(drop_git_stash, self.manager, alias, auth.user_id, str(body.get("ref") or ""))
         return _json({"ok": True, "data": {"message": "已删除 stash", "overview": overview}})
 
     async def get_git_blame_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         path = request.query.get("path", "")
-        return _json({"ok": True, "data": get_git_blame(self.manager, alias, auth.user_id, path)})
+        data = await asyncio.to_thread(get_git_blame, self.manager, alias, auth.user_id, path)
+        return _json({"ok": True, "data": data})
 
     async def get_git_identity_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_git_identity_config(self.manager, alias, auth.user_id)})
+        data = await asyncio.to_thread(get_git_identity_config, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def get_git_commit_message_config_view(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
@@ -2534,7 +2545,8 @@ class WebApiServer:
         if scope != "global" and self._allows_readonly_bot_capability(request, CAP_GIT_OPS, auth):
             auth = auth.with_capabilities({*auth.capabilities, CAP_GIT_OPS})
         _require_capability(auth, CAP_ADMIN_OPS if scope == "global" else CAP_GIT_OPS)
-        data = update_git_identity_config(
+        data = await asyncio.to_thread(
+            update_git_identity_config,
             self.manager,
             alias,
             auth.user_id,
@@ -2547,77 +2559,79 @@ class WebApiServer:
     async def post_git_init(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": init_git_repository(self.manager, alias, auth.user_id)})
+        data = await asyncio.to_thread(init_git_repository, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
 
     async def get_git_diff_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         path = request.query.get("path", "")
         staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
-        return _json({"ok": True, "data": get_git_diff(self.manager, alias, auth.user_id, path, staged=staged)})
+        data = await asyncio.to_thread(get_git_diff, self.manager, alias, auth.user_id, path, staged=staged)
+        return _json({"ok": True, "data": data})
 
     async def post_git_stage(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = stage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
+        overview = await asyncio.to_thread(stage_git_paths, self.manager, alias, auth.user_id, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已暂存所选文件", "overview": overview}})
 
     async def post_git_unstage(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = unstage_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
+        overview = await asyncio.to_thread(unstage_git_paths, self.manager, alias, auth.user_id, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已取消暂存所选文件", "overview": overview}})
 
     async def post_git_discard(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = discard_git_paths(self.manager, alias, auth.user_id, body.get("paths", []))
+        overview = await asyncio.to_thread(discard_git_paths, self.manager, alias, auth.user_id, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已丢弃所选文件改动", "overview": overview}})
 
     async def post_git_discard_all(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = discard_all_git_changes(self.manager, alias, auth.user_id)
+        overview = await asyncio.to_thread(discard_all_git_changes, self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已丢弃全部改动", "overview": overview}})
 
     async def post_git_commit(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = commit_git_changes(self.manager, alias, auth.user_id, body.get("message", ""))
+        overview = await asyncio.to_thread(commit_git_changes, self.manager, alias, auth.user_id, body.get("message", ""))
         return _json({"ok": True, "data": {"message": "已创建提交", "overview": overview}})
 
     async def post_git_fetch(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = fetch_git_remote(self.manager, alias, auth.user_id)
+        overview = await asyncio.to_thread(fetch_git_remote, self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已抓取远端更新", "overview": overview}})
 
     async def post_git_pull(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = pull_git_remote(self.manager, alias, auth.user_id)
+        overview = await asyncio.to_thread(pull_git_remote, self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
 
     async def post_git_push(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = push_git_remote(self.manager, alias, auth.user_id)
+        overview = await asyncio.to_thread(push_git_remote, self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已推送本地提交", "overview": overview}})
 
     async def post_git_stash(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = stash_git_changes(self.manager, alias, auth.user_id)
+        overview = await asyncio.to_thread(stash_git_changes, self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已暂存当前工作区", "overview": overview}})
 
     async def post_git_stash_pop(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = pop_git_stash(self.manager, alias, auth.user_id)
+        overview = await asyncio.to_thread(pop_git_stash, self.manager, alias, auth.user_id)
         return _json({"ok": True, "data": {"message": "已恢复最近一次暂存", "overview": overview}})
 
     async def upload_file(self, request: web.Request) -> web.Response:
@@ -2757,7 +2771,7 @@ class WebApiServer:
         filename = request.query.get("filename", "")
         mode = request.query.get("mode", "cat")
         lines = int(request.query.get("lines", "20"))
-        data = read_file_content(self.manager, alias, auth.user_id, filename, mode=mode, lines=lines)
+        data = await asyncio.to_thread(read_file_content, self.manager, alias, auth.user_id, filename, mode=mode, lines=lines)
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def resolve_file_plugin_target(self, request: web.Request) -> web.Response:

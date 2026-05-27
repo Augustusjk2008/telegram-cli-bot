@@ -445,7 +445,7 @@ function WaveformTrackRow({
   onRadixChange: (signalId: string, radix: WaveformRadix) => void;
   formatValue: (track: WaveformTrack, value: string) => string;
 }) {
-  const useCanvas = track.width > 1 && track.segments.length > 400;
+  const useCanvas = track.segments.length > 400;
   return (
     <>
       <div className="sticky left-0 z-10 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2">

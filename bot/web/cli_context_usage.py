@@ -4,6 +4,7 @@ import json
 import re
 import threading
 from decimal import Decimal, ROUND_HALF_UP
+from io import SEEK_END
 from pathlib import Path
 from typing import Any
 
@@ -32,12 +33,15 @@ _CACHE_LOCK = threading.Lock()
 _CONTEXT_USAGE_CACHE: dict[tuple[str, str, str, int, int], dict[str, Any] | None] = {}
 _CONTEXT_USAGE_CACHE_ORDER: list[tuple[str, str, str, int, int]] = []
 _CONTEXT_USAGE_CACHE_LIMIT = 128
+_TRANSCRIPT_STATE: dict[tuple[str, str, str], dict[str, Any]] = {}
+_TAIL_WINDOW_BYTES = 256 * 1024
 
 
 def clear_context_usage_cache() -> None:
     with _CACHE_LOCK:
         _CONTEXT_USAGE_CACHE.clear()
         _CONTEXT_USAGE_CACHE_ORDER.clear()
+        _TRANSCRIPT_STATE.clear()
 
 
 def _transcript_cache_key(provider: str, session_id: str, transcript_path: Path) -> tuple[str, str, str, int, int] | None:
@@ -73,6 +77,10 @@ def _set_cached_context_usage(key: tuple[str, str, str, int, int], value: dict[s
 
 
 _CACHE_MISS = object()
+
+
+def _transcript_state_key(provider: str, session_id: str, transcript_path: Path) -> tuple[str, str, str]:
+    return (provider, session_id, str(transcript_path))
 
 
 def _as_int(value: Any) -> int | None:
@@ -157,20 +165,9 @@ def _extract_codex_token_count(line: str) -> tuple[int, int] | None:
     return used_tokens, context_window
 
 
-def _resolve_codex_context_usage(session_id: str, transcript_path: Path) -> dict[str, Any] | None:
-    try:
-        lines = transcript_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-
-    token_count: tuple[int, int] | None = None
-    for line in reversed(lines):
-        token_count = _extract_codex_token_count(line.strip())
-        if token_count is not None:
-            break
+def _build_codex_context_usage(session_id: str, token_count: tuple[int, int] | None) -> dict[str, Any] | None:
     if token_count is None:
         return None
-
     used_tokens, context_window = token_count
     available = context_window - _CODEX_CONTEXT_BASELINE_TOKENS
     if available <= 0:
@@ -191,6 +188,15 @@ def _resolve_codex_context_usage(session_id: str, transcript_path: Path) -> dict
         "window_display": window_display,
         "status_text": f"{left_percent}% context left · {used_display} / {window_display}",
     }
+
+
+def _resolve_codex_context_usage_from_lines(session_id: str, lines: list[str]) -> dict[str, Any] | None:
+    token_count: tuple[int, int] | None = None
+    for line in reversed(lines):
+        token_count = _extract_codex_token_count(line.strip())
+        if token_count is not None:
+            break
+    return _build_codex_context_usage(session_id, token_count)
 
 
 def _parse_claude_context_text(session_id: str, text: str) -> dict[str, Any] | None:
@@ -312,12 +318,7 @@ def _build_claude_usage_estimate(session_id: str, used_tokens: int, model: str |
     return result
 
 
-def _resolve_claude_context_usage(session_id: str, transcript_path: Path) -> dict[str, Any] | None:
-    try:
-        lines = transcript_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-
+def _resolve_claude_context_usage_from_lines(session_id: str, lines: list[str]) -> dict[str, Any] | None:
     for line in reversed(lines):
         context_usage = _extract_claude_context_from_line(session_id, line.strip())
         if context_usage is not None:
@@ -330,6 +331,81 @@ def _resolve_claude_context_usage(session_id: str, transcript_path: Path) -> dic
             return _build_claude_usage_estimate(session_id, used_tokens, model)
 
     return None
+
+
+def _read_transcript_lines_from_offset(transcript_path: Path, offset: int) -> tuple[list[str], int]:
+    try:
+        with transcript_path.open("rb") as handle:
+            handle.seek(max(0, int(offset or 0)))
+            data = handle.read()
+            next_offset = handle.tell()
+    except OSError:
+        return [], max(0, int(offset or 0))
+    return data.decode("utf-8", errors="replace").splitlines(), next_offset
+
+
+def _read_transcript_tail_lines(transcript_path: Path, *, window_bytes: int = _TAIL_WINDOW_BYTES) -> list[str]:
+    try:
+        with transcript_path.open("rb") as handle:
+            handle.seek(0, SEEK_END)
+            size = handle.tell()
+            start = max(0, size - max(window_bytes, 1024))
+            handle.seek(start)
+            data = handle.read()
+    except OSError:
+        return []
+    text = data.decode("utf-8", errors="replace")
+    if start > 0:
+        first_newline = text.find("\n")
+        if first_newline >= 0:
+            text = text[first_newline + 1 :]
+    return text.splitlines()
+
+
+def _resolve_incremental_context_usage(
+    provider: str,
+    session_id: str,
+    transcript_path: Path,
+    parser: Any,
+) -> dict[str, Any] | None:
+    try:
+        stat = transcript_path.stat()
+    except OSError:
+        return None
+
+    state_key = _transcript_state_key(provider, session_id, transcript_path)
+    with _CACHE_LOCK:
+        state = dict(_TRANSCRIPT_STATE.get(state_key) or {})
+
+    current_size = int(stat.st_size)
+    current_mtime_ns = int(stat.st_mtime_ns)
+    usage: dict[str, Any] | None
+    previous_size = int(state.get("size") or 0) if state else 0
+    previous_offset = int(state.get("offset") or 0) if state else 0
+    if state and current_size > previous_size and previous_offset <= current_size:
+        appended_lines, next_offset = _read_transcript_lines_from_offset(transcript_path, int(state.get("offset") or 0))
+        usage = parser(session_id, appended_lines) if appended_lines else None
+        if usage is None:
+            usage = state.get("last_usage")
+        with _CACHE_LOCK:
+            _TRANSCRIPT_STATE[state_key] = {
+                "offset": next_offset,
+                "size": current_size,
+                "mtime_ns": current_mtime_ns,
+                "last_usage": dict(usage) if isinstance(usage, dict) else None,
+            }
+        return dict(usage) if isinstance(usage, dict) else None
+
+    tail_lines = _read_transcript_tail_lines(transcript_path)
+    usage = parser(session_id, tail_lines)
+    with _CACHE_LOCK:
+        _TRANSCRIPT_STATE[state_key] = {
+            "offset": current_size,
+            "size": current_size,
+            "mtime_ns": current_mtime_ns,
+            "last_usage": dict(usage) if isinstance(usage, dict) else None,
+        }
+    return dict(usage) if isinstance(usage, dict) else None
 
 
 def resolve_cli_context_usage(
@@ -352,7 +428,12 @@ def resolve_cli_context_usage(
                 cached = _get_cached_context_usage(key)
                 if cached is not _CACHE_MISS:
                     return cached
-            result = _resolve_codex_context_usage(normalized_session_id, ref.path)
+            result = _resolve_incremental_context_usage(
+                provider,
+                normalized_session_id,
+                ref.path,
+                _resolve_codex_context_usage_from_lines,
+            )
             if key is not None:
                 _set_cached_context_usage(key, result)
             return result
@@ -366,7 +447,12 @@ def resolve_cli_context_usage(
                 cached = _get_cached_context_usage(key)
                 if cached is not _CACHE_MISS:
                     return cached
-            result = _resolve_claude_context_usage(normalized_session_id, ref.path)
+            result = _resolve_incremental_context_usage(
+                provider,
+                normalized_session_id,
+                ref.path,
+                _resolve_claude_context_usage_from_lines,
+            )
             if key is not None:
                 _set_cached_context_usage(key, result)
             return result

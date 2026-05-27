@@ -132,23 +132,58 @@ def delete_job_run_audit(home: AssistantHome, job_id: str) -> bool:
     return True
 
 
+def _read_text_chunks_reverse(path: Path, *, chunk_size: int = 64 * 1024):
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        pending = b""
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            handle.seek(position)
+            chunk = handle.read(read_size)
+            if not chunk:
+                continue
+            data = chunk + pending
+            parts = data.split(b"\n")
+            pending = parts[0]
+            for line in reversed(parts[1:]):
+                yield line
+        if pending:
+            yield pending
+
+
 def read_job_run_audit(home: AssistantHome, job_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
     path = _audit_path(home, job_id)
     if not path.exists():
         return []
+    if limit is None:
+        folded: dict[str, dict[str, Any]] = {}
+        ordered_run_ids: list[str] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            run_id = str(record.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            if run_id not in folded:
+                ordered_run_ids.append(run_id)
+            folded[run_id] = record
+        return [folded[run_id] for run_id in ordered_run_ids]
     folded: dict[str, dict[str, Any]] = {}
-    ordered_run_ids: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+    unique_limit = max(1, int(limit)) if limit is not None else None
+    for raw_line in _read_text_chunks_reverse(path):
+        if not raw_line.strip():
             continue
-        record = json.loads(line)
+        record = json.loads(raw_line.decode("utf-8"))
         run_id = str(record.get("run_id") or "").strip()
         if not run_id:
             continue
-        if run_id not in folded:
-            ordered_run_ids.append(run_id)
+        if run_id in folded:
+            continue
         folded[run_id] = record
-    records = [folded[run_id] for run_id in ordered_run_ids]
-    if limit is not None:
-        return records[-limit:]
+        if unique_limit is not None and len(folded) >= unique_limit:
+            break
+    records = list(reversed(list(folded.values())))
     return records

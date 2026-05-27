@@ -83,6 +83,8 @@ class PluginService:
         self._snapshot_cache: dict[str, dict[str, Any]] = {}
         self._snapshot_cache_plugins: dict[str, set[str]] = {}
         self._render_semaphore = asyncio.Semaphore(max(1, int(render_concurrency)))
+        self._last_idle_eviction_at = 0.0
+        self._idle_eviction_interval_seconds = 5.0
 
     def _get_view_spec(self, plugin_id: str, view_id: str):
         manifest = self.registry.get_manifest(plugin_id)
@@ -422,7 +424,7 @@ class PluginService:
                 payload=dict(cached.get("payload") or {}),
                 audit_context=audit_context,
             )
-            await self.evict_idle_runtimes()
+            await self.evict_idle_runtimes(throttle=True)
             return cached
         async with self._render_semaphore:
             result = await self.runtime.render_view(bot_alias, manifest, view_id, resolved_input)
@@ -435,7 +437,7 @@ class PluginService:
             payload=payload,
             audit_context=audit_context,
         )
-        await self.evict_idle_runtimes()
+        await self.evict_idle_runtimes(throttle=True)
         return payload
 
     async def open_view(
@@ -465,7 +467,7 @@ class PluginService:
         cache_key = self.sessions.build_cache_key(bot_alias, plugin_id, view_id, source_fingerprint)
         cached = self.sessions.get_cached(cache_key)
         if cached is not None:
-            await self.evict_idle_runtimes()
+            await self.evict_idle_runtimes(throttle=True)
             return dict(cached.opened_payload)
 
         result = await self.runtime.open_view(bot_alias, manifest, view_id, resolved_input)
@@ -498,7 +500,7 @@ class PluginService:
             audit_context=audit_context,
             session_id=payload["sessionId"],
         )
-        await self.evict_idle_runtimes()
+        await self.evict_idle_runtimes(throttle=True)
         return payload
 
     async def get_view_window(
@@ -528,7 +530,7 @@ class PluginService:
             audit_context=audit_context,
             session_id=session_id,
         )
-        await self.evict_idle_runtimes()
+        await self.evict_idle_runtimes(throttle=True)
         return payload
 
     async def invoke_action(
@@ -583,7 +585,7 @@ class PluginService:
                 "action_target": "plugin",
             },
         )
-        await self.evict_idle_runtimes()
+        await self.evict_idle_runtimes(throttle=True)
         return normalized
 
     async def dispose_view(
@@ -607,13 +609,19 @@ class PluginService:
             audit_context=audit_context or {},
             session_id=session_id,
         )
-        await self.evict_idle_runtimes()
+        await self.evict_idle_runtimes(throttle=True)
         return payload
 
     def get_artifact(self, *, bot_alias: str, artifact_id: str) -> ArtifactRecord:
         return self.artifacts.get(bot_alias=bot_alias, artifact_id=artifact_id)
 
-    async def evict_idle_runtimes(self) -> int:
+    async def evict_idle_runtimes(self, *, throttle: bool = False) -> int:
+        if throttle:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            if now - self._last_idle_eviction_at < self._idle_eviction_interval_seconds:
+                return 0
+            self._last_idle_eviction_at = now
         return await self.runtime.evict_idle_processes()
 
     async def shutdown(self) -> None:

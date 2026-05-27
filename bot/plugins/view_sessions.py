@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+_CONTENT_HASH_MEMO: dict[tuple[str, int, int], str] = {}
+
 
 def _normalize_for_key(value: Any) -> Any:
     if isinstance(value, dict):
@@ -47,14 +49,7 @@ def build_source_fingerprint(input_payload: dict[str, Any], *, hash_file_content
         )
     content_hash = ""
     if hash_file_contents and path.is_file():
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            while True:
-                chunk = handle.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
-        content_hash = digest.hexdigest()
+        content_hash = _memoized_file_sha256(path, stat.st_mtime_ns, stat.st_size)
     return _stable_json(
         {
             "path": str(path),
@@ -65,6 +60,23 @@ def build_source_fingerprint(input_payload: dict[str, Any], *, hash_file_content
             "options": payload,
         }
     )
+
+
+def _memoized_file_sha256(path: Path, mtime_ns: int, size: int) -> str:
+    memo_key = (str(path), int(mtime_ns), int(size))
+    cached = _CONTENT_HASH_MEMO.get(memo_key)
+    if cached is not None:
+        return cached
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    value = digest.hexdigest()
+    _CONTENT_HASH_MEMO[memo_key] = value
+    return value
 
 
 def build_snapshot_cache_key(

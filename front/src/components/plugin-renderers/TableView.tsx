@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { PluginAction, PluginRenderResult, TableColumn, TableSort, TableWindowPayload } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { PluginActionBar } from "./PluginActionBar";
@@ -38,22 +38,28 @@ function nextSort(column: TableColumn, current?: TableSort): TableSort | undefin
 
 export function TableView({ botAlias, client, view, onRunAction }: Props) {
   const session = view.mode === "session" ? view : null;
-  const summary = view.mode === "session"
-    ? view.summary
-    : {
-        columns: view.payload.columns,
-        totalRows: view.payload.rows.length,
-        defaultPageSize: view.payload.rows.length || 100,
-        actions: view.payload.actions,
-      };
-  const initialWindow: TableWindowPayload = view.mode === "session"
-    ? view.initialWindow
-    : {
-        offset: 0,
-        limit: view.payload.rows.length || summary.defaultPageSize,
-        totalRows: view.payload.rows.length,
-        rows: view.payload.rows,
-      };
+  const summary = useMemo(
+    () => (view.mode === "session"
+      ? view.summary
+      : {
+          columns: view.payload.columns,
+          totalRows: view.payload.rows.length,
+          defaultPageSize: view.payload.rows.length || 100,
+          actions: view.payload.actions,
+        }),
+    [view],
+  );
+  const initialWindow: TableWindowPayload = useMemo(
+    () => (view.mode === "session"
+      ? view.initialWindow
+      : {
+          offset: 0,
+          limit: view.payload.rows.length || summary.defaultPageSize,
+          totalRows: view.payload.rows.length,
+          rows: view.payload.rows,
+        }),
+    [summary.defaultPageSize, view],
+  );
 
   const [windowState, setWindowState] = useState<TableWindowPayload>(initialWindow);
   const [offset, setOffset] = useState(Number(initialWindow.offset || 0));

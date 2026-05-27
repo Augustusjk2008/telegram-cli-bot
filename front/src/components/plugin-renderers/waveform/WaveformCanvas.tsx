@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import type { WaveformTrack } from "../../../services/types";
+import { useEffect, useMemo, useRef } from "react";
+import type { WaveformTrack, WaveformTrackSegment } from "../../../services/types";
 import { getDenseSegmentLayout } from "./denseSegmentLayout";
 
 type Props = {
@@ -13,6 +13,13 @@ type Props = {
 
 export function WaveformCanvas({ track, width, height, startTime, endTime, formatValue }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const isDigitalCanvas = track.width === 1;
+  const denseSegments = useMemo(
+    () => track.segments.filter((segment) => (
+      segment.kind === "dense" || segment.value === "mixed" || (segment.transitionCount ?? 0) > 0
+    )),
+    [track.segments],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,27 +48,45 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
     context.fillStyle = "rgba(15, 23, 42, 0.92)";
     context.lineWidth = 2;
     context.font = "11px monospace";
+    let previousLevel: number | null = null;
+    const drawDenseSegment = (segment: WaveformTrackSegment, startX: number, endX: number) => {
+      const segmentWidth = Math.max(1, endX - startX);
+      context.globalAlpha = 0.12;
+      context.fillRect(startX, top, segmentWidth, bottom - top);
+      context.globalAlpha = 0.75;
+      context.beginPath();
+      context.moveTo(startX, top);
+      context.lineTo(endX, bottom);
+      context.moveTo(startX, bottom);
+      context.lineTo(endX, top);
+      context.stroke();
+      context.globalAlpha = 1;
+      if (segmentWidth >= 56 && segment.transitionCount) {
+        context.save();
+        context.textAlign = "center";
+        context.fillText(`${segment.transitionCount} changes`, startX + segmentWidth / 2, denseLayout.labelY);
+        context.restore();
+      }
+    };
     for (const segment of track.segments) {
       const startX = ((segment.start - startTime) / range) * width;
       const endX = ((segment.end - startTime) / range) * width;
       if (segment.kind === "dense" || segment.value === "mixed" || (segment.transitionCount ?? 0) > 0) {
-        const segmentWidth = Math.max(1, endX - startX);
-        context.globalAlpha = 0.12;
-        context.fillRect(startX, top, segmentWidth, bottom - top);
-        context.globalAlpha = 0.75;
+        drawDenseSegment(segment, startX, endX);
+        continue;
+      }
+      if (isDigitalCanvas) {
+        const level = segment.value === "1" ? top : segment.value === "0" ? bottom : middle;
         context.beginPath();
-        context.moveTo(startX, top);
-        context.lineTo(endX, bottom);
-        context.moveTo(startX, bottom);
-        context.lineTo(endX, top);
-        context.stroke();
-        context.globalAlpha = 1;
-        if (segmentWidth >= 56 && segment.transitionCount) {
-          context.save();
-          context.textAlign = "center";
-          context.fillText(`${segment.transitionCount} changes`, startX + segmentWidth / 2, denseLayout.labelY);
-          context.restore();
+        if (previousLevel === null) {
+          context.moveTo(startX, level);
+        } else {
+          context.moveTo(startX, previousLevel);
+          context.lineTo(startX, level);
         }
+        context.lineTo(endX, level);
+        context.stroke();
+        previousLevel = level;
         continue;
       }
       context.beginPath();
@@ -74,7 +99,15 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
         context.fillText(formatValue ? formatValue(track, segment.value) : segment.value, startX + 8, middle + 4);
       }
     }
-  }, [endTime, formatValue, height, startTime, track, width]);
+  }, [denseSegments, endTime, formatValue, height, isDigitalCanvas, startTime, track, width]);
 
-  return <canvas ref={canvasRef} width={width} height={height} className="block bg-[var(--surface-strong)]" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      width={width}
+      height={height}
+      data-testid={isDigitalCanvas ? "waveform-digital-canvas" : "waveform-bus-canvas"}
+      className="block bg-[var(--surface-strong)]"
+    />
+  );
 }

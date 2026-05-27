@@ -472,3 +472,20 @@ def test_upsert_job_run_audit_appends_and_reader_returns_latest(tmp_path: Path):
 
     assert len(raw_lines) == 2
     assert records == [{"run_id": "r1", "status": "completed"}]
+
+
+def test_read_job_run_audit_limit_reads_tail_only_and_keeps_latest(tmp_path: Path):
+    from bot.assistant.cron.store import upsert_job_run_audit
+
+    home = bootstrap_assistant_home(tmp_path)
+    for index in range(10):
+        upsert_job_run_audit(home, "nightly", {"run_id": f"r{index}", "status": "queued"})
+    upsert_job_run_audit(home, "nightly", {"run_id": "r8", "status": "completed"})
+    upsert_job_run_audit(home, "nightly", {"run_id": "r9", "status": "completed"})
+
+    records = read_job_run_audit(home, "nightly", limit=2)
+
+    assert records == [
+        {"run_id": "r8", "status": "completed"},
+        {"run_id": "r9", "status": "completed"},
+    ]

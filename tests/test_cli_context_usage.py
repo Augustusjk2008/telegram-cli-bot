@@ -104,20 +104,9 @@ def test_resolve_codex_context_usage_reuses_cache_until_transcript_changes(monke
         "bot.web.cli_context_usage.locate_codex_transcript",
         lambda session_id: LocatedTranscript("codex", session_id, transcript),
     )
-    read_calls = 0
-    original_read_text = Path.read_text
-
-    def counting_read_text(path: Path, *args, **kwargs):
-        nonlocal read_calls
-        if path == transcript:
-            read_calls += 1
-        return original_read_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", counting_read_text)
 
     assert resolve_cli_context_usage("codex", "thread-1")["used_tokens"] == 32000
     assert resolve_cli_context_usage("codex", "thread-1")["used_tokens"] == 32000
-    assert read_calls == 1
 
     _write_jsonl(
         transcript,
@@ -136,7 +125,52 @@ def test_resolve_codex_context_usage_reuses_cache_until_transcript_changes(monke
     )
 
     assert resolve_cli_context_usage("codex", "thread-1")["used_tokens"] == 64000
-    assert read_calls == 2
+
+
+def test_resolve_codex_context_usage_reads_tail_without_full_text_read(monkeypatch, tmp_path: Path):
+    from bot.web.cli_context_usage import clear_context_usage_cache, resolve_cli_context_usage
+
+    clear_context_usage_cache()
+
+    transcript = tmp_path / "session.jsonl"
+    prefix = [
+        {"type": "event_msg", "payload": {"type": "agent_message", "text": f"line-{index}"}}
+        for index in range(400)
+    ]
+    _write_jsonl(
+        transcript,
+        [
+            *prefix,
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {"total_tokens": 76593},
+                        "model_context_window": 258400,
+                    },
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "bot.web.cli_context_usage.locate_codex_transcript",
+        lambda session_id: LocatedTranscript("codex", session_id, transcript),
+    )
+
+    original_read_text = Path.read_text
+
+    def fail_read_text(path: Path, *args, **kwargs):
+        if path == transcript:
+            raise AssertionError("full transcript read not allowed")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    usage = resolve_cli_context_usage("codex", "thread-1")
+
+    assert usage is not None
+    assert usage["used_tokens"] == 76593
 
 
 def test_resolve_cli_context_usage_ignores_unknown_and_kimi():

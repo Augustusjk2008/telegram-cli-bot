@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,50 @@ class LocatedTranscript:
     session_id: str
     path: Path
     cwd_hint: str | None = None
+
+
+_LOCATOR_CACHE_LOCK = threading.Lock()
+_LOCATOR_CACHE: dict[tuple[str, str, str, str], LocatedTranscript] = {}
+
+
+def clear_history_locator_cache() -> None:
+    with _LOCATOR_CACHE_LOCK:
+        _LOCATOR_CACHE.clear()
+
+
+def _locator_cache_key(provider: str, session_id: str, cwd_hint: str | None, home: Path) -> tuple[str, str, str, str]:
+    normalized_cwd = re.sub(r"[\\/]+", "/", str(cwd_hint or "").strip()).rstrip("/").lower()
+    return (provider, str(session_id or "").strip(), normalized_cwd, str(home))
+
+
+def _get_cached_transcript(
+    provider: str,
+    session_id: str,
+    cwd_hint: str | None,
+    home: Path,
+) -> LocatedTranscript | None:
+    key = _locator_cache_key(provider, session_id, cwd_hint, home)
+    with _LOCATOR_CACHE_LOCK:
+        cached = _LOCATOR_CACHE.get(key)
+    if cached is None or not cached.path.is_file():
+        if cached is not None:
+            with _LOCATOR_CACHE_LOCK:
+                _LOCATOR_CACHE.pop(key, None)
+        return None
+    return cached
+
+
+def _set_cached_transcript(
+    provider: str,
+    session_id: str,
+    cwd_hint: str | None,
+    home: Path,
+    ref: LocatedTranscript,
+) -> LocatedTranscript:
+    key = _locator_cache_key(provider, session_id, cwd_hint, home)
+    with _LOCATOR_CACHE_LOCK:
+        _LOCATOR_CACHE[key] = ref
+    return ref
 
 
 def build_claude_bucket_candidates(cwd_hint: str | None) -> list[str]:
@@ -45,6 +90,9 @@ def locate_codex_transcript(
     codex_home: Path | None = None,
 ) -> LocatedTranscript | None:
     home = codex_home or (Path.home() / ".codex")
+    cached = _get_cached_transcript("codex", session_id, None, home)
+    if cached is not None:
+        return cached
     for db_path in _iter_codex_state_databases(home):
         try:
             with closing(sqlite3.connect(db_path)) as conn:
@@ -59,11 +107,23 @@ def locate_codex_transcript(
         transcript = Path(str(row[0] or ""))
         if transcript.is_file():
             cwd_hint = str(row[1] or "").strip() or None
-            return LocatedTranscript("codex", session_id, transcript, cwd_hint)
+            return _set_cached_transcript(
+                "codex",
+                session_id,
+                None,
+                home,
+                LocatedTranscript("codex", session_id, transcript, cwd_hint),
+            )
 
     for candidate in home.glob("sessions/**/*.jsonl"):
         if candidate.is_file() and session_id in candidate.name:
-            return LocatedTranscript("codex", session_id, candidate)
+            return _set_cached_transcript(
+                "codex",
+                session_id,
+                None,
+                home,
+                LocatedTranscript("codex", session_id, candidate),
+            )
     return None
 
 
@@ -74,15 +134,30 @@ def locate_claude_transcript(
     claude_home: Path | None = None,
 ) -> LocatedTranscript | None:
     home = claude_home or (Path.home() / ".claude")
+    cached = _get_cached_transcript("claude", session_id, cwd_hint, home)
+    if cached is not None:
+        return cached
     projects_dir = home / "projects"
     for bucket in build_claude_bucket_candidates(cwd_hint):
         candidate = projects_dir / bucket / f"{session_id}.jsonl"
         if candidate.is_file():
-            return LocatedTranscript("claude", session_id, candidate, cwd_hint)
+            return _set_cached_transcript(
+                "claude",
+                session_id,
+                cwd_hint,
+                home,
+                LocatedTranscript("claude", session_id, candidate, cwd_hint),
+            )
 
     matches = sorted(projects_dir.glob(f"**/{session_id}.jsonl"))
     if matches:
-        return LocatedTranscript("claude", session_id, matches[0], cwd_hint)
+        return _set_cached_transcript(
+            "claude",
+            session_id,
+            cwd_hint,
+            home,
+            LocatedTranscript("claude", session_id, matches[0], cwd_hint),
+        )
     return None
 
 

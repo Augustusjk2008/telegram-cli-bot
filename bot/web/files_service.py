@@ -16,7 +16,7 @@ from bot.models import BotProfile, UserSession
 from bot.runtime_paths import get_chat_attachments_dir
 from bot.web import workspace_index_service
 from bot.web.api_common import _raise, get_profile_or_raise, get_session_for_alias
-from bot.web.text_encoding import UnsupportedTextEncoding, read_text_file, write_text_file
+from bot.web.text_encoding import UnsupportedTextEncoding, read_text_file, read_text_file_head, write_text_file
 
 _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
 _WINDOWS_DRIVES_DISPLAY_ROOT = "盘符列表"
@@ -800,12 +800,15 @@ def read_file_content(
         return raster_preview
 
     try:
-        decoded = read_text_file(file_path)
         if mode == "head":
+            decoded = read_text_file_head(file_path, lines)
             content_lines = decoded.text.splitlines()
             content = "\n".join(content_lines[:lines])
-            is_full_content = len(content_lines) <= lines
+            is_full_content = file_size == len(decoded.text.encode(decoded.encoding, errors="replace"))
+            if len(content_lines) > lines:
+                is_full_content = False
         else:
+            decoded = read_text_file(file_path)
             content = decoded.text
             is_full_content = True
     except UnsupportedTextEncoding:

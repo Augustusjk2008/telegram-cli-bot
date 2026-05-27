@@ -12,6 +12,8 @@ from bot.assistant.home import AssistantHome
 
 _STAGE_KEYS = ("sync_ms", "index_ms", "recall_ms", "cli_ms", "db_ms", "trace_ms", "plugin_ms")
 _ACTIVE_CAPTURE: ContextVar[dict[str, int] | None] = ContextVar("assistant_perf_capture", default=None)
+_PERF_INDEX_CACHE_TTL_SECONDS = 2.0
+_PERF_INDEX_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def new_stage_durations() -> dict[str, int]:
@@ -85,13 +87,14 @@ def write_perf_record(
     path = home.root / "audit" / "perf" / f"{timestamp}-{run_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    _invalidate_perf_cache(path.parent)
     return record
 
 
 def list_perf_records(home: AssistantHome, *, limit: int = 20) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     perf_root = home.root / "audit" / "perf"
-    for path in sorted(perf_root.glob("*.json"), reverse=True):
+    for path in _list_cached_json_paths(perf_root, ttl_seconds=_PERF_INDEX_CACHE_TTL_SECONDS):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -113,3 +116,39 @@ def time_stage(stage_durations: dict[str, int], stage_key: str) -> Iterator[None
             0,
             int(round((time.perf_counter() - started_at) * 1000)),
         )
+
+
+def _dir_signature(root: Path) -> tuple[int, int]:
+    try:
+        stat = root.stat()
+    except OSError:
+        return (0, 0)
+    try:
+        file_count = sum(1 for entry in root.iterdir() if entry.is_file())
+    except OSError:
+        file_count = 0
+    return (stat.st_mtime_ns, file_count)
+
+
+def _list_cached_json_paths(root: Path, *, ttl_seconds: float) -> list[Path]:
+    cache_key = str(root.resolve())
+    now = time.monotonic()
+    signature = _dir_signature(root)
+    cached = _PERF_INDEX_CACHE.get(cache_key)
+    if (
+        cached is not None
+        and cached.get("signature") == signature
+        and now - float(cached.get("loaded_at") or 0.0) < ttl_seconds
+    ):
+        return list(cached.get("paths") or [])
+    paths = sorted(root.glob("*.json"), reverse=True) if root.exists() else []
+    _PERF_INDEX_CACHE[cache_key] = {
+        "signature": signature,
+        "loaded_at": now,
+        "paths": list(paths),
+    }
+    return paths
+
+
+def _invalidate_perf_cache(root: Path) -> None:
+    _PERF_INDEX_CACHE.pop(str(root.resolve()), None)

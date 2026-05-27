@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { FilePlus, FolderOpen, FolderPlus, House, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
-import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent, type MouseEvent, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
@@ -124,26 +124,13 @@ function resolveGitDecoration(
   path: string,
   isDir: boolean,
   gitDecorations: Record<string, GitTreeDecorationKind>,
+  inheritedDirDecorations: Record<string, GitTreeDecorationKind>,
 ) {
   const direct = gitDecorations[path];
   if (direct === "ignored" || direct === "added" || !isDir) {
     return direct;
   }
-
-  let inherited: GitTreeDecorationKind | undefined = direct === "modified" ? "modified" : undefined;
-  const prefix = `${path}/`;
-  for (const [candidate, decoration] of Object.entries(gitDecorations)) {
-    if (!candidate.startsWith(prefix)) {
-      continue;
-    }
-    if (decoration === "added") {
-      return "added";
-    }
-    if (decoration === "modified") {
-      inherited = "modified";
-    }
-  }
-  return inherited;
+  return inheritedDirDecorations[path] || (direct === "modified" ? "modified" : undefined);
 }
 
 function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
@@ -912,8 +899,29 @@ export function FileTreePane({
   const [dropTargetPath, setDropTargetPath] = useState("");
   const [actionError, setActionError] = useState("");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const inheritedDirDecorations = useMemo(() => {
+    const next: Record<string, GitTreeDecorationKind> = {};
+    for (const [candidate, decoration] of Object.entries(gitDecorations)) {
+      if (decoration !== "added" && decoration !== "modified") {
+        continue;
+      }
+      const parts = candidate.split("/");
+      if (parts.length <= 1) {
+        continue;
+      }
+      let current = "";
+      for (let index = 0; index < parts.length - 1; index += 1) {
+        current = current ? `${current}/${parts[index]}` : parts[index];
+        if (next[current] === "added") {
+          continue;
+        }
+        next[current] = decoration === "added" ? "added" : next[current] || "modified";
+      }
+    }
+    return next;
+  }, [gitDecorations]);
   const contextMenuDecoration = contextMenu
-    ? resolveGitDecoration(contextMenu.entry.path, contextMenu.entry.isDir, gitDecorations)
+    ? resolveGitDecoration(contextMenu.entry.path, contextMenu.entry.isDir, gitDecorations, inheritedDirDecorations)
     : undefined;
 
   function closeContextMenu() {
@@ -1133,8 +1141,6 @@ export function FileTreePane({
     }
     setActionError("");
     await onRequestUpload(files);
-    await tree.refreshRoot({ preserveExpandedPaths: true });
-    await onRefreshGitDecorations();
   }
 
   async function handleRefresh() {
@@ -1204,7 +1210,7 @@ export function FileTreePane({
     const iconKind = entry.isDir
       ? (expanded ? "folder-open" : "folder-closed")
       : getFileIconKind(entry.name);
-    const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations);
+    const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations, inheritedDirDecorations);
     const isIgnored = gitDecoration === "ignored";
     const itemToneClass = treeItemToneClass(gitDecoration);
     const selected = tree.selectedPath === entry.path;
@@ -1282,7 +1288,10 @@ export function FileTreePane({
     );
   }
 
-  const visibleTreeRows = !tree.loading && !tree.error ? flattenBranch(tree.rootEntries, 0) : [];
+  const visibleTreeRows = useMemo(
+    () => (!tree.loading && !tree.error ? flattenBranch(tree.rootEntries, 0) : []),
+    [tree.loading, tree.error, tree.rootEntries, tree.branches, tree.expandedPaths],
+  );
 
   return (
     <div

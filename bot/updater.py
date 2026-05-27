@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -47,6 +48,14 @@ SUPPORTED_UPDATE_PACKAGE_KINDS = {
     LINUX_PACKAGE_KIND,
     MACOS_PACKAGE_KIND,
 }
+FRONTEND_BUILD_TRIGGER_PATHS = {
+    "scripts/build_web_frontend.bat",
+    "scripts/build_web_frontend.sh",
+}
+
+
+class _PackageStreamError(RuntimeError):
+    pass
 
 
 def get_update_status(repo_root: Path | None = None) -> dict[str, Any]:
@@ -284,6 +293,7 @@ def _emit_apply_log(log_callback: Any | None, message: str) -> None:
 
 def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> dict[str, Any]:
     repo_root = Path(repo_root).resolve()
+    _recover_interrupted_update_applications(repo_root, log_callback=log_callback)
     settings = app_settings._load_settings()
     pending_path = str(settings.get("pending_update_path") or "").strip()
     pending_version = _normalize_tag_name(settings.get("pending_update_version"))
@@ -317,21 +327,7 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
         return {"applied": False, "reason": "missing_package", "path": str(package_path)}
 
     try:
-        package_entries = _iter_package_entries(package_path)
-    except Exception as exc:
-        settings["update_last_error"] = str(exc)
-        _clear_pending_update(settings)
-        app_settings._save_settings(settings)
-        _emit_apply_log(log_callback, settings["update_last_error"])
-        return {
-            "applied": False,
-            "reason": "invalid_package",
-            "package_path": str(package_path),
-            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        }
-
-    try:
-        distribution = _read_package_distribution_from_entries(package_entries, package_name=package_path.name)
+        distribution = _read_package_distribution_from_package(package_path)
         _validate_package_distribution(repo_root, distribution, package_name=package_path.name)
     except Exception as exc:
         settings["update_last_error"] = str(exc)
@@ -345,41 +341,93 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
             "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
         }
 
-    write_plan = _build_update_write_plan(repo_root, package_entries)
-    backups = _backup_update_targets(write_plan)
-    extracted_files = 0
     try:
-        for target_path, relative_path, data in write_plan:
-            _emit_apply_log(log_callback, f"正在更新: {relative_path}")
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(data)
-            extracted_files += 1
+        package_entry_paths = _list_package_entry_paths(package_path)
+    except _PackageStreamError as exc:
+        settings["update_last_error"] = str(exc)
+        _clear_pending_update(settings)
+        app_settings._save_settings(settings)
+        _emit_apply_log(log_callback, settings["update_last_error"])
+        return {
+            "applied": False,
+            "reason": "invalid_package",
+            "package_path": str(package_path),
+            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+        }
 
-        _emit_apply_log(log_callback, "正在重建前端资源...")
-        build_success, build_output = _build_updated_frontend(repo_root)
-        if not build_success:
-            _restore_update_targets(backups)
-            settings["update_last_error"] = build_output
-            app_settings._save_settings(settings)
-            if build_output:
-                for line in str(build_output).splitlines():
-                    if line.strip():
-                        _emit_apply_log(log_callback, line)
-            return {
-                "applied": False,
-                "reason": "frontend_build_failed",
-                "frontend_built": False,
-                "files_written": extracted_files,
-                "package_path": str(package_path),
-                "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-            }
-        if build_output:
-            for line in str(build_output).splitlines():
-                if line.strip():
-                    _emit_apply_log(log_callback, line)
-        _emit_apply_log(log_callback, "前端资源重建完成。")
+    write_plan = _build_update_write_plan(repo_root, package_entry_paths)
+    needs_frontend_build = _needs_frontend_build(
+        repo_root,
+        [relative_path for _target_path, relative_path in write_plan],
+    )
+    extracted_files = 0
+    frontend_built = False
+    try:
+        with tempfile.TemporaryDirectory(prefix=".update-apply-", dir=repo_root) as temp_root_str:
+            temp_root = Path(temp_root_str)
+            journal_path = temp_root / "journal.jsonl"
+            backups = _backup_update_targets(write_plan, temp_root=temp_root, journal_path=journal_path)
+
+            try:
+                def _write_entry(relative_path: str, stream) -> None:
+                    nonlocal extracted_files
+                    if _is_protected_update_path(relative_path):
+                        return
+                    target_path = repo_root / relative_path
+                    _emit_apply_log(log_callback, f"正在更新: {relative_path}")
+                    _replace_target_from_stream(
+                        target_path,
+                        stream,
+                        journal_path=journal_path,
+                        backup_record=backups[target_path],
+                    )
+                    extracted_files += 1
+
+                _stream_package_entries(package_path, _write_entry)
+            except _PackageStreamError as exc:
+                _restore_update_targets(backups)
+                settings["update_last_error"] = str(exc)
+                _clear_pending_update(settings)
+                app_settings._save_settings(settings)
+                _emit_apply_log(log_callback, settings["update_last_error"])
+                return {
+                    "applied": False,
+                    "reason": "invalid_package",
+                    "package_path": str(package_path),
+                    "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+                }
+            except Exception:
+                _restore_update_targets(backups)
+                raise
+
+            if needs_frontend_build:
+                _emit_apply_log(log_callback, "正在重建前端资源...")
+                build_success, build_output = _build_updated_frontend(repo_root)
+                if not build_success:
+                    _restore_update_targets(backups)
+                    settings["update_last_error"] = build_output
+                    app_settings._save_settings(settings)
+                    if build_output:
+                        for line in str(build_output).splitlines():
+                            if line.strip():
+                                _emit_apply_log(log_callback, line)
+                    return {
+                        "applied": False,
+                        "reason": "frontend_build_failed",
+                        "frontend_built": False,
+                        "files_written": extracted_files,
+                        "package_path": str(package_path),
+                        "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+                    }
+                frontend_built = True
+                if build_output:
+                    for line in str(build_output).splitlines():
+                        if line.strip():
+                            _emit_apply_log(log_callback, line)
+                _emit_apply_log(log_callback, "前端资源重建完成。")
+            else:
+                _emit_apply_log(log_callback, "未检测到前端改动，跳过前端重建。")
     except Exception:
-        _restore_update_targets(backups)
         raise
 
     _clear_pending_update(settings)
@@ -389,7 +437,7 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
     return {
         "applied": True,
         "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        "frontend_built": True,
+        "frontend_built": frontend_built,
         "files_written": extracted_files,
         "package_path": str(package_path),
     }
@@ -715,6 +763,16 @@ def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
     raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
 
 
+def _list_package_entry_paths(package_path: Path) -> list[str]:
+    entries: list[str] = []
+
+    def _append(relative_path: str, _stream) -> None:
+        entries.append(relative_path)
+
+    _stream_package_entries(package_path, _append, open_files=False)
+    return entries
+
+
 def _read_package_distribution_from_package(package_path: Path) -> dict[str, str]:
     raw_bytes = _read_distribution_marker_from_package(package_path)
     return _read_package_distribution_from_bytes(raw_bytes, package_name=package_path.name)
@@ -811,35 +869,158 @@ def _validate_package_distribution(
 
 def _build_update_write_plan(
     repo_root: Path,
-    package_entries: list[tuple[str, bytes]],
-) -> list[tuple[Path, str, bytes]]:
-    plan: list[tuple[Path, str, bytes]] = []
-    for relative_path, data in package_entries:
+    package_entries: list[str],
+) -> list[tuple[Path, str]]:
+    plan: list[tuple[Path, str]] = []
+    for relative_path in package_entries:
         if _is_protected_update_path(relative_path):
             continue
-        plan.append((repo_root / relative_path, relative_path, data))
+        plan.append((repo_root / relative_path, relative_path))
     return plan
 
 
 def _backup_update_targets(
-    write_plan: list[tuple[Path, str, bytes]],
-) -> dict[Path, bytes | None]:
-    backups: dict[Path, bytes | None] = {}
-    for target_path, _relative_path, _data in write_plan:
+    write_plan: list[tuple[Path, str]],
+    *,
+    temp_root: Path,
+    journal_path: Path,
+) -> dict[Path, dict[str, str]]:
+    backups: dict[Path, dict[str, str]] = {}
+    for index, (target_path, relative_path) in enumerate(write_plan):
         if target_path in backups:
             continue
-        backups[target_path] = target_path.read_bytes() if target_path.exists() else None
+        backup_path = ""
+        if target_path.exists():
+            if not target_path.is_file():
+                raise IsADirectoryError(str(target_path))
+            backup_file = temp_root / f"backup-{index:04d}"
+            target_path.replace(backup_file)
+            backup_path = str(backup_file)
+        record = {
+            "target_path": str(target_path),
+            "relative_path": relative_path,
+            "backup_path": backup_path,
+            "write_path": "",
+        }
+        backups[target_path] = record
+        _append_update_journal(journal_path, {"event": "backup", **record})
     return backups
 
 
-def _restore_update_targets(backups: dict[Path, bytes | None]) -> None:
-    for target_path, original_bytes in backups.items():
-        if original_bytes is None:
+def _restore_update_targets(backups: dict[Path, dict[str, str]]) -> None:
+    for target_path, record in backups.items():
+        write_path = str(record.get("write_path") or "").strip()
+        if write_path:
+            temp_output = Path(write_path)
+            if temp_output.exists():
+                temp_output.unlink()
+        backup_path = str(record.get("backup_path") or "").strip()
+        if not backup_path:
             if target_path.exists():
                 target_path.unlink()
             continue
+        if target_path.exists():
+            target_path.unlink()
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(original_bytes)
+        Path(backup_path).replace(target_path)
+
+
+def _recover_interrupted_update_applications(repo_root: Path, log_callback: Any | None = None) -> None:
+    for temp_root in repo_root.glob(".update-apply-*"):
+        if not temp_root.is_dir():
+            continue
+        journal_path = temp_root / "journal.jsonl"
+        if not journal_path.exists():
+            shutil.rmtree(temp_root, ignore_errors=True)
+            continue
+        backups = _read_update_journal(journal_path)
+        if backups:
+            _emit_apply_log(log_callback, f"检测到未完成的更新应用，正在回滚: {temp_root.name}")
+            _restore_update_targets(backups)
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def _read_update_journal(journal_path: Path) -> dict[Path, dict[str, str]]:
+    backups: dict[Path, dict[str, str]] = {}
+    try:
+        lines = journal_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return backups
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        target_text = str(record.get("target_path") or "").strip()
+        if not target_text:
+            continue
+        target_path = Path(target_text)
+        current = backups.setdefault(
+            target_path,
+            {
+                "target_path": target_text,
+                "relative_path": str(record.get("relative_path") or ""),
+                "backup_path": "",
+                "write_path": "",
+            },
+        )
+        backup_path = str(record.get("backup_path") or "").strip()
+        write_path = str(record.get("write_path") or "").strip()
+        if backup_path:
+            current["backup_path"] = backup_path
+        if write_path:
+            current["write_path"] = write_path
+        relative_path = str(record.get("relative_path") or "").strip()
+        if relative_path:
+            current["relative_path"] = relative_path
+    return backups
+
+
+def _replace_target_from_stream(
+    target_path: Path,
+    stream,
+    *,
+    journal_path: Path,
+    backup_record: dict[str, str],
+) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{target_path.name}.update-",
+        suffix=".tmp",
+        dir=target_path.parent,
+        delete=False,
+    ) as handle:
+        temp_output = Path(handle.name)
+        backup_record["write_path"] = str(temp_output)
+        _append_update_journal(
+            journal_path,
+            {
+                "event": "stage",
+                "target_path": str(target_path),
+                "relative_path": backup_record.get("relative_path") or "",
+                "backup_path": backup_record.get("backup_path") or "",
+                "write_path": str(temp_output),
+            },
+        )
+        try:
+            while True:
+                chunk = stream.read(DOWNLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                handle.write(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+        except Exception:
+            if temp_output.exists():
+                temp_output.unlink()
+            raise
+    temp_output.replace(target_path)
 
 
 def _iter_zip_entries(package_path: Path) -> list[tuple[str, bytes]]:
@@ -869,6 +1050,56 @@ def _iter_tar_entries(package_path: Path) -> list[tuple[str, bytes]]:
                 continue
             entries.append((relative_path, extracted.read()))
     return entries
+
+
+def _stream_package_entries(
+    package_path: Path,
+    consumer: Any,
+    *,
+    open_files: bool = True,
+) -> None:
+    if _is_zip_package(package_path):
+        if not zipfile.is_zipfile(package_path):
+            raise _PackageStreamError(_format_invalid_package_message(package_path))
+        try:
+            with zipfile.ZipFile(package_path) as archive:
+                for member in archive.infolist():
+                    if member.is_dir():
+                        continue
+                    relative_path = _normalize_archive_path(member.filename)
+                    if not relative_path:
+                        continue
+                    if not open_files:
+                        consumer(relative_path, None)
+                        continue
+                    with archive.open(member, "r") as extracted:
+                        consumer(relative_path, extracted)
+            return
+        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+            raise _PackageStreamError(_format_invalid_package_message(package_path, exc)) from exc
+
+    if _is_tar_gz_package(package_path):
+        try:
+            with tarfile.open(package_path, "r:gz") as archive:
+                for member in archive:
+                    if not member.isfile():
+                        continue
+                    relative_path = _normalize_archive_path(member.name)
+                    if not relative_path:
+                        continue
+                    if not open_files:
+                        consumer(relative_path, None)
+                        continue
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        continue
+                    with extracted:
+                        consumer(relative_path, extracted)
+            return
+        except (OSError, tarfile.TarError) as exc:
+            raise _PackageStreamError(_format_invalid_package_message(package_path, exc)) from exc
+
+    raise _PackageStreamError(f"不支持的更新包格式: {package_path.name}")
 
 
 def _validate_package_file(package_path: Path, package_name: str | None = None) -> None:
@@ -943,6 +1174,22 @@ def _normalize_archive_path(raw_path: str) -> str:
 def _is_protected_update_path(relative_path: str) -> bool:
     root_name = relative_path.split("/", 1)[0]
     return relative_path in PROTECTED_UPDATE_PATHS or root_name in PROTECTED_UPDATE_PATHS
+
+
+def _needs_frontend_build(repo_root: Path, relative_paths: list[str]) -> bool:
+    normalized = [str(path or "").replace("\\", "/").strip("/") for path in relative_paths]
+    if any(path.startswith("front/") for path in normalized):
+        return True
+    if any(path in FRONTEND_BUILD_TRIGGER_PATHS for path in normalized):
+        return True
+    front_root = repo_root / "front"
+    return front_root.exists() and not (front_root / "dist").exists()
+
+
+def _append_update_journal(journal_path: Path, record: dict[str, Any]) -> None:
+    with journal_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False))
+        handle.write("\n")
 
 
 def _clear_pending_update(settings: dict[str, Any]) -> None:

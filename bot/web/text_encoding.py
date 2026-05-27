@@ -32,6 +32,9 @@ class UnsupportedTextEncoding(ValueError):
     pass
 
 
+_HEAD_READ_BLOCK_SIZE = 4096
+
+
 def normalize_text_encoding(value: str | None) -> str | None:
     normalized = str(value or "").strip().lower().replace("_", "-")
     if not normalized:
@@ -112,6 +115,54 @@ def decode_text_bytes(data: bytes, requested_encoding: str | None = None) -> Dec
 
 def read_text_file(path: str | Path, requested_encoding: str | None = None) -> DecodedText:
     return decode_text_bytes(Path(path).read_bytes(), requested_encoding)
+
+
+def _read_bytes_prefix(path: Path, limit: int) -> bytes:
+    with path.open("rb") as handle:
+        return handle.read(limit)
+
+
+def _read_text_file_head_requested(path: Path, lines: int, requested_encoding: str) -> DecodedText:
+    encoding = normalize_text_encoding(requested_encoding)
+    if encoding is None:
+        raise UnsupportedTextEncoding(requested_encoding)
+
+    newline_count = 0
+    consumed = b""
+    with path.open("rb") as handle:
+        while newline_count < lines:
+            chunk = handle.read(_HEAD_READ_BLOCK_SIZE)
+            if not chunk:
+                break
+            consumed += chunk
+            newline_count += chunk.count(b"\n")
+
+    decoded = _decode_with_encoding(consumed, encoding)
+    if decoded is None:
+        raise UnsupportedTextEncoding(encoding)
+    return decoded
+
+
+def read_text_file_head(
+    path: str | Path,
+    lines: int,
+    requested_encoding: str | None = None,
+) -> DecodedText:
+    target = Path(path)
+    line_limit = max(0, int(lines))
+    if line_limit <= 0:
+        return DecodedText(text="", encoding=normalize_text_encoding(requested_encoding) or "utf-8")
+
+    requested = normalize_text_encoding(requested_encoding)
+    if requested:
+        return _read_text_file_head_requested(target, line_limit, requested)
+
+    prefix_limit = max(_HEAD_READ_BLOCK_SIZE, line_limit * 256)
+    prefix = _read_bytes_prefix(target, prefix_limit)
+    detected = decode_text_bytes(prefix)
+    if detected.text.count("\n") >= line_limit or len(prefix) < prefix_limit:
+        return detected
+    return _read_text_file_head_requested(target, line_limit, detected.encoding)
 
 
 def write_text_file(path: str | Path, content: str, encoding: str | None) -> None:

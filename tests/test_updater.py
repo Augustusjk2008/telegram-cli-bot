@@ -377,7 +377,7 @@ def test_apply_pending_update_builds_frontend_before_clearing_pending(monkeypatc
     package_path = tmp_path / "release.zip"
     with zipfile.ZipFile(package_path, "w") as archive:
         _write_distribution_marker(archive)
-        archive.writestr("README.md", "# updated\n")
+        archive.writestr("front/src/app.ts", "export const x = 1;\n")
 
     current_settings = app_settings._load_settings()
     current_settings["pending_update_version"] = "1.0.1"
@@ -401,6 +401,37 @@ def test_apply_pending_update_builds_frontend_before_clearing_pending(monkeypatc
     assert app_settings._load_settings()["pending_update_version"] == ""
 
 
+def test_apply_pending_update_skips_frontend_build_when_frontend_unchanged(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    (repo_root / "front").mkdir()
+    (repo_root / "front" / "dist").mkdir(parents=True)
+
+    package_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive)
+        archive.writestr("README.md", "# updated\n")
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = "1.0.1"
+    current_settings["pending_update_path"] = str(package_path)
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    monkeypatch.setattr(
+        updater,
+        "_build_updated_frontend",
+        lambda path: (_ for _ in ()).throw(AssertionError("should skip frontend build")),
+    )
+
+    result = updater.apply_pending_update(repo_root)
+
+    assert result["applied"] is True
+    assert result["frontend_built"] is False
+
+
 def test_apply_pending_update_keeps_pending_update_when_frontend_build_fails(monkeypatch, tmp_path: Path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -410,7 +441,7 @@ def test_apply_pending_update_keeps_pending_update_when_frontend_build_fails(mon
     package_path = tmp_path / "release.zip"
     with zipfile.ZipFile(package_path, "w") as archive:
         _write_distribution_marker(archive)
-        archive.writestr("README.md", "# updated\n")
+        archive.writestr("front/src/app.ts", "export const x = 1;\n")
 
     current_settings = app_settings._load_settings()
     current_settings["pending_update_version"] = "1.0.1"
@@ -443,6 +474,7 @@ def test_apply_pending_update_rolls_back_files_when_frontend_build_fails(monkeyp
     with zipfile.ZipFile(package_path, "w") as archive:
         _write_distribution_marker(archive, version="2.0.0")
         archive.writestr("bot/version.py", "VERSION = 'new'\n")
+        archive.writestr("front/src/app.ts", "export const x = 1;\n")
 
     current_settings = app_settings._load_settings()
     current_settings["pending_update_version"] = "2.0.0"
@@ -460,6 +492,85 @@ def test_apply_pending_update_rolls_back_files_when_frontend_build_fails(monkeyp
     saved_settings = app_settings._load_settings()
     assert saved_settings["pending_update_version"] == "2.0.0"
     assert saved_settings["pending_update_path"] == str(package_path)
+
+
+def test_apply_pending_update_rolls_back_new_file_written_from_stream(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    (repo_root / "front").mkdir()
+
+    package_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive, version="2.0.0")
+        archive.writestr("front/src/version.ts", "export const VERSION = 'new'\n")
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = "2.0.0"
+    current_settings["pending_update_path"] = str(package_path)
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    monkeypatch.setattr(updater, "_build_updated_frontend", lambda path: (False, "npm run build failed"))
+
+    result = updater.apply_pending_update(repo_root)
+
+    assert result["applied"] is False
+    assert not (repo_root / "front" / "src" / "version.ts").exists()
+
+
+def test_apply_pending_update_recovers_interrupted_journal_before_pending_check(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    target = repo_root / "bot" / "version.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VERSION = 'new'\n", encoding="utf-8")
+    temp_root = repo_root / ".update-apply-crashed"
+    temp_root.mkdir()
+    backup = temp_root / "backup-0000"
+    backup.write_text("VERSION = 'old'\n", encoding="utf-8")
+    staged = target.parent / ".version.py.update-leftover.tmp"
+    staged.write_text("partial\n", encoding="utf-8")
+    journal = temp_root / "journal.jsonl"
+    journal.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "backup",
+                        "target_path": str(target),
+                        "relative_path": "bot/version.py",
+                        "backup_path": str(backup),
+                        "write_path": "",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event": "stage",
+                        "target_path": str(target),
+                        "relative_path": "bot/version.py",
+                        "backup_path": str(backup),
+                        "write_path": str(staged),
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = updater.apply_pending_update(repo_root)
+
+    assert result["reason"] == "no_pending_update"
+    assert target.read_text(encoding="utf-8") == "VERSION = 'old'\n"
+    assert not staged.exists()
+    assert not temp_root.exists()
 
 
 def test_apply_pending_update_handles_invalid_package(monkeypatch, tmp_path: Path):
@@ -491,6 +602,38 @@ def test_apply_pending_update_handles_invalid_package(monkeypatch, tmp_path: Pat
     assert result["reason"] == "invalid_package"
     assert "更新包已损坏" in saved_settings["update_last_error"]
     assert any("更新包已损坏" in line for line in log_lines)
+
+
+def test_apply_pending_update_handles_package_path_listing_failure(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    package_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive)
+        archive.writestr("bot/version.py", "VERSION = 'new'\n")
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = "1.0.1"
+    current_settings["pending_update_path"] = str(package_path)
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    monkeypatch.setattr(
+        updater,
+        "_list_package_entry_paths",
+        lambda _path: (_ for _ in ()).throw(updater._PackageStreamError("更新包已损坏，请重新下载: release.zip")),
+    )
+
+    result = updater.apply_pending_update(repo_root)
+    saved_settings = app_settings._load_settings()
+
+    assert result["applied"] is False
+    assert result["reason"] == "invalid_package"
+    assert saved_settings["pending_update_version"] == ""
+    assert "更新包已损坏" in saved_settings["update_last_error"]
 
 
 def test_apply_pending_update_skips_when_current_version_matches_pending(monkeypatch, tmp_path: Path):

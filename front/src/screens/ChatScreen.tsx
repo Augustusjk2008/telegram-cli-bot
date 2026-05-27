@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Paperclip, Plus, Square, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { AgentSwitcher } from "../components/AgentSwitcher";
@@ -90,6 +90,16 @@ type ParsedUserAttachment = {
   filename: string;
   savedPath: string;
 };
+
+type ChatMessageRowModel = {
+  item: ChatMessage;
+  messageClientStateKey: string;
+  planDraft: string;
+  deletedAttachmentKeys: Record<string, boolean>;
+  deletingAttachmentKeys: Record<string, boolean>;
+};
+
+const EMPTY_ATTACHMENT_STATE: Record<string, boolean> = {};
 
 function formatBytes(value: number) {
   if (value >= 1024 * 1024) {
@@ -924,6 +934,87 @@ const ChatMessageRow = memo(function ChatMessageRow({
       </div>
     </motion.div>
   );
+});
+
+const StreamingElapsedBadge = memo(function StreamingElapsedBadge({
+  elapsedSeconds,
+}: {
+  elapsedSeconds: number;
+}) {
+  return (
+    <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+      <span>已等待 {elapsedSeconds} 秒</span>
+    </div>
+  );
+});
+
+const ChatMessageList = memo(function ChatMessageList({
+  rows,
+  assistantName,
+  assistantAvatarName,
+  userAvatarName,
+  allowTrace,
+  expandedTracePanels,
+  traceLoadState,
+  handleDeleteAttachment,
+  handleFileLinkClick,
+  loadMessageTrace,
+  handleToggleTracePanel,
+  handleCopyFinalAnswer,
+  executingPlanMessageId,
+  planExecuteError,
+  handleExecutePlan,
+}: {
+  rows: ChatMessageRowModel[];
+  assistantName: string;
+  assistantAvatarName?: string;
+  userAvatarName?: string;
+  allowTrace: boolean;
+  expandedTracePanels: Record<string, boolean>;
+  traceLoadState: Record<string, { loading: boolean; error?: string }>;
+  handleDeleteAttachment: (messageId: string, savedPath: string) => void;
+  handleFileLinkClick: (href: string) => void;
+  loadMessageTrace: (messageId: string) => void;
+  handleToggleTracePanel: (messageClientStateKey: string) => void;
+  handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
+  executingPlanMessageId: string;
+  planExecuteError: string;
+  handleExecutePlan: (messageId: string, content: string) => void;
+}) {
+  return rows.map((row) => (
+    <div key={row.item.id} className="space-y-1">
+      <ChatMessageRow
+        item={row.item}
+        messageClientStateKey={row.messageClientStateKey}
+        assistantName={assistantName}
+        assistantAvatarName={assistantAvatarName}
+        userAvatarName={userAvatarName}
+        allowTrace={allowTrace}
+        deletedAttachmentKeys={row.deletedAttachmentKeys}
+        deletingAttachmentKeys={row.deletingAttachmentKeys}
+        tracePanelExpanded={Boolean(expandedTracePanels[row.messageClientStateKey])}
+        traceLoadState={traceLoadState[row.messageClientStateKey]}
+        onDeleteAttachment={handleDeleteAttachment}
+        onFileLinkClick={handleFileLinkClick}
+        onLoadTrace={loadMessageTrace}
+        onToggleTracePanel={handleToggleTracePanel}
+        onCopyFinalAnswer={handleCopyFinalAnswer}
+      />
+      {row.planDraft ? (
+        <div className="flex justify-start">
+          <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
+            <PlanDraftCard
+              content={row.planDraft}
+              executing={executingPlanMessageId === row.item.id}
+              error={executingPlanMessageId === row.item.id ? "" : planExecuteError}
+              onExecute={(content) => void handleExecutePlan(row.item.id, content)}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  ));
 });
 
 export function ChatScreen({
@@ -1997,48 +2088,6 @@ export function ChatScreen({
     }
   }
 
-  async function handleExecutePlan(messageId: string, content: string) {
-    const planContent = content.trim();
-    if (!planContent) {
-      return;
-    }
-    setExecutingPlanMessageId(messageId);
-    setPlanExecuteError("");
-    setConversationLoading(true);
-    setError("");
-    try {
-      const result = await client.executePlan(botAlias, {
-        content: planContent,
-        title: "执行方案",
-        agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
-      });
-      stopAssistantPoll();
-      stopSseRecoveryWatch();
-      stopClusterTaskPoll();
-      setClusterRunId("");
-      setClusterTaskStatus(null);
-      setClusterTaskError("");
-      clusterRunIdRef.current = "";
-      setExpandedTracePanels({});
-      setTraceLoadState({});
-      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
-      setItems(result.messages);
-      setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
-      setHistoryPanelOpen(false);
-      setPlanMode(false);
-      await sendMessageInternal(result.executionMessage, {
-        sendOptions: clusterMode ? { taskMode: "standard", cluster: true } : { taskMode: "standard" },
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "执行方案失败";
-      setPlanExecuteError(message);
-      setError(message);
-    } finally {
-      setExecutingPlanMessageId("");
-      setConversationLoading(false);
-    }
-  }
-
   const handleSelectAgent = useCallback((agentId: string) => {
     const normalized = agentId || "main";
     const previousAgentId = activeAgentIdRef.current || "main";
@@ -2399,6 +2448,50 @@ export function ChatScreen({
     });
   };
 
+  const handleExecutePlan = useCallback(async (messageId: string, content: string) => {
+    const planContent = content.trim();
+    if (!planContent) {
+      return;
+    }
+    setExecutingPlanMessageId(messageId);
+    setPlanExecuteError("");
+    setConversationLoading(true);
+    setError("");
+    try {
+      const result = await client.executePlan(botAlias, {
+        content: planContent,
+        title: "执行方案",
+        agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
+      });
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      setClusterRunId("");
+      setClusterTaskStatus(null);
+      setClusterTaskError("");
+      clusterRunIdRef.current = "";
+      setExpandedTracePanels({});
+      setTraceLoadState({});
+      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setItems(result.messages);
+      setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
+      setHistoryPanelOpen(false);
+      setPlanMode(false);
+      await sendMessageInternal(result.executionMessage, {
+        sendOptions: botOverview?.cluster?.enabled
+          ? { taskMode: "standard", cluster: true }
+          : { taskMode: "standard" },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "执行方案失败";
+      setPlanExecuteError(message);
+      setError(message);
+    } finally {
+      setExecutingPlanMessageId("");
+      setConversationLoading(false);
+    }
+  }, [botAlias, botOverview, client, sendMessageInternal, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
+
   const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
     if (clusterMode && activeAgentIdRef.current !== "main") {
@@ -2620,6 +2713,46 @@ export function ChatScreen({
   const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
     ? [selectedModel, ...modelOptions]
     : modelOptions;
+  const deletedAttachmentKeysByMessage = useMemo(() => {
+    const next: Record<string, Record<string, boolean>> = {};
+    for (const [key, value] of Object.entries(deletedAttachmentKeys)) {
+      const separatorIndex = key.indexOf("|");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const messageId = key.slice(0, separatorIndex);
+      next[messageId] = next[messageId] || {};
+      next[messageId][key] = value;
+    }
+    return next;
+  }, [deletedAttachmentKeys]);
+  const deletingAttachmentKeysByMessage = useMemo(() => {
+    const next: Record<string, Record<string, boolean>> = {};
+    for (const [key, value] of Object.entries(deletingAttachmentKeys)) {
+      const separatorIndex = key.indexOf("|");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const messageId = key.slice(0, separatorIndex);
+      next[messageId] = next[messageId] || {};
+      next[messageId][key] = value;
+    }
+    return next;
+  }, [deletingAttachmentKeys]);
+  const messageRowModels = useMemo<ChatMessageRowModel[]>(() => items.map((item) => {
+    const messageClientStateKey = getMessageClientStateKey(item);
+    const planDraft = item.role === "assistant" && item.state === "done"
+      ? extractPlanDraft(item.text)
+      : "";
+    const displayItem = planDraft ? { ...item, text: stripPlanDraftTags(item.text) } : item;
+    return {
+      item: displayItem,
+      messageClientStateKey,
+      planDraft,
+      deletedAttachmentKeys: deletedAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
+      deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
+    };
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, items]);
 
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";
@@ -2646,10 +2779,7 @@ export function ChatScreen({
             nameClassName="truncate text-lg font-semibold text-[var(--text)]"
           />
           {isStreaming ? (
-            <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              <span>已等待 {elapsedSeconds} 秒</span>
-            </div>
+            <StreamingElapsedBadge elapsedSeconds={elapsedSeconds} />
           ) : null}
         </header>
       ) : null}
@@ -2801,46 +2931,23 @@ export function ChatScreen({
               暂无消息，开始聊天吧
             </div>
           ) : null}
-          {items.map((item) => {
-            const messageClientStateKey = getMessageClientStateKey(item);
-            const planDraft = item.role === "assistant" && item.state === "done"
-              ? extractPlanDraft(item.text)
-              : "";
-            const displayItem = planDraft ? { ...item, text: stripPlanDraftTags(item.text) } : item;
-            return (
-              <div key={item.id} className="space-y-1">
-                <ChatMessageRow
-                  item={displayItem}
-                  messageClientStateKey={messageClientStateKey}
-                  assistantName={assistantName}
-                  assistantAvatarName={assistantAvatarName}
-                  userAvatarName={userAvatarName}
-                  allowTrace={allowTrace}
-                  deletedAttachmentKeys={deletedAttachmentKeys}
-                  deletingAttachmentKeys={deletingAttachmentKeys}
-                  tracePanelExpanded={Boolean(expandedTracePanels[messageClientStateKey])}
-                  traceLoadState={traceLoadState[messageClientStateKey]}
-                  onDeleteAttachment={handleDeleteAttachment}
-                  onFileLinkClick={handleFileLinkClick}
-                  onLoadTrace={loadMessageTrace}
-                  onToggleTracePanel={handleToggleTracePanel}
-                  onCopyFinalAnswer={handleCopyFinalAnswer}
-                />
-                {planDraft ? (
-                  <div className="flex justify-start">
-                    <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
-                      <PlanDraftCard
-                        content={planDraft}
-                        executing={executingPlanMessageId === item.id}
-                        error={executingPlanMessageId === item.id ? "" : planExecuteError}
-                        onExecute={(content) => void handleExecutePlan(item.id, content)}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
+          <ChatMessageList
+            rows={messageRowModels}
+            assistantName={assistantName}
+            assistantAvatarName={assistantAvatarName}
+            userAvatarName={userAvatarName}
+            allowTrace={allowTrace}
+            expandedTracePanels={expandedTracePanels}
+            traceLoadState={traceLoadState}
+            handleDeleteAttachment={handleDeleteAttachment}
+            handleFileLinkClick={handleFileLinkClick}
+            loadMessageTrace={loadMessageTrace}
+            handleToggleTracePanel={handleToggleTracePanel}
+            handleCopyFinalAnswer={handleCopyFinalAnswer}
+            executingPlanMessageId={executingPlanMessageId}
+            planExecuteError={planExecuteError}
+            handleExecutePlan={handleExecutePlan}
+          />
           {clusterTaskStatus ? (
             <ClusterTaskPanel
               status={clusterTaskStatus}

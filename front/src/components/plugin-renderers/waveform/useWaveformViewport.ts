@@ -41,6 +41,7 @@ export function useWaveformViewport({
   const [viewportWidth, setViewportWidth] = useState(display.minWaveWidth);
   const [windowError, setWindowError] = useState("");
   const requestIdRef = useRef(0);
+  const debounceTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setWindowData(initialWindow);
@@ -84,44 +85,64 @@ export function useWaveformViewport({
   const timelineEnd = Number(summary.endTime);
   const timelineRange = Math.max(1, timelineEnd - timelineStart);
   const waveScrollLeft = Math.max(0, Math.min(pixelWidth, scrollLeft));
-  const windowStart = timelineStart + (Math.min(pixelWidth, waveScrollLeft) / Math.max(1, pixelWidth)) * timelineRange;
-  const windowEnd = timelineStart + (Math.min(pixelWidth, waveScrollLeft + visibleWaveWidth) / Math.max(1, pixelWidth)) * timelineRange;
+  const quantizedPixelWidth = Math.max(64, Math.ceil(visibleWaveWidth / 8) * 8);
+  const quantizedWindowStart = Math.round(
+    (timelineStart + (Math.min(pixelWidth, waveScrollLeft) / Math.max(1, pixelWidth)) * timelineRange) * 1000,
+  ) / 1000;
+  const quantizedWindowEnd = Math.round(
+    (timelineStart + (Math.min(pixelWidth, waveScrollLeft + visibleWaveWidth) / Math.max(1, pixelWidth)) * timelineRange) * 1000,
+  ) / 1000;
+  const requestWindowStart = Math.min(quantizedWindowStart, quantizedWindowEnd);
+  const requestWindowEnd = Math.max(quantizedWindowStart, quantizedWindowEnd);
 
   useEffect(() => {
     if (!sessionId) {
       return;
     }
     const controller = new AbortController();
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    void client.queryPluginViewWindow(
-      botAlias,
-      pluginId,
-      sessionId,
-      {
-        startTime: windowStart,
-        endTime: Math.max(windowStart, windowEnd),
-        signalIds: visibleSignalIds,
-        pixelWidth: Math.max(64, Math.ceil(visibleWaveWidth)),
-      },
-      controller.signal,
-    ).then((nextWindow) => {
-      if (requestIdRef.current !== requestId) {
-        return;
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    debounceTimerRef.current = window.setTimeout(() => {
+      debounceTimerRef.current = null;
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
+      void client.queryPluginViewWindow(
+        botAlias,
+        pluginId,
+        sessionId,
+        {
+          startTime: requestWindowStart,
+          endTime: requestWindowEnd,
+          signalIds: visibleSignalIds,
+          pixelWidth: quantizedPixelWidth,
+        },
+        controller.signal,
+      ).then((nextWindow) => {
+        if (requestIdRef.current !== requestId) {
+          return;
+        }
+        setWindowError("");
+        setWindowData(nextWindow as WaveformWindowPayload);
+      }).catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        if (requestIdRef.current !== requestId) {
+          return;
+        }
+        setWindowError(error instanceof Error ? error.message : "加载窗口失败");
+      });
+    }, 60);
+    return () => {
+      controller.abort();
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
       }
-      setWindowError("");
-      setWindowData(nextWindow as WaveformWindowPayload);
-    }).catch((error) => {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        return;
-      }
-      if (requestIdRef.current !== requestId) {
-        return;
-      }
-      setWindowError(error instanceof Error ? error.message : "加载窗口失败");
-    });
-    return () => controller.abort();
-  }, [botAlias, client, pluginId, sessionId, visibleSignalsKey, visibleSignalIds, visibleWaveWidth, windowEnd, windowStart]);
+    };
+  }, [botAlias, client, pluginId, quantizedPixelWidth, requestWindowEnd, requestWindowStart, sessionId, visibleSignalIds, visibleSignalsKey]);
 
   const visibleTracks = useMemo<WaveformTrack[]>(
     () =>

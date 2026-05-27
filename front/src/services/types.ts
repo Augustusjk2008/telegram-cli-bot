@@ -1640,6 +1640,7 @@ export type GitDiffPayload = {
   path: string;
   staged: boolean;
   diff: string;
+  truncated?: boolean;
 };
 
 export type GitActionResult = {

@@ -45,6 +45,7 @@ from bot.web.api_service import (
     AuthContext,
     _stream_cli_chat,
     _build_stream_status_event,
+    _extract_codex_stream_preview,
     WebApiError,
     build_bot_summary,
     build_session_snapshot,
@@ -88,6 +89,8 @@ from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 from bot.web.git_service import (
     GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+    GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT,
+    _read_untracked_file_preview,
     apply_git_stash,
     commit_git_changes,
     create_git_branch,
@@ -2070,6 +2073,23 @@ def test_read_file_content_supports_utf16_bom_text(web_manager: MultiBotManager,
     assert content["content"] == "alpha\n中文\n"
     assert content["encoding"] == "utf-16"
 
+
+def test_read_file_content_head_reads_partial_without_full_text_decode(web_manager: MultiBotManager, temp_dir: Path):
+    save_uploaded_file(
+        web_manager,
+        "main",
+        1001,
+        "notes.txt",
+        "".join(f"line {index}\n" for index in range(60)).encode("utf-8"),
+    )
+
+    with patch("bot.web.files_service.read_text_file", side_effect=AssertionError("full read not allowed")):
+        content = read_file_content(web_manager, "main", 1001, "notes.txt", mode="head", lines=20)
+
+    assert content["content"] == "".join(f"line {index}\n" for index in range(20)).rstrip("\n")
+    assert content["is_full_content"] is False
+    assert content["encoding"] == "utf-8"
+
 def test_write_file_content_updates_text_and_returns_version(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
     previous = read_file_content(web_manager, "main", 1001, "notes.txt", mode="cat", lines=0)
@@ -2563,6 +2583,40 @@ async def test_generate_git_commit_message_uses_unstaged_draft_when_no_staged(
     assert "仅基于未暂存/未跟踪内容生成草稿" in captured["user_text"]
 
 
+def test_git_smart_commit_untracked_preview_does_not_read_full_file(
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    large_file = temp_dir / "large.txt"
+    large_file.write_text("a" * (GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT + 50), encoding="utf-8")
+
+    def fail_read_bytes(self):
+        raise AssertionError("read_bytes should not be used for untracked preview")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    preview = _read_untracked_file_preview(str(temp_dir), "large.txt")
+
+    assert preview.startswith("--- large.txt ---\n")
+    assert preview.endswith("...[truncated]")
+
+
+def test_extract_codex_stream_preview_loads_each_json_line_once(monkeypatch: pytest.MonkeyPatch):
+    raw_output = '{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n'
+    original_loads = json.loads
+    calls = 0
+
+    def counting_loads(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_loads(*args, **kwargs)
+
+    monkeypatch.setattr(api_service.json, "loads", counting_loads)
+
+    assert _extract_codex_stream_preview(raw_output) == "完成"
+    assert calls == 1
+
+
 @pytest.mark.asyncio
 async def test_generate_git_commit_message_sets_utf8_python_env_for_kimi_on_windows(
     web_manager: MultiBotManager,
@@ -2806,6 +2860,35 @@ def test_git_overview_returns_repo_state(web_manager: MultiBotManager, temp_dir:
     assert overview["recent_commits"][0]["subject"] == "init"
     assert overview["recent_commits"][0]["message"] == "init\n\ndetail line 1\ndetail line 2"
 
+
+def test_git_overview_cache_refreshes_after_worktree_file_changes(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.git_service._GIT_STATUS_CACHE_TTL_SECONDS", 60)
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    clean = get_git_overview(web_manager, "main", 1001)
+    assert clean["changed_files"] == []
+
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    (repo_dir / "new.txt").write_text("draft\n", encoding="utf-8")
+
+    refreshed = get_git_overview(web_manager, "main", 1001)
+
+    assert any(item["path"] == "tracked.txt" for item in refreshed["changed_files"])
+    assert any(item["path"] == "new.txt" for item in refreshed["changed_files"])
+
+
 def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_dir: Path):
     repo_dir = temp_dir / "repo"
     repo_dir.mkdir()
@@ -2833,6 +2916,26 @@ def test_stage_commit_and_diff_git_changes(web_manager: MultiBotManager, temp_di
     )
     assert committed["recent_commits"][0]["subject"] == "feat: update tracked"
     assert committed["recent_commits"][0]["message"] == "feat: update tracked\n\nbody line 1\nbody line 2"
+
+
+def test_get_git_diff_marks_truncated_for_large_diff(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+
+    tracked.write_text("".join(f"line {index}\n" for index in range(12000)), encoding="utf-8")
+    web_manager.main_profile.working_dir = str(repo_dir)
+
+    diff = get_git_diff(web_manager, "main", 1001, "tracked.txt", staged=False)
+
+    assert diff["path"] == "tracked.txt"
+    assert diff["truncated"] is True
+    assert diff["diff"].endswith("...[truncated]")
 
 
 def test_discard_git_paths_restores_tracked_and_added_files(web_manager: MultiBotManager, temp_dir: Path):
@@ -4419,6 +4522,70 @@ async def test_workspace_routes_use_current_file_browser_directory(
             assert definition_resp.status == 200
             definition_payload = await definition_resp.json()
             assert definition_payload["data"]["items"][0]["path"] == "src/main.py"
+
+
+@pytest.mark.asyncio
+async def test_blocking_workspace_file_and_git_routes_use_to_thread(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    read_payload = {
+        "filename": "notes.md",
+        "mode": "cat",
+        "content": "",
+        "working_dir": "C:\\repo",
+        "file_size_bytes": 0,
+        "is_full_content": True,
+        "last_modified_ns": 1,
+        "encoding": "utf-8",
+    }
+
+    with patch("bot.web.server.get_directory_listing", return_value={"working_dir": "C:\\repo", "entries": []}) as ls_mock, \
+         patch("bot.web.server.build_file_outline", return_value={"items": []}) as outline_mock, \
+         patch("bot.web.server.resolve_workspace_definition", return_value={"items": []}) as definition_mock, \
+         patch("bot.web.server.read_file_content", return_value=read_payload) as read_mock, \
+         patch("bot.web.server.get_git_overview", return_value={"repo_found": False}) as overview_mock, \
+         patch("bot.web.server.commit_git_changes", return_value={"repo_found": True}) as commit_mock, \
+         patch(
+             "bot.web.server.asyncio.to_thread",
+             new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+         ) as to_thread_mock:
+        app = WebApiServer(web_manager)._build_app()
+        async with TestServer(app) as test_server:
+            async with TestClient(test_server) as client:
+                ls_resp = await client.get("/api/bots/main/ls")
+                outline_resp = await client.get("/api/bots/main/workspace/outline?path=src/main.py")
+                definition_resp = await client.post(
+                    "/api/bots/main/workspace/resolve-definition",
+                    json={"path": "src/main.py", "line": 1, "column": 1, "symbol": "run"},
+                )
+                read_resp = await client.get("/api/bots/main/files/read?filename=notes.md&mode=cat&lines=0")
+                overview_resp = await client.get("/api/bots/main/git")
+                commit_resp = await client.post("/api/bots/main/git/commit", json={"message": "feat: test"})
+
+        assert ls_resp.status == 200
+        assert outline_resp.status == 200
+        assert definition_resp.status == 200
+        assert read_resp.status == 200
+        assert overview_resp.status == 200
+        assert commit_resp.status == 200
+        to_thread_mock.assert_any_call(ls_mock, ANY, "main", 1001, path=None)
+        to_thread_mock.assert_any_call(outline_mock, ANY, "src/main.py")
+        to_thread_mock.assert_any_call(
+            definition_mock,
+            ANY,
+            "src/main.py",
+            line=1,
+            column=1,
+            symbol="run",
+        )
+        to_thread_mock.assert_any_call(read_mock, ANY, "main", 1001, "notes.md", mode="cat", lines=0)
+        to_thread_mock.assert_any_call(overview_mock, ANY, "main", 1001)
+        to_thread_mock.assert_any_call(commit_mock, ANY, "main", 1001, "feat: test")
 
 
 @pytest.mark.asyncio
@@ -9144,6 +9311,82 @@ async def test_stream_cli_chat_status_includes_context_usage_from_claude_session
     assert any(event.get("context_usage") == context_usage for event in status_events)
     assert any(call[0] == "claude" and call[1] == "claude-1" for call in context_calls)
     assert any(call[2] == session.working_dir for call in context_calls)
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_throttles_context_usage_polling_to_once_per_second(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "claude"
+    _, _, session = get_chat_session_for_alias(web_manager, "main", 1001, "main")
+    session.claude_session_id = "claude-1"
+    calls: list[tuple[str, str, str | None]] = []
+    context_usage = {
+        "provider": "claude",
+        "source": "claude_context_command",
+        "session_id": "claude-1",
+        "used_tokens": 80100,
+        "context_window": 1000000,
+        "context_left_percent": 92,
+        "used_display": "80.1k",
+        "window_display": "1m",
+        "status_text": "92% context left · 80.1k / 1m",
+    }
+
+    class FakeStdout:
+        def __init__(self, owner):
+            self._owner = owner
+            self._index = 0
+            self._lines = [
+                '{"type":"stream_event","session_id":"claude-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}}\n',
+                '{"type":"result","subtype":"success","session_id":"claude-1","result":"你好"}\n',
+            ]
+
+        def readline(self):
+            if self._index >= len(self._lines):
+                self._owner.returncode = 0
+                return ""
+            if self._index == 1:
+                time.sleep(0.35)
+            line = self._lines[self._index]
+            self._index += 1
+            return line
+
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.stdout = FakeStdout(self)
+            self.stdin = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        calls.append((cli_type, session_id, cwd_hint))
+        return context_usage
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_claude_done_session", return_value=MagicMock(enabled=False, prompt_text="hello")), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["claude"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=FakeProcess()):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["message"]["meta"]["context_usage"] == context_usage
+    assert len(calls) == 2
 
 
 def test_codex_done_candidate_ignores_event_msg_commentary():

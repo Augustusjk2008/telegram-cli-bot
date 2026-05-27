@@ -734,6 +734,7 @@ type RawGitDiffPayload = {
   path: string;
   staged: boolean;
   diff: string;
+  truncated?: boolean;
 };
 
 type RawGitActionResult = {
@@ -2330,6 +2331,7 @@ function mapGitDiffPayload(raw: RawGitDiffPayload): GitDiffPayload {
     path: raw.path,
     staged: Boolean(raw.staged),
     diff: raw.diff || "",
+    truncated: Boolean(raw.truncated),
   };
 }
 

@@ -729,6 +729,38 @@ test("embedded git opens changed file diffs as read-only editor tabs", async () 
   expect(screen.queryByLabelText("文件内容")).not.toBeInTheDocument();
 });
 
+test("embedded git marks truncated diffs in read-only editor tabs", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getGitDiff").mockResolvedValue({
+    path: "bot/web/server.py",
+    staged: true,
+    diff: "diff --git a/bot/web/server.py b/bot/web/server.py\n@@ -1 +1 @@\n-old\n+new",
+    truncated: true,
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={client}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "Git" }));
+  await user.click(await screen.findByLabelText("在编辑器打开 bot/web/server.py"));
+
+  expect(await screen.findByRole("tab", { name: "server.py.diff" })).toBeInTheDocument();
+  expect(screen.getByText(/已截断/)).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-git-diff-viewer")).toHaveTextContent("...[diff truncated]");
+});
+
 test("desktop workbench keeps file tabs editable when file targets include plugin targets", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

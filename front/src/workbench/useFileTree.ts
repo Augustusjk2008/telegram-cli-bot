@@ -47,6 +47,7 @@ export type UseFileTreeResult = {
   isExpanded: (path: string) => boolean;
   toggleDirectory: (path: string) => Promise<void>;
   refreshRoot: (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => Promise<void>;
+  refreshTreeAndRoot: (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => Promise<string>;
   restoreExpandedPaths: (paths: string[]) => Promise<void>;
   revealPath: (path: string) => Promise<void>;
   highlightPath: (path: string) => void;
@@ -389,6 +390,56 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     }
   }, [botAlias, client, startBackgroundRestoreExpandedPaths]);
 
+  const refreshTreeAndRoot = useCallback(async (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    backgroundRestoreIdRef.current += 1;
+    inFlightBranchLoadsRef.current.clear();
+    const preserveExpandedPaths = options?.preserveExpandedPaths === true;
+    setLoading(true);
+    setError("");
+    try {
+      const listing = await client.listFiles(botAlias, options?.rootPath);
+      if (loadGenerationRef.current !== generation) {
+        return listing.workingDir;
+      }
+      const nextRootPath = listing.workingDir;
+      const nextExpandedPaths = preserveExpandedPaths ? expandedPathsRef.current : [];
+      const normalizedExpandedPaths = uniqueExpandedPaths(nextExpandedPaths);
+      const rootBranch = {
+        entries: mapBranchEntries("", listing.entries),
+        loading: false,
+        loaded: true,
+        error: "",
+      };
+      const nextBranches: Record<string, FileTreeBranchState> = {
+        "": rootBranch,
+      };
+
+      setRootPath(nextRootPath);
+      setBranchesSynced(nextBranches);
+      setExpandedPathsSynced([]);
+
+      if (normalizedExpandedPaths.length > 0) {
+        startBackgroundRestoreExpandedPaths(nextRootPath, normalizedExpandedPaths, generation);
+      }
+
+      clearSelectionIfConfirmedMissing(nextBranches, selectedPathRef.current);
+      return nextRootPath;
+    } catch (nextError) {
+      if (loadGenerationRef.current === generation) {
+        setError(getErrorMessage(nextError, "加载文件树失败"));
+        setBranchesSynced({});
+        clearSelection();
+      }
+      throw nextError;
+    } finally {
+      if (loadGenerationRef.current === generation) {
+        setLoading(false);
+      }
+    }
+  }, [botAlias, client, startBackgroundRestoreExpandedPaths]);
+
   useEffect(() => {
     void refreshRoot();
   }, [refreshRoot]);
@@ -604,6 +655,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     isExpanded: (path: string) => expandedPaths.includes(path),
     toggleDirectory,
     refreshRoot,
+    refreshTreeAndRoot,
     restoreExpandedPaths,
     revealPath,
     highlightPath,
