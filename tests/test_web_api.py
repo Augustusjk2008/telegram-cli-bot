@@ -9028,6 +9028,142 @@ async def test_stream_cli_chat_done_message_includes_context_usage(web_manager: 
     assert done_event["message"]["meta"]["context_usage"] == context_usage
 
 
+def _codex_context_usage(left_percent: int) -> dict[str, object]:
+    return {
+        "provider": "codex",
+        "source": "codex_session_token_count",
+        "session_id": "thread-1",
+        "used_tokens": 76593,
+        "context_window": 258400,
+        "context_left_percent": left_percent,
+        "used_display": "76.6K",
+        "window_display": "258K",
+        "status_text": f"{left_percent}% context left · 76.6K / 258K",
+    }
+
+
+class _ScheduledFakeStdout:
+    def __init__(self, owner, schedule: list[tuple[float, str]]):
+        self._owner = owner
+        self._schedule = list(schedule)
+
+    def readline(self):
+        if not self._schedule:
+            self._owner.returncode = 0
+            return ""
+        delay, line = self._schedule.pop(0)
+        if delay:
+            time.sleep(delay)
+        return line
+
+    def read(self):
+        return ""
+
+    def close(self):
+        pass
+
+
+class _ScheduledFakeProcess:
+    def __init__(self, schedule: list[tuple[float, str]]):
+        self.returncode = None
+        self.stdout = _ScheduledFakeStdout(self, schedule)
+        self.stdin = None
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 0
+
+    def kill(self):
+        self.returncode = -9
+
+
+def _quick_codex_schedule() -> list[tuple[float, str]]:
+    return [
+        (0, '{"type":"thread.started","thread_id":"thread-1"}\n'),
+        (0.02, '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n'),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_context_usage_counts_compaction(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    readings = [_codex_context_usage(20), _codex_context_usage(80), _codex_context_usage(79)]
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        return readings.pop(0) if len(readings) > 1 else readings[0]
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", side_effect=lambda *_args, **_kwargs: _ScheduledFakeProcess(_quick_codex_schedule())):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    context_usage = done_event["message"]["meta"]["context_usage"]
+    assert context_usage["context_left_percent"] == 80
+    assert context_usage["compaction_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_context_usage_counts_multiple_compactions(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    readings = [
+        _codex_context_usage(20),
+        _codex_context_usage(80),
+        _codex_context_usage(30),
+        _codex_context_usage(90),
+    ]
+    schedule = [
+        (0, '{"type":"thread.started","thread_id":"thread-1"}\n'),
+        (2.25, '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n'),
+    ]
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        return readings.pop(0) if len(readings) > 1 else readings[0]
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", side_effect=lambda *_args, **_kwargs: _ScheduledFakeProcess(schedule)):
+        events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["message"]["meta"]["context_usage"]["compaction_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_context_usage_compaction_count_resets_each_turn(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    readings = [
+        _codex_context_usage(20),
+        _codex_context_usage(80),
+        _codex_context_usage(80),
+        _codex_context_usage(79),
+    ]
+
+    def fake_resolve(cli_type: str, session_id: str, *, cwd_hint: str | None = None):
+        return readings.pop(0) if len(readings) > 1 else readings[0]
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.resolve_cli_context_usage", side_effect=fake_resolve), \
+         patch("bot.web.api_service.subprocess.Popen", side_effect=lambda *_args, **_kwargs: _ScheduledFakeProcess(_quick_codex_schedule())):
+        first_events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello")]
+        second_events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "hello again")]
+
+    first_done = next(event for event in first_events if event["type"] == "done")
+    second_done = next(event for event in second_events if event["type"] == "done")
+    assert first_done["message"]["meta"]["context_usage"]["compaction_count"] == 1
+    assert "compaction_count" not in second_done["message"]["meta"]["context_usage"]
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_persists_status_context_usage_before_done(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"

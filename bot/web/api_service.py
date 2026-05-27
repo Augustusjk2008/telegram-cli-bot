@@ -2528,6 +2528,43 @@ def _context_usage_signature(context_usage: dict[str, Any] | None) -> tuple[tupl
     return tuple(items)
 
 
+def _context_left_percent(context_usage: dict[str, Any] | None) -> int | None:
+    if not isinstance(context_usage, dict):
+        return None
+    value = context_usage.get("context_left_percent")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _with_compaction_count(
+    context_usage: dict[str, Any] | None,
+    *,
+    previous_left_percent: int | None,
+    compaction_count: int,
+) -> tuple[dict[str, Any] | None, int | None, int]:
+    if not isinstance(context_usage, dict) or not context_usage:
+        return context_usage, previous_left_percent, compaction_count
+
+    current_left_percent = _context_left_percent(context_usage)
+    if current_left_percent is None:
+        return dict(context_usage), previous_left_percent, compaction_count
+
+    next_count = compaction_count
+    if previous_left_percent is not None and current_left_percent > previous_left_percent:
+        next_count += 1
+
+    next_usage = dict(context_usage)
+    if next_count > 0:
+        next_usage["compaction_count"] = next_count
+    else:
+        next_usage.pop("compaction_count", None)
+
+    return next_usage, current_left_percent, next_count
+
+
 def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session: UserSession, cli_type: str) -> str:
     if agent.id == "main" or _current_native_session_id(session, cli_type):
         return prompt_text
@@ -4017,6 +4054,8 @@ async def _stream_cli_chat(
             0,
             int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
+        turn_context_left_percent: int | None = None
+        turn_compaction_count = 0
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
@@ -4292,6 +4331,15 @@ async def _stream_cli_chat(
                     elif status_session_id:
                         status_context_usage = last_context_usage
                     if status_context_usage:
+                        (
+                            status_context_usage,
+                            turn_context_left_percent,
+                            turn_compaction_count,
+                        ) = _with_compaction_count(
+                            status_context_usage,
+                            previous_left_percent=turn_context_left_percent,
+                            compaction_count=turn_compaction_count,
+                        )
                         status_event["context_usage"] = status_context_usage
                         context_usage_signature = _context_usage_signature(status_context_usage)
                         last_context_usage = status_context_usage
@@ -4464,6 +4512,15 @@ async def _stream_cli_chat(
             )
             if context_usage is None:
                 context_usage = last_context_usage
+            (
+                context_usage,
+                turn_context_left_percent,
+                turn_compaction_count,
+            ) = _with_compaction_count(
+                context_usage,
+                previous_left_percent=turn_context_left_percent,
+                compaction_count=turn_compaction_count,
+            )
             complete_started_at = time.perf_counter()
             done_message = await asyncio.to_thread(
                 service.complete_turn,

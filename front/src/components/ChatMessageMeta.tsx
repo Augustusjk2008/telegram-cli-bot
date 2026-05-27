@@ -35,6 +35,20 @@ function formatTime(createdAt: string) {
   return `${dateText} ${timeText}`;
 }
 
+function formatCompactionCount(count?: number) {
+  const value = Math.floor(Number(count || 0));
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+  if (value === 1) {
+    return "compacted once";
+  }
+  if (value === 2) {
+    return "compacted twice";
+  }
+  return `compacted ${value} times`;
+}
+
 function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
   if (!contextUsage) {
     return null;
@@ -45,14 +59,20 @@ function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
   const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
     : "";
-  const text = (contextUsage.statusText || [percent, usage].filter(Boolean).join(" · "))
+  const baseText = (contextUsage.statusText || [percent, usage].filter(Boolean).join(" · "))
     .replace(/\bcontext left\b/g, "left");
+  if (!baseText) {
+    return null;
+  }
+  const compactionText = formatCompactionCount(contextUsage.compactionCount);
+  const text = [baseText, compactionText ? `(${compactionText})` : ""].filter(Boolean).join(" ");
   if (!text) {
     return null;
   }
-  const title = contextUsage.usedDisplay && contextUsage.windowDisplay
+  const baseTitle = contextUsage.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} used / ${contextUsage.windowDisplay} window`
-    : text;
+    : baseText;
+  const title = compactionText ? `${baseTitle} (${compactionText})` : baseTitle;
   return { text, title, isLow: typeof contextUsage.contextLeftPercent === "number" && contextUsage.contextLeftPercent < 25 };
 }
 

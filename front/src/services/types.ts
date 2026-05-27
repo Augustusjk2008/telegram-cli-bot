@@ -517,6 +517,7 @@ export type ChatMessageContextUsage = {
   usedDisplay?: string;
   windowDisplay?: string;
   statusText?: string;
+  compactionCount?: number;
 };
 
 export type ChatMessageMetaInfo = {

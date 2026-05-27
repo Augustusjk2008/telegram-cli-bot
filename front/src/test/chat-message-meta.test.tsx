@@ -56,11 +56,58 @@ test("shows assistant context usage after time", () => {
       usedDisplay: "76.6K",
       windowDisplay: "258K",
       statusText: "74% context left · 76.6K / 258K",
+      compactionCount: 1,
+    }}
+  />);
+
+  expect(screen.getByText("74% left · 76.6K / 258K (compacted once)")).toBeInTheDocument();
+  expect(screen.getByTitle("76.6K used / 258K window (compacted once)")).toBeInTheDocument();
+});
+
+test("renders compaction count variants", () => {
+  const baseContextUsage = {
+    contextLeftPercent: 74,
+    usedDisplay: "76.6K",
+    windowDisplay: "258K",
+  };
+
+  const { rerender } = render(<ChatMessageMeta
+    name="助手"
+    createdAt="2026-05-08T09:05:00+08:00"
+    contextUsage={{
+      ...baseContextUsage,
+      compactionCount: 2,
+    }}
+  />);
+
+  expect(screen.getByText("74% left · 76.6K / 258K (compacted twice)")).toBeInTheDocument();
+
+  rerender(<ChatMessageMeta
+    name="助手"
+    createdAt="2026-05-08T09:05:00+08:00"
+    contextUsage={{
+      ...baseContextUsage,
+      compactionCount: 3,
+    }}
+  />);
+
+  expect(screen.getByText("74% left · 76.6K / 258K (compacted 3 times)")).toBeInTheDocument();
+});
+
+test("does not render compaction suffix for zero", () => {
+  render(<ChatMessageMeta
+    name="助手"
+    createdAt="2026-05-08T09:05:00+08:00"
+    contextUsage={{
+      contextLeftPercent: 74,
+      usedDisplay: "76.6K",
+      windowDisplay: "258K",
+      compactionCount: 0,
     }}
   />);
 
   expect(screen.getByText("74% left · 76.6K / 258K")).toBeInTheDocument();
-  expect(screen.getByTitle("76.6K used / 258K window")).toBeInTheDocument();
+  expect(screen.queryByText(/compacted/)).not.toBeInTheDocument();
 });
 
 test("renders claude context usage text", () => {

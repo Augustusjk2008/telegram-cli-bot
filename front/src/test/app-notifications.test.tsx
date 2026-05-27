@@ -72,11 +72,19 @@ afterEach(() => {
   localStorage.clear();
 });
 
-test("visible chat completion shows in-app toast and marks bot unread", async () => {
+test("visible chat completion for current bot shows toast without marking unread", async () => {
   const client = new NotificationClient();
   const onUnreadBot = vi.fn();
 
-  render(<NotificationCenter client={client} enabled currentBotAlias="main" onUnreadBot={onUnreadBot} />);
+  render(
+    <NotificationCenter
+      client={client}
+      enabled
+      currentBotAlias="main"
+      visibleChatBotAlias="main"
+      onUnreadBot={onUnreadBot}
+    />,
+  );
 
   await waitFor(() => expect(client.onEvent).toBeTruthy());
   act(() => {
@@ -86,7 +94,30 @@ test("visible chat completion shows in-app toast and marks bot unread", async ()
   expect(await screen.findByRole("status")).toHaveTextContent("聊天已完成");
   expect(screen.getByText("后台回复完成")).toBeInTheDocument();
   expect(Notification).not.toHaveBeenCalled();
-  expect(onUnreadBot).toHaveBeenCalledWith("main");
+  expect(onUnreadBot).not.toHaveBeenCalled();
+});
+
+test("visible chat completion for another bot marks unread", async () => {
+  const client = new NotificationClient();
+  const onUnreadBot = vi.fn();
+
+  render(
+    <NotificationCenter
+      client={client}
+      enabled
+      currentBotAlias="main"
+      visibleChatBotAlias="main"
+      onUnreadBot={onUnreadBot}
+    />,
+  );
+
+  await waitFor(() => expect(client.onEvent).toBeTruthy());
+  act(() => {
+    client.emit(chatDoneEvent({ dedupeKey: "other-visible-dedupe", botAlias: "team2" }));
+  });
+
+  expect(await screen.findByRole("status")).toHaveTextContent("聊天已完成");
+  expect(onUnreadBot).toHaveBeenCalledWith("team2");
 });
 
 test("hidden chat completion uses browser notification when permission is granted", async () => {

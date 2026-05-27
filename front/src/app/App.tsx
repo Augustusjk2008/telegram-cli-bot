@@ -304,6 +304,16 @@ export function App() {
     }
     return botSummaryByAlias.get(currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
   }, [botSummaryByAlias, bots, currentBot]);
+  const visibleChatBotAlias = currentBot
+    && !showBotManager
+    && !showAdminCenter
+    && (
+      effectiveLayoutMode === "desktop"
+        ? desktopChatPaneVisible
+        : currentTab === "chat"
+    )
+    ? currentBot
+    : null;
   const canOperateCurrentBot = currentBotSummary?.canOperate !== false;
   const canViewAssistantOps = effectiveLayoutMode === "desktop"
     && currentBotSummary?.botMode === "assistant"
@@ -735,6 +745,7 @@ export function App() {
       client={client}
       enabled={isLoggedIn}
       currentBotAlias={currentBot}
+      visibleChatBotAlias={visibleChatBotAlias}
       onUnreadBot={markBotUnread}
     />
   );

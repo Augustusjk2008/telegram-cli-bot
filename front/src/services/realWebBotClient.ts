@@ -355,6 +355,7 @@ type RawChatMessageContextUsage = {
   used_display?: string;
   window_display?: string;
   status_text?: string;
+  compaction_count?: number;
 };
 
 type RawChatTraceDetails = {
@@ -1724,6 +1725,9 @@ function mapContextUsage(raw?: RawChatMessageContextUsage | null): ChatMessageCo
   }
   if (raw.status_text) {
     contextUsage.statusText = raw.status_text;
+  }
+  if (typeof raw.compaction_count === "number" && raw.compaction_count > 0) {
+    contextUsage.compactionCount = raw.compaction_count;
   }
   return Object.keys(contextUsage).length > 0 ? contextUsage : undefined;
 }

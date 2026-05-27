@@ -572,6 +572,38 @@ test("marks a bot unread after a hidden reply completes and clears it on return"
   expect(screen.queryByText("未读")).not.toBeInTheDocument();
 });
 
+test("does not mark current visible bot unread when its reply completes", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "sendMessage").mockImplementation(
+    async (_botAlias: string, _text: string, _onChunk: (chunk: string) => void): Promise<ChatMessage> =>
+      new Promise((resolve) => {
+        window.setTimeout(() => {
+          resolve({
+            id: "assistant-visible",
+            role: "assistant",
+            text: "当前页完成",
+            createdAt: new Date().toISOString(),
+            state: "done",
+          });
+        }, 100);
+      }),
+  );
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "123");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续处理");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(await screen.findByText("当前页完成")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  expect(within(screen.getByRole("button", { name: "main" })).queryByTestId("bot-switcher-unread-indicator")).not.toBeInTheDocument();
+  expect(screen.queryByText("未读")).not.toBeInTheDocument();
+});
+
 test("desktop header shows an unread indicator when another bot has unread messages", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();

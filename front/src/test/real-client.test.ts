@@ -468,6 +468,7 @@ describe("RealWebBotClient", () => {
               used_display: "76.6K",
               window_display: "258K",
               status_text: "74% context left · 76.6K / 258K",
+              compaction_count: 2,
             },
           },
         }],
@@ -479,7 +480,7 @@ describe("RealWebBotClient", () => {
             read: vi.fn()
               .mockResolvedValueOnce({
                 value: encoder.encode(
-                  "data: {\"type\":\"done\",\"message\":{\"id\":\"assistant-stream\",\"role\":\"assistant\",\"content\":\"流式回复\",\"created_at\":\"2026-05-08T09:06:00+08:00\",\"state\":\"done\",\"meta\":{\"context_usage\":{\"provider\":\"codex\",\"source\":\"codex_session_token_count\",\"session_id\":\"thread-2\",\"used_tokens\":76593,\"context_window\":258400,\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\"}}}}\n\n",
+                  "data: {\"type\":\"done\",\"message\":{\"id\":\"assistant-stream\",\"role\":\"assistant\",\"content\":\"流式回复\",\"created_at\":\"2026-05-08T09:06:00+08:00\",\"state\":\"done\",\"meta\":{\"context_usage\":{\"provider\":\"codex\",\"source\":\"codex_session_token_count\",\"session_id\":\"thread-2\",\"used_tokens\":76593,\"context_window\":258400,\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\",\"compaction_count\":1}}}}\n\n",
                 ),
                 done: false,
               })
@@ -495,8 +496,10 @@ describe("RealWebBotClient", () => {
 
     expect(history[0].meta?.contextUsage?.sessionId).toBe("thread-1");
     expect(history[0].meta?.contextUsage?.statusText).toBe("74% context left · 76.6K / 258K");
+    expect(history[0].meta?.contextUsage?.compactionCount).toBe(2);
     expect(sent.meta?.contextUsage?.sessionId).toBe("thread-2");
     expect(sent.meta?.contextUsage?.usedTokens).toBe(76593);
+    expect(sent.meta?.contextUsage?.compactionCount).toBe(1);
   });
 
   test("executePlan posts plan content and maps execution payload", async () => {
@@ -3005,7 +3008,7 @@ describe("RealWebBotClient", () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(encoder.encode("event: meta\ndata: {\"type\":\"meta\",\"cli_type\":\"codex\"}\n\n"));
-        controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"preview_text\":\"处理中预览\",\"context_usage\":{\"provider\":\"codex\",\"source\":\"codex_session_token_count\",\"session_id\":\"thread-1\",\"used_tokens\":76593,\"context_window\":258400,\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: status\ndata: {\"elapsed_seconds\":2,\"preview_text\":\"处理中预览\",\"context_usage\":{\"provider\":\"codex\",\"source\":\"codex_session_token_count\",\"session_id\":\"thread-1\",\"used_tokens\":76593,\"context_window\":258400,\"context_left_percent\":74,\"used_display\":\"76.6K\",\"window_display\":\"258K\",\"status_text\":\"74% context left · 76.6K / 258K\",\"compaction_count\":1}}\n\n"));
         controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\",\"elapsed_seconds\":4}\n\n"));
         controller.close();
       },
@@ -3033,7 +3036,7 @@ describe("RealWebBotClient", () => {
     const client = new RealWebBotClient();
     await client.login("secret-token");
 
-    const statuses: Array<{ elapsedSeconds?: number; previewText?: string; contextUsage?: { sessionId?: string; statusText?: string } }> = [];
+    const statuses: Array<{ elapsedSeconds?: number; previewText?: string; contextUsage?: { sessionId?: string; statusText?: string; compactionCount?: number } }> = [];
     const message = await client.sendMessage("main", "hello", () => undefined, (status) => {
       statuses.push(status);
     });
@@ -3045,6 +3048,7 @@ describe("RealWebBotClient", () => {
         contextUsage: expect.objectContaining({
           sessionId: "thread-1",
           statusText: "74% context left · 76.6K / 258K",
+          compactionCount: 1,
         }),
       },
     ]);
