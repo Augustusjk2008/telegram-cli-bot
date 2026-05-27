@@ -9,6 +9,7 @@ def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
 
     assert "managed_bots.json" in ignore
     assert ".web_admin_settings.json" in ignore
+    assert ".web_announcement_reads.json" in ignore
     assert ".web_tunnel_state.json" in ignore
     assert ".updates/" in ignore
     assert ".release-local/" in ignore
@@ -18,6 +19,7 @@ def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
 
 
 def test_lan_chat_runtime_files_are_protected_during_update():
+    assert ".web_announcement_reads.json" in updater.PROTECTED_UPDATE_PATHS
     assert ".web_lan_chat.json" in updater.PROTECTED_UPDATE_PATHS
     assert ".web_lan_chat_messages.json" in updater.PROTECTED_UPDATE_PATHS
 

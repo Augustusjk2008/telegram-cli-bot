@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .session_store.json
 .web_admin_settings.json
+.web_announcement_reads.json
 .web_lan_chat.json
 .web_lan_chat_messages.json
 .web_permissions.json

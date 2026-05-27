@@ -62,6 +62,66 @@ def test_store_marks_latest_seen_per_user(tmp_path: Path) -> None:
     assert store.list_for_user("other")["has_unseen"] is True
 
 
+def test_store_mark_seen_writes_sidecar_without_touching_content_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bot.web.announcement_store as announcement_store
+
+    content_path = tmp_path / "announcements.json"
+    reads_path = tmp_path / "reads.json"
+    store = AnnouncementStore(content_path, reads_path=reads_path)
+    store.upsert_item(_announcement(id="ann-new"))
+    content_before = json.loads(content_path.read_text(encoding="utf-8"))
+    monkeypatch.setattr(announcement_store, "_now_iso", lambda: "2099-01-01T00:00:00+08:00", raising=False)
+
+    store.mark_seen("admin", "ann-new")
+
+    content_after = json.loads(content_path.read_text(encoding="utf-8"))
+    reads_after = json.loads(reads_path.read_text(encoding="utf-8"))
+    assert "reads" not in content_after
+    assert content_after["updated_at"] == content_before["updated_at"]
+    assert reads_after == {
+        "version": 1,
+        "updated_at": "2099-01-01T00:00:00+08:00",
+        "reads": {
+            "admin": {
+                "last_seen_id": "ann-new",
+                "seen_at": "2099-01-01T00:00:00+08:00",
+            },
+        },
+    }
+
+
+def test_store_reads_legacy_content_reads_and_drops_them_on_next_content_save(tmp_path: Path) -> None:
+    content_path = tmp_path / "announcements.json"
+    content_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-05-13T09:00:00+08:00",
+                "items": [_announcement(id="ann-new")],
+                "reads": {
+                    "admin": {
+                        "last_seen_id": "ann-new",
+                        "seen_at": "2026-05-13T10:00:00+08:00",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    store = AnnouncementStore(content_path, reads_path=tmp_path / "reads.json")
+
+    result = store.list_for_user("admin")
+    store.upsert_item(_announcement(id="ann-next", published_at="2026-05-14T09:00:00+08:00"))
+
+    content_after = json.loads(content_path.read_text(encoding="utf-8"))
+    assert result["has_unseen"] is False
+    assert "reads" not in content_after
+
+
 def test_store_create_item_generates_id_and_publish_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import bot.web.announcement_store as announcement_store
 

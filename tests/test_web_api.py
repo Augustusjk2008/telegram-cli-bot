@@ -2321,6 +2321,22 @@ def test_move_path_moves_file_into_target_directory(web_manager: MultiBotManager
     assert (target / "notes.md").read_text(encoding="utf-8") == "# hello\n"
 
 
+def test_move_path_moves_file_to_workspace_root(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    source_parent = workspace / "docs"
+    source_parent.mkdir(parents=True)
+    source = source_parent / "notes.md"
+    source.write_text("# hello\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = move_path(web_manager, "main", 1001, "docs/notes.md", "")
+
+    assert result["old_path"] == "docs/notes.md"
+    assert result["path"] == "notes.md"
+    assert not source.exists()
+    assert (workspace / "notes.md").read_text(encoding="utf-8") == "# hello\n"
+
+
 def test_move_path_moves_directory_into_target_directory(web_manager: MultiBotManager, temp_dir: Path):
     workspace = temp_dir / "workspace"
     source = workspace / "src"
@@ -2336,6 +2352,21 @@ def test_move_path_moves_directory_into_target_directory(web_manager: MultiBotMa
     assert result["path"] == "docs/src"
     assert not source.exists()
     assert (target / "src" / "main.py").read_text(encoding="utf-8") == "print('hi')\n"
+
+
+def test_move_path_moves_directory_to_workspace_root(web_manager: MultiBotManager, temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    source = workspace / "docs" / "src"
+    source.mkdir(parents=True)
+    (source / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    change_working_directory(web_manager, "main", 1001, str(workspace))
+
+    result = move_path(web_manager, "main", 1001, "docs/src", "")
+
+    assert result["old_path"] == "docs/src"
+    assert result["path"] == "src"
+    assert not source.exists()
+    assert (workspace / "src" / "main.py").read_text(encoding="utf-8") == "print('hi')\n"
 
 
 def test_move_path_rejects_directory_into_own_descendant(web_manager: MultiBotManager, temp_dir: Path):

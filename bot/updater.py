@@ -28,6 +28,7 @@ PROTECTED_UPDATE_PATHS = {
     "managed_bots.json",
     ".session_store.json",
     ".web_admin_settings.json",
+    ".web_announcement_reads.json",
     ".web_tunnel_state.json",
     ".web_lan_chat.json",
     ".web_lan_chat_messages.json",
@@ -37,6 +38,8 @@ PROTECTED_UPDATE_PATHS = {
     ".updates",
 }
 DISTRIBUTION_MARKER_FILE = ".distribution.json"
+ANNOUNCEMENTS_FILE = ".web_announcements.json"
+ANNOUNCEMENT_READS_FILE = ".web_announcement_reads.json"
 WINDOWS_INSTALLER_PACKAGE_KIND = "installer"
 WINDOWS_PORTABLE_PACKAGE_KIND = "portable"
 LINUX_PACKAGE_KIND = "linux"
@@ -356,6 +359,11 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
         }
 
     write_plan = _build_update_write_plan(repo_root, package_entry_paths)
+    _preserve_legacy_announcement_reads(
+        repo_root,
+        [relative_path for _target_path, relative_path in write_plan],
+        log_callback=log_callback,
+    )
     needs_frontend_build = _needs_frontend_build(
         repo_root,
         [relative_path for _target_path, relative_path in write_plan],
@@ -877,6 +885,40 @@ def _build_update_write_plan(
             continue
         plan.append((repo_root / relative_path, relative_path))
     return plan
+
+
+def _preserve_legacy_announcement_reads(
+    repo_root: Path,
+    relative_paths: list[str],
+    *,
+    log_callback: Any | None = None,
+) -> None:
+    normalized_paths = {str(path or "").replace("\\", "/").strip("/") for path in relative_paths}
+    if ANNOUNCEMENTS_FILE not in normalized_paths:
+        return
+
+    content_path = repo_root / ANNOUNCEMENTS_FILE
+    reads_path = repo_root / ANNOUNCEMENT_READS_FILE
+    if reads_path.exists() or not content_path.exists():
+        return
+
+    try:
+        data = json.loads(content_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    reads = data.get("reads")
+    if not isinstance(reads, dict) or not reads:
+        return
+
+    payload = {
+        "version": 1,
+        "updated_at": str(data.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+        "reads": reads,
+    }
+    reads_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _emit_apply_log(log_callback, "已迁移公告已读状态到本地 sidecar。")
 
 
 def _backup_update_targets(

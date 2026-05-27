@@ -1,4 +1,14 @@
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type DragEventHandler,
+  type MutableRefObject,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { clsx } from "clsx";
 
 type Props<T> = {
@@ -7,6 +17,10 @@ type Props<T> = {
   overscan?: number;
   className?: string;
   dataTestId?: string;
+  viewportRef?: MutableRefObject<HTMLDivElement | null>;
+  onDragOver?: DragEventHandler<HTMLDivElement>;
+  onDragLeave?: DragEventHandler<HTMLDivElement>;
+  onDrop?: DragEventHandler<HTMLDivElement>;
   getKey: (item: T, index: number) => string;
   renderRow: (item: T, index: number) => ReactNode;
 };
@@ -24,10 +38,14 @@ export function VirtualList<T>({
   overscan = 8,
   className,
   dataTestId,
+  viewportRef,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   getKey,
   renderRow,
 }: Props<T>) {
-  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const localViewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportHeight, setViewportHeight] = useState(FALLBACK_VIEWPORT_HEIGHT);
   const scrollTopRef = useRef(0);
   const scrollFrameRef = useRef<number | null>(null);
@@ -42,7 +60,7 @@ export function VirtualList<T>({
   const [visibleRange, setVisibleRange] = useState<VisibleRange>(() => computeVisibleRange(0, FALLBACK_VIEWPORT_HEIGHT));
 
   useLayoutEffect(() => {
-    const element = viewportRef.current;
+    const element = localViewportRef.current;
     if (!element) {
       return;
     }
@@ -89,11 +107,21 @@ export function VirtualList<T>({
     [effectiveVisibleRange.endIndex, effectiveVisibleRange.startIndex, items],
   );
 
+  const setViewportElement = useCallback((element: HTMLDivElement | null) => {
+    localViewportRef.current = element;
+    if (viewportRef) {
+      viewportRef.current = element;
+    }
+  }, [viewportRef]);
+
   return (
     <div
-      ref={viewportRef}
+      ref={setViewportElement}
       data-testid={dataTestId}
       className={clsx("min-h-0 overflow-auto", className)}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       onScroll={(event) => {
         scrollTopRef.current = event.currentTarget.scrollTop;
         if (scrollFrameRef.current !== null) {

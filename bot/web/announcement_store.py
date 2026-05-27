@@ -38,16 +38,18 @@ def _next_announcement_id(existing_ids: set[str], base_id: str) -> str:
 
 
 class AnnouncementStore:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, reads_path: Path | str | None = None) -> None:
         self.path = Path(path)
+        self.reads_path = Path(reads_path) if reads_path is not None else self.path.with_name(".web_announcement_reads.json")
         self._lock = threading.RLock()
 
     def list_for_user(self, account_id: str) -> dict[str, Any]:
         with self._lock:
-            data = self._load()
-            items = self._sorted_items(data)
+            content = self._load_content()
+            reads = self._load_reads(content)
+            items = self._sorted_items(content)
             latest_id = items[0]["id"] if items else ""
-            read = data.get("reads", {}).get(str(account_id or "").strip(), {})
+            read = reads.get(str(account_id or "").strip(), {})
             last_seen_id = str(read.get("last_seen_id") or "")
         return {
             "items": items,
@@ -62,33 +64,33 @@ class AnnouncementStore:
         if not account_key:
             raise ValueError("账号 ID 不能为空")
         with self._lock:
-            data = self._load()
-            ids = {str(item.get("id") or "") for item in data.get("items", [])}
+            content = self._load_content()
+            ids = {str(item.get("id") or "") for item in content.get("items", [])}
             if resolved_id and resolved_id not in ids:
                 raise ValueError("公告不存在")
-            data.setdefault("reads", {})[account_key] = {
+            reads = self._load_reads(content)
+            reads[account_key] = {
                 "last_seen_id": resolved_id,
                 "seen_at": _now_iso(),
             }
-            data["updated_at"] = _now_iso()
-            self._save(data)
+            self._save_reads(reads)
         return self.list_for_user(account_key)
 
     def upsert_item(self, item: dict[str, Any]) -> dict[str, Any]:
         normalized = self._validate_item(item)
         with self._lock:
-            data = self._load()
+            data = self._load_content()
             items = [current for current in data.get("items", []) if current.get("id") != normalized["id"]]
             items.append(normalized)
             data["items"] = items
             data["updated_at"] = _now_iso()
-            self._save(data)
+            self._save_content(data)
         return deepcopy(normalized)
 
     def create_item(self, item: dict[str, Any]) -> dict[str, Any]:
         published_at = _now_announcement_datetime().replace(second=0, microsecond=0)
         with self._lock:
-            data = self._load()
+            data = self._load_content()
             existing_ids = {str(current.get("id") or "") for current in data.get("items", []) if isinstance(current, dict)}
             generated = dict(item)
             generated["id"] = _next_announcement_id(existing_ids, _announcement_id_base(published_at))
@@ -96,24 +98,24 @@ class AnnouncementStore:
             normalized = self._validate_item(generated)
             data.setdefault("items", []).append(normalized)
             data["updated_at"] = _now_iso()
-            self._save(data)
+            self._save_content(data)
         return deepcopy(normalized)
 
     def delete_item(self, item_id: str) -> bool:
         resolved_id = str(item_id or "").strip()
         with self._lock:
-            data = self._load()
+            data = self._load_content()
             before = len(data.get("items", []))
             data["items"] = [item for item in data.get("items", []) if str(item.get("id") or "") != resolved_id]
             changed = len(data["items"]) != before
             if changed:
                 data["updated_at"] = _now_iso()
-                self._save(data)
+                self._save_content(data)
         return changed
 
-    def _load(self) -> dict[str, Any]:
+    def _load_content(self) -> dict[str, Any]:
         if not self.path.exists():
-            return {"version": 1, "updated_at": _now_iso(), "items": [], "reads": {}}
+            return {"version": 1, "updated_at": _now_iso(), "items": []}
         data = json.loads(self.path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             data = {}
@@ -121,13 +123,46 @@ class AnnouncementStore:
         data.setdefault("updated_at", _now_iso())
         if not isinstance(data.get("items"), list):
             data["items"] = []
-        if not isinstance(data.get("reads"), dict):
-            data["reads"] = {}
-        return data
+        return {
+            "version": data["version"],
+            "updated_at": data["updated_at"],
+            "items": data["items"],
+        }
 
-    def _save(self, data: dict[str, Any]) -> None:
+    def _load_reads(self, content_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        if self.reads_path.exists():
+            loaded = json.loads(self.reads_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        else:
+            legacy_data = content_data if isinstance(content_data, dict) and "reads" in content_data else None
+            if legacy_data is None and self.path.exists():
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                legacy_data = loaded if isinstance(loaded, dict) else {}
+            if isinstance(legacy_data, dict):
+                data = {"reads": legacy_data.get("reads", {})}
+
+        reads = data.get("reads", {})
+        return deepcopy(reads) if isinstance(reads, dict) else {}
+
+    def _save_content(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload = {
+            "version": data.get("version", 1),
+            "updated_at": data.get("updated_at", _now_iso()),
+            "items": data.get("items", []),
+        }
+        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _save_reads(self, reads: dict[str, Any]) -> None:
+        self.reads_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "updated_at": _now_iso(),
+            "reads": reads,
+        }
+        self.reads_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def _sorted_items(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         items = [self._validate_item(item) for item in data.get("items", []) if isinstance(item, dict)]

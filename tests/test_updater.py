@@ -368,6 +368,70 @@ def test_apply_pending_update_skips_local_state_files(monkeypatch, tmp_path: Pat
     assert app_settings._load_settings()["pending_update_version"] == ""
 
 
+def test_apply_pending_update_preserves_legacy_announcement_reads(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    (repo_root / ".web_announcements.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-05-26T14:18:08+08:00",
+                "items": [{"id": "old"}],
+                "reads": {
+                    "local-admin": {
+                        "last_seen_id": "old",
+                        "seen_at": "2026-05-26T14:18:08+08:00",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    package_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(package_path, "w") as archive:
+        _write_distribution_marker(archive)
+        archive.writestr(
+            ".web_announcements.json",
+            json.dumps(
+                {
+                    "version": 1,
+                    "updated_at": "2026-05-27T09:00:00+08:00",
+                    "items": [{"id": "new"}],
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = "1.0.1"
+    current_settings["pending_update_path"] = str(package_path)
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    result = updater.apply_pending_update(repo_root)
+
+    assert result["applied"] is True
+    content_after = json.loads((repo_root / ".web_announcements.json").read_text(encoding="utf-8"))
+    reads_after = json.loads((repo_root / ".web_announcement_reads.json").read_text(encoding="utf-8"))
+    assert "reads" not in content_after
+    assert content_after["items"] == [{"id": "new"}]
+    assert reads_after == {
+        "version": 1,
+        "updated_at": "2026-05-26T14:18:08+08:00",
+        "reads": {
+            "local-admin": {
+                "last_seen_id": "old",
+                "seen_at": "2026-05-26T14:18:08+08:00",
+            },
+        },
+    }
+
+
 def test_apply_pending_update_builds_frontend_before_clearing_pending(monkeypatch, tmp_path: Path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

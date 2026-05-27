@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { FilePlus, FolderOpen, FolderPlus, House, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
-import { type DragEvent, type KeyboardEvent, type MouseEvent, useMemo, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
@@ -41,6 +41,9 @@ type FileTreeVisibleRow =
 const TREE_CONTEXT_MENU_WIDTH_PX = 152;
 const TREE_CONTEXT_MENU_PADDING_PX = 8;
 const INTERNAL_FILE_DRAG_TYPE = "application/x-tcb-file-path";
+const ROOT_DROP_TARGET = "__root__";
+const TREE_AUTO_SCROLL_EDGE_PX = 40;
+const TREE_AUTO_SCROLL_MAX_STEP_PX = 18;
 
 function branchLabel(path: string) {
   const parts = path.split("/");
@@ -901,6 +904,9 @@ export function FileTreePane({
   const [dropTargetPath, setDropTargetPath] = useState("");
   const [actionError, setActionError] = useState("");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const treeScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollFrameRef = useRef<number | null>(null);
+  const autoScrollStepRef = useRef(0);
   const inheritedDirDecorations = useMemo(() => {
     const next: Record<string, GitTreeDecorationKind> = {};
     for (const [candidate, decoration] of Object.entries(gitDecorations)) {
@@ -928,11 +934,64 @@ export function FileTreePane({
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
 
+  function stopTreeAutoScroll() {
+    autoScrollStepRef.current = 0;
+    if (autoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+  }
+
+  function runTreeAutoScroll() {
+    const viewport = treeScrollRef.current;
+    const step = autoScrollStepRef.current;
+    if (!viewport || step === 0) {
+      autoScrollFrameRef.current = null;
+      return;
+    }
+    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, viewport.scrollTop + step));
+    if (nextScrollTop === viewport.scrollTop) {
+      stopTreeAutoScroll();
+      return;
+    }
+    viewport.scrollTop = nextScrollTop;
+    viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+    autoScrollFrameRef.current = window.requestAnimationFrame(runTreeAutoScroll);
+  }
+
+  function updateTreeAutoScroll(event: DragEvent<HTMLElement>) {
+    const viewport = treeScrollRef.current;
+    if (!viewport) {
+      return;
+    }
+    const rect = viewport.getBoundingClientRect();
+    const topDistance = event.clientY - rect.top;
+    const bottomDistance = rect.bottom - event.clientY;
+    let nextStep = 0;
+    if (topDistance >= 0 && topDistance < TREE_AUTO_SCROLL_EDGE_PX) {
+      nextStep = -Math.ceil(((TREE_AUTO_SCROLL_EDGE_PX - topDistance) / TREE_AUTO_SCROLL_EDGE_PX) * TREE_AUTO_SCROLL_MAX_STEP_PX);
+    } else if (bottomDistance >= 0 && bottomDistance < TREE_AUTO_SCROLL_EDGE_PX) {
+      nextStep = Math.ceil(((TREE_AUTO_SCROLL_EDGE_PX - bottomDistance) / TREE_AUTO_SCROLL_EDGE_PX) * TREE_AUTO_SCROLL_MAX_STEP_PX);
+    }
+    autoScrollStepRef.current = nextStep;
+    if (nextStep === 0) {
+      stopTreeAutoScroll();
+      return;
+    }
+    if (autoScrollFrameRef.current === null) {
+      autoScrollFrameRef.current = window.requestAnimationFrame(runTreeAutoScroll);
+    }
+  }
+
+  useEffect(() => () => stopTreeAutoScroll(), []);
+
   function closeContextMenu() {
     setContextMenu(null);
   }
 
   function resetInternalDrag() {
+    stopTreeAutoScroll();
     setDraggedEntryPath("");
     setDropTargetPath("");
   }
@@ -1133,12 +1192,15 @@ export function FileTreePane({
     if (!canMutateFiles || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
       return;
     }
+    updateTreeAutoScroll(event);
     const sourcePath = draggedEntryPath || event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
+    event.stopPropagation();
     if (!canMoveTreeEntryToDirectory(sourcePath, entry.path)) {
+      event.dataTransfer.dropEffect = "none";
+      setDropTargetPath((current) => current === entry.path ? "" : current);
       return;
     }
     event.preventDefault();
-    event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
     setDropTargetPath(entry.path);
   }
@@ -1155,13 +1217,66 @@ export function FileTreePane({
   }
 
   function handleDirectoryDrop(event: DragEvent<HTMLButtonElement>, entry: FileTreeNode) {
-    if (!canMutateFiles || !entry.isDir || !hasInternalTreeEntryDrag(event)) {
+    if (!hasInternalTreeEntryDrag(event)) {
+      return;
+    }
+    event.stopPropagation();
+    if (!canMutateFiles || !entry.isDir) {
+      return;
+    }
+    const sourcePath = event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
+    if (!canMoveTreeEntryToDirectory(sourcePath, entry.path)) {
+      resetInternalDrag();
       return;
     }
     event.preventDefault();
-    event.stopPropagation();
-    const sourcePath = event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
     void handleMoveFile(sourcePath, entry.path);
+  }
+
+  function internalDragSourcePath(event: DragEvent<HTMLElement>) {
+    return draggedEntryPath || event.dataTransfer.getData(INTERNAL_FILE_DRAG_TYPE);
+  }
+
+  function handleRootDragOver(event: DragEvent<HTMLElement>) {
+    if (!canMutateFiles || !hasInternalTreeEntryDrag(event)) {
+      return false;
+    }
+    const sourcePath = internalDragSourcePath(event);
+    if (!canMoveTreeEntryToDirectory(sourcePath, "")) {
+      event.dataTransfer.dropEffect = "none";
+      setDropTargetPath("");
+      return true;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetPath(ROOT_DROP_TARGET);
+    updateTreeAutoScroll(event);
+    return true;
+  }
+
+  function handleTreeDragLeave(event: DragEvent<HTMLElement>) {
+    if (!hasInternalTreeEntryDrag(event)) {
+      return;
+    }
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+      return;
+    }
+    stopTreeAutoScroll();
+  }
+
+  function handleRootDrop(event: DragEvent<HTMLElement>) {
+    if (!hasInternalTreeEntryDrag(event)) {
+      return false;
+    }
+    event.preventDefault();
+    const sourcePath = internalDragSourcePath(event);
+    if (canMutateFiles && canMoveTreeEntryToDirectory(sourcePath, "")) {
+      void handleMoveFile(sourcePath, "");
+      return true;
+    }
+    resetInternalDrag();
+    return true;
   }
 
   async function handleUpload(files: File[]) {
@@ -1340,6 +1455,9 @@ export function FileTreePane({
         setDragDepth((current) => current + 1);
       }}
       onDragOver={(event) => {
+        if (handleRootDragOver(event)) {
+          return;
+        }
         if (hasInternalTreeEntryDrag(event)) {
           return;
         }
@@ -1350,15 +1468,18 @@ export function FileTreePane({
       }}
       onDragLeave={(event) => {
         if (hasInternalTreeEntryDrag(event)) {
+          const relatedTarget = event.relatedTarget;
+          if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+            return;
+          }
+          resetInternalDrag();
           return;
         }
         event.preventDefault();
         setDragDepth((current) => Math.max(0, current - 1));
       }}
       onDrop={(event) => {
-        if (hasInternalTreeEntryDrag(event)) {
-          event.preventDefault();
-          resetInternalDrag();
+        if (handleRootDrop(event)) {
           return;
         }
         event.preventDefault();
@@ -1471,7 +1592,14 @@ export function FileTreePane({
         </div>
       </div>
 
-      <div data-testid="desktop-file-tree-scroll" className="flex min-h-0 flex-1 flex-col px-2 py-2">
+      <div
+        data-testid="desktop-file-tree-scroll"
+        data-root-drop-target={dropTargetPath === ROOT_DROP_TARGET ? "true" : "false"}
+        className={clsx(
+          "flex min-h-0 flex-1 flex-col px-2 py-2",
+          dropTargetPath === ROOT_DROP_TARGET && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
+        )}
+      >
         {actionError ? (
           <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[12px] text-red-700">
             {actionError}
@@ -1485,10 +1613,22 @@ export function FileTreePane({
         ) : null}
         {!tree.loading && !tree.error ? (
           <VirtualList
+            viewportRef={treeScrollRef}
             items={visibleTreeRows}
             rowHeight={28}
             className="flex-1"
             dataTestId="desktop-file-tree-virtual-list"
+            onDragOver={(event) => {
+              if (hasInternalTreeEntryDrag(event)) {
+                updateTreeAutoScroll(event);
+              }
+            }}
+            onDragLeave={handleTreeDragLeave}
+            onDrop={(event) => {
+              if (hasInternalTreeEntryDrag(event)) {
+                stopTreeAutoScroll();
+              }
+            }}
             getKey={(row) => row.type === "entry" ? row.entry.path : `${row.branchPath}-${row.tone}`}
             renderRow={(row) => renderTreeRow(row)}
           />

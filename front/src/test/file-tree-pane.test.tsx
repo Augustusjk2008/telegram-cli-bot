@@ -66,6 +66,17 @@ function createDragData(path: string) {
   };
 }
 
+function dragOverWithClientY(
+  element: Element,
+  dataTransfer: ReturnType<typeof createDragData>,
+  clientY: number,
+) {
+  const event = new Event("dragover", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  Object.defineProperty(event, "clientY", { value: clientY });
+  fireEvent(element, event);
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -912,6 +923,224 @@ test("dragging a folder onto another folder moves it into that folder", async ()
   expect(await screen.findByRole("button", { name: "展开 docs/src" })).toBeInTheDocument();
   expectTreeRowSelected("docs/src");
   expect(screen.queryByRole("button", { name: "展开 src" })).not.toBeInTheDocument();
+});
+
+test("dragging a nested file onto the tree dropzone moves it to the root", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rootEntries: Array<{ name: string; isDir: boolean; size?: number }> = [{ name: "docs", isDir: true }];
+  let docsEntries: Array<{ name: string; isDir: boolean; size?: number }> = [
+    { name: "README.md", isDir: false, size: 12 },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return { workingDir: "/workspace", entries: rootEntries };
+    }
+    if (path === "/workspace/docs") {
+      return { workingDir: "/workspace/docs", entries: docsEntries };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+  const movePath = vi.spyOn(client, "movePath").mockImplementation(async (_botAlias, path) => {
+    docsEntries = [];
+    rootEntries = [{ name: "docs", isDir: true }, { name: "README.md", isDir: false, size: 12 }];
+    return {
+      oldPath: path,
+      path: "README.md",
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  const fileButton = await screen.findByRole("button", { name: "打开 docs/README.md" });
+  const dropzone = screen.getByTestId("desktop-file-tree-dropzone");
+  const dataTransfer = createDragData("docs/README.md");
+
+  fireEvent.dragStart(fileButton, { dataTransfer });
+  fireEvent.dragOver(dropzone, { dataTransfer });
+  fireEvent.drop(dropzone, { dataTransfer });
+
+  await waitFor(() => {
+    expect(movePath).toHaveBeenCalledWith("main", "docs/README.md", "");
+  });
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expectTreeRowSelected("README.md");
+});
+
+test("dragging a nested folder onto the tree dropzone moves it to the root", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rootEntries: Array<{ name: string; isDir: boolean; size?: number }> = [{ name: "docs", isDir: true }];
+  let docsEntries: Array<{ name: string; isDir: boolean; size?: number }> = [
+    { name: "src", isDir: true },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return { workingDir: "/workspace", entries: rootEntries };
+    }
+    if (path === "/workspace/docs") {
+      return { workingDir: "/workspace/docs", entries: docsEntries };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+  const movePath = vi.spyOn(client, "movePath").mockImplementation(async (_botAlias, path) => {
+    docsEntries = [];
+    rootEntries = [{ name: "docs", isDir: true }, { name: "src", isDir: true }];
+    return {
+      oldPath: path,
+      path: "src",
+    };
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  const sourceFolderButton = await screen.findByRole("button", { name: "展开 docs/src" });
+  const dropzone = screen.getByTestId("desktop-file-tree-dropzone");
+  const dataTransfer = createDragData("docs/src");
+
+  fireEvent.dragStart(sourceFolderButton, { dataTransfer });
+  fireEvent.dragOver(dropzone, { dataTransfer });
+  fireEvent.drop(dropzone, { dataTransfer });
+
+  await waitFor(() => {
+    expect(movePath).toHaveBeenCalledWith("main", "docs/src", "");
+  });
+  expect(await screen.findByRole("button", { name: "展开 src" })).toBeInTheDocument();
+  expectTreeRowSelected("src");
+});
+
+test("dragging a root file back over the root clears the previous folder drop target", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: [
+      { name: "docs", isDir: true },
+      { name: "README.md", isDir: false, size: 12 },
+    ],
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const sourceFileButton = await screen.findByRole("button", { name: "打开 README.md" });
+  const docsButton = await screen.findByRole("button", { name: "展开 docs" });
+  const docsRow = document.querySelector('[data-tree-path="docs"]');
+  const dropzone = screen.getByTestId("desktop-file-tree-dropzone");
+  const dataTransfer = createDragData("README.md");
+
+  fireEvent.dragStart(sourceFileButton, { dataTransfer });
+  fireEvent.dragOver(docsButton, { dataTransfer });
+  await waitFor(() => expect(docsRow).toHaveAttribute("data-drop-target", "true"));
+
+  fireEvent.dragOver(dropzone, { dataTransfer });
+  await waitFor(() => expect(docsRow).toHaveAttribute("data-drop-target", "false"));
+});
+
+test("dragging near the file tree edges scrolls the tree", async () => {
+  const client = new MockWebBotClient();
+  const rootEntries = Array.from({ length: 80 }, (_, index) => ({
+    name: `file-${index}.txt`,
+    isDir: false,
+    size: 12,
+  }));
+  const animationFrames: FrameRequestCallback[] = [];
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) => {
+    animationFrames.push(callback);
+    return animationFrames.length;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "/workspace",
+    entries: rootEntries,
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const fileButton = await screen.findByRole("button", { name: "打开 file-0.txt" });
+  const viewport = screen.getByTestId("desktop-file-tree-virtual-list");
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: 240,
+    bottom: 200,
+    width: 240,
+    height: 200,
+    toJSON: () => ({}),
+  });
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 200 });
+  Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 2240 });
+  const dataTransfer = createDragData("file-0.txt");
+  animationFrames.length = 0;
+
+  viewport.scrollTop = 100;
+  fireEvent.dragStart(fileButton, { dataTransfer });
+  dragOverWithClientY(viewport, dataTransfer, 195);
+  animationFrames.shift()?.(0);
+  expect(viewport.scrollTop).toBeGreaterThan(100);
+
+  viewport.scrollTop = 100;
+  dragOverWithClientY(viewport, dataTransfer, 5);
+  for (let index = 0; index < 4 && viewport.scrollTop >= 100; index += 1) {
+    animationFrames.shift()?.(16 + index);
+  }
+  expect(viewport.scrollTop).toBeLessThan(100);
+
+  animationFrames.length = 0;
+  viewport.scrollTop = 0;
+  dragOverWithClientY(viewport, dataTransfer, 5);
+  animationFrames.shift()?.(80);
+  expect(viewport.scrollTop).toBe(0);
+  expect(animationFrames).toHaveLength(0);
 });
 
 test("workspace open reveals file tree through one backend request", async () => {
