@@ -265,7 +265,7 @@ test("desktop workbench keeps session persistence active while guide is open", a
   fireEvent.change(editor, { target: { value: "dirty draft" } });
   await user.click(screen.getByRole("button", { name: "指南" }));
 
-  expect(await screen.findByRole("heading", { name: "欢迎使用面向协作开发的智能体操作系统" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "智能体协作开发指南" })).toBeInTheDocument();
   await waitFor(() => {
     const raw = localStorage.getItem(storageKey);
     const session = raw ? JSON.parse(raw) : null;
@@ -483,7 +483,7 @@ test("desktop workbench falls back to files for legacy guide sidebar sessions", 
 
   expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("heading", { name: "欢迎使用面向协作开发的智能体操作系统" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "智能体协作开发指南" })).not.toBeInTheDocument();
 });
 
 test("desktop workbench falls back to files when the next bot workspace has no saved session", async () => {
@@ -626,12 +626,20 @@ test("desktop workbench shows the status bar and uses the left rail to switch si
   expect(screen.getByRole("button", { name: "指南" })).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "指南" }));
-  expect(await screen.findByRole("heading", { name: "欢迎使用面向协作开发的智能体操作系统" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "智能体协作开发指南" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "指南" })).toHaveAttribute("aria-pressed", "true");
+  const guidePane = screen.getByTestId("desktop-pane-guide");
+  const guideNav = within(guidePane).getByRole("navigation", { name: "AI 使用指南目录" });
+  expect(within(guideNav).getByRole("link", { name: "提升模型能力" })).toHaveAttribute("href", "#model-capability");
+  expect(within(guideNav).getByRole("link", { name: "Assistant 运维" })).toHaveAttribute("href", "#assistant-ops");
+  expect(within(guideNav).getByRole("link", { name: "更新" })).toHaveAttribute("href", "#updates");
+  expect(within(guidePane).getByRole("heading", { name: "提升模型能力" })).toBeInTheDocument();
+  expect(within(guidePane).getByRole("heading", { name: "文件和工作区" })).toBeInTheDocument();
+  expect(within(guidePane).getByRole("heading", { name: "公告、通知、Bot 切换器和 LAN Chat" })).toBeInTheDocument();
   expect(screen.getByTestId("desktop-workbench-columns")).toHaveStyle({
     gridTemplateColumns: "48px 0px minmax(0, 1fr) 0px 0px",
   });
-  expect(screen.getByTestId("desktop-pane-guide")).toBeInTheDocument();
+  expect(guidePane).toBeInTheDocument();
   expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
   expect(screen.queryByTestId("desktop-sidebar-scroll")).not.toBeInTheDocument();
   expect(screen.queryByTestId("desktop-pane-terminal")).not.toBeInTheDocument();
