@@ -15,6 +15,7 @@ npm_bin="${NPM:-npm}"
 
 version=""
 repository="Augustusjk2008/telegram-cli-bot"
+release_branch="master"
 release_notes_file=""
 mode="BuildAndPublish"
 run_checks=0
@@ -43,6 +44,7 @@ usage() {
 选项:
   --version, -Version <version>                 版本号，如 1.0.3 或 v1.0.3
   --repository, -Repository <repo>              GitHub 仓库，默认 Augustusjk2008/telegram-cli-bot
+  --release-branch, -ReleaseBranch <branch>     发布分支，默认 master
   --release-notes-file, -ReleaseNotesFile <md>  GitHub Release body 文件
   --mode, -Mode <mode>                          BuildAndPublish | BuildOnly | PublishOnly
   --run-checks, -RunChecks                      运行发布前测试
@@ -71,6 +73,9 @@ parse_args() {
       --repository=*)
         repository="${1#*=}"
         ;;
+      --release-branch=*)
+        release_branch="${1#*=}"
+        ;;
       --release-notes-file=*)
         release_notes_file="${1#*=}"
         ;;
@@ -85,6 +90,11 @@ parse_args() {
       --repository|-Repository)
         require_value "$1" "${2:-}"
         repository="$2"
+        shift
+        ;;
+      --release-branch|-ReleaseBranch)
+        require_value "$1" "${2:-}"
+        release_branch="$2"
         shift
         ;;
       --release-notes-file|-ReleaseNotesFile)
@@ -170,6 +180,66 @@ assert_valid_version() {
   fi
 }
 
+normalize_release_branch() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ -z "$value" ]]; then
+    value="master"
+  fi
+  printf '%s' "$value"
+}
+
+assert_valid_release_branch() {
+  local value="$1"
+  if [[ -z "$value" || ! "$value" =~ ^[-0-9A-Za-z._/]+$ || "$value" == *..* || "$value" == *//* || "$value" == *@\{* || "$value" == /* || "$value" == */ || "$value" == *. || "$value" == *.lock ]]; then
+    fail "发布分支名称无效: $value"
+  fi
+}
+
+normalize_github_repository() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="${value%/}"
+  case "$value" in
+    https://github.com/*)
+      value="${value#https://github.com/}"
+      ;;
+    ssh://git@github.com/*)
+      value="${value#ssh://git@github.com/}"
+      ;;
+    git@github.com:*)
+      value="${value#git@github.com:}"
+      ;;
+  esac
+  value="${value%.git}"
+  if [[ ! "$value" =~ ^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$ ]]; then
+    fail "GitHub 仓库格式无效: $1"
+  fi
+  printf '%s' "$value"
+}
+
+assert_origin_matches_repository() {
+  local expected_repository="$1"
+  local fetch_url
+  local push_url
+  local fetch_repository
+  local push_repository
+
+  fetch_url="$(git_output "读取 origin fetch URL 失败" remote get-url origin | head -n 1)"
+  push_url="$(git_output "读取 origin push URL 失败" remote get-url --push origin | head -n 1)"
+  fetch_repository="$(normalize_github_repository "$fetch_url")"
+  push_repository="$(normalize_github_repository "$push_url")"
+
+  if [[ "${fetch_repository,,}" != "${expected_repository,,}" ]]; then
+    fail "origin fetch URL 指向 $fetch_repository，但发布仓库为 $expected_repository。"
+  fi
+  if [[ "${push_repository,,}" != "${expected_repository,,}" ]]; then
+    fail "origin push URL 指向 $push_repository，但发布仓库为 $expected_repository。"
+  fi
+}
+
 get_app_version() {
   if [[ ! -f "$version_file" ]]; then
     fail "未找到版本文件: $version_file"
@@ -222,6 +292,33 @@ get_worktree_status() {
   printf '%s\n' "$output" | sed '/^[[:space:]]*$/d'
 }
 
+assert_release_branch() {
+  local expected_branch="$1"
+  local expected_repository="$2"
+  write_step "校验发布分支 $expected_branch"
+  assert_origin_matches_repository "$expected_repository"
+
+  local current_branch
+  current_branch="$(git_output "读取当前分支失败" rev-parse --abbrev-ref HEAD | head -n 1)"
+  if [[ "$current_branch" == "HEAD" ]]; then
+    fail "当前处于 detached HEAD，不能发布。"
+  fi
+  if [[ "$current_branch" != "$expected_branch" ]]; then
+    fail "当前分支为 $current_branch，发布分支必须为 $expected_branch。"
+  fi
+
+  local remote_ref="refs/remotes/origin/$expected_branch"
+  run_checked_command "$repo_root" "拉取发布分支状态失败" git fetch --tags origin "+refs/heads/$expected_branch:$remote_ref"
+  if ! (cd "$repo_root" && git show-ref --verify --quiet "$remote_ref"); then
+    fail "未找到远端发布分支 origin/$expected_branch。"
+  fi
+  if ! (cd "$repo_root" && git merge-base --is-ancestor "origin/$expected_branch" HEAD); then
+    fail "当前分支不包含 origin/$expected_branch，请先同步远端发布分支。"
+  fi
+
+  write_info "发布分支已校验: $expected_branch"
+}
+
 assert_clean_tracked_worktree() {
   local status
   status="$(get_worktree_status 1)"
@@ -244,12 +341,12 @@ confirm_dirty_worktree_for_publish() {
   done
 
   if [[ "$auto_confirm_dirty_worktree" == "1" ]]; then
-    write_info "已启用 --auto-confirm-dirty-worktree，将在版本同步后提交当前工作区并继续发布 $normalized_version。"
+    write_info "已启用 --auto-confirm-dirty-worktree，将在发布检查后提交当前工作区并继续发布 $normalized_version。"
     return
   fi
 
   local answer
-  read -r -p "是否在版本同步后提交当前工作区并继续发布 $normalized_version？输入 y 确认: " answer
+  read -r -p "是否在发布检查后提交当前工作区并继续发布 $normalized_version？输入 y 确认: " answer
   if [[ ! "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]; then
     fail "已取消发布。"
   fi
@@ -517,6 +614,7 @@ publish_github_release() {
   local release_tag="$1"
   local repo="$2"
   local release_notes_path="$3"
+  local target_branch="$4"
 
   local gh_command
   gh_command="$(command -v gh || true)"
@@ -534,7 +632,7 @@ publish_github_release() {
   fi
 
   write_step "推送当前分支到 origin"
-  run_checked_command "$repo_root" "推送分支失败" git push origin HEAD
+  run_checked_command "$repo_root" "推送分支失败" git push origin "HEAD:refs/heads/$target_branch"
 
   write_step "推送 tag $release_tag 到 origin"
   run_checked_command "$repo_root" "推送 tag 失败" git push origin "refs/tags/$release_tag"
@@ -582,6 +680,11 @@ main() {
   local normalized_version
   normalized_version="$(normalize_version "$version")"
   assert_valid_version "$normalized_version"
+  local normalized_repository
+  normalized_repository="$(normalize_github_repository "$repository")"
+  local normalized_release_branch
+  normalized_release_branch="$(normalize_release_branch "$release_branch")"
+  assert_valid_release_branch "$normalized_release_branch"
 
   local release_tag="v$normalized_version"
   local should_build=1
@@ -593,10 +696,17 @@ main() {
     should_publish=0
   fi
 
+  if [[ "$should_publish" == "1" ]]; then
+    assert_release_branch "$normalized_release_branch" "$normalized_repository"
+  fi
+
   write_step "检查工作区状态"
   local worktree_status=()
   if [[ "$should_publish" == "1" ]]; then
     mapfile -t worktree_status < <(get_worktree_status 0)
+    if [[ "$should_build" != "1" && ${#worktree_status[@]} -gt 0 ]]; then
+      fail "PublishOnly 模式复用现有产物，不支持 dirty worktree；请先提交改动，或使用 BuildAndPublish 重新生成发布包。"
+    fi
     confirm_dirty_worktree_for_publish "$normalized_version" "${worktree_status[@]}"
   elif [[ "$allow_dirty_worktree" == "1" ]]; then
     write_info "已允许使用当前未提交改动生成本地产物。"
@@ -624,9 +734,19 @@ main() {
     fi
 
     invoke_front_build
-    new_release_archives "$normalized_version"
   else
     write_info "PublishOnly 模式，复用现有产物。"
+  fi
+
+  if [[ "$should_publish" == "1" ]]; then
+    local release_notes_path
+    release_notes_path="$(resolve_release_notes_file "$release_notes_file")"
+    commit_release_changes "$normalized_version"
+  fi
+
+  if [[ "$should_build" == "1" ]]; then
+    new_release_archives "$normalized_version"
+  else
     get_existing_release_archives "$normalized_version"
   fi
 
@@ -640,11 +760,8 @@ main() {
   write_info "macOS 包: $macos_archive"
 
   if [[ "$should_publish" == "1" ]]; then
-    local release_notes_path
-    release_notes_path="$(resolve_release_notes_file "$release_notes_file")"
-    commit_release_changes "$normalized_version"
     ensure_tag_at_head "$release_tag"
-    publish_github_release "$release_tag" "$repository" "$release_notes_path"
+    publish_github_release "$release_tag" "$normalized_repository" "$release_notes_path" "$normalized_release_branch"
   else
     write_info "已跳过 GitHub Release 发布。"
   fi

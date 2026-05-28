@@ -13,6 +13,9 @@ def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
     assert ".web_tunnel_state.json" in ignore
     assert ".updates/" in ignore
     assert ".release-local/" in ignore
+    assert "!.release-local/portable-win/" in ignore
+    assert ".release-local/portable-win/*" in ignore
+    assert "!.release-local/portable-win/build-portable.ps1" in ignore
 
     example = json.loads(Path("managed_bots.example.json").read_text(encoding="utf-8"))
     assert isinstance(example["bots"], list)
@@ -76,3 +79,34 @@ def test_publish_release_builds_and_publishes_macos_archive():
     assert "MacOSArchive" in content
     assert "未找到 macOS 包" in content
     assert "$releaseAssets += @($WindowsInstallerArchive, $LinuxArchive, $MacOSArchive)" in content
+
+
+def test_publish_release_shell_builds_and_publishes_macos_archive():
+    content = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+
+    assert '${package_base_name}-macos-universal-${normalized_version}.tar.gz' in content
+    assert 'write_distribution_marker "$stage_dir" "macos" "macos-universal"' in content
+    assert "macos_archive" in content
+    assert "未找到 macOS 包" in content
+    assert '"$windows_installer_archive" "$linux_archive" "$macos_archive"' in content
+
+
+def test_publish_release_scripts_commit_before_archiving_and_validate_branch():
+    powershell = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
+    shell = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+
+    assert "Assert-ReleaseBranch -ExpectedBranch $normalizedReleaseBranch" in powershell
+    assert "Assert-OriginMatchesRepository -ExpectedRepository $ExpectedRepository" in powershell
+    assert "HEAD:refs/heads/{0}" in powershell
+    assert "PublishOnly 模式复用现有产物，不支持 dirty worktree" in powershell
+    assert powershell.index("Commit-ReleaseChanges -NormalizedVersion $normalizedVersion") < powershell.index(
+        "$archives = New-ReleaseArchives -NormalizedVersion $normalizedVersion"
+    )
+
+    assert 'assert_release_branch "$normalized_release_branch"' in shell
+    assert 'assert_origin_matches_repository "$expected_repository"' in shell
+    assert 'HEAD:refs/heads/$target_branch' in shell
+    assert "PublishOnly 模式复用现有产物，不支持 dirty worktree" in shell
+    assert shell.index('commit_release_changes "$normalized_version"') < shell.index(
+        'new_release_archives "$normalized_version"'
+    )

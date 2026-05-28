@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
     [string]$Repository = "Augustusjk2008/telegram-cli-bot",
+    [string]$ReleaseBranch = "master",
     [string]$ReleaseNotesFile = "",
     [ValidateSet("BuildAndPublish", "BuildOnly", "PublishOnly")]
     [string]$Mode = "BuildAndPublish",
@@ -62,8 +63,16 @@ function Invoke-Git {
         [string]$FailureMessage
     )
 
-    $output = & git @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $originalLocation = Get-Location
+    try {
+        Set-Location $script:RepoRoot
+        $output = & git @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Set-Location $originalLocation
+    }
+
+    if ($exitCode -ne 0) {
         $detail = ($output | Out-String).Trim()
         if ($detail) {
             throw "{0}: {1}" -f $FailureMessage, $detail
@@ -71,6 +80,24 @@ function Invoke-Git {
         throw $FailureMessage
     }
     return @($output)
+}
+
+function Invoke-GitResult {
+    param([string[]]$Arguments)
+
+    $originalLocation = Get-Location
+    try {
+        Set-Location $script:RepoRoot
+        $output = & git @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Set-Location $originalLocation
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = @($output)
+    }
 }
 
 function Normalize-Version {
@@ -88,6 +115,69 @@ function Assert-ValidVersion {
 
     if ($Value -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
         throw "版本号格式无效: $Value。请使用如 1.0.3 或 1.0.3-beta.1。"
+    }
+}
+
+function Normalize-ReleaseBranch {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "master"
+    }
+    return $Value.Trim()
+}
+
+function Assert-ValidReleaseBranch {
+    param([string]$Value)
+
+    if (
+        [string]::IsNullOrWhiteSpace($Value) -or
+        $Value -notmatch '^[-0-9A-Za-z._/]+$' -or
+        $Value.Contains("..") -or
+        $Value.Contains("//") -or
+        $Value.Contains("@{") -or
+        $Value.StartsWith("/") -or
+        $Value.EndsWith("/") -or
+        $Value.EndsWith(".") -or
+        $Value.EndsWith(".lock")
+    ) {
+        throw "发布分支名称无效: $Value"
+    }
+}
+
+function Normalize-GitHubRepository {
+    param([string]$Value)
+
+    $text = [string]::IsNullOrWhiteSpace($Value) ? "" : $Value.Trim()
+    $patterns = @(
+        '^https://github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?/?$',
+        '^ssh://git@github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?$',
+        '^git@github\.com:(?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?$',
+        '^(?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?$'
+    )
+
+    foreach ($pattern in $patterns) {
+        if ($text -match $pattern) {
+            return "{0}/{1}" -f $Matches["owner"], $Matches["repo"]
+        }
+    }
+
+    throw "GitHub 仓库格式无效: $Value"
+}
+
+function Assert-OriginMatchesRepository {
+    param([string]$ExpectedRepository)
+
+    $fetchUrl = (Invoke-Git -Arguments @("remote", "get-url", "origin") -FailureMessage "读取 origin fetch URL 失败" | Select-Object -First 1).Trim()
+    $pushUrl = (Invoke-Git -Arguments @("remote", "get-url", "--push", "origin") -FailureMessage "读取 origin push URL 失败" | Select-Object -First 1).Trim()
+    $fetchRepository = Normalize-GitHubRepository $fetchUrl
+    $pushRepository = Normalize-GitHubRepository $pushUrl
+
+    if (-not [string]::Equals($fetchRepository, $ExpectedRepository, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "origin fetch URL 指向 $fetchRepository，但发布仓库为 $ExpectedRepository。"
+    }
+    if (-not [string]::Equals($pushRepository, $ExpectedRepository, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "origin push URL 指向 $pushRepository，但发布仓库为 $ExpectedRepository。"
     }
 }
 
@@ -137,11 +227,42 @@ function Get-WorktreeStatus {
         $arguments += "--untracked-files=no"
     }
 
-    $status = & git @arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "无法读取 git 状态。"
-    }
+    $status = Invoke-Git -Arguments $arguments -FailureMessage "无法读取 git 状态。"
     return @($status | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Assert-ReleaseBranch {
+    param(
+        [string]$ExpectedBranch,
+        [string]$ExpectedRepository
+    )
+
+    Write-Step ("校验发布分支 {0}" -f $ExpectedBranch)
+    Assert-OriginMatchesRepository -ExpectedRepository $ExpectedRepository
+
+    $currentBranch = (Invoke-Git -Arguments @("rev-parse", "--abbrev-ref", "HEAD") -FailureMessage "读取当前分支失败" | Select-Object -First 1).Trim()
+    if ($currentBranch -eq "HEAD") {
+        throw "当前处于 detached HEAD，不能发布。"
+    }
+    if ($currentBranch -ne $ExpectedBranch) {
+        throw "当前分支为 $currentBranch，发布分支必须为 $ExpectedBranch。"
+    }
+
+    $remoteRef = "refs/remotes/origin/$ExpectedBranch"
+    $fetchRefspec = "+refs/heads/{0}:{1}" -f $ExpectedBranch, $remoteRef
+    Invoke-CheckedCommand -FilePath "git" -Arguments @("fetch", "--tags", "origin", $fetchRefspec) -FailureMessage "拉取发布分支状态失败"
+
+    $remoteCheck = Invoke-GitResult -Arguments @("show-ref", "--verify", "--quiet", $remoteRef)
+    if ($remoteCheck.ExitCode -ne 0) {
+        throw "未找到远端发布分支 origin/$ExpectedBranch。"
+    }
+
+    $ancestorCheck = Invoke-GitResult -Arguments @("merge-base", "--is-ancestor", "origin/$ExpectedBranch", "HEAD")
+    if ($ancestorCheck.ExitCode -ne 0) {
+        throw "当前分支不包含 origin/$ExpectedBranch，请先同步远端发布分支。"
+    }
+
+    Write-Info ("发布分支已校验: {0}" -f $ExpectedBranch)
 }
 
 function Assert-CleanTrackedWorktree {
@@ -167,11 +288,11 @@ function Confirm-DirtyWorktreeForPublish {
     }
 
     if ($AutoConfirmDirtyWorktree) {
-        Write-Info ("已启用 -AutoConfirmDirtyWorktree，将在版本同步后提交当前工作区并继续发布 {0}。" -f $NormalizedVersion)
+        Write-Info ("已启用 -AutoConfirmDirtyWorktree，将在发布检查后提交当前工作区并继续发布 {0}。" -f $NormalizedVersion)
         return
     }
 
-    $answer = Read-Host ("是否在版本同步后提交当前工作区并继续发布 {0}？输入 y 确认" -f $NormalizedVersion)
+    $answer = Read-Host ("是否在发布检查后提交当前工作区并继续发布 {0}？输入 y 确认" -f $NormalizedVersion)
     if ($answer -notmatch "^(?i:y|yes)$") {
         throw "已取消发布。"
     }
@@ -408,8 +529,9 @@ function Ensure-TagAtHead {
     param([string]$ReleaseTag)
 
     $headCommit = (Invoke-Git -Arguments @("rev-parse", "HEAD") -FailureMessage "读取 HEAD 失败" | Select-Object -First 1).Trim()
-    $existingTag = & git rev-parse -q --verify ("refs/tags/{0}" -f $ReleaseTag) 2>$null
-    if ($LASTEXITCODE -eq 0 -and $existingTag) {
+    $existingTagResult = Invoke-GitResult -Arguments @("rev-parse", "-q", "--verify", ("refs/tags/{0}" -f $ReleaseTag))
+    $existingTag = ($existingTagResult.Output | Select-Object -First 1)
+    if ($existingTagResult.ExitCode -eq 0 -and $existingTag) {
         $tagCommit = (Invoke-Git -Arguments @("rev-list", "-n", "1", $ReleaseTag) -FailureMessage "读取 tag 提交失败" | Select-Object -First 1).Trim()
         if ($tagCommit -ne $headCommit) {
             throw "tag $ReleaseTag 已存在，但不指向当前 HEAD。"
@@ -460,7 +582,8 @@ function Publish-GitHubRelease {
         [string]$WindowsInstallerArchive,
         [string]$LinuxArchive,
         [string]$MacOSArchive,
-        [string]$ReleaseNotesFile
+        [string]$ReleaseNotesFile,
+        [string]$ReleaseBranch
     )
 
     $ghCommand = Get-Command gh -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -477,7 +600,7 @@ function Publish-GitHubRelease {
     }
 
     Write-Step "推送当前分支到 origin"
-    Invoke-CheckedCommand -FilePath "git" -Arguments @("push", "origin", "HEAD") -FailureMessage "推送分支失败"
+    Invoke-CheckedCommand -FilePath "git" -Arguments @("push", "origin", ("HEAD:refs/heads/{0}" -f $ReleaseBranch)) -FailureMessage "推送分支失败"
 
     Write-Step ("推送 tag {0} 到 origin" -f $ReleaseTag)
     Invoke-CheckedCommand -FilePath "git" -Arguments @("push", "origin", ("refs/tags/{0}" -f $ReleaseTag)) -FailureMessage "推送 tag 失败"
@@ -512,15 +635,25 @@ function Publish-GitHubRelease {
 try {
     $normalizedVersion = Normalize-Version $Version
     Assert-ValidVersion -Value $normalizedVersion
+    $normalizedRepository = Normalize-GitHubRepository $Repository
+    $normalizedReleaseBranch = Normalize-ReleaseBranch $ReleaseBranch
+    Assert-ValidReleaseBranch -Value $normalizedReleaseBranch
     $releaseTag = "v$normalizedVersion"
     $shouldBuild = $Mode -ne "PublishOnly"
     $shouldPublish = $Mode -ne "BuildOnly"
     $releaseNotesPath = ""
     $worktreeStatus = @()
 
+    if ($shouldPublish) {
+        Assert-ReleaseBranch -ExpectedBranch $normalizedReleaseBranch -ExpectedRepository $normalizedRepository
+    }
+
     Write-Step "检查工作区状态"
     if ($shouldPublish) {
         $worktreeStatus = Get-WorktreeStatus
+        if (-not $shouldBuild -and (($worktreeStatus | Out-String).Trim())) {
+            throw "PublishOnly 模式复用现有产物，不支持 dirty worktree；请先提交改动，或使用 BuildAndPublish 重新生成发布包。"
+        }
         Confirm-DirtyWorktreeForPublish -StatusLines $worktreeStatus -NormalizedVersion $normalizedVersion
     } elseif ($AllowDirtyWorktree) {
         Write-Info "已允许使用当前未提交改动生成本地产物。"
@@ -547,9 +680,18 @@ try {
         }
 
         Invoke-FrontBuild
-        $archives = New-ReleaseArchives -NormalizedVersion $normalizedVersion
     } else {
         Write-Info "PublishOnly 模式，复用现有产物。"
+    }
+
+    if ($shouldPublish) {
+        $releaseNotesPath = Resolve-ReleaseNotesFile -PathText $ReleaseNotesFile
+        Commit-ReleaseChanges -NormalizedVersion $normalizedVersion
+    }
+
+    if ($shouldBuild) {
+        $archives = New-ReleaseArchives -NormalizedVersion $normalizedVersion
+    } else {
         $archives = Get-ExistingReleaseArchives -NormalizedVersion $normalizedVersion
     }
 
@@ -563,10 +705,8 @@ try {
     Write-Info ("macOS 包: {0}" -f $archives.MacOSArchive)
 
     if ($shouldPublish) {
-        $releaseNotesPath = Resolve-ReleaseNotesFile -PathText $ReleaseNotesFile
-        Commit-ReleaseChanges -NormalizedVersion $normalizedVersion
         Ensure-TagAtHead -ReleaseTag $releaseTag
-        Publish-GitHubRelease -ReleaseTag $releaseTag -Repo $Repository -WindowsArchive $archives.WindowsArchive -WindowsInstallerArchive $archives.WindowsInstallerArchive -LinuxArchive $archives.LinuxArchive -MacOSArchive $archives.MacOSArchive -ReleaseNotesFile $releaseNotesPath
+        Publish-GitHubRelease -ReleaseTag $releaseTag -Repo $normalizedRepository -WindowsArchive $archives.WindowsArchive -WindowsInstallerArchive $archives.WindowsInstallerArchive -LinuxArchive $archives.LinuxArchive -MacOSArchive $archives.MacOSArchive -ReleaseNotesFile $releaseNotesPath -ReleaseBranch $normalizedReleaseBranch
     } else {
         Write-Info "已跳过 GitHub Release 发布。"
     }

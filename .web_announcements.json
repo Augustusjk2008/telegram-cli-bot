@@ -1,7 +1,39 @@
 {
   "version": 1,
-  "updated_at": "2026-05-27T09:43:34+08:00",
+  "updated_at": "2026-05-28T14:29:35+08:00",
   "items": [
+    {
+      "id": "ann-2026-05-28-14-29",
+      "published_at": "2026-05-28T14:29:35+08:00",
+      "publisher": "Orbit Safe Claw",
+      "title": "版本更新公告 v1.2.14",
+      "category": "release",
+      "severity": "info",
+      "summary": "完善本地发布脚本和 Windows 绿色版交付，发布包会在提交发布改动后生成，并增加发布分支与仓库校验。",
+      "sections": [
+        {
+          "label": "发布流程",
+          "items": [
+            "Windows 绿色版构建脚本已纳入版本库，发布默认会生成 Windows 绿色版包。",
+            "发布脚本改为先提交版本号和发布改动，再生成 Windows / Linux / macOS 发布包，减少 tag 与资产不一致的问题。",
+            "Bash 和 PowerShell 发布脚本都支持 `--release-branch` / `-ReleaseBranch`，默认校验 `master`。"
+          ]
+        },
+        {
+          "label": "安全校验",
+          "items": [
+            "发布前会确认当前分支、远端发布分支和 `origin` 仓库与目标 GitHub Release 仓库一致。",
+            "`PublishOnly` 模式在工作区 dirty 时会直接拒绝，避免复用旧包生成新 tag。"
+          ]
+        },
+        {
+          "label": "验证",
+          "items": [
+            "补充发布资产测试，覆盖 shell 发布脚本、提交顺序、分支校验和 portable 构建脚本入库规则。"
+          ]
+        }
+      ]
+    },
     {
       "id": "ann-2026-05-13-16-01",
       "published_at": "2026-05-13T16:01:00+08:00",

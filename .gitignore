@@ -18,6 +18,9 @@ managed_bots.json
 .worktrees/
 .release-local/*
 !.release-local/
+!.release-local/portable-win/
+.release-local/portable-win/*
+!.release-local/portable-win/build-portable.ps1
 !.release-local/publish-release.ps1
 !.release-local/publish-release.sh
 .tcb/
