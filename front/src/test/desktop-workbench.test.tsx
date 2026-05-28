@@ -1313,6 +1313,23 @@ test("focused panes maximize into the available workbench area", async () => {
   expect(centerRows).toHaveStyle({
     gridTemplateRows: "420px 3px minmax(160px, 1fr)",
   });
+
+  await user.click(await screen.findByRole("button", { name: "聚焦聊天" }));
+
+  expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-focused-pane", "chat");
+  expect(columns).toHaveStyle({
+    gridTemplateColumns: "0px 0px 0px 0px minmax(0, 1fr)",
+  });
+  expect(centerRows).toHaveStyle({
+    gridTemplateRows: "420px 3px minmax(160px, 1fr)",
+  });
+
+  await user.click(screen.getByRole("button", { name: "退出聚焦聊天" }));
+
+  expect(screen.getByTestId("desktop-workbench-root")).toHaveAttribute("data-focused-pane", "none");
+  expect(columns).toHaveStyle({
+    gridTemplateColumns: "320px 3px minmax(0, 1fr) 3px 384px",
+  });
 });
 
 test("desktop chat file links reuse the workbench preview window", async () => {

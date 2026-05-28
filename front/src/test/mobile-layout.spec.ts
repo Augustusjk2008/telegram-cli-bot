@@ -4,7 +4,24 @@ test.use({ viewport: { width: 390, height: 844 } });
 
 test("app has no horizontal overflow on mobile", async ({ page }) => {
   await page.goto("http://localhost:3000/");
+  await page.getByRole("button", { name: "以 guest 进入" }).click();
+  const closeAnnouncement = page.getByRole("button", { name: "关闭公告" });
+  if (await closeAnnouncement.isVisible()) {
+    await closeAnnouncement.click();
+  }
+
+  const actionBar = page.getByTestId("chat-action-bar");
+  await expect(actionBar).toBeVisible();
   const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const innerWidth = await page.evaluate(() => window.innerWidth);
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+
+  const actionBarBounds = await actionBar.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(actionBarBounds.scrollWidth).toBeLessThanOrEqual(actionBarBounds.clientWidth);
+  await expect(page.getByLabel("模型")).toBeVisible();
+  await expect(page.getByRole("button", { name: "计划模式" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "历史会话" })).toBeVisible();
 });

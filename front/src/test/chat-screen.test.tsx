@@ -1118,7 +1118,7 @@ test("shows a streaming placeholder before the first assistant chunk arrives", a
   expect(await screen.findByRole("heading", { name: "最终结果" })).toBeInTheDocument();
 });
 
-test("kill button is disabled while idle and highlighted while streaming", async () => {
+test("kill button is hidden while idle and shown while streaming", async () => {
   const user = userEvent.setup();
   const client = createClient({
     sendMessage: (_botAlias: string, _text: string, _onChunk: (chunk: string) => void) =>
@@ -1137,8 +1137,8 @@ test("kill button is disabled while idle and highlighted while streaming", async
 
   render(<ChatScreen botAlias="main" client={client} isVisible />);
 
-  const killButton = await screen.findByRole("button", { name: "终止任务" });
-  expect(killButton).toBeDisabled();
+  await screen.findByText("暂无消息，开始聊天吧");
+  expect(screen.queryByRole("button", { name: "终止任务" })).not.toBeInTheDocument();
 
   await user.type(screen.getByPlaceholderText("输入消息"), "继续");
   await user.click(screen.getByRole("button", { name: "发送" }));
@@ -1343,7 +1343,7 @@ test("chat action bar toggles cluster mode without resetting config", async () =
   render(<ChatScreen botAlias="main" client={client} />);
 
   const toggle = await screen.findByRole("button", { name: "开启集群模式" });
-  expect(toggle).toHaveTextContent("集群关");
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
 
   await userEvent.click(toggle);
 
@@ -1356,7 +1356,7 @@ test("chat action bar toggles cluster mode without resetting config", async () =
     modelTiers: { low: "gpt-5.4-mini", medium: "gpt-5.4", high: "gpt-5.5" },
   }));
   const closeToggle = await screen.findByRole("button", { name: "关闭集群模式" });
-  expect(closeToggle).toHaveTextContent("集群开");
+  expect(closeToggle).toHaveAttribute("aria-pressed", "true");
 
   await userEvent.click(closeToggle);
 
@@ -1368,7 +1368,7 @@ test("chat action bar toggles cluster mode without resetting config", async () =
     defaultTimeoutSeconds: 900,
     modelTiers: { low: "gpt-5.4-mini", medium: "gpt-5.4", high: "gpt-5.5" },
   }));
-  expect(await screen.findByRole("button", { name: "开启集群模式" })).toHaveTextContent("集群关");
+  expect(await screen.findByRole("button", { name: "开启集群模式" })).toHaveAttribute("aria-pressed", "false");
 });
 
 test("chat message motion keeps assistant text and trace controls accessible", async () => {
@@ -1554,7 +1554,7 @@ test("chat screen switches agent and scopes history requests", async () => {
   });
   expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "历史" }));
+  await user.click(screen.getByRole("button", { name: "历史会话" }));
   await waitFor(() => {
     expect(listConversations).toHaveBeenLastCalledWith("main", "", { agentId: "reviewer" });
   });
@@ -1671,13 +1671,58 @@ test("chat screen opens history and switches conversation", async () => {
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
-  await user.click(await screen.findByRole("button", { name: "历史" }));
+  await user.click(await screen.findByRole("button", { name: "历史会话" }));
+  expect(await screen.findByText("历史会话")).toBeInTheDocument();
   await user.click(await screen.findByRole("button", { name: "旧会话 旧回答" }));
 
   expect(await screen.findByText("旧回答")).toBeInTheDocument();
 });
 
-test("chat screen creates a new conversation from the action bar", async () => {
+test("history panel keeps search close and delete dialog accessible", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const client = createClient({
+    listConversations: async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-id",
+      items: [{
+        id: "conv-id",
+        title: "当前会话",
+        lastMessagePreview: "已有消息",
+        messageCount: 1,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "历史会话" }));
+  expect(await screen.findByText("历史会话")).toBeInTheDocument();
+
+  const search = screen.getByLabelText("搜索会话");
+  await user.type(search, "当前");
+  expect(search).toHaveValue("当前");
+
+  await user.click(screen.getByRole("button", { name: "删除会话 当前会话" }));
+  const dialog = await screen.findByRole("dialog", { name: "删除会话" });
+  expect(within(dialog).getByLabelText("同时清除关联 CLI session 存储")).toBeChecked();
+  await user.click(within(dialog).getByRole("button", { name: "取消" }));
+
+  await user.click(screen.getAllByRole("button", { name: "关闭历史会话" })[0]);
+  await waitFor(() => {
+    expect(screen.queryByText("历史会话")).not.toBeInTheDocument();
+  });
+});
+
+test("chat screen creates a new conversation from the history panel", async () => {
   const user = userEvent.setup();
   const now = new Date().toISOString();
   const createConversation = vi.fn(async (): Promise<ConversationSelectResult> => ({
@@ -1712,6 +1757,7 @@ test("chat screen creates a new conversation from the action bar", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
   expect(await screen.findByText("已有会话")).toBeInTheDocument();
 
+  await user.click(screen.getByRole("button", { name: "历史会话" }));
   await user.click(screen.getByRole("button", { name: "新会话" }));
 
   expect(createConversation).toHaveBeenCalledWith("main");
@@ -1761,7 +1807,7 @@ test("chat screen deletes active conversation and clears messages", async () => 
   render(<ChatScreen botAlias="main" client={client} />);
   expect(await screen.findByText("已有消息")).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "历史" }));
+  await user.click(screen.getByRole("button", { name: "历史会话" }));
   await user.click(await screen.findByRole("button", { name: "删除会话 当前会话" }));
 
   const dialog = await screen.findByRole("dialog", { name: "删除会话" });
@@ -1806,7 +1852,7 @@ test("chat screen blocks conversation switch while streaming", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
   await user.type(await screen.findByPlaceholderText("输入消息"), "运行");
   await user.click(screen.getByRole("button", { name: "发送" }));
-  await user.click(await screen.findByRole("button", { name: "历史" }));
+  await user.click(await screen.findByRole("button", { name: "历史会话" }));
 
   expect(await screen.findByRole("button", { name: "旧会话 旧回答" })).toBeDisabled();
 });
@@ -2395,14 +2441,15 @@ test("assistant sse recovery resolves stale runningReply when overview is idle",
   expect(screen.getByText("已修。")).toBeInTheDocument();
 });
 
-test("shows new conversation and kill actions for non-main bots", async () => {
+test("shows history action and hides idle kill action for non-main bots", async () => {
   const client = createClient();
 
   render(<ChatScreen botAlias="team2" client={client} />);
 
+  await userEvent.click(await screen.findByRole("button", { name: "历史会话" }));
   expect(await screen.findByRole("button", { name: "新会话" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "重置会话" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "终止任务" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "终止任务" })).not.toBeInTheDocument();
 });
 
 test("does not force-scroll to the bottom once the user scrolls away during streaming", async () => {

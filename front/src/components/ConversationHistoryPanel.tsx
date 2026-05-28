@@ -83,33 +83,36 @@ export function ConversationHistoryPanel({
               <History className="h-4 w-4" />
               <span>历史会话</span>
             </div>
-            <button
-              type="button"
-              aria-label="关闭历史会话"
-              onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={onNewConversation}
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+                新会话
+              </button>
+              <button
+                type="button"
+                aria-label="关闭历史会话"
+                onClick={onClose}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2">
             <Search className="h-4 w-4 text-[var(--muted)]" />
             <input
+              aria-label="搜索会话"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="搜索会话"
               className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
             />
           </div>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onNewConversation}
-            className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
-          >
-            <MessageSquarePlus className="h-4 w-4" />
-            新会话
-          </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {loading ? (

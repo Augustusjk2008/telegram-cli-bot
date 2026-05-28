@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Paperclip, Plus, Square, Trash2 } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { AgentSwitcher } from "../components/AgentSwitcher";
 import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
+import { ChatActionBar } from "../components/ChatActionBar";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
@@ -2747,7 +2747,7 @@ export function ChatScreen({
     });
   }, [botAlias, client]);
 
-  const killTaskActive = isStreaming || actionLoading === "kill";
+  const terminateVisible = isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
@@ -2840,102 +2840,31 @@ export function ChatScreen({
         </header>
       ) : null}
       {showActionBar ? (
-        <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {visibleModelOptions.length > 0 ? (
-              <select
-                aria-label="模型"
-                value={selectedModel}
-                disabled={modelSaving || readOnly}
-                onChange={(event) => void handleModelChange(event.target.value)}
-                className="h-9 shrink-0 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                {visibleModelOptions.map((model) => (
-                  <option key={model} value={model}>{model}</option>
-                ))}
-              </select>
-            ) : null}
-            {showAgentSwitcher ? (
-              <AgentSwitcher
-                agents={agents}
-                activeAgentId={activeAgentId}
-                disabled={loading}
-                onSelect={handleSelectAgent}
-              />
-            ) : null}
-            {showClusterToggle ? (
-              <button
-                type="button"
-                aria-pressed={clusterMode}
-                aria-label={clusterMode ? "关闭集群模式" : "开启集群模式"}
-                onClick={() => void handleToggleClusterMode()}
-                disabled={loading || isStreaming || clusterSaving || readOnly}
-                className={clusterMode
-                  ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
-                  : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60"}
-              >
-                {clusterSaving ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Network className="h-4 w-4" />
-                )}
-                {clusterSaving ? "保存中" : (clusterMode ? "集群开" : "集群关")}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              aria-pressed={planMode}
-              aria-label="计划模式"
-              onClick={() => setPlanMode((value) => !value)}
-              disabled={loading || isStreaming || chatMutationsDisabled}
-              className={planMode
-                ? "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 text-sm font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
-                : "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60"}
-            >
-              <ClipboardList className="h-4 w-4" />
-              计划模式
-            </button>
-            {embedded && onToggleFocus ? (
-              <button
-                type="button"
-                aria-label={focused ? "退出聚焦聊天" : "聚焦聊天"}
-                title={focused ? "退出聚焦聊天" : "聚焦聊天"}
-                onClick={onToggleFocus}
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-              >
-                {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void handleOpenHistoryPanel()}
-              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)]"
-            >
-              <History className="h-4 w-4" />
-              历史
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleNewConversation()}
-              disabled={conversationLoading || isStreaming || chatMutationsDisabled}
-              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface-strong)] disabled:opacity-60"
-            >
-              <Plus className="h-4 w-4" />
-              {conversationLoading ? "新建中..." : "新会话"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleKillTask()}
-              disabled={killTaskDisabled}
-              className={killTaskActive
-                ? "inline-flex shrink-0 items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
-                : "inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--muted)] disabled:opacity-60"}
-            >
-              <Square className="h-4 w-4" />
-              {actionLoading === "kill" ? "终止中..." : "终止任务"}
-            </button>
-          </div>
-        </section>
+        <ChatActionBar
+          visibleModelOptions={visibleModelOptions}
+          selectedModel={selectedModel}
+          modelDisabled={modelSaving || readOnly}
+          onModelChange={(model) => void handleModelChange(model)}
+          agents={showAgentSwitcher ? agents : []}
+          activeAgentId={activeAgentId}
+          agentDisabled={loading}
+          onSelectAgent={handleSelectAgent}
+          showClusterToggle={showClusterToggle}
+          clusterMode={clusterMode}
+          clusterSaving={clusterSaving}
+          clusterDisabled={loading || isStreaming || clusterSaving || readOnly}
+          onToggleClusterMode={() => void handleToggleClusterMode()}
+          planMode={planMode}
+          planDisabled={loading || isStreaming || chatMutationsDisabled}
+          onTogglePlanMode={() => setPlanMode((value) => !value)}
+          embedded={embedded}
+          focused={focused}
+          onToggleFocus={onToggleFocus}
+          onOpenHistoryPanel={() => void handleOpenHistoryPanel()}
+          onKillTask={terminateVisible ? () => void handleKillTask() : undefined}
+          killTaskDisabled={killTaskDisabled}
+          killTaskBusy={actionLoading === "kill"}
+        />
       ) : null}
       {showAssistantRuntimeBanner ? (
         <section
