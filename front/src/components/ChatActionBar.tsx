@@ -28,7 +28,7 @@ type Props = {
   killTaskBusy?: boolean;
 };
 
-const groupClassName = "inline-flex max-w-full flex-wrap items-center gap-2";
+const groupClassName = "inline-flex shrink-0 items-center gap-2";
 const neutralButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60";
 const iconButtonClassName = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]";
 
@@ -61,7 +61,7 @@ export function ChatActionBar({
     <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
       <div
         data-testid="chat-action-bar"
-        className="flex max-w-full flex-wrap items-center gap-2"
+        className="flex max-w-full gap-2 overflow-x-auto pb-1"
       >
         <div className={groupClassName} role="group" aria-label="聊天上下文">
           {visibleModelOptions.length > 0 ? (
@@ -101,7 +101,7 @@ export function ChatActionBar({
               ) : (
                 <Network className="h-4 w-4" />
               )}
-              {clusterSaving ? "保存中" : (clusterMode ? "集群开" : "集群关")}
+              {clusterSaving ? "保存中" : "集群"}
             </button>
           ) : null}
           <button
@@ -115,7 +115,7 @@ export function ChatActionBar({
               : neutralButtonClassName}
           >
             <ClipboardList className="h-4 w-4" />
-            计划模式
+            计划
           </button>
         </div>
         <div className={groupClassName} role="group" aria-label="聊天会话">

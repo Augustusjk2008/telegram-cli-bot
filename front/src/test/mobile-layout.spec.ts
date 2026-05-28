@@ -19,9 +19,11 @@ test("app has no horizontal overflow on mobile", async ({ page }) => {
   const actionBarBounds = await actionBar.evaluate((element) => ({
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
+    overflowX: window.getComputedStyle(element).overflowX,
   }));
-  expect(actionBarBounds.scrollWidth).toBeLessThanOrEqual(actionBarBounds.clientWidth);
+  expect(actionBarBounds.scrollWidth).toBeGreaterThanOrEqual(actionBarBounds.clientWidth);
+  expect(actionBarBounds.overflowX).toBe("auto");
   await expect(page.getByLabel("模型")).toBeVisible();
-  await expect(page.getByRole("button", { name: "计划模式" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "计划模式" })).toHaveText("计划");
   await expect(page.getByRole("button", { name: "历史会话" })).toBeVisible();
 });
