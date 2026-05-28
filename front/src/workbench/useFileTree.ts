@@ -544,7 +544,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     await client.createDirectory(
       botAlias,
       name,
-      parentPath ? joinAbsoluteTreePath(rootPath, parentPath) : undefined,
+      joinAbsoluteTreePath(rootPath, parentPath),
     );
     await refreshBranch(parentPath);
     const nextPath = parentPath ? `${parentPath}/${name}` : name;
@@ -557,7 +557,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       botAlias,
       filename,
       content,
-      parentPath ? joinAbsoluteTreePath(rootPath, parentPath) : undefined,
+      joinAbsoluteTreePath(rootPath, parentPath),
     );
     await refreshBranch(parentPath);
     selectPath(result.path);

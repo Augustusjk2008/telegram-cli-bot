@@ -657,6 +657,47 @@ test("new directory is created inside the selected directory", async () => {
   expectTreeRowSelected("docs/assets");
 });
 
+test("new directory at tree root uses the visible root path", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rootEntries: Array<{ name: string; isDir: boolean; size?: number }> = [
+    { name: "README.md", isDir: false, size: 12 },
+  ];
+
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue("/workspace");
+  vi.spyOn(client, "changeDirectory").mockResolvedValue("/workspace");
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias, path) => {
+    if (!path || path === "/workspace") {
+      return { workingDir: "/workspace", entries: rootEntries };
+    }
+    return { workingDir: path || "/workspace", entries: [] };
+  });
+  const createDirectory = vi.spyOn(client, "createDirectory").mockImplementation(async (_botAlias, name) => {
+    rootEntries = [{ name, isDir: true }, ...rootEntries];
+  });
+  vi.spyOn(window, "prompt").mockReturnValue("assets");
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await screen.findByRole("button", { name: "打开 README.md" });
+  await user.click(screen.getByRole("button", { name: "新建文件夹" }));
+
+  await waitFor(() => {
+    expect(createDirectory).toHaveBeenCalledWith("main", "assets", "/workspace");
+  });
+  expect(await screen.findByRole("button", { name: "展开 assets" })).toBeInTheDocument();
+  expectTreeRowSelected("assets");
+});
+
 test("file context menu copies a sibling file", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
