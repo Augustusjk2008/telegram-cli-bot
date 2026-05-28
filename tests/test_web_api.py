@@ -2784,6 +2784,41 @@ async def test_generate_git_commit_message_closes_streams_on_success(
 
 
 @pytest.mark.asyncio
+async def test_generate_git_commit_message_passes_prompt_via_communicate_input(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    tracked = repo_dir / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    _run_git_command(repo_dir, "commit", "-m", "init")
+    tracked.write_text("before\nafter\n", encoding="utf-8")
+    _run_git_command(repo_dir, "add", "tracked.txt")
+    web_manager.main_profile.working_dir = str(repo_dir)
+    fake_process = RecordingProcess()
+    fake_process.communicate = MagicMock(return_value=(
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>\\nfeat(git): stdin input\\n</COMMIT_MESSAGE>"}}',
+        None,
+    ))
+    fake_process.returncode = 0
+
+    with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.git_service.build_cli_command", return_value=(["codex"], True)), \
+         patch("bot.web.git_service._start_cli_process", return_value=fake_process):
+        result = await generate_git_commit_message(web_manager, "main", 1001)
+
+    assert result["message"] == "feat(git): stdin input"
+    fake_process.communicate.assert_called_once()
+    prompt_input = fake_process.communicate.call_args.kwargs["input"]
+    assert "diff --git a/tracked.txt b/tracked.txt" in prompt_input
+    assert prompt_input.endswith("\n")
+    assert_recording_process_closed(fake_process)
+
+
+@pytest.mark.asyncio
 async def test_generate_git_commit_message_closes_streams_on_timeout(
     web_manager: MultiBotManager,
     temp_dir: Path,
@@ -2797,7 +2832,7 @@ async def test_generate_git_commit_message_closes_streams_on_timeout(
     web_manager.main_profile.working_dir = str(repo_dir)
     fake_process = RecordingProcess()
 
-    async def never_finish(_process):
+    async def never_finish(_process, **_kwargs):
         await asyncio.sleep(10)
         return "", 0
 
@@ -2826,7 +2861,8 @@ async def test_generate_git_commit_message_closes_streams_on_stdin_broken_pipe(
     _run_git_command(repo_dir, "add", "tracked.txt")
     _run_git_command(repo_dir, "commit", "-m", "init")
     web_manager.main_profile.working_dir = str(repo_dir)
-    fake_process = RecordingProcess(stdin_fails=True)
+    fake_process = RecordingProcess()
+    fake_process.communicate = MagicMock(side_effect=BrokenPipeError("pipe closed"))
 
     with patch("bot.web.git_service.resolve_cli_executable", return_value="codex"), \
          patch("bot.web.git_service.build_cli_command", return_value=(["codex"], True)), \
@@ -2836,6 +2872,7 @@ async def test_generate_git_commit_message_closes_streams_on_stdin_broken_pipe(
 
     assert error.value.code == "git_commit_message_failed"
     fake_process.terminate.assert_called()
+    fake_process.communicate.assert_called_once()
     assert_recording_process_closed(fake_process)
 
 

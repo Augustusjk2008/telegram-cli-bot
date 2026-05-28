@@ -156,6 +156,10 @@ def _get_local_browser_url(bind: RuntimeWebBind) -> str:
     return f"http://127.0.0.1:{bind.actual_port}"
 
 
+def _allow_runtime_port_fallback() -> bool:
+    return not is_supervised_restart()
+
+
 def _env_flag_enabled(name: str, default: bool = True) -> bool:
     raw_value = os.environ.get(name)
     if raw_value is None:
@@ -380,7 +384,11 @@ async def run_all_bots():
     )
 
     manager = MultiBotManager(main_profile=main_profile, storage_file=MANAGED_BOTS_FILE)
-    runtime_bind = resolve_runtime_web_bind(config.WEB_HOST, config.WEB_PORT)
+    runtime_bind = resolve_runtime_web_bind(
+        config.WEB_HOST,
+        config.WEB_PORT,
+        allow_port_fallback=_allow_runtime_port_fallback(),
+    )
     web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
     await web_server.start()
     await manager.start_background_services(

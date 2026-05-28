@@ -83,7 +83,7 @@
       "label": "重启程序",
       "icon": "Terminal",
       "windowsCommand": "Invoke-RestMethod -Method Post \"http://127.0.0.1:8765/api/admin/restart\" -Headers @{ Authorization = \"Bearer adsadaqda2ii2ijdfq0rj1ejdsad1\" }",
-      "linuxCommand": "sudo bash -lc 'cd /home/ubuntu/telegram-cli-bot-master && if [ -f .host.pid ]; then old=$(cat .host.pid); kill -TERM -- -$old 2>/dev/null || kill -TERM $old 2>/dev/null || true; sleep 2; kill -KILL -- -$old 2>/dev/null || true; fi; mkdir -p logs; CLI_BRIDGE_ALLOW_ROOT=1 setsid bash ./start.sh >> logs/host.log 2>&1 < /dev/null & echo $! > .host.pid'",
+      "linuxCommand": "cd /home/ubuntu/telegram-cli-bot-master && TOKEN=$(awk -F= '$1==\"WEB_API_TOKEN\"{print $2}' .env | tr -d '\"'\\'\"'\"' ') && curl -fsS -X POST \"http://127.0.0.1:8765/api/admin/restart\" -H \"Authorization: Bearer $TOKEN\"",
       "macosCommand": "",
       "cwd": ".",
       "confirm": false,

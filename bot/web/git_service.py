@@ -179,9 +179,12 @@ def _terminate_process_sync(process: subprocess.Popen) -> None:
         pass
 
 
-async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
+async def _communicate_process(process: subprocess.Popen, *, input_text: str | None = None) -> tuple[str, int]:
     try:
-        output, _ = await asyncio.to_thread(process.communicate)
+        if input_text is None:
+            output, _ = await asyncio.to_thread(process.communicate)
+        else:
+            output, _ = await asyncio.to_thread(process.communicate, input=input_text)
     except Exception:
         _terminate_process_sync(process)
         raise
@@ -901,30 +904,18 @@ async def _generate_git_commit_message_from_context(
     except FileNotFoundError:
         _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
 
-    if use_stdin:
-        try:
-            assert process.stdin is not None
-            process.stdin.write(prompt_text + "\n")
-            process.stdin.flush()
-            process.stdin.close()
-        except (BrokenPipeError, OSError) as exc:
-            close_process_streams(process)
-            _terminate_process_sync(process)
-            try:
-                process.wait(timeout=1)
-            except Exception:
-                pass
-            _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
-
     try:
         raw_output, returncode = await asyncio.wait_for(
-            _communicate_process(process),
+            _communicate_process(process, input_text=prompt_text + "\n" if use_stdin else None),
             timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
         )
     except TimeoutError:
         _terminate_process_sync(process)
         close_process_streams(process)
         _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
+    except (BrokenPipeError, OSError) as exc:
+        close_process_streams(process)
+        _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
     finally:
         close_process_streams(process)
 

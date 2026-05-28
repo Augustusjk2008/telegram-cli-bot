@@ -68,7 +68,7 @@ def _iter_probe_hosts(host: str) -> tuple[str, ...]:
     return (normalized_host,)
 
 
-def resolve_runtime_web_bind(host: str, port: int) -> RuntimeWebBind:
+def resolve_runtime_web_bind(host: str, port: int, *, allow_port_fallback: bool = True) -> RuntimeWebBind:
     normalized_host = _normalize_host(host)
     configured_port = _validate_port(port)
     candidate_port = configured_port
@@ -80,6 +80,8 @@ def resolve_runtime_web_bind(host: str, port: int) -> RuntimeWebBind:
                 configured_port=configured_port,
                 actual_port=candidate_port,
             )
+        if not allow_port_fallback:
+            raise OSError(f"TCP port {configured_port} is already in use for host {normalized_host}")
         candidate_port += 1
 
     raise OSError(f"No available TCP port from {configured_port} to {_MAX_TCP_PORT} for host {normalized_host}")

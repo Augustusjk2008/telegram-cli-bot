@@ -35,6 +35,7 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     fake_event.wait = AsyncMock()
 
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
+    monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
          patch.object(main_module.asyncio, "Event", return_value=fake_event), \
@@ -66,11 +67,12 @@ async def test_run_all_bots_opens_localhost_with_actual_port(monkeypatch):
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module.config, "WEB_HOST", "0.0.0.0")
     monkeypatch.setattr(main_module.config, "WEB_PORT", 8765)
+    monkeypatch.setattr(main_module.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setenv("BROWSER", "test-browser")
     monkeypatch.setattr(
         main_module,
         "resolve_runtime_web_bind",
-        lambda host, port: main_module.RuntimeWebBind(host=host, configured_port=port, actual_port=8767),
+        lambda host, port, **kwargs: main_module.RuntimeWebBind(host=host, configured_port=port, actual_port=8767),
     )
     monkeypatch.setattr(
         main_module.webbrowser,
@@ -177,6 +179,7 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
             main_module.config.RESTART_REQUESTED = True
 
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
+    monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
          patch.object(main_module.asyncio, "Event", return_value=FakeEvent()), \

@@ -70,6 +70,15 @@ def test_resolve_runtime_web_bind_uses_next_port_when_requested_port_is_busy() -
     assert bind.port_changed is True
 
 
+def test_resolve_runtime_web_bind_rejects_busy_port_without_fallback() -> None:
+    held_socket, requested_port = _hold_tcp_port("127.0.0.1")
+    try:
+        with pytest.raises(OSError, match=f"TCP port {requested_port} is already in use"):
+            resolve_runtime_web_bind("127.0.0.1", requested_port, allow_port_fallback=False)
+    finally:
+        held_socket.close()
+
+
 def test_resolve_runtime_web_bind_uses_next_port_for_wildcard_when_loopback_port_is_busy() -> None:
     held_socket, requested_port = _hold_tcp_port("127.0.0.1")
     try:
