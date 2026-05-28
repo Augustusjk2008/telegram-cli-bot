@@ -76,12 +76,25 @@ function Reset-Directory {
 }
 
 function Get-PythonEmbedUrl {
-    $page = Invoke-WebRequest -UseBasicParsing -Uri "https://www.python.org/downloads/windows/"
     $currentVersion = (& python --version 2>&1 | Select-Object -First 1)
     if ($currentVersion -notmatch "Python (?<major>\d+)\.(?<minor>\d+)\.\d+") {
         throw "无法读取当前 Python 版本。"
     }
     $majorMinor = "{0}.{1}" -f $Matches["major"], $Matches["minor"]
+
+    $cachedZip = Get-ChildItem -LiteralPath $script:DownloadsRoot -Filter ("python-{0}.*-embed-amd64.zip" -f $majorMinor) -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($cachedZip -and $cachedZip.Name -match "^python-(?<version>\d+\.\d+\.\d+)-embed-amd64\.zip$") {
+        $version = $Matches["version"]
+        return [pscustomobject]@{
+            Version = $version
+            Url = "https://www.python.org/ftp/python/$version/python-$version-embed-amd64.zip"
+            FileName = $cachedZip.Name
+        }
+    }
+
+    $page = Invoke-WebRequest -UseBasicParsing -Uri "https://www.python.org/downloads/windows/" -TimeoutSec 30
     $match = [regex]::Match(
         $page.Content,
         "https://www\.python\.org/ftp/python/(" + [regex]::Escape($majorMinor) + "\.[0-9]+)/python-\1-amd64\.exe"
