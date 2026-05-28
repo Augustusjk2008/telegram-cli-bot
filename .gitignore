@@ -16,7 +16,10 @@ managed_bots.json
 *.log
 /docs/
 .worktrees/
-.release-local/
+.release-local/*
+!.release-local/
+!.release-local/publish-release.ps1
+!.release-local/publish-release.sh
 .tcb/
 .plugins/
 .env.copy
