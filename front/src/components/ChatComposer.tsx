@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, LoaderCircle, Maximize2, Minimize2, Paperclip, Plus, Settings, Trash2, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, LoaderCircle, Paperclip, Plus, Settings, Trash2, X } from "lucide-react";
 import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
 
 type ComposerAttachment = {
@@ -90,7 +90,6 @@ export function ChatComposer({
   const formClassName = compact ? "flex items-end gap-2" : "flex items-end gap-2";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
-  const [expanded, setExpanded] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
   const [editingPresetScope, setEditingPresetScope] = useState<PresetScope>("bot");
@@ -134,6 +133,17 @@ export function ChatComposer({
       setPresetMenuOpen(false);
     }
   }, [inputDisabled]);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, 288);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 288 ? "auto" : "hidden";
+  }, [message, inputDisabled]);
 
   function focusTextarea(cursor: number) {
     requestAnimationFrame(() => {
@@ -346,7 +356,7 @@ export function ChatComposer({
             name="message"
             value={message}
             placeholder={placeholder}
-            rows={expanded ? 6 : 1}
+            rows={1}
             disabled={inputDisabled}
             onChange={(event) => updateMessage(event.currentTarget.value, event.currentTarget.selectionStart)}
             onSelect={(event) => {
@@ -373,9 +383,7 @@ export function ChatComposer({
               }
               form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             }}
-            className={expanded
-              ? `max-h-72 w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60`
-              : `w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60`}
+            className={`max-h-72 w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60`}
           />
           {showPromptPresetControls ? (
             <button
@@ -385,9 +393,7 @@ export function ChatComposer({
               title="提示词预设"
               disabled={inputDisabled}
               onClick={() => setPresetMenuOpen((value) => !value)}
-              className={expanded
-                ? "absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--accent)] disabled:opacity-50"
-                : "absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--accent)] disabled:opacity-50"}
+              className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--accent)] disabled:opacity-50"
             >
               <ChevronDown className="h-4 w-4" />
             </button>
@@ -444,16 +450,6 @@ export function ChatComposer({
             </div>
           ) : null}
         </div>
-        <button
-          type="button"
-          aria-label={expanded ? "收起输入框" : "展开输入框"}
-          title={expanded ? "收起输入框" : "展开输入框"}
-          onClick={() => setExpanded((value) => !value)}
-          disabled={inputDisabled}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
-        >
-          {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
         <button
           type="submit"
           disabled={inputDisabled}

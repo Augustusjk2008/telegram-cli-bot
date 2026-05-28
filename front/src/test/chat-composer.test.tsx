@@ -1,7 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { ChatComposer } from "../components/ChatComposer";
+
+let restoreScrollHeightMock: (() => void) | undefined;
+
+afterEach(() => {
+  restoreScrollHeightMock?.();
+  restoreScrollHeightMock = undefined;
+});
 
 test("attachment input forwards selected files to the upload handler", async () => {
   const user = userEvent.setup();
@@ -84,8 +91,21 @@ test("typing at in cluster mode opens agent picker", async () => {
   expect(input).toHaveValue("@reviewer ");
 });
 
-test("can expand and collapse the message textarea", async () => {
+test("message textarea auto-sizes without expand controls", async () => {
   const user = userEvent.setup();
+  let mockedScrollHeight = 40;
+  const scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+  restoreScrollHeightMock = () => {
+    if (scrollHeightDescriptor) {
+      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", scrollHeightDescriptor);
+    } else {
+      Reflect.deleteProperty(HTMLTextAreaElement.prototype, "scrollHeight");
+    }
+  };
+  Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => mockedScrollHeight,
+  });
 
   render(
     <ChatComposer
@@ -97,13 +117,34 @@ test("can expand and collapse the message textarea", async () => {
   );
 
   const input = screen.getByPlaceholderText("输入消息") as HTMLTextAreaElement;
+  expect(screen.queryByRole("button", { name: "展开输入框" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "收起输入框" })).not.toBeInTheDocument();
   expect(input.rows).toBe(1);
+  expect(input.style.height).toBe("40px");
+  expect(input.style.overflowY).toBe("hidden");
 
-  await user.click(screen.getByRole("button", { name: "展开输入框" }));
-  expect(input.rows).toBe(6);
-
-  await user.click(screen.getByRole("button", { name: "收起输入框" }));
+  mockedScrollHeight = 160;
+  await user.type(input, "第一行{enter}第二行{enter}第三行");
+  await waitFor(() => {
+    expect(input.style.height).toBe("160px");
+  });
   expect(input.rows).toBe(1);
+  expect(input.style.overflowY).toBe("hidden");
+
+  mockedScrollHeight = 360;
+  await user.type(input, "{enter}第四行");
+  await waitFor(() => {
+    expect(input.style.height).toBe("288px");
+  });
+  expect(input.style.overflowY).toBe("auto");
+
+  mockedScrollHeight = 40;
+  await user.clear(input);
+  await waitFor(() => {
+    expect(input.style.height).toBe("40px");
+  });
+  expect(input.rows).toBe(1);
+  expect(input.style.overflowY).toBe("hidden");
 });
 
 test("inserts a prompt preset at the cursor", async () => {
