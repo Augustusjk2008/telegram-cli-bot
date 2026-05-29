@@ -91,6 +91,24 @@ def test_publish_release_shell_builds_and_publishes_macos_archive():
     assert '"$windows_installer_archive" "$linux_archive" "$macos_archive"' in content
 
 
+def test_publish_release_shell_generates_and_publishes_checksum_assets():
+    content = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+
+    assert "checksum_archives=()" in content
+    assert "new_sha256_file()" in content
+    assert 'if [[ -z "${path//[[:space:]]/}" || ! -f "$path" ]]; then' in content
+    assert 'local checksum_path="${path}.sha256"' in content
+    assert 'printf \'%s  %s\\n\' "$hash" "$filename" > "$checksum_path"' in content
+    assert "new_archive_checksum_files()" in content
+    assert 'for archive in "${windows_archive:-}" "${windows_installer_archive:-}" "${linux_archive:-}" "${macos_archive:-}"; do' in content
+    assert 'checksum_archives+=("$checksum")' in content
+    assert 'release_assets+=("${checksum_archives[@]}")' in content
+    assert 'windows_archive=""' in content
+    assert content.index('  new_archive_checksum_files\n\n  if [[ "$should_publish" == "1" ]]; then') < content.index(
+        'publish_github_release "$release_tag"'
+    )
+
+
 def test_publish_release_scripts_commit_before_archiving_and_validate_branch():
     powershell = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
     shell = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")

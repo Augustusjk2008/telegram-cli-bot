@@ -22,6 +22,7 @@ run_checks=0
 allow_dirty_worktree=0
 auto_confirm_dirty_worktree=0
 skip_windows_portable=0
+checksum_archives=()
 
 write_step() {
   printf '[步骤] %s\n' "$1"
@@ -443,6 +444,44 @@ new_tar_gz_archive() {
   run_checked_command "$repo_root" "创建 tar.gz 包失败" tar -C "$source_dir" -czf "$destination_file" .
 }
 
+new_sha256_file() {
+  local path="$1"
+  if [[ -z "${path//[[:space:]]/}" || ! -f "$path" ]]; then
+    return
+  fi
+
+  local hash
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash="$(sha256sum "$path" | awk '{print tolower($1)}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    hash="$(shasum -a 256 "$path" | awk '{print tolower($1)}')"
+  else
+    fail "未找到 sha256sum 或 shasum，无法生成校验文件。"
+  fi
+  if [[ -z "$hash" ]]; then
+    fail "生成校验值失败: $path"
+  fi
+
+  local checksum_path="${path}.sha256"
+  local filename
+  filename="$(basename "$path")"
+  printf '%s  %s\n' "$hash" "$filename" > "$checksum_path"
+  printf '%s\n' "$checksum_path"
+}
+
+new_archive_checksum_files() {
+  checksum_archives=()
+
+  local archive
+  local checksum
+  for archive in "${windows_archive:-}" "${windows_installer_archive:-}" "${linux_archive:-}" "${macos_archive:-}"; do
+    checksum="$(new_sha256_file "$archive")"
+    if [[ -n "${checksum//[[:space:]]/}" ]]; then
+      checksum_archives+=("$checksum")
+    fi
+  done
+}
+
 write_distribution_marker() {
   local root="$1"
   local package_kind="$2"
@@ -642,6 +681,9 @@ publish_github_release() {
     release_assets+=("$windows_archive")
   fi
   release_assets+=("$windows_installer_archive" "$linux_archive" "$macos_archive")
+  if ((${#checksum_archives[@]} > 0)); then
+    release_assets+=("${checksum_archives[@]}")
+  fi
 
   write_step "创建 GitHub Release $release_tag"
   local release_arguments=(
@@ -758,6 +800,7 @@ main() {
   write_info "Windows 安装版包: $windows_installer_archive"
   write_info "Linux 包: $linux_archive"
   write_info "macOS 包: $macos_archive"
+  new_archive_checksum_files
 
   if [[ "$should_publish" == "1" ]]; then
     ensure_tag_at_head "$release_tag"
