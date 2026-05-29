@@ -976,3 +976,52 @@ def test_chat_store_slow_log_threshold_boundary(monkeypatch, tmp_path: Path):
     assert "op=count_history" in warnings[0]
     assert "elapsed_ms=500" in warnings[0]
     assert "secret-user-text" not in warnings[0]
+
+
+def test_chat_store_migrates_conversations_to_shared_and_preserves_author(tmp_path: Path):
+    store = ChatStore(tmp_path)
+    old_handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=0,
+        user_text="Alice 问题",
+        native_provider="codex",
+        actor={"user_id": 2001, "account_id": "member-alice", "username": "alice"},
+    )
+    store.complete_turn(old_handle, content="Alice 回答", completion_state="completed")
+    shared_handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=0,
+        user_text="Bob 问题",
+        native_provider="codex",
+        actor={"user_id": 3001, "account_id": "member-bob", "username": "bob"},
+    )
+    store.complete_turn(shared_handle, content="Bob 回答", completion_state="completed")
+
+    moved = store.migrate_conversations_to_shared(1, 1001)
+
+    conversations = store.list_conversations(bot_id=1, user_id=1001, working_dir=str(tmp_path))
+    messages = store.list_messages(conversations[0]["id"])
+    user_messages = [item for item in messages if item["role"] == "user"]
+    assert moved == 1
+    assert len(conversations) == 1
+    assert [item["content"] for item in user_messages] == ["Alice 问题", "Bob 问题"]
+    assert user_messages[0]["author"] == {
+        "user_id": 2001,
+        "account_id": "member-alice",
+        "username": "alice",
+    }
+    assert user_messages[1]["author"] == {
+        "user_id": 3001,
+        "account_id": "member-bob",
+        "username": "bob",
+    }

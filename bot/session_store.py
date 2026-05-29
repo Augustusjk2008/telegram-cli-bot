@@ -187,6 +187,49 @@ def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[
     return data.get(key)
 
 
+def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
+    """将同一 bot 下旧用户会话快照合并到共享用户键。"""
+    moved = 0
+    with _store_lock:
+        if not STORE_FILE.exists():
+            return 0
+        try:
+            with open(STORE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return 0
+        except (json.JSONDecodeError, IOError):
+            return 0
+
+        next_data = dict(data)
+        for key, value in list(data.items()):
+            parsed = _parse_key(key)
+            if parsed is None:
+                continue
+            item_bot_id, user_id, agent_id = parsed
+            if item_bot_id != bot_id or user_id == shared_user_id:
+                continue
+            shared_key = _make_key(bot_id, shared_user_id, agent_id)
+            source = value if isinstance(value, dict) else {}
+            target = next_data.get(shared_key)
+            next_data[shared_key] = _merge_session_snapshots(source, target if isinstance(target, dict) else {})
+            next_data.pop(key, None)
+            moved += 1
+
+        if moved == 0:
+            return 0
+
+        try:
+            with open(STORE_FILE, "w", encoding="utf-8") as f:
+                json.dump(next_data, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            logger.error(f"保存会话存储文件失败: {e}")
+            return 0
+
+    logger.debug("已合并 bot 会话快照到共享用户: bot=%s shared_user=%s moved=%s", bot_id, shared_user_id, moved)
+    return moved
+
+
 def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_working_dir: str) -> dict[str, Any]:
     next_data = dict(data or {})
     if next_data.get("local_history_backend") == LOCAL_HISTORY_BACKEND:

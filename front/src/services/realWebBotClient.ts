@@ -292,6 +292,17 @@ type RawHistoryItem = {
   state?: ChatMessage["state"];
   elapsed_seconds?: number;
   meta?: RawChatMessageMeta;
+  author?: RawChatMessageAuthor | null;
+};
+
+type RawChatMessageAuthor = {
+  user_id?: number | string | null;
+  userId?: number | string | null;
+  account_id?: string | null;
+  accountId?: string | null;
+  username?: string | null;
+  is_current_user?: boolean | null;
+  isCurrentUser?: boolean | null;
 };
 
 type RawConversationSummary = {
@@ -1858,7 +1869,26 @@ function mergeMessageMeta(
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
+function mapChatMessageAuthor(raw?: RawChatMessageAuthor | null): ChatMessage["author"] | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const rawUserId = raw.user_id ?? raw.userId;
+  const parsedUserId = typeof rawUserId === "number" ? rawUserId : Number.parseInt(String(rawUserId || ""), 10);
+  const accountId = String(raw.account_id ?? raw.accountId ?? "").trim();
+  const username = String(raw.username ?? "").trim();
+  const isCurrentUser = raw.is_current_user ?? raw.isCurrentUser;
+  const author = {
+    ...(Number.isFinite(parsedUserId) ? { userId: parsedUserId } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(username ? { username } : {}),
+    ...(typeof isCurrentUser === "boolean" ? { isCurrentUser } : {}),
+  };
+  return Object.keys(author).length > 0 ? author : undefined;
+}
+
 function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatMessage["state"] = "done"): ChatMessage {
+  const author = mapChatMessageAuthor(raw.author);
   return {
     id: raw.id || `${raw.timestamp || raw.created_at || "history"}-${index}`,
     role: raw.role,
@@ -1868,6 +1898,7 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
     state: raw.state || fallbackState,
     ...(typeof raw.elapsed_seconds === "number" ? { elapsedSeconds: raw.elapsed_seconds } : {}),
     ...(mapMessageMeta(raw.meta) ? { meta: mapMessageMeta(raw.meta) } : {}),
+    ...(author ? { author } : {}),
   };
 }
 

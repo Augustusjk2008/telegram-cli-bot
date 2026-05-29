@@ -34,6 +34,7 @@ from bot.assistant.docs import ManagedPromptSyncResult
 from bot.assistant.home import bootstrap_assistant_home
 from bot.assistant.runtime import AssistantRunRequest
 from bot.assistant.state import save_assistant_runtime_state
+from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import AgentProfile, BotProfile, UserSession
@@ -1110,7 +1111,7 @@ def test_overview_includes_active_cluster_run_with_pending_child_task(web_manage
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True)
     run = api_service._CLUSTER_RUNTIME.start_run(
-        api_service.ClusterRunRequest(bot_alias="main", user_id=8101, profile=profile)
+        api_service.ClusterRunRequest(bot_alias="main", user_id=chat_session_user_id(None), profile=profile)
     )
     task = api_service._CLUSTER_RUNTIME.create_agent_task(
         run.run_id,
@@ -1129,7 +1130,7 @@ def test_overview_includes_active_cluster_run_with_pending_child_task(web_manage
     assert overview["active_cluster_run"]["run_id"] == run.run_id
     assert overview["active_cluster_run"]["tasks"]["pending_count"] == 1
     assert overview["active_cluster_run"]["tasks"]["tasks"][0]["agent_id"] == "tester"
-    assert get_overview(web_manager, "main", 8102)["active_cluster_run"] is None
+    assert get_overview(web_manager, "main", 8102)["active_cluster_run"]["run_id"] == run.run_id
 
     api_service._CLUSTER_RUNTIME.complete_agent_task(run.run_id, task.task_id, "done")
     assert get_overview(web_manager, "main", 8101)["active_cluster_run"] is None
@@ -1141,7 +1142,7 @@ def test_overview_finishes_idle_cluster_run_without_pending_tasks(web_manager: M
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True)
     run = api_service._CLUSTER_RUNTIME.start_run(
-        api_service.ClusterRunRequest(bot_alias="main", user_id=9101, profile=profile)
+        api_service.ClusterRunRequest(bot_alias="main", user_id=chat_session_user_id(None), profile=profile)
     )
 
     overview = get_overview(web_manager, "main", 9101)
@@ -1810,7 +1811,7 @@ def test_assistant_change_directory_persists_browser_dir_in_assistant_state(
     result = change_working_directory(web_manager, "assistant1", 1001, str(browse_dir))
 
     assert result["working_dir"] == str(browse_dir)
-    state_file = workdir / ".assistant" / "state" / "users" / "1001.json"
+    state_file = workdir / ".assistant" / "state" / "users" / f"{chat_session_user_id(None)}.json"
     assert json.loads(state_file.read_text(encoding="utf-8"))["browse_dir"] == str(browse_dir)
 
 def test_get_session_for_alias_restores_assistant_private_metadata_without_visible_history_state(
@@ -1833,7 +1834,7 @@ def test_get_session_for_alias_restores_assistant_private_metadata_without_visib
     home = bootstrap_assistant_home(workdir)
     save_assistant_runtime_state(
         home,
-        1001,
+        chat_session_user_id(None),
         {
             "browse_dir": str(browse_dir),
             "history": [{"timestamp": "2026-04-11T09:00:00", "role": "user", "content": "private state"}],
@@ -1845,7 +1846,7 @@ def test_get_session_for_alias_restores_assistant_private_metadata_without_visib
     )
     save_session(
         bot_id=resolve_session_bot_id(web_manager, "assistant1"),
-        user_id=1001,
+        user_id=chat_session_user_id(None),
         codex_session_id="project-thread",
         browse_dir=str(temp_dir / "project-store"),
         history=[{"timestamp": "2026-04-11T08:00:00", "role": "user", "content": "project store"}],
@@ -1876,12 +1877,12 @@ def test_reset_user_session_clears_assistant_private_state(
     )
 
     home = bootstrap_assistant_home(workdir)
-    save_assistant_runtime_state(home, 1001, {"history": [{"role": "user", "content": "hello"}]})
+    save_assistant_runtime_state(home, chat_session_user_id(None), {"history": [{"role": "user", "content": "hello"}]})
 
     result = api_service.reset_user_session(web_manager, "assistant1", 1001)
 
     assert result["reset"] is True
-    assert not (home.root / "state" / "users" / "1001.json").exists()
+    assert not (home.root / "state" / "users" / f"{chat_session_user_id(None)}.json").exists()
 
 def test_reset_user_session_with_live_assistant_session_does_not_recreate_private_state(
     web_manager: MultiBotManager, temp_dir: Path
@@ -1901,7 +1902,7 @@ def test_reset_user_session_with_live_assistant_session_does_not_recreate_privat
     home = bootstrap_assistant_home(workdir)
     session = get_session_for_alias(web_manager, "assistant1", 1001)
     session.add_to_history("user", "hello")
-    state_file = home.root / "state" / "users" / "1001.json"
+    state_file = home.root / "state" / "users" / f"{chat_session_user_id(None)}.json"
     assert state_file.exists()
 
     result = api_service.reset_user_session(web_manager, "assistant1", 1001)
@@ -4722,7 +4723,8 @@ async def test_blocking_workspace_file_and_git_routes_use_to_thread(
         assert read_resp.status == 200
         assert overview_resp.status == 200
         assert commit_resp.status == 200
-        to_thread_mock.assert_any_call(ls_mock, ANY, "main", 1001, path=None)
+        shared_user_id = chat_session_user_id(None)
+        to_thread_mock.assert_any_call(ls_mock, ANY, "main", shared_user_id, path=None)
         to_thread_mock.assert_any_call(outline_mock, ANY, "src/main.py")
         to_thread_mock.assert_any_call(
             definition_mock,
@@ -4732,7 +4734,7 @@ async def test_blocking_workspace_file_and_git_routes_use_to_thread(
             column=1,
             symbol="run",
         )
-        to_thread_mock.assert_any_call(read_mock, ANY, "main", 1001, "notes.md", mode="cat", lines=0)
+        to_thread_mock.assert_any_call(read_mock, ANY, "main", shared_user_id, "notes.md", mode="cat", lines=0)
         to_thread_mock.assert_any_call(overview_mock, ANY, "main", 1001)
         to_thread_mock.assert_any_call(commit_mock, ANY, "main", 1001, "feat: test")
 
@@ -5164,7 +5166,9 @@ async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
 
-    async def fake_stream_chat(manager, alias, user_id, message):
+    async def fake_stream_chat(manager, alias, user_id, message, **kwargs):
+        assert user_id == chat_session_user_id(None)
+        assert kwargs["actor"]["user_id"] == 1001
         yield {"type": "meta", "alias": alias}
         yield {"type": "delta", "text": "hello"}
         yield {"type": "done", "returncode": 0, "timed_out": False}
@@ -6657,8 +6661,9 @@ async def test_admin_rename_bot_route_keeps_existing_chat_history(
     assert restored.bot_alias == "team1"
     assert restored.bot_id == new_bot_id
     assert restored.codex_session_id == "thread-old"
-    assert load_session(old_bot_id, 1001) is None
-    persisted = load_session(new_bot_id, 1001)
+    shared_user_id = chat_session_user_id(None)
+    assert load_session(old_bot_id, shared_user_id) is None
+    persisted = load_session(new_bot_id, shared_user_id)
     assert persisted is not None
     assert persisted["codex_session_id"] == "thread-old"
 
@@ -6745,8 +6750,9 @@ async def test_admin_remove_bot_route_can_delete_history_for_all_agents(
     assert payload["data"]["history_deleted"] is True
     assert payload["data"]["history_deleted_count"] == 2
     assert "review" not in web_manager.managed_profiles
-    assert load_session(review_bot_id, 1001) is None
-    assert load_session(other_bot_id, 1001) is not None
+    shared_user_id = chat_session_user_id(None)
+    assert load_session(review_bot_id, shared_user_id) is None
+    assert load_session(other_bot_id, shared_user_id) is not None
 
     assert get_history(web_manager, "duplicate-a", 1001, limit=10)["items"][-2]["content"] == "other 问"
     with pytest.raises(WebApiError):
@@ -8257,10 +8263,46 @@ async def test_run_chat_routes_assistant_mode_to_assistant_runtime(
     runtime.submit_interactive.assert_awaited_once()
     request = runtime.submit_interactive.await_args.args[0]
     assert request.bot_alias == "assistant1"
-    assert request.user_id == 1001
+    assert request.user_id == chat_session_user_id(None)
+    assert request.context_user_id == chat_session_user_id(None)
     assert request.text == "hello"
     assert request.interactive is True
     assert data["output"] == "assistant runtime result"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_passes_actor_to_assistant_runtime(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-cli"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    runtime = MagicMock()
+    runtime.submit_interactive = AsyncMock(return_value={"output": "ok"})
+    web_manager.assistant_runtime = runtime
+
+    await run_chat(
+        web_manager,
+        "assistant1",
+        2001,
+        "hello",
+        actor={"user_id": 2001, "account_id": "member-alice", "username": "alice"},
+    )
+
+    request = runtime.submit_interactive.await_args.args[0]
+    assert request.user_id == chat_session_user_id(None)
+    assert request.context_user_id == chat_session_user_id(None)
+    assert request.actor_user_id == 2001
+    assert request.actor_account_id == "member-alice"
+    assert request.actor_username == "alice"
 
 @pytest.mark.asyncio
 async def test_admin_assistant_proposal_routes_list_and_approve(
@@ -8506,7 +8548,7 @@ def test_delete_active_conversation_clears_matching_codex_session_id(web_manager
     session.persist()
 
     deleted = delete_conversation(web_manager, "main", 1001, handle.conversation_id, delete_native_session=True)
-    persisted = load_session(session.bot_id, 1001)
+    persisted = load_session(session.bot_id, chat_session_user_id(None))
 
     assert deleted["active_conversation_id"] == ""
     assert deleted["native_session_cleared"] is True
@@ -8954,7 +8996,7 @@ def test_reset_user_session_supports_child_agent(web_manager: MultiBotManager):
     assert result["reset"] is True
     with api_service.sessions_lock:
         bot_id = resolve_session_bot_id(web_manager, "main")
-        assert (bot_id, 1001, "reviewer") not in api_service.sessions
+        assert (bot_id, chat_session_user_id(None), "reviewer") not in api_service.sessions
 
 
 def test_kill_user_process_finishes_stale_cluster_run_without_pending_tasks(
@@ -8967,7 +9009,7 @@ def test_kill_user_process_finishes_stale_cluster_run_without_pending_tasks(
     run = api_service._CLUSTER_RUNTIME.start_run(
         api_service.ClusterRunRequest(
             bot_alias="main",
-            user_id=1001,
+            user_id=chat_session_user_id(None),
             profile=web_manager.main_profile,
         )
     )
@@ -8994,7 +9036,7 @@ def test_get_processing_sessions_handles_agent_scoped_sessions(web_manager: Mult
     assert items == [
         {
             "bot_id": session.bot_id,
-            "user_id": 1001,
+            "user_id": chat_session_user_id(None),
             "agent_id": "main",
             "working_dir": session.working_dir,
             "message_count": session.message_count,
@@ -9076,7 +9118,7 @@ async def test_post_reset_passes_agent_id_from_body(web_manager: MultiBotManager
 
     payload = json.loads(response.text)
     assert payload["data"]["reset"] is True
-    reset_mock.assert_called_once_with(server.manager, "main", 1001, agent_id="reviewer")
+    reset_mock.assert_called_once_with(server.manager, "main", chat_session_user_id(None), agent_id="reviewer")
 
 
 @pytest.mark.asyncio
@@ -9094,7 +9136,7 @@ async def test_post_kill_passes_agent_id_from_body(web_manager: MultiBotManager)
 
     payload = json.loads(response.text)
     assert payload["data"]["killed"] is True
-    kill_mock.assert_called_once_with(server.manager, "main", 1001, agent_id="reviewer")
+    kill_mock.assert_called_once_with(server.manager, "main", chat_session_user_id(None), agent_id="reviewer")
 
 def test_codex_status_event_skips_json_meta_preview():
     event = _build_stream_status_event(
@@ -11085,7 +11127,9 @@ async def test_post_chat_stream_continues_processing_after_client_disconnect(web
     request = MagicMock()
     consumed: list[str] = []
 
-    async def fake_stream_chat(manager, alias, user_id, message):
+    async def fake_stream_chat(manager, alias, user_id, message, **kwargs):
+        assert user_id == chat_session_user_id(None)
+        assert kwargs["actor"]["user_id"] == 1001
         for event in [
             {"type": "meta", "alias": alias},
             {"type": "status", "elapsed_seconds": 1},
@@ -11345,7 +11389,7 @@ async def test_member_sees_all_bots_but_ungranted_bot_is_read_only(
 
 
 @pytest.mark.asyncio
-async def test_web_member_accounts_use_isolated_runtime_sessions(
+async def test_web_member_accounts_share_runtime_sessions(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -11423,18 +11467,19 @@ async def test_web_member_accounts_use_isolated_runtime_sessions(
     assert alice_user_id == alice.account.session_user_id
     assert bob_user_id == bob.account.session_user_id
     assert alice_user_id != bob_user_id
-    assert captured_chat_user_ids == [alice_user_id, bob_user_id]
+    shared_user_id = chat_session_user_id(None)
+    assert captured_chat_user_ids == [shared_user_id, shared_user_id]
     assert alice_chat.status == 200
     assert bob_chat.status == 200
-    assert get_session_for_alias(web_manager, "main", alice_user_id).codex_session_id == "thread-alice"
+    assert get_session_for_alias(web_manager, "main", alice_user_id).codex_session_id == "thread-bob"
     assert get_session_for_alias(web_manager, "main", bob_user_id).codex_session_id == "thread-bob"
     assert alice_cd.status == 200
     assert bob_pwd.status == 200
-    assert bob_pwd_payload["data"]["working_dir"] == web_manager.main_profile.working_dir
+    assert bob_pwd_payload["data"]["working_dir"] == str(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_web_member_reset_and_kill_use_isolated_runtime_sessions(
+async def test_web_member_reset_and_kill_use_shared_runtime_sessions(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -11464,15 +11509,13 @@ async def test_web_member_reset_and_kill_use_isolated_runtime_sessions(
     permissions.set_allowed_bots(bob.account.account_id, ["main"])
     monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
 
-    alice_session = get_session_for_alias(web_manager, "main", alice.account.session_user_id or 0)
-    alice_session.codex_session_id = "thread-alice"
-    bob_session = get_session_for_alias(web_manager, "main", bob.account.session_user_id or 0)
-    bob_session.codex_session_id = "thread-bob"
+    shared_session = get_session_for_alias(web_manager, "main", alice.account.session_user_id or 0)
+    shared_session.codex_session_id = "thread-shared"
     bob_process = MagicMock()
     bob_process.poll.return_value = None
-    with bob_session._lock:
-        bob_session.process = bob_process
-        bob_session.is_processing = True
+    with shared_session._lock:
+        shared_session.process = bob_process
+        shared_session.is_processing = True
 
     app = WebApiServer(web_manager)._build_app()
     alice_headers = {"Authorization": f"Bearer {alice.token}", "Host": "example.test"}
@@ -11485,8 +11528,8 @@ async def test_web_member_reset_and_kill_use_isolated_runtime_sessions(
     assert alice_reset.status == 200
     assert bob_kill.status == 200
     assert get_session_for_alias(web_manager, "main", alice.account.session_user_id or 0).codex_session_id is None
-    assert get_session_for_alias(web_manager, "main", bob.account.session_user_id or 0).codex_session_id == "thread-bob"
-    assert bob_process.poll.called is True
+    assert get_session_for_alias(web_manager, "main", bob.account.session_user_id or 0).codex_session_id is None
+    assert bob_process.terminate.called is False
 
 
 @pytest.mark.asyncio

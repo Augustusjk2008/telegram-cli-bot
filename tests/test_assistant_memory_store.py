@@ -57,3 +57,61 @@ def test_search_lexical_matches_two_char_chinese_query(tmp_path: Path):
 
     assert len(rows) == 1
     assert rows[0].title == "用户偏好"
+
+
+def test_migrate_chat_memories_to_shared_keeps_global_rows(tmp_path: Path):
+    home = bootstrap_assistant_home(tmp_path / "assistant-root")
+    store = AssistantMemoryStore(home)
+    old_id = store.upsert(
+        MemoryRecordInput(
+            user_id=2001,
+            scope="user",
+            kind="semantic",
+            source_type="chat",
+            source_ref="cap_old",
+            title="用户偏好",
+            summary="默认中文",
+            body="- 默认中文",
+            tags=["preference"],
+            entity_keys=["user:2001"],
+        )
+    )
+    global_id = store.upsert(
+        MemoryRecordInput(
+            user_id=0,
+            scope="global",
+            kind="semantic",
+            source_type="chat",
+            source_ref="cap_global",
+            title="全局规则",
+            summary="全局保留",
+            body="- 全局保留",
+            tags=["global"],
+            entity_keys=["global"],
+        )
+    )
+    store.upsert(
+        MemoryRecordInput(
+            user_id=2001,
+            scope="project",
+            kind="episodic",
+            source_type="dream",
+            source_ref="dream_old",
+            title="Dream",
+            summary="不迁移",
+            body="- 不迁移",
+        )
+    )
+
+    moved = store.migrate_chat_memories_to_shared(1001)
+
+    shared_rows = store.search_lexical(user_id=1001, query_text="默认中文", kinds=["semantic"], scopes=["user"], limit=5)
+    old_rows = store.search_lexical(user_id=2001, query_text="默认中文", kinds=["semantic"], scopes=["user"], limit=5)
+    global_rows = store.search_lexical(user_id=1001, query_text="全局保留", kinds=["semantic"], scopes=["global"], limit=5)
+    dream_rows = store.search_lexical(user_id=2001, query_text="不迁移", kinds=["episodic"], scopes=["project"], limit=5)
+
+    assert moved == 1
+    assert [row.id for row in shared_rows] == [old_id]
+    assert old_rows == []
+    assert [row.id for row in global_rows] == [global_id]
+    assert dream_rows

@@ -117,3 +117,43 @@ def test_assistant_runtime_state_cutover_drops_legacy_visible_history_fields(tmp
     assert restored.running_preview_text == ""
     assert restored.running_started_at is None
     assert restored.managed_prompt_hash_seen == "hash-before"
+
+
+def test_assistant_runtime_state_migrates_old_user_files_to_shared(tmp_path):
+    from bot.assistant.state import migrate_assistant_runtime_state_to_shared, save_assistant_runtime_state
+
+    workdir = tmp_path / "assistant-root"
+    workdir.mkdir()
+    home = bootstrap_assistant_home(workdir)
+    save_assistant_runtime_state(
+        home,
+        2001,
+        {
+            "codex_session_id": "thread-old",
+            "working_dir": str(workdir),
+            "message_count": 4,
+            "session_epoch": 1,
+            "last_activity": "2026-05-01T00:00:00+00:00",
+        },
+    )
+    save_assistant_runtime_state(
+        home,
+        1001,
+        {
+            "claude_session_id": "claude-shared",
+            "working_dir": str(workdir),
+            "message_count": 1,
+            "session_epoch": 0,
+            "last_activity": "2026-04-30T00:00:00+00:00",
+        },
+    )
+
+    moved = migrate_assistant_runtime_state_to_shared(home, 1001)
+
+    shared = json.loads((home.root / "state" / "users" / "1001.json").read_text(encoding="utf-8"))
+    assert moved == 1
+    assert shared["codex_session_id"] == "thread-old"
+    assert shared["claude_session_id"] == "claude-shared"
+    assert shared["message_count"] == 4
+    assert shared["session_epoch"] == 1
+    assert not (home.root / "state" / "users" / "2001.json").exists()

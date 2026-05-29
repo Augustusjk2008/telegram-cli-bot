@@ -215,6 +215,84 @@ class AssistantMemoryStore:
         finally:
             add_db_duration(time.perf_counter() - started_at)
 
+    def migrate_chat_memories_to_shared(self, shared_user_id: int) -> int:
+        started_at = time.perf_counter()
+        try:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM memories
+                    WHERE user_id != 0 AND user_id != ? AND source_type = 'chat'
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    (int(shared_user_id),),
+                ).fetchall()
+                moved = 0
+                for row in rows:
+                    conflict = conn.execute(
+                        """
+                        SELECT id
+                        FROM memories
+                        WHERE user_id = ? AND source_type = ? AND source_ref = ? AND kind = ? AND title = ?
+                        """,
+                        (
+                            int(shared_user_id),
+                            row["source_type"],
+                            row["source_ref"],
+                            row["kind"],
+                            row["title"],
+                        ),
+                    ).fetchone()
+                    if conflict is not None:
+                        conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (row["id"],))
+                        conn.execute("DELETE FROM memories WHERE id = ?", (row["id"],))
+                    else:
+                        entity_keys = self._replace_user_entity_keys(row["entity_keys_json"], shared_user_id)
+                        conn.execute(
+                            "UPDATE memories SET user_id = ?, entity_keys_json = ?, updated_at = ? WHERE id = ?",
+                            (int(shared_user_id), json.dumps(entity_keys, ensure_ascii=False), self._now(), row["id"]),
+                        )
+                        conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (row["id"],))
+                        conn.execute(
+                            "INSERT INTO memory_fts(memory_id, title, summary, body, tags) VALUES (?, ?, ?, ?, ?)",
+                            (
+                                row["id"],
+                                row["title"],
+                                row["summary"],
+                                row["body"],
+                                " ".join(
+                                    self._parse_json_list(row["tags_json"])
+                                    + entity_keys
+                                    + self._cjk_ngrams(f"{row['title']} {row['summary']} {row['body']}")
+                                ),
+                            ),
+                        )
+                    moved += 1
+                conn.commit()
+            return moved
+        finally:
+            add_db_duration(time.perf_counter() - started_at)
+
+    @staticmethod
+    def _parse_json_list(value: str | None) -> list[str]:
+        try:
+            data = json.loads(value or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, list):
+            return []
+        return [str(item) for item in data if str(item)]
+
+    @classmethod
+    def _replace_user_entity_keys(cls, value: str | None, shared_user_id: int) -> list[str]:
+        items = cls._parse_json_list(value)
+        replaced = [f"user:{int(shared_user_id)}" if item.startswith("user:") else item for item in items]
+        shared_key = f"user:{int(shared_user_id)}"
+        if shared_key not in replaced:
+            replaced.append(shared_key)
+        return replaced
+
     @staticmethod
     def _fts_query(query_text: str) -> str:
         text = str(query_text or "")

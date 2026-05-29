@@ -1715,6 +1715,36 @@ describe("RealWebBotClient", () => {
     ]);
   });
 
+  test("listMessages maps author", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      items: [
+        {
+          id: "msg-user",
+          role: "user",
+          content: "共享问题",
+          created_at: "2026-05-29T09:00:00+08:00",
+          state: "done",
+          author: {
+            user_id: 2001,
+            account_id: "member-alice",
+            username: "alice",
+            is_current_user: false,
+          },
+        },
+      ],
+    }));
+
+    const client = new RealWebBotClient();
+    const messages = await client.listMessages("main");
+
+    expect(messages[0].author).toEqual({
+      userId: 2001,
+      accountId: "member-alice",
+      username: "alice",
+      isCurrentUser: false,
+    });
+  });
+
   test("listConversations maps native session metadata", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

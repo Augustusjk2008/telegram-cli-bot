@@ -5,7 +5,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from bot.assistant.home import bootstrap_assistant_home
-from bot.assistant.state import attach_assistant_persist_hook, restore_assistant_runtime_state
+from bot.assistant.memory.store import AssistantMemoryStore
+from bot.assistant.state import (
+    attach_assistant_persist_hook,
+    migrate_assistant_runtime_state_to_shared,
+    restore_assistant_runtime_state,
+)
+from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.sessions import align_session_paths, get_or_create_session
@@ -86,18 +92,21 @@ def resolve_session_bot_id(manager: MultiBotManager, alias: str) -> int:
 
 def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) -> UserSession:
     profile = get_profile_or_raise(manager, alias)
+    shared_user_id = chat_session_user_id(user_id)
     session = get_or_create_session(
         bot_id=resolve_session_bot_id(manager, alias),
         bot_alias=alias,
-        user_id=user_id,
+        user_id=shared_user_id,
         default_working_dir=profile.working_dir,
         load_persisted_state=profile.bot_mode != "assistant",
     )
 
     if profile.bot_mode == "assistant" and session.persist_hook is None:
         home = bootstrap_assistant_home(profile.working_dir)
-        attach_assistant_persist_hook(session, home, user_id)
-        restore_assistant_runtime_state(session, home, user_id)
+        migrate_assistant_runtime_state_to_shared(home, shared_user_id)
+        AssistantMemoryStore(home).migrate_chat_memories_to_shared(shared_user_id)
+        attach_assistant_persist_hook(session, home, shared_user_id)
+        restore_assistant_runtime_state(session, home, shared_user_id)
 
     return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
@@ -109,19 +118,20 @@ def get_chat_session_for_alias(
     agent_id: str = "main",
 ) -> tuple[BotProfile, AgentProfile, UserSession]:
     profile = get_profile_or_raise(manager, alias)
+    shared_user_id = chat_session_user_id(user_id)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
     try:
         agent = profile.get_agent(normalized_agent_id)
     except KeyError:
         _raise(404, "agent_not_found", "未找到 agent")
     if normalized_agent_id == "main":
-        return profile, agent, get_session_for_alias(manager, alias, user_id)
+        return profile, agent, get_session_for_alias(manager, alias, shared_user_id)
     if normalized_agent_id != "main" and profile.bot_mode != "cli":
         _raise(400, "agent_not_supported", "仅 CLI Bot 支持子 agent")
     session = get_or_create_session(
         bot_id=resolve_session_bot_id(manager, alias),
         bot_alias=alias,
-        user_id=user_id,
+        user_id=shared_user_id,
         default_working_dir=profile.working_dir,
         load_persisted_state=profile.bot_mode != "assistant",
         agent_id=agent.id,

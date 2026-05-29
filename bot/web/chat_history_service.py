@@ -153,6 +153,7 @@ class ChatHistoryService:
         assistant_home: str | None = None,
         managed_prompt_hash: str | None = None,
         prompt_surface_version: str | None = None,
+        actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
         had_active_conversation = bool(_active_conversation_id(session))
         handle = self.store.begin_turn(
@@ -171,6 +172,7 @@ class ChatHistoryService:
             managed_prompt_hash=managed_prompt_hash,
             prompt_surface_version=prompt_surface_version,
             agent_prompt_hash=getattr(session, "agent_prompt_hash_seen", None),
+            actor=actor,
         )
         if not had_active_conversation:
             with session._lock:

@@ -84,7 +84,104 @@ def _normalize_optional_str(value: Any) -> str | None:
     return None
 
 
+def _state_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
+    snapshot = dict(data or {})
+    try:
+        message_count = max(0, int(snapshot.get("message_count", 0) or 0))
+    except (TypeError, ValueError):
+        message_count = 0
+    session_count = (
+        int(bool(snapshot.get("codex_session_id")))
+        + int(bool(snapshot.get("claude_session_id")))
+        + int(bool(snapshot.get("kimi_session_id")))
+    )
+    try:
+        session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
+    except (TypeError, ValueError):
+        session_epoch = 0
+    return (message_count, session_count, session_epoch, str(snapshot.get("last_activity") or ""))
+
+
+def _merge_runtime_state(source: dict[str, Any] | None, target: dict[str, Any] | None) -> dict[str, Any]:
+    source_data = dict(source or {})
+    target_data = dict(target or {})
+    preferred = source_data if _state_rank(source_data) >= _state_rank(target_data) else target_data
+    fallback = target_data if preferred is source_data else source_data
+    merged = dict(preferred)
+
+    for key, value in fallback.items():
+        if key not in merged or merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+
+    try:
+        merged["message_count"] = max(
+            0,
+            int(source_data.get("message_count", 0) or 0),
+            int(target_data.get("message_count", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        merged["message_count"] = max(0, int(merged.get("message_count", 0) or 0))
+    try:
+        merged["session_epoch"] = max(
+            0,
+            int(source_data.get("session_epoch", 0) or 0),
+            int(target_data.get("session_epoch", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        merged["session_epoch"] = max(0, int(merged.get("session_epoch", 0) or 0))
+    last_activity = max(str(source_data.get("last_activity") or ""), str(target_data.get("last_activity") or ""))
+    if last_activity:
+        merged["last_activity"] = last_activity
+    merged["local_history_backend"] = (
+        str(target_data.get("local_history_backend") or "")
+        or str(source_data.get("local_history_backend") or "")
+        or LOCAL_HISTORY_BACKEND
+    )
+    for key in ("codex_session_id", "claude_session_id", "kimi_session_id", "managed_prompt_hash_seen"):
+        if not merged.get(key):
+            merged.pop(key, None)
+    return merged
+
+
+def migrate_assistant_runtime_state_to_shared(home: AssistantHome, shared_user_id: int) -> int:
+    state_dir = home.root / "state" / "users"
+    if not state_dir.exists():
+        return 0
+
+    target_path = _user_state_path(home, shared_user_id)
+    target_state = load_assistant_runtime_state(home, shared_user_id)
+    moved = 0
+    for path in sorted(state_dir.glob("*.json")):
+        if path == target_path:
+            continue
+        try:
+            source_user_id = int(path.stem)
+        except ValueError:
+            continue
+        if source_user_id <= 0 or source_user_id == shared_user_id:
+            continue
+        try:
+            source_state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("迁移 assistant 状态失败 path=%s error=%s", path, exc)
+            continue
+        if not isinstance(source_state, dict):
+            continue
+        target_state = _merge_runtime_state(source_state, target_state)
+        try:
+            path.unlink()
+        except OSError as exc:
+            logger.warning("删除旧 assistant 状态失败 path=%s error=%s", path, exc)
+            continue
+        moved += 1
+
+    if moved:
+        save_assistant_runtime_state(home, shared_user_id, target_state)
+    return moved
+
+
 def restore_assistant_runtime_state(session, home: AssistantHome, user_id: int) -> None:
+    migrate_assistant_runtime_state_to_shared(home, user_id)
     original_state = load_assistant_runtime_state(home, user_id)
     if not original_state:
         return

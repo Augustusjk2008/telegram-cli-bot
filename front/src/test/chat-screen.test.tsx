@@ -532,6 +532,29 @@ test("shows assistant completed message time from updatedAt", async () => {
   expect(screen.queryByText("10:01")).not.toBeInTheDocument();
 });
 
+test("shows other shared user message with author name", async () => {
+  const messages: ChatMessage[] = [
+    {
+      id: "other-user",
+      role: "user",
+      text: "共享问题",
+      createdAt: "2026-05-29T09:00:00",
+      state: "done",
+      author: {
+        userId: 2001,
+        username: "alice",
+        isCurrentUser: false,
+      },
+    },
+  ];
+
+  render(<ChatScreen botAlias="main" client={createClient({ listMessages: async () => messages })} />);
+
+  expect(await screen.findByText("共享问题")).toBeInTheDocument();
+  expect(screen.getByText("alice")).toBeInTheDocument();
+  expect(screen.queryByText("你")).not.toBeInTheDocument();
+});
+
 test("does not show context usage on user messages", async () => {
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [
@@ -1713,6 +1736,7 @@ test("history panel keeps search close and delete dialog accessible", async () =
 
   await user.click(screen.getByRole("button", { name: "删除会话 当前会话" }));
   const dialog = await screen.findByRole("dialog", { name: "删除会话" });
+  expect(within(dialog).getByText("共享会话，删除会影响所有可访问该 bot 的用户。")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("同时清除关联 CLI session 存储")).toBeChecked();
   await user.click(within(dialog).getByRole("button", { name: "取消" }));
 
@@ -1811,6 +1835,7 @@ test("chat screen deletes active conversation and clears messages", async () => 
   await user.click(await screen.findByRole("button", { name: "删除会话 当前会话" }));
 
   const dialog = await screen.findByRole("dialog", { name: "删除会话" });
+  expect(within(dialog).getByText("共享会话，删除会影响所有可访问该 bot 的用户。")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("同时清除关联 CLI session 存储")).toBeChecked();
 
   await user.click(within(dialog).getByRole("button", { name: "删除" }));

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from bot.assistant.runtime import AssistantRunRequest
+from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_service import build_assistant_run_request, execute_plan, run_chat, run_cli_chat, stream_chat
@@ -127,7 +128,7 @@ async def test_run_chat_passes_plan_request_to_cli(monkeypatch: pytest.MonkeyPat
     await run_chat(web_manager, "main", 1001, "先出方案", task_mode="plan")
 
     assert captured["alias"] == "main"
-    assert captured["user_id"] == 1001
+    assert captured["user_id"] == chat_session_user_id(None)
     assert captured["text"] == "先出方案"
     request = captured["request"]
     assert isinstance(request, AssistantRunRequest)

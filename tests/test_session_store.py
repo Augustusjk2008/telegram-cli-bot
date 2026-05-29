@@ -12,6 +12,7 @@ from bot.session_store import (
     _make_key,
     load_session,
     load_session_ids,
+    migrate_sessions_to_shared,
     rename_bot_sessions,
     remove_all_sessions_for_bot,
     remove_session,
@@ -224,6 +225,57 @@ class TestRenameBotSessions:
             assert moved_snapshot is not None
             assert moved_snapshot["claude_session_id"] == "claude-old"
             assert moved_snapshot["session_epoch"] == 2
+
+
+class TestMigrateSessionsToShared:
+    def test_migrate_sessions_to_shared_merges_bot_user_agent_keys(self, temp_dir: Path):
+        store_file = temp_dir / ".session_store.json"
+        workdir = temp_dir / "repo"
+        workdir.mkdir()
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(
+                bot_id=1,
+                user_id=2001,
+                agent_id="main",
+                codex_session_id="thread-old",
+                working_dir=str(workdir),
+                message_count=5,
+                session_epoch=2,
+                last_activity="2026-05-01T00:00:00",
+            )
+            save_session(
+                bot_id=1,
+                user_id=1001,
+                agent_id="main",
+                claude_session_id="claude-shared",
+                working_dir=str(workdir),
+                message_count=1,
+                session_epoch=1,
+                last_activity="2026-04-30T00:00:00",
+            )
+            save_session(
+                bot_id=1,
+                user_id=2001,
+                agent_id="reviewer",
+                kimi_session_id="kimi-old",
+                working_dir=str(workdir),
+            )
+
+            moved = migrate_sessions_to_shared(1, 1001)
+
+            shared = load_session(1, 1001)
+            reviewer = load_session(1, 1001, agent_id="reviewer")
+            assert moved == 2
+            assert load_session(1, 2001) is None
+            assert load_session(1, 2001, agent_id="reviewer") is None
+            assert shared is not None
+            assert shared["codex_session_id"] == "thread-old"
+            assert shared["claude_session_id"] == "claude-shared"
+            assert shared["message_count"] == 5
+            assert shared["session_epoch"] == 2
+            assert reviewer is not None
+            assert reviewer["kimi_session_id"] == "kimi-old"
 
 
 class TestLoadSessionIds:

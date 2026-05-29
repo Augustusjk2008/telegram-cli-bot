@@ -831,7 +831,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   }
 
   const isUser = item.role === "user";
-  const messageName = isUser ? "你" : assistantName;
+  const isCurrentUserMessage = !isUser || item.author?.isCurrentUser !== false;
+  const messageName = isUser ? item.author?.username || "你" : assistantName;
+  const messageAlign = isUser && isCurrentUserMessage ? "right" : "left";
   const parsedUserMessage = isUser ? parseUserMessageDisplay(item.text) : null;
   const visibleUserText = parsedUserMessage?.visibleText || "";
   const userAttachments = parsedUserMessage?.attachments || [];
@@ -849,14 +851,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
   return (
     <motion.div
-      className={isUser ? "flex justify-end" : "flex justify-start"}
+      className={messageAlign === "right" ? "flex justify-end" : "flex justify-start"}
       {...resolveMotionProps(delightMotion.messagePop, reduceMotion)}
     >
       <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
         <ChatMessageMeta
           name={messageName}
           createdAt={chatMessageDisplayTime(item)}
-          align={isUser ? "right" : "left"}
+          align={messageAlign}
           avatar={inlineAvatar}
           contextUsage={!isUser ? item.meta?.contextUsage : undefined}
         />
@@ -864,7 +866,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           data-streaming={item.state === "streaming" ? "true" : "false"}
           className={[
             "chat-message-bubble-delight",
-            isUser
+            isUser && isCurrentUserMessage
               ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
               : item.state === "error"
                 ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
@@ -876,7 +878,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ) : isUser ? (
             <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
               {visibleUserText ? (
-                <ChatPlainTextMessage content={visibleUserText} className="text-[var(--accent-foreground)]" />
+                <ChatPlainTextMessage
+                  content={visibleUserText}
+                  className={isCurrentUserMessage ? "text-[var(--accent-foreground)]" : undefined}
+                />
               ) : null}
               {userAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
@@ -889,7 +894,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
                       <span
                         key={attachment.savedPath}
                         title={attachment.savedPath}
-                        className={isDeleted
+                        className={!isCurrentUserMessage
+                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 py-1 text-xs text-[var(--muted)]"
+                          : isDeleted
                           ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/20 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]/70"
                           : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/25 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]"}
                       >

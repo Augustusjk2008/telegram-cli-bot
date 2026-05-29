@@ -184,7 +184,7 @@ export function ConversationHistoryPanel({
             className="w-full max-w-sm rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-card)]"
           >
             <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">删除会话</h2>
-            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">将删除此历史会话和本地消息记录。</p>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">共享会话，删除会影响所有可访问该 bot 的用户。</p>
             <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">
               <input
                 type="checkbox"

@@ -281,6 +281,9 @@ class ChatStore:
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
+        self._ensure_column(conn, "messages", "author_user_id", "INTEGER")
+        self._ensure_column(conn, "messages", "author_account_id", "TEXT")
+        self._ensure_column(conn, "messages", "author_username", "TEXT")
         conn.execute("DROP INDEX IF EXISTS idx_conversations_scope_updated")
         conn.execute(
             """
@@ -632,6 +635,55 @@ class ChatStore:
                 ).fetchall()
         return [self._conversation_from_row(row) for row in rows]
 
+    def migrate_conversations_to_shared(self, bot_id: int, shared_user_id: int) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+
+        moved = 0
+        with closing(conn):
+            with conn:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM conversations
+                    WHERE bot_id = ? AND user_id != ?
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    (bot_id, shared_user_id),
+                ).fetchall()
+                for source in rows:
+                    target = conn.execute(
+                        """
+                        SELECT *
+                        FROM conversations
+                        WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
+                        ORDER BY updated_at DESC, created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (
+                            bot_id,
+                            shared_user_id,
+                            source["agent_id"],
+                            source["working_dir"],
+                            source["session_epoch"],
+                        ),
+                    ).fetchone()
+                    if target is None:
+                        conn.execute(
+                            "UPDATE conversations SET user_id = ?, updated_at = ? WHERE id = ?",
+                            (shared_user_id, _utc_now(), str(source["id"])),
+                        )
+                    else:
+                        self._merge_conversation_into_target(
+                            conn,
+                            source=source,
+                            target=target,
+                            new_alias=_row_text(target, "bot_alias") or _row_text(source, "bot_alias"),
+                        )
+                    moved += 1
+        return moved
+
     def begin_turn(
         self,
         *,
@@ -650,12 +702,21 @@ class ChatStore:
         managed_prompt_hash: str | None = None,
         prompt_surface_version: str | None = None,
         agent_prompt_hash: str | None = None,
+        actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
         started_at = time.perf_counter()
         now = _utc_now()
         turn_id = f"turn_{uuid.uuid4().hex}"
         user_message_id = f"msg_{uuid.uuid4().hex}"
         assistant_message_id = f"msg_{uuid.uuid4().hex}"
+        actor_data = dict(actor or {})
+        author_user_id = actor_data.get("user_id")
+        try:
+            normalized_author_user_id = int(author_user_id) if author_user_id is not None else None
+        except (TypeError, ValueError):
+            normalized_author_user_id = None
+        author_account_id = str(actor_data.get("account_id") or "").strip() or None
+        author_username = str(actor_data.get("username") or "").strip() or None
         with self._connect_for_write() as conn:
             normalized_conversation_id = str(conversation_id or "").strip()
             if normalized_conversation_id:
@@ -730,9 +791,12 @@ class ChatStore:
                     content,
                     content_format,
                     state,
+                    author_user_id,
+                    author_account_id,
+                    author_username,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_message_id,
@@ -742,6 +806,9 @@ class ChatStore:
                     user_text,
                     "markdown",
                     "done",
+                    normalized_author_user_id,
+                    author_account_id,
+                    author_username,
                     now,
                     now,
                 ),
@@ -1165,6 +1232,25 @@ class ChatStore:
                 parsed_context_usage = None
             if isinstance(parsed_context_usage, dict):
                 meta["context_usage"] = parsed_context_usage
+        author: dict[str, Any] = {}
+        try:
+            author_user_id = row["author_user_id"]
+        except (KeyError, IndexError):
+            author_user_id = None
+        try:
+            author_account_id = row["author_account_id"]
+        except (KeyError, IndexError):
+            author_account_id = None
+        try:
+            author_username = row["author_username"]
+        except (KeyError, IndexError):
+            author_username = None
+        if author_user_id is not None:
+            author["user_id"] = int(author_user_id)
+        if str(author_account_id or "").strip():
+            author["account_id"] = str(author_account_id)
+        if str(author_username or "").strip():
+            author["username"] = str(author_username)
         return {
             "id": row["id"],
             "role": row["role"],
@@ -1173,6 +1259,7 @@ class ChatStore:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "meta": meta,
+            **({"author": author} if author else {}),
         }
 
     def _list_message_rows(
@@ -1191,6 +1278,9 @@ class ChatStore:
                     m.role,
                     m.content,
                     m.state,
+                    m.author_user_id,
+                    m.author_account_id,
+                    m.author_username,
                     m.created_at,
                     m.updated_at,
                     t.seq,
@@ -1219,6 +1309,9 @@ class ChatStore:
                 recent.role,
                 recent.content,
                 recent.state,
+                recent.author_user_id,
+                recent.author_account_id,
+                recent.author_username,
                 recent.created_at,
                 recent.updated_at,
                 recent.seq,
@@ -1234,6 +1327,9 @@ class ChatStore:
                     m.role,
                     m.content,
                     m.state,
+                    m.author_user_id,
+                    m.author_account_id,
+                    m.author_username,
                     m.created_at,
                     m.updated_at,
                     t.seq,
@@ -1281,6 +1377,9 @@ class ChatStore:
                         m.role,
                         m.content,
                         m.state,
+                        m.author_user_id,
+                        m.author_account_id,
+                        m.author_username,
                         m.created_at,
                         m.updated_at,
                         t.completion_state,

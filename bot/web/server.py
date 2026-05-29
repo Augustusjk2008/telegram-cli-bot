@@ -25,6 +25,7 @@ from aiohttp.http import WSCloseCode, WSMsgType
 from aiohttp import web
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
+from bot.chat_identity import chat_session_user_id
 from bot.config import (
     ALLOWED_USER_IDS,
     CHAT_COMPLETION_NOTIFY_ENABLED,
@@ -1507,6 +1508,38 @@ class WebApiServer:
             return "main"
         return str(value or "main").strip().lower() or "main"
 
+    def _chat_user_id(self, auth: AuthContext) -> int:
+        return chat_session_user_id(auth.user_id)
+
+    def _chat_actor(self, auth: AuthContext) -> dict[str, Any]:
+        return {
+            "user_id": auth.user_id,
+            "account_id": auth.account_id,
+            "username": auth.username,
+        }
+
+    def _decorate_chat_authors(self, data: Any, auth: AuthContext) -> Any:
+        if isinstance(data, list):
+            return [self._decorate_chat_authors(item, auth) for item in data]
+        if not isinstance(data, dict):
+            return data
+        result = dict(data)
+        author = result.get("author")
+        if isinstance(author, dict):
+            next_author = dict(author)
+            if int(next_author.get("user_id") or 0) == int(auth.user_id):
+                next_author["is_current_user"] = True
+            elif next_author:
+                next_author["is_current_user"] = False
+            result["author"] = next_author
+        for key in ("items", "messages"):
+            if isinstance(result.get(key), list):
+                result[key] = [self._decorate_chat_authors(item, auth) for item in result[key]]
+        message = result.get("message")
+        if isinstance(message, dict):
+            result["message"] = self._decorate_chat_authors(message, auth)
+        return result
+
     def _public_tunnel_url(self) -> str:
         snapshot = self._tunnel_service.snapshot()
         return str(snapshot.get("public_url") or "").strip().rstrip("/")
@@ -1741,12 +1774,14 @@ class WebApiServer:
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
+        chat_user_id = self._chat_user_id(auth)
+        actor = self._chat_actor(auth)
         try:
             if task_mode or isinstance(task_payload, dict) or visible_text is not None:
                 data = await run_chat(
                     self.manager,
                     alias,
-                    auth.user_id,
+                    chat_user_id,
                     body.get("message", ""),
                     task_mode=task_mode or "standard",
                     task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
@@ -1754,16 +1789,18 @@ class WebApiServer:
                     agent_id=agent_id,
                     cluster=cluster_enabled,
                     mentions=mentions,
+                    actor=actor,
                 )
             else:
                 data = await run_chat(
                     self.manager,
                     alias,
-                    auth.user_id,
+                    chat_user_id,
                     body.get("message", ""),
                     agent_id=agent_id,
                     cluster=cluster_enabled,
                     mentions=mentions,
+                    actor=actor,
                 )
         except Exception as exc:
             self._schedule_chat_terminal_event(
@@ -1775,7 +1812,7 @@ class WebApiServer:
             )
             raise
         self._schedule_chat_terminal_event(auth=auth, alias=alias, agent_id=agent_id, data=data)
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
@@ -1787,6 +1824,8 @@ class WebApiServer:
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
+        chat_user_id = self._chat_user_id(auth)
+        actor = self._chat_actor(auth)
 
         response = web.StreamResponse(
             status=200,
@@ -1813,9 +1852,10 @@ class WebApiServer:
             event_stream = stream_chat(
                 self.manager,
                 alias,
-                auth.user_id,
+                chat_user_id,
                 body.get("message", ""),
                 **stream_kwargs,
+                actor=actor,
             )
         else:
             stream_kwargs = {
@@ -1823,17 +1863,26 @@ class WebApiServer:
                 "mentions": mentions,
             } if cluster_enabled else {}
             if agent_id == "main":
-                event_stream = stream_chat(self.manager, alias, auth.user_id, body.get("message", ""), **stream_kwargs)
+                event_stream = stream_chat(
+                    self.manager,
+                    alias,
+                    chat_user_id,
+                    body.get("message", ""),
+                    **stream_kwargs,
+                    actor=actor,
+                )
             else:
                 event_stream = stream_chat(
                     self.manager,
                     alias,
-                    auth.user_id,
+                    chat_user_id,
                     body.get("message", ""),
                     agent_id=agent_id,
                     **stream_kwargs,
+                    actor=actor,
                 )
         async for event in event_stream:
+            event = self._decorate_chat_authors(event, auth)
             event_type = str(event.get("type") or "")
             if event_type == "done":
                 self._schedule_chat_terminal_event(
@@ -2185,31 +2234,31 @@ class WebApiServer:
     async def get_pwd(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_working_directory(self.manager, alias, auth.user_id)})
+        return _json({"ok": True, "data": get_working_directory(self.manager, alias, self._chat_user_id(auth))})
 
     async def get_ls(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
         target_path = request.query.get("path") or None
         if auth.role == ROLE_GUEST:
-            base_dir = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+            base_dir = get_working_directory(self.manager, alias, self._chat_user_id(auth))["working_dir"]
             data = await asyncio.to_thread(
                 get_directory_listing,
                 self.manager,
                 alias,
-                auth.user_id,
+                self._chat_user_id(auth),
                 path=target_path,
                 base_dir=base_dir,
                 restrict_to_base_dir=True,
             )
             return _json({"ok": True, "data": data})
-        data = await asyncio.to_thread(get_directory_listing, self.manager, alias, auth.user_id, path=target_path)
+        data = await asyncio.to_thread(get_directory_listing, self.manager, alias, self._chat_user_id(auth), path=target_path)
         return _json({"ok": True, "data": data})
 
     def _workspace_file_root(self, alias: str, auth: WebAuthSession) -> str:
         if auth.role == ROLE_GUEST:
-            return get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
-        return get_file_browser_directory(self.manager, alias, auth.user_id)["working_dir"]
+            return get_working_directory(self.manager, alias, self._chat_user_id(auth))["working_dir"]
+        return get_file_browser_directory(self.manager, alias, self._chat_user_id(auth))["working_dir"]
 
     async def get_workspace_quick_open(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
@@ -2264,7 +2313,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_MUTATE_BROWSE_STATE)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = change_working_directory(self.manager, alias, auth.user_id, body.get("path", ""))
+        data = change_working_directory(self.manager, alias, self._chat_user_id(auth), body.get("path", ""))
         return _json({"ok": True, "data": data})
 
     async def post_reset(self, request: web.Request) -> web.Response:
@@ -2272,14 +2321,14 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": reset_user_session(self.manager, alias, auth.user_id, agent_id=agent_id)})
+        return _json({"ok": True, "data": reset_user_session(self.manager, alias, self._chat_user_id(auth), agent_id=agent_id)})
 
     async def post_kill(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": kill_user_process(self.manager, alias, auth.user_id, agent_id=agent_id)})
+        return _json({"ok": True, "data": kill_user_process(self.manager, alias, self._chat_user_id(auth), agent_id=agent_id)})
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
@@ -2312,7 +2361,8 @@ class WebApiServer:
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": get_history(self.manager, alias, auth.user_id, limit=limit, agent_id=agent_id)})
+        data = get_history(self.manager, alias, self._chat_user_id(auth), limit=limit, agent_id=agent_id)
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_history_delta_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
@@ -2320,7 +2370,8 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         after_id = request.query.get("after_id", "")
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": get_history_delta(self.manager, alias, auth.user_id, after_id, limit=limit, agent_id=agent_id)})
+        data = get_history_delta(self.manager, alias, self._chat_user_id(auth), after_id, limit=limit, agent_id=agent_id)
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_conversations_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
@@ -2328,14 +2379,15 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         query = request.query.get("q", "")
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": list_conversations(self.manager, alias, auth.user_id, limit=limit, query=query, agent_id=agent_id)})
+        return _json({"ok": True, "data": list_conversations(self.manager, alias, self._chat_user_id(auth), limit=limit, query=query, agent_id=agent_id)})
 
     async def post_conversation_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": create_conversation(self.manager, alias, auth.user_id, str(body.get("title") or ""), agent_id=agent_id)})
+        data = create_conversation(self.manager, alias, self._chat_user_id(auth), str(body.get("title") or ""), agent_id=agent_id)
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def post_plan_execute_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
@@ -2345,12 +2397,12 @@ class WebApiServer:
         data = execute_plan(
             self.manager,
             alias,
-            auth.user_id,
+            self._chat_user_id(auth),
             str(body.get("content") or ""),
             title=str(body.get("title") or ""),
             agent_id=agent_id,
         )
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def post_conversation_select_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
@@ -2358,7 +2410,8 @@ class WebApiServer:
         conversation_id = request.match_info.get("conversation_id", "")
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": select_conversation(self.manager, alias, auth.user_id, conversation_id, agent_id=agent_id)})
+        data = select_conversation(self.manager, alias, self._chat_user_id(auth), conversation_id, agent_id=agent_id)
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def delete_conversation_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
@@ -2369,12 +2422,12 @@ class WebApiServer:
         data = delete_conversation(
             self.manager,
             alias,
-            auth.user_id,
+            self._chat_user_id(auth),
             conversation_id,
             agent_id=agent_id,
             delete_native_session=delete_native,
         )
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_debug_profile(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_DEBUG_EXEC)
@@ -2496,7 +2549,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": get_history_trace(self.manager, alias, auth.user_id, message_id, agent_id=agent_id)})
+        return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id)})
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
@@ -2745,7 +2798,7 @@ class WebApiServer:
         if field is None or field.name != "file":
             raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
         filename = field.filename or ""
-        result = await save_uploaded_file_from_chunks(self.manager, alias, auth.user_id, filename, _iter_field_chunks(field))
+        result = await save_uploaded_file_from_chunks(self.manager, alias, self._chat_user_id(auth), filename, _iter_field_chunks(field))
         return _json({"ok": True, "data": result})
 
     async def upload_chat_attachment(self, request: web.Request) -> web.Response:
@@ -2756,14 +2809,14 @@ class WebApiServer:
         if field is None or field.name != "file":
             raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
         filename = field.filename or ""
-        result = await save_chat_attachment_from_chunks(self.manager, alias, auth.user_id, filename, _iter_field_chunks(field))
+        result = await save_chat_attachment_from_chunks(self.manager, alias, self._chat_user_id(auth), filename, _iter_field_chunks(field))
         return _json({"ok": True, "data": result})
 
     async def delete_chat_attachment_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        result = delete_chat_attachment(self.manager, alias, auth.user_id, body.get("saved_path", ""))
+        result = delete_chat_attachment(self.manager, alias, self._chat_user_id(auth), body.get("saved_path", ""))
         return _json({"ok": True, "data": result})
 
     async def create_directory_view(self, request: web.Request) -> web.Response:
@@ -2773,7 +2826,7 @@ class WebApiServer:
         data = create_directory(
             self.manager,
             alias,
-            auth.user_id,
+            self._chat_user_id(auth),
             body.get("name", ""),
             parent_path=body.get("parent_path"),
         )
@@ -2786,7 +2839,7 @@ class WebApiServer:
         if not _is_loopback_request(request):
             raise WebApiError(403, "loopback_required", "仅本机访问可打开系统文件夹")
         alias = self._manager_alias(request)
-        working_dir = get_working_directory(self.manager, alias, auth.user_id)["working_dir"]
+        working_dir = get_working_directory(self.manager, alias, self._chat_user_id(auth))["working_dir"]
         try:
             data = open_directory_in_desktop(working_dir)
         except DesktopOpenError as exc:
@@ -2797,7 +2850,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        return _json({"ok": True, "data": reveal_directory_tree(self.manager, alias, auth.user_id, str(body.get("path", "")))})
+        return _json({"ok": True, "data": reveal_directory_tree(self.manager, alias, self._chat_user_id(auth), str(body.get("path", "")))})
 
     async def write_file_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
@@ -2806,7 +2859,7 @@ class WebApiServer:
         data = write_file_content(
             self.manager,
             alias,
-            auth.user_id,
+            self._chat_user_id(auth),
             body.get("path", ""),
             body.get("content", ""),
             expected_mtime_ns=body.get("expected_mtime_ns"),
@@ -2821,7 +2874,7 @@ class WebApiServer:
         data = create_text_file(
             self.manager,
             alias,
-            auth.user_id,
+            self._chat_user_id(auth),
             body.get("filename", ""),
             body.get("content", ""),
             parent_path=body.get("parent_path"),
@@ -2832,35 +2885,35 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = rename_path(self.manager, alias, auth.user_id, body.get("path", ""), body.get("new_name", ""))
+        data = rename_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""), body.get("new_name", ""))
         return _json({"ok": True, "data": data})
 
     async def copy_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = copy_path(self.manager, alias, auth.user_id, body.get("path", ""))
+        data = copy_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""))
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def move_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = move_path(self.manager, alias, auth.user_id, body.get("path", ""), body.get("target_parent_path", ""))
+        data = move_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""), body.get("target_parent_path", ""))
         return _json({"ok": True, "data": data})
 
     async def delete_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = delete_path(self.manager, alias, auth.user_id, body.get("path", ""))
+        data = delete_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""))
         return _json({"ok": True, "data": data})
 
     async def download_file(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         filename = request.query.get("filename", "")
-        metadata = get_file_metadata(self.manager, alias, auth.user_id, filename)
+        metadata = get_file_metadata(self.manager, alias, self._chat_user_id(auth), filename)
         return web.FileResponse(
             path=metadata["path"],
             headers={"Content-Disposition": f'attachment; filename="{metadata["filename"]}"'},
@@ -2872,7 +2925,7 @@ class WebApiServer:
         filename = request.query.get("filename", "")
         mode = request.query.get("mode", "cat")
         lines = int(request.query.get("lines", "20"))
-        data = await asyncio.to_thread(read_file_content, self.manager, alias, auth.user_id, filename, mode=mode, lines=lines)
+        data = await asyncio.to_thread(read_file_content, self.manager, alias, self._chat_user_id(auth), filename, mode=mode, lines=lines)
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def resolve_file_plugin_target(self, request: web.Request) -> web.Response:
@@ -3026,7 +3079,7 @@ class WebApiServer:
             self.manager,
             alias,
             body.get("working_dir", ""),
-            auth.user_id,
+            self._chat_user_id(auth),
             force_reset=bool(body.get("force_reset")),
         )
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})

@@ -71,10 +71,12 @@ from bot.assistant.upgrade.targets import list_upgrade_targets, resolve_upgrade_
 from bot.assistant.state import (
     attach_assistant_persist_hook,
     clear_assistant_runtime_state,
+    migrate_assistant_runtime_state_to_shared,
     record_assistant_capture,
     restore_assistant_runtime_state,
 )
 from bot.agents import build_agent_prompt_input
+from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
     CliParamsConfig,
     get_default_params,
@@ -440,7 +442,15 @@ def _assistant_home_or_raise(manager: MultiBotManager, alias: str):
     profile = get_profile_or_raise(manager, alias)
     if profile.bot_mode != "assistant":
         _raise(409, "unsupported_bot_mode", "仅 assistant Bot 支持 proposal 审批")
-    return bootstrap_assistant_home(profile.working_dir)
+    home = bootstrap_assistant_home(profile.working_dir)
+    _migrate_assistant_home_to_shared(home)
+    return home
+
+
+def _migrate_assistant_home_to_shared(home: Any) -> None:
+    shared_user_id = chat_session_user_id(None)
+    migrate_assistant_runtime_state_to_shared(home, shared_user_id)
+    AssistantMemoryStore(home).migrate_chat_memories_to_shared(shared_user_id)
 
 
 def _assistant_cron_service_or_raise(manager: MultiBotManager, alias: str):
@@ -501,19 +511,20 @@ def get_chat_session_for_alias(
     agent_id: str = "main",
 ) -> tuple[BotProfile, AgentProfile, UserSession]:
     profile = get_profile_or_raise(manager, alias)
+    shared_user_id = chat_session_user_id(user_id)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
     try:
         agent = profile.get_agent(normalized_agent_id)
     except KeyError:
         _raise(404, "agent_not_found", "未找到 agent")
     if normalized_agent_id == "main":
-        return profile, agent, get_session_for_alias(manager, alias, user_id)
+        return profile, agent, get_session_for_alias(manager, alias, shared_user_id)
     if normalized_agent_id != "main" and profile.bot_mode != "cli":
         _raise(400, "agent_not_supported", "仅 CLI Bot 支持子 agent")
     session = get_or_create_session(
         bot_id=resolve_session_bot_id(manager, alias),
         bot_alias=alias,
-        user_id=user_id,
+        user_id=shared_user_id,
         default_working_dir=profile.working_dir,
         load_persisted_state=profile.bot_mode != "assistant",
         agent_id=agent.id,
@@ -545,8 +556,15 @@ def _build_running_reply_snapshot(session: UserSession) -> Optional[dict[str, An
     }
 
 
+def _get_chat_store(session: UserSession) -> ChatStore:
+    store = ChatStore(Path(session.working_dir))
+    store.migrate_conversations_to_shared(session.bot_id, chat_session_user_id(session.user_id))
+    return store
+
+
 def _get_chat_history_service(session: UserSession) -> ChatHistoryService:
-    return ChatHistoryService(ChatStore(Path(session.working_dir)))
+    store = _get_chat_store(session)
+    return ChatHistoryService(store)
 
 
 def get_file_browser_directory(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -578,12 +596,11 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
 
 
 def _build_agent_runtime_map(bot_id: int, user_id: int | None) -> dict[str, dict[str, Any]]:
-    if user_id is None:
-        return {}
+    _ = user_id
     result: dict[str, dict[str, Any]] = {}
     with sessions_lock:
         for (session_bot_id, session_user_id, session_agent_id), session in sessions.items():
-            if session_bot_id != bot_id or session_user_id != user_id:
+            if session_bot_id != bot_id or session_user_id != chat_session_user_id(session_user_id):
                 continue
             with session._lock:
                 result[session_agent_id] = {
@@ -646,11 +663,11 @@ def build_bot_summary(
     service_status = "offline" if run_status in {"stopped", "offline"} else "online"
     bot_id = resolve_session_bot_id(manager, alias)
 
-    # 优先使用当前用户 session 的工作目录（如果用户已登录）
+    # 优先使用共享聊天 session 的工作目录（如果已建立）
     working_dir = profile.working_dir
     if user_id is not None:
         try:
-            current_session = session or get_session_for_alias(manager, alias, user_id)
+            current_session = session or get_session_for_alias(manager, alias, chat_session_user_id(user_id))
             if current_session and current_session.working_dir:
                 working_dir = current_session.working_dir
         except Exception:
@@ -1975,7 +1992,7 @@ def list_conversations(
     agent_id: str = "main",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    store = ChatStore(Path(session.working_dir))
+    store = _get_chat_store(session)
     active_id = str(getattr(session, "active_conversation_id", "") or "")
     items = store.list_conversations(
         bot_id=session.bot_id,
@@ -2004,7 +2021,7 @@ def _create_agent_conversation(
     *,
     title: str = "",
 ) -> tuple[ChatStore, str]:
-    store = ChatStore(Path(session.working_dir))
+    store = _get_chat_store(session)
     conversation_id = store.create_conversation(
         bot_id=session.bot_id,
         bot_alias=session.bot_alias,
@@ -2090,7 +2107,7 @@ def select_conversation(
     if is_processing:
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
 
-    store = ChatStore(Path(session.working_dir))
+    store = _get_chat_store(session)
     try:
         conversation = store.get_conversation(conversation_id)
     except KeyError:
@@ -2145,7 +2162,7 @@ def delete_conversation(
     if is_processing:
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
 
-    store = ChatStore(Path(session.working_dir))
+    store = _get_chat_store(session)
     try:
         conversation = store.get_conversation(conversation_id)
     except KeyError:
@@ -2227,6 +2244,7 @@ def get_history_trace(
 
 
 def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
+    user_id = chat_session_user_id(user_id)
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
@@ -2261,6 +2279,7 @@ def _is_session_processing(session: UserSession) -> bool:
 
 
 def _find_active_cluster_run_for_session(alias: str, user_id: int, session: UserSession) -> Any | None:
+    user_id = chat_session_user_id(user_id)
     for _ in range(100):
         active_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
         if active_run is None:
@@ -2273,6 +2292,7 @@ def _find_active_cluster_run_for_session(alias: str, user_id: int, session: User
 
 
 def _finish_stale_cluster_run_if_idle(alias: str, user_id: int) -> str | None:
+    user_id = chat_session_user_id(user_id)
     active_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
     if active_run is None:
         return None
@@ -2284,6 +2304,7 @@ def _finish_stale_cluster_run_if_idle(alias: str, user_id: int) -> str | None:
 
 
 def kill_user_process(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
+    user_id = chat_session_user_id(user_id)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
     if normalized_agent_id == "main":
         session = get_session_for_alias(manager, alias, user_id)
@@ -4023,6 +4044,7 @@ async def _stream_cli_chat(
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
+    user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
@@ -4058,12 +4080,13 @@ async def _stream_cli_chat(
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
+        context_user_id = request.context_user_id if request is not None and request.context_user_id is not None else user_id
         assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active, assistant_stage_durations = (
             _normalize_assistant_prompt_preparation(
                 _prepare_assistant_prompt(
                     profile,
                     session,
-                    user_id=user_id,
+                    user_id=context_user_id,
                     user_text=text,
                     cli_type=cli_type,
                 )
@@ -4116,6 +4139,7 @@ async def _stream_cli_chat(
             assistant_home=str(assistant_home.root) if assistant_home is not None else None,
             managed_prompt_hash=session.managed_prompt_hash_seen,
             prompt_surface_version="v1" if assistant_home is not None else None,
+            actor=_actor_from_request(request),
         )
         assistant_stage_durations["db_ms"] += max(
             0,
@@ -4732,6 +4756,7 @@ async def run_cli_chat(
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     total_started_at = time.perf_counter()
+    user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
@@ -4770,6 +4795,7 @@ async def run_cli_chat(
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
+        _migrate_assistant_home_to_shared(bootstrap_assistant_home(profile.working_dir))
         if _is_dream_request(request):
             assert request is not None
             assistant_home, prompt_text, dream_context_stats, assistant_stage_durations = _normalize_dream_prompt_preparation(
@@ -4789,7 +4815,7 @@ async def run_cli_chat(
                     _prepare_assistant_prompt(
                         profile,
                         session,
-                        user_id=user_id,
+                        user_id=request.context_user_id if request is not None and request.context_user_id is not None else user_id,
                         user_text=text,
                         cli_type=cli_type,
                     )
@@ -4839,6 +4865,7 @@ async def run_cli_chat(
             assistant_home=str(assistant_home.root) if assistant_home is not None else None,
             managed_prompt_hash=session.managed_prompt_hash_seen,
             prompt_surface_version="v1" if assistant_home is not None else None,
+            actor=_actor_from_request(request),
         )
         assistant_stage_durations["db_ms"] += max(
             0,
@@ -5162,20 +5189,23 @@ async def run_chat(
     agent_id: str = "main",
     cluster: bool = False,
     mentions: list[dict[str, Any]] | None = None,
+    actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
+    shared_user_id = chat_session_user_id(user_id)
     if profile.bot_mode == "assistant":
         if manager.assistant_runtime is None:
             _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
         if task_mode == "proposal_patch":
-            _ensure_proposal_patch_chat_available(manager, alias, user_id)
+            _ensure_proposal_patch_chat_available(manager, alias, shared_user_id)
         request = build_assistant_run_request(
             alias,
-            user_id,
+            shared_user_id,
             user_text,
             task_mode=task_mode,
             task_payload=task_payload,
             visible_text=visible_text,
+            actor=actor,
         )
         return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
@@ -5186,7 +5216,7 @@ async def run_chat(
             cluster_run = _CLUSTER_RUNTIME.start_run(
                 ClusterRunRequest(
                     bot_alias=alias,
-                    user_id=user_id,
+                    user_id=shared_user_id,
                     profile=profile,
                     mentions=list(mentions or []),
                 )
@@ -5194,17 +5224,18 @@ async def run_chat(
         run_status = "completed"
         request = build_assistant_run_request(
             alias,
-            user_id,
+            shared_user_id,
             user_text,
             task_mode=task_mode,
             task_payload=task_payload,
             visible_text=visible_text,
+            actor=actor,
         )
         try:
             return await run_cli_chat(
                 manager,
                 alias,
-                user_id,
+                shared_user_id,
                 user_text,
                 request=request,
                 agent_id=agent_id,
@@ -5233,21 +5264,24 @@ async def stream_chat(
     agent_id: str = "main",
     cluster: bool = False,
     mentions: list[dict[str, Any]] | None = None,
+    actor: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
+        shared_user_id = chat_session_user_id(user_id)
         if profile.bot_mode == "assistant":
             if manager.assistant_runtime is None:
                 _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
             if task_mode == "proposal_patch":
-                _ensure_proposal_patch_chat_available(manager, alias, user_id)
+                _ensure_proposal_patch_chat_available(manager, alias, shared_user_id)
             request = build_assistant_run_request(
                 alias,
-                user_id,
+                shared_user_id,
                 user_text,
                 task_mode=task_mode,
                 task_payload=task_payload,
                 visible_text=visible_text,
+                actor=actor,
             )
             async for event in manager.assistant_runtime.stream_interactive(request):
                 yield event
@@ -5260,7 +5294,7 @@ async def stream_chat(
                 cluster_run = _CLUSTER_RUNTIME.start_run(
                     ClusterRunRequest(
                         bot_alias=alias,
-                        user_id=user_id,
+                        user_id=shared_user_id,
                         profile=profile,
                         mentions=list(mentions or []),
                     )
@@ -5268,17 +5302,18 @@ async def stream_chat(
             run_status = "completed"
             request = build_assistant_run_request(
                 alias,
-                user_id,
+                shared_user_id,
                 user_text,
                 task_mode=task_mode,
                 task_payload=task_payload,
                 visible_text=visible_text,
+                actor=actor,
             )
             try:
                 async for event in _stream_cli_chat(
                     manager,
                     alias,
-                    user_id,
+                    shared_user_id,
                     user_text,
                     request=request,
                     agent_id=agent_id,
@@ -5359,21 +5394,50 @@ def build_assistant_run_request(
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
+    actor: dict[str, Any] | None = None,
 ) -> AssistantRunRequest:
     normalized_task_mode = task_mode if task_mode in {"standard", "dream", "proposal_patch", PLAN_MODE_TASK_MODE} else "standard"
     if normalized_task_mode == PLAN_MODE_TASK_MODE and is_plan_execution_prompt(user_text):
         normalized_task_mode = "standard"
+    shared_user_id = chat_session_user_id(user_id)
+    actor_data = dict(actor or {})
     return AssistantRunRequest(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         source="web",
         bot_alias=alias,
-        user_id=user_id,
+        user_id=shared_user_id,
         text=user_text,
         interactive=True,
         visible_text=visible_text if visible_text is not None else user_text,
+        context_user_id=shared_user_id,
         task_mode=normalized_task_mode,
         task_payload=task_payload,
+        actor_user_id=_optional_int(actor_data.get("user_id")),
+        actor_account_id=str(actor_data.get("account_id") or "").strip() or None,
+        actor_username=str(actor_data.get("username") or "").strip() or None,
     )
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _actor_from_request(request: AssistantRunRequest | None) -> dict[str, Any] | None:
+    if request is None:
+        return None
+    actor: dict[str, Any] = {}
+    if request.actor_user_id is not None:
+        actor["user_id"] = request.actor_user_id
+    if request.actor_account_id:
+        actor["account_id"] = request.actor_account_id
+    if request.actor_username:
+        actor["username"] = request.actor_username
+    return actor or None
 
 
 def execute_plan(
@@ -5385,6 +5449,7 @@ def execute_plan(
     title: str = "",
     agent_id: str = "main",
 ) -> dict[str, Any]:
+    user_id = chat_session_user_id(user_id)
     plan_text = str(content or "").strip()
     if not plan_text:
         _raise(400, "empty_plan", "方案不能为空")
@@ -5406,6 +5471,7 @@ def _ensure_proposal_patch_chat_available(
     alias: str,
     user_id: int,
 ) -> None:
+    user_id = chat_session_user_id(user_id)
     session = get_session_for_alias(manager, alias, user_id)
     with session._lock:
         if session.is_processing:
@@ -5459,6 +5525,7 @@ async def _stream_assistant_proposal_patch_request(
             assistant_home=str(home.root),
             managed_prompt_hash=session.managed_prompt_hash_seen,
             prompt_surface_version="v1",
+            actor=_actor_from_request(request),
         )
         started_at = time.perf_counter()
         event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -5478,7 +5545,7 @@ async def _stream_assistant_proposal_patch_request(
                 home,
                 proposal,
                 target=target,
-                generated_by=str(request.user_id),
+                generated_by=str(request.actor_user_id or request.user_id),
                 regenerate=regenerate,
                 event_callback=on_event,
             )

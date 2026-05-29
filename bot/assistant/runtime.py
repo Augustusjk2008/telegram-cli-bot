@@ -30,6 +30,9 @@ class AssistantRunRequest:
     interactive: bool
     visible_text: str | None = None
     context_user_id: int | None = None
+    actor_user_id: int | None = None
+    actor_account_id: str | None = None
+    actor_username: str | None = None
     task_mode: Literal["standard", "dream", "proposal_patch", "plan"] = "standard"
     task_payload: dict[str, Any] | None = None
     job_id: str | None = None

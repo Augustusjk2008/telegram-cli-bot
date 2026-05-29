@@ -1,15 +1,17 @@
-"""按 (bot_id, user_id, agent_id) 隔离的会话存储与生命周期管理"""
+"""按 (bot_id, shared_user_id, agent_id) 管理 Web 聊天会话生命周期。"""
 
 import logging
 import threading
 from datetime import datetime
 from typing import Dict, Tuple
 
+from bot.chat_identity import chat_session_user_id
 from bot.models import UserSession
 from bot.session_store import (
     LOCAL_HISTORY_BACKEND,
     load_session,
     migrate_local_history_snapshot,
+    migrate_sessions_to_shared,
     remove_all_sessions_for_bot,
     remove_session,
     save_session,
@@ -17,7 +19,7 @@ from bot.session_store import (
 
 logger = logging.getLogger(__name__)
 
-# 全局会话存储
+# 全局会话存储，key 形状保留为 (bot_id, user_id, agent_id)，Web 聊天 user_id 恒为共享 id。
 sessions: Dict[Tuple[int, int, str], UserSession] = {}
 sessions_lock = threading.Lock()
 
@@ -95,6 +97,7 @@ def get_or_create_session(
     load_persisted_state: bool = True,
     agent_id: str = "main",
 ) -> UserSession:
+    user_id = chat_session_user_id(user_id)
     normalized_agent_id = _normalize_agent_id(agent_id)
     key = (bot_id, user_id, normalized_agent_id)
     should_persist_migration = False
@@ -105,6 +108,8 @@ def get_or_create_session(
     if session is not None:
         return session
 
+    if load_persisted_state:
+        migrate_sessions_to_shared(bot_id, user_id)
     stored_data = load_session(bot_id, user_id, agent_id=normalized_agent_id) if load_persisted_state else None
     (
         session,
@@ -138,9 +143,10 @@ get_session = get_or_create_session
 def _save_session_to_store(session: UserSession):
     """保存会话到持久化存储"""
     with session._lock:
+        user_id = chat_session_user_id(session.user_id)
         save_session(
             bot_id=session.bot_id,
-            user_id=session.user_id,
+            user_id=user_id,
             agent_id=session.agent_id,
             codex_session_id=session.codex_session_id,
             claude_session_id=session.claude_session_id,
@@ -259,6 +265,7 @@ def _build_session_from_store(
 
 
 def reset_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
+    user_id = chat_session_user_id(user_id)
     normalized_agent_id = _normalize_agent_id(agent_id)
     key = (bot_id, user_id, normalized_agent_id)
     removed_in_memory = False
@@ -405,7 +412,9 @@ def rekey_bot_sessions(old_bot_id: int, new_bot_id: int, *, old_alias: str, new_
     with sessions_lock:
         for key in [item for item in list(sessions.keys()) if item[0] == old_bot_id]:
             source = sessions.pop(key)
-            target_key = (new_bot_id, source.user_id, _normalize_agent_id(source.agent_id))
+            shared_user_id = chat_session_user_id(source.user_id)
+            source.user_id = shared_user_id
+            target_key = (new_bot_id, shared_user_id, _normalize_agent_id(source.agent_id))
             target = sessions.pop(target_key, None)
 
             if target is None:

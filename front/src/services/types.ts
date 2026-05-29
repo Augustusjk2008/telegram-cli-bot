@@ -534,6 +534,13 @@ export type ChatMessageMetaInfo = {
   contextUsage?: ChatMessageContextUsage;
 };
 
+export type ChatMessageAuthor = {
+  userId?: number;
+  accountId?: string;
+  username?: string;
+  isCurrentUser?: boolean;
+};
+
 export type ChatTraceDetails = {
   traceCount: number;
   toolCallCount: number;
@@ -550,6 +557,7 @@ export type ChatMessage = {
   elapsedSeconds?: number;
   state?: "done" | "streaming" | "error";
   meta?: ChatMessageMetaInfo;
+  author?: ChatMessageAuthor;
 };
 
 export type HistoryDeltaResult = {
