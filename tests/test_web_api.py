@@ -555,6 +555,8 @@ def test_cluster_prompt_includes_run_id():
     prompt = api_service._build_cluster_prompt([{"agent_id": "tester"}], "clr_test")
 
     assert "当前集群 run_id: clr_test" in prompt
+    assert "TCB 集群模式优先于 Claude Code 自带 agents" in prompt
+    assert "只能使用 tcb-cluster 的 MCP 工具" in prompt
     assert "调用 ask_agent 时带 run_id" in prompt
     assert "用户显式提及的子 agent: tester" in prompt
     assert "ask_agent 会异步启动任务并返回 task_id" in prompt
@@ -583,6 +585,7 @@ def test_cluster_disabled_prompt_only_when_child_agents_configured():
     prompt = api_service._apply_cluster_prompt(profile, "hello")
 
     assert prompt.startswith("<tcb_cluster_mode>\n集群模式已关。")
+    assert "不要使用 Claude Code 自带 agents" in prompt
     assert prompt.endswith("hello")
 
 
@@ -887,6 +890,16 @@ async def test_run_cli_chat_injects_cluster_mcp_config_file_for_claude(
     web_manager: MultiBotManager, tmp_path: Path
 ):
     web_manager.main_profile.cli_type = "claude"
+    web_manager.main_profile.cli_params.claude["extra_args"] = [
+        "--agent",
+        "native-reviewer",
+        "--agents={\"native\":{}}",
+        "--mcp-config",
+        "old-mcp.json",
+        "old-mcp-2.json",
+        "--strict-mcp-config",
+        "--keep",
+    ]
     captured = {}
 
     def fake_build_cli_command(**kwargs):
@@ -902,6 +915,14 @@ async def test_run_cli_chat_injects_cluster_mcp_config_file_for_claude(
         await run_cli_chat(web_manager, "main", 1001, "hello", cluster_run_id="clr_test")
 
     extra_args = captured["params"]["extra_args"]
+    assert "--keep" in extra_args
+    assert "--agent" not in extra_args
+    assert "native-reviewer" not in extra_args
+    assert not any(str(arg).startswith("--agents") for arg in extra_args)
+    assert "old-mcp.json" not in extra_args
+    assert "old-mcp-2.json" not in extra_args
+    assert extra_args.count("--mcp-config") == 1
+    assert extra_args.count("--strict-mcp-config") == 1
     assert "--mcp-config" in extra_args
     config_path = Path(extra_args[extra_args.index("--mcp-config") + 1])
     assert config_path.exists()
@@ -6136,9 +6157,6 @@ async def test_cli_params_routes_support_get_patch_and_reset(web_manager: MultiB
             assert payload["data"]["schema"]["model"]["enum"] == [
                 "gpt-5.5",
                 "gpt-5.4",
-                "claude-opus-4-7",
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
                 "none",
             ]
 
@@ -6177,9 +6195,6 @@ def test_cli_params_model_schema_uses_env_model_options(web_manager: MultiBotMan
         "gpt-5.5",
         "gpt-5.4-mini",
         "gpt-5.3-codex",
-        "claude-opus-4-7",
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
         "none",
     ]
 

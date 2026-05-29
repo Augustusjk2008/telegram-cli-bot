@@ -5,7 +5,7 @@ import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { CliParamsPayload } from "../services/types";
 
-const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "none"];
+const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-sonnet-4-6", "none"];
 
 function cliParamsWithModel(params: Partial<Record<string, unknown>> = {}): CliParamsPayload {
   return {

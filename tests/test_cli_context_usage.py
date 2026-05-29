@@ -343,7 +343,7 @@ def test_resolve_claude_context_usage_falls_back_to_known_message_model(monkeypa
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "model": "claude-opus-4-7[1m]",
+                    "model": "claude-opus-4-6",
                     "usage": {
                         "input_tokens": 358148,
                         "output_tokens": 0,

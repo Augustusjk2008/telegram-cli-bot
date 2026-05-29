@@ -10,7 +10,8 @@ def test_load_prompt_template_reads_markdown_body():
 
     assert "Plan Mode" in text
     assert "{user_text}" in text
-    assert "不要使用 Claude Code 自带 Plan Mode" in text
+    assert "不要切换、请求或使用 Claude Code 自带 Plan Mode" in text
+    assert "优先于 Claude Code 自带 Plan Mode" in text
 
 
 def test_render_prompt_substitutes_variables_without_stripping_newlines():
@@ -21,6 +22,7 @@ def test_render_prompt_substitutes_variables_without_stripping_newlines():
 
     assert text.startswith("请按方案执行。方案文件：docs/plan/demo.md")
     assert "\n\n要求：\n" in text
+    assert "不要使用 Claude Code 自带 Plan Mode" in text
 
 
 def test_render_prompt_raises_clear_error_for_missing_variable():

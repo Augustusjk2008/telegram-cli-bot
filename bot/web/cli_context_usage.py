@@ -13,10 +13,8 @@ from bot.web.native_history_locator import locate_claude_transcript, locate_code
 
 _CODEX_CONTEXT_BASELINE_TOKENS = 12_000
 _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
-_CLAUDE_MODEL_CONTEXT_WINDOWS = {
-    "claude-opus-4-7": 1_000_000,
-    "opus": 1_000_000,
-}
+_CLAUDE_OPUS_CONTEXT_WINDOW_TOKENS = 1_000_000
+_CLAUDE_OPUS_MODEL_RE = re.compile(r"(?:^|[-_/])opus(?:$|[-_/])")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CLAUDE_TOKENS_RE = re.compile(
     r"(?:Tokens\s*:\s*)?(?P<used>\d+(?:\.\d+)?\s*[kKmM]?)\s*/\s*"
@@ -29,9 +27,10 @@ _CLAUDE_FREE_RE = re.compile(
     r"\s*(?:\|)?\s*\(?(?P<free_percent>\d+(?:\.\d+)?)%",
     re.IGNORECASE,
 )
+_ContextCacheKey = tuple[str, str, str, int, int, int]
 _CACHE_LOCK = threading.Lock()
-_CONTEXT_USAGE_CACHE: dict[tuple[str, str, str, int, int], dict[str, Any] | None] = {}
-_CONTEXT_USAGE_CACHE_ORDER: list[tuple[str, str, str, int, int]] = []
+_CONTEXT_USAGE_CACHE: dict[_ContextCacheKey, dict[str, Any] | None] = {}
+_CONTEXT_USAGE_CACHE_ORDER: list[_ContextCacheKey] = []
 _CONTEXT_USAGE_CACHE_LIMIT = 128
 _TRANSCRIPT_STATE: dict[tuple[str, str, str], dict[str, Any]] = {}
 _TAIL_WINDOW_BYTES = 256 * 1024
@@ -44,7 +43,7 @@ def clear_context_usage_cache() -> None:
         _TRANSCRIPT_STATE.clear()
 
 
-def _transcript_cache_key(provider: str, session_id: str, transcript_path: Path) -> tuple[str, str, str, int, int] | None:
+def _transcript_cache_key(provider: str, session_id: str, transcript_path: Path) -> _ContextCacheKey | None:
     try:
         stat = transcript_path.stat()
     except OSError:
@@ -54,11 +53,12 @@ def _transcript_cache_key(provider: str, session_id: str, transcript_path: Path)
         session_id,
         str(transcript_path),
         int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
         int(stat.st_size),
     )
 
 
-def _get_cached_context_usage(key: tuple[str, str, str, int, int]) -> dict[str, Any] | None | object:
+def _get_cached_context_usage(key: _ContextCacheKey) -> dict[str, Any] | None | object:
     with _CACHE_LOCK:
         if key not in _CONTEXT_USAGE_CACHE:
             return _CACHE_MISS
@@ -66,7 +66,7 @@ def _get_cached_context_usage(key: tuple[str, str, str, int, int]) -> dict[str, 
         return dict(value) if isinstance(value, dict) else None
 
 
-def _set_cached_context_usage(key: tuple[str, str, str, int, int], value: dict[str, Any] | None) -> None:
+def _set_cached_context_usage(key: _ContextCacheKey, value: dict[str, Any] | None) -> None:
     with _CACHE_LOCK:
         if key not in _CONTEXT_USAGE_CACHE:
             _CONTEXT_USAGE_CACHE_ORDER.append(key)
@@ -258,19 +258,14 @@ def _extract_claude_context_from_line(session_id: str, line: str) -> dict[str, A
 def _normalize_claude_model_name(model: str | None) -> str:
     text = str(model or "").strip().lower()
     text = re.sub(r"\[[^\]]+\]\s*$", "", text).strip()
-    if not text:
-        return ""
-    for key in _CLAUDE_MODEL_CONTEXT_WINDOWS:
-        if text == key or text.startswith(f"{key}-"):
-            return key
     return text
 
 
 def _lookup_claude_context_window(model: str | None) -> int | None:
     normalized = _normalize_claude_model_name(model)
-    if not normalized:
-        return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
-    return _CLAUDE_MODEL_CONTEXT_WINDOWS.get(normalized, _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS)
+    if normalized and _CLAUDE_OPUS_MODEL_RE.search(normalized):
+        return _CLAUDE_OPUS_CONTEXT_WINDOW_TOKENS
+    return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
 def _extract_claude_message_usage(line: str) -> tuple[int, str] | None:

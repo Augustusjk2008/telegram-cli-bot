@@ -29,7 +29,7 @@ from bot.cli import (
     should_reset_codex_session,
     validate_cli_type,
 )
-from bot.cli_params import CliParamsConfig, with_global_extra_args
+from bot.cli_params import CliParamsConfig, normalize_cli_model_options, with_global_extra_args
 
 class TestValidateCliType:
     """测试 validate_cli_type"""
@@ -363,6 +363,13 @@ class TestBuildCliCommand:
         assert merged.claude["extra_args"] == ["--bot-claude", "--global-claude"]
         assert merged.kimi["extra_args"] == ["--bot-kimi", "--global-kimi"]
 
+
+def test_normalize_cli_model_options_preserves_explicit_env_list():
+    assert normalize_cli_model_options(
+        ["gpt-5.5", "gpt-5.2", "gpt-5.5", "claude-opus-4-7"]
+    ) == ["gpt-5.5", "claude-opus-4-7", "none"]
+
+
 class TestParseCodexJsonLine:
     """测试 parse_codex_json_line"""
 
@@ -569,7 +576,8 @@ class TestReadCodexStatusFromTerminal:
         assert result["error"] == "not_found"
 
     def test_returns_parsed_status_line(self):
-        with patch("bot.cli.resolve_cli_executable", return_value="C:/bin/codex.cmd"), \
+        with patch("bot.cli.os.name", "nt"), \
+             patch("bot.cli.resolve_cli_executable", return_value="C:/bin/codex.cmd"), \
              patch("bot.cli._run_codex_status_terminal", return_value="› /status\n100% context left\n"):
             result = read_codex_status_from_terminal("codex", "C:/repo")
 

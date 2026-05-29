@@ -44,6 +44,7 @@ def test_build_plan_mode_prompt_uses_plan_draft_protocol_without_file_instructio
     assert "不要修改文件" in prompt
     assert "不要创建文件" in prompt
     assert "会改变项目状态的命令" in prompt
+    assert "优先于 Claude Code 自带 Plan Mode" in prompt
     assert "写的 plan 应详细、可执行" in prompt
     assert "docs/plan" not in prompt
 
@@ -85,6 +86,7 @@ def test_build_plan_execution_prompt_references_saved_plan():
     assert "docs/plan/2026-05-21-1010-plan-mode.md" in prompt
     assert "先阅读方案和相关代码" in prompt
     assert "不要回到 Plan Mode" in prompt
+    assert "不要使用 Claude Code 自带 Plan Mode" in prompt
 
 
 def test_build_assistant_run_request_preserves_plan_mode():

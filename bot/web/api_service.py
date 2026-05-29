@@ -2384,6 +2384,34 @@ def _quote_toml_string(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+def _filter_claude_host_cluster_extra_args(extra_args: list[str]) -> list[str]:
+    filtered: list[str] = []
+    skip_next = False
+    skip_mcp_values = False
+    args_with_values = {"--mcp-config", "--agent", "--agents"}
+    args_without_values = {"--strict-mcp-config"}
+    for arg in extra_args:
+        if skip_mcp_values:
+            if not arg.startswith("-"):
+                continue
+            skip_mcp_values = False
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--mcp-config":
+            skip_mcp_values = True
+            continue
+        if arg in {"--agent", "--agents"}:
+            skip_next = True
+            continue
+        if any(arg.startswith(f"{name}=") for name in args_with_values):
+            continue
+        if arg in args_without_values:
+            continue
+        filtered.append(arg)
+    return filtered
+
+
 def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsConfig) -> CliParamsConfig:
     cli_type = normalize_cli_type(profile.cli_type)
     launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
@@ -2395,11 +2423,12 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
     if cli_type == "codex":
         injection = ["-c", f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.command={_quote_toml_string(str(launcher_path))}"]
     elif cli_type == "claude":
+        extra_args = _filter_claude_host_cluster_extra_args(extra_args)
         config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}
         config_path = home_root / "cluster-mcp" / "mcp_config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
-        injection = ["--mcp-config", str(config_path)]
+        injection = ["--mcp-config", str(config_path), "--strict-mcp-config"]
     elif cli_type == "kimi":
         config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}
         injection = ["--mcp-config", json.dumps(config, ensure_ascii=False)]

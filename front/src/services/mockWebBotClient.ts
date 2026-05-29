@@ -236,7 +236,6 @@ const MOCK_CLI_MODEL_OPTIONS = [
   "gpt-5.4-mini",
   "gpt-5.3-codex",
   "claude-opus-4-7",
-  "claude-opus-4-6",
   "claude-sonnet-4-6",
   "none",
 ];
