@@ -41,6 +41,10 @@ GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
 _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
+_SSH_STRICT_HOST_KEY_OPTION_RE = re.compile(
+    r"(?:^|\s)-o\s*['\"]?stricthostkeychecking(?:\s*=|\s|=|$)",
+    re.IGNORECASE,
+)
 
 
 class GitCommandError(RuntimeError):
@@ -115,7 +119,13 @@ def _build_git_command(args: list[str]) -> list[str]:
     return ["git", "-c", "core.fsmonitor=false", *get_git_proxy_config_args(), *args]
 
 
-def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_git(
+    repo_root: str,
+    args: list[str],
+    *,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             _build_git_command(args),
@@ -124,6 +134,7 @@ def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subproce
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
@@ -133,6 +144,45 @@ def _run_git(repo_root: str, args: list[str], *, check: bool = True) -> subproce
         output = (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
         raise GitCommandError(output)
     return result
+
+
+def _get_configured_git_ssh_command(repo_root: str) -> str:
+    try:
+        result = subprocess.run(
+            _build_git_command(["config", "--get", "core.sshCommand"]),
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+
+def _ssh_command_sets_strict_host_key_checking(ssh_command: str) -> bool:
+    return bool(_SSH_STRICT_HOST_KEY_OPTION_RE.search(ssh_command))
+
+
+def _build_git_remote_env(repo_root: str) -> dict[str, str]:
+    env = os.environ.copy()
+    ssh_command = str(env.get("GIT_SSH_COMMAND") or "").strip()
+    if not ssh_command:
+        ssh_command = _get_configured_git_ssh_command(repo_root)
+    if ssh_command:
+        if not _ssh_command_sets_strict_host_key_checking(ssh_command):
+            env["GIT_SSH_COMMAND"] = f"{ssh_command} -o StrictHostKeyChecking=accept-new"
+        else:
+            env["GIT_SSH_COMMAND"] = ssh_command
+        return env
+
+    if "GIT_SSH" not in env:
+        env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=accept-new"
+    return env
 
 
 def _run_git_with_input(
@@ -1321,10 +1371,11 @@ def _run_git_action(
     *,
     error_code: str,
     error_message: str,
+    remote: bool = False,
 ) -> dict[str, Any]:
     working_dir, repo_root = _require_repo_root(manager, alias, user_id)
     try:
-        _run_git(repo_root, args)
+        _run_git(repo_root, args, env=_build_git_remote_env(repo_root) if remote else None)
     except GitCommandError as exc:
         _raise(400, error_code, str(exc))
     _invalidate_git_status_cache(repo_root)
@@ -1339,6 +1390,7 @@ def fetch_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict
         ["fetch", "--all", "--prune"],
         error_code="git_fetch_failed",
         error_message="抓取远端失败",
+        remote=True,
     )
 
 
@@ -1350,6 +1402,7 @@ def pull_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[
         ["pull", "--ff-only"],
         error_code="git_pull_failed",
         error_message="拉取远端失败",
+        remote=True,
     )
 
 
@@ -1361,6 +1414,7 @@ def push_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[
         ["push"],
         error_code="git_push_failed",
         error_message="推送远端失败",
+        remote=True,
     )
 
 
