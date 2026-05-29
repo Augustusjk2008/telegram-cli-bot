@@ -196,7 +196,9 @@ from bot.web.files_service import (
     reveal_directory_tree,
     rename_path,
     save_chat_attachment,
+    save_chat_attachment_from_chunks,
     save_uploaded_file,
+    save_uploaded_file_from_chunks,
     write_file_content,
 )
 from bot.web.plugin_api_service import (

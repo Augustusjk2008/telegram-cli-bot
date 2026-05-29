@@ -38,6 +38,7 @@ _DEFAULT_SETTINGS = {
     "pending_update_notes": "",
     "pending_update_platform": "",
     "pending_update_package_kind": "",
+    "pending_update_sha256": "",
     "update_last_error": "",
 }
 _PORT_ERROR_MESSAGE = "代理端口必须是 1 到 65535 之间的整数"
@@ -55,6 +56,7 @@ _UPDATE_TEXT_FIELDS = (
     "pending_update_notes",
     "pending_update_platform",
     "pending_update_package_kind",
+    "pending_update_sha256",
     "update_last_error",
 )
 

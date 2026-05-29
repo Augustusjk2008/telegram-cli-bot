@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from bot.web.auth_store import AuthStoreError, WebAuthStore
+from bot.web.auth_store import AuthStoreError, CAP_TERMINAL_EXEC, MEMBER_CAPABILITIES, WebAuthStore
 from bot.web.permission_store import BotPermissionStore
 
 
@@ -27,12 +27,13 @@ def test_register_member_consumes_register_code(tmp_path: Path):
     assert '"INVITE-001"' not in codes_text
     data = json.loads(codes_path.read_text(encoding="utf-8"))
     users_data = json.loads(users_text)
-    assert "session_user_id" not in users_data["items"][0]
+    assert isinstance(users_data["items"][0]["session_user_id"], int)
+    assert set(users_data["items"][0]["capabilities"]) == set(MEMBER_CAPABILITIES)
     assert data["items"][0]["used_count"] == 1
     assert data["items"][0]["usage"][0]["used_by_enc"].startswith("v1:")
 
 
-def test_member_login_ignores_legacy_session_user_id(tmp_path: Path):
+def test_member_login_repairs_legacy_session_user_id(tmp_path: Path):
     codes_path = tmp_path / ".web_register_codes.json"
     codes_path.write_text(
         json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
@@ -47,7 +48,7 @@ def test_member_login_ignores_legacy_session_user_id(tmp_path: Path):
 
     session = store.login_member("alice", "pw-123")
 
-    assert session.account.session_user_id is None
+    assert isinstance(session.account.session_user_id, int)
 
 
 def test_guest_account_is_builtin_and_never_requires_register_code(tmp_path: Path):
@@ -210,6 +211,7 @@ def test_auth_store_lists_and_disables_members(tmp_path: Path):
             "username": "alice",
             "role": "member",
             "disabled": False,
+            "capabilities": sorted(MEMBER_CAPABILITIES),
             "created_at": users[0]["created_at"],
         }
     ]
@@ -219,3 +221,21 @@ def test_auth_store_lists_and_disables_members(tmp_path: Path):
     with pytest.raises(AuthStoreError) as exc_info:
         store.login_member("alice", "pw-123")
     assert exc_info.value.code == "account_disabled"
+
+
+def test_get_session_refreshes_capabilities_from_store_file(tmp_path: Path):
+    users_path = tmp_path / ".web_users.json"
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(users_path=users_path, register_codes_path=codes_path)
+    session = store.register_member("alice", "pw-123", "INVITE-001")
+    assert CAP_TERMINAL_EXEC not in session.capabilities
+
+    users_data = json.loads(users_path.read_text(encoding="utf-8"))
+    users_data["items"][0]["capabilities"] = sorted({*MEMBER_CAPABILITIES, CAP_TERMINAL_EXEC})
+    users_path.write_text(json.dumps(users_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    refreshed = store.get_session(session.token)
+
+    assert refreshed is not None
+    assert CAP_TERMINAL_EXEC in refreshed.capabilities

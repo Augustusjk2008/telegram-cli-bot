@@ -15,9 +15,10 @@ import sys
 import threading
 import time
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 from aiohttp.client_exceptions import ClientConnectionResetError
 from aiohttp.http import WSCloseCode, WSMsgType
@@ -189,8 +190,8 @@ from .api_service import (
     render_plugin_view,
     resolve_plugin_file_target,
     reveal_directory_tree,
-    save_chat_attachment,
-    save_uploaded_file,
+    save_chat_attachment_from_chunks,
+    save_uploaded_file_from_chunks,
     save_terminal_actions_config_for_bot,
     start_managed_bot,
     stop_managed_bot,
@@ -400,9 +401,45 @@ def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, 
     return payload
 
 
-def _session_user_id_for_account(_account_id: str, _session_user_id: int | None = None) -> int:
-    return WEB_DEFAULT_USER_ID
+def _session_user_id_for_account(account_id: str, session_user_id: int | None = None) -> int:
+    if str(account_id or "").strip() == "local-admin":
+        return WEB_DEFAULT_USER_ID
+    if isinstance(session_user_id, int) and session_user_id > 0:
+        return session_user_id
+    seed = zlib.adler32(str(account_id or "web-account").encode("utf-8"))
+    return 1_000_000 + int(seed)
 
+
+def _same_origin_host(origin: str, host: str) -> bool:
+    parsed = urlparse(origin)
+    origin_host = parsed.netloc or parsed.path
+    return bool(origin_host) and origin_host.lower() == str(host or "").strip().lower()
+
+
+def _is_request_origin_allowed(request: web.Request) -> bool:
+    origin = str(request.headers.get("Origin") or "").strip()
+    if not origin:
+        return True
+    normalized_allowed = {_normalize_origin(item) for item in WEB_ALLOWED_ORIGINS}
+    normalized_origin = _normalize_origin(origin)
+    if "*" in normalized_allowed or normalized_origin in normalized_allowed:
+        return True
+    return _same_origin_host(origin, request.headers.get("Host", ""))
+
+
+def _is_loopback_auto_auth_allowed(request: web.Request) -> bool:
+    return _is_loopback_request(request) and _is_request_origin_allowed(request)
+
+
+def _iter_field_chunks(field, *, chunk_size: int = 64 * 1024):
+    async def iterator():
+        while True:
+            chunk = await field.read_chunk(size=chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+    return iterator()
 
 def _serialize_auth_session(session: WebAuthSession) -> dict[str, Any]:
     auth = AuthContext(
@@ -759,13 +796,13 @@ class WebApiServer:
             session = _WEB_AUTH_STORE.get_session(raw_token)
             if session is not None:
                 return self._session_auth_context(session)
-            if _is_loopback_request(request):
+            if _is_loopback_auto_auth_allowed(request):
                 return self._local_admin_auth_context()
             if WEB_API_TOKEN and raw_token == WEB_API_TOKEN:
                 return self._legacy_auth_context(request, token_used=True)
             raise WebApiError(401, "unauthorized", "访问令牌无效")
 
-        if _is_loopback_request(request):
+        if _is_loopback_auto_auth_allowed(request):
             return self._local_admin_auth_context()
         if WEB_API_TOKEN:
             raise WebApiError(401, "unauthorized", "访问令牌无效")
@@ -801,14 +838,15 @@ class WebApiServer:
             account_id="legacy-default",
             username=username,
             role="member",
-            capabilities=set(MEMBER_CAPABILITIES),
+            capabilities=set(LOCAL_ADMIN_CAPABILITIES),
             allowed_bot_aliases=set(),
             owned_bot_aliases=set(),
             is_local_admin=True,
         )
 
     def _session_auth_context(self, session: WebAuthSession) -> AuthContext:
-        self._ensure_allowed_user_id(WEB_DEFAULT_USER_ID)
+        if session.account.account_id == "local-admin":
+            self._ensure_allowed_user_id(WEB_DEFAULT_USER_ID)
         return AuthContext(
             user_id=_session_user_id_for_account(session.account.account_id, session.account.session_user_id),
             token_used=True,
@@ -887,6 +925,11 @@ class WebApiServer:
 
     def _is_local_admin(self, auth: AuthContext) -> bool:
         return auth.is_local_admin or auth.account_id == "local-admin"
+
+    def _require_websocket_origin(self, request: web.Request) -> None:
+        if _is_request_origin_allowed(request):
+            return
+        raise web.HTTPForbidden(text="WebSocket Origin 不被允许")
 
     def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
         normalized_alias = self._normalize_bot_alias(alias)
@@ -1256,10 +1299,10 @@ class WebApiServer:
 
     async def auth_me(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
-        return _json({"ok": True, "data": _serialize_auth_context(auth, token=_extract_auth_token(request))})
+        return _json({"ok": True, "data": _serialize_auth_context(auth, token=_extract_auth_token(request) if auth.token_used else "")})
 
     async def auth_login(self, request: web.Request) -> web.Response:
-        if _is_loopback_request(request):
+        if _is_loopback_auto_auth_allowed(request):
             return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
         try:
@@ -1272,8 +1315,6 @@ class WebApiServer:
         return _json({"ok": True, "data": _serialize_auth_session(session)})
 
     async def auth_register(self, request: web.Request) -> web.Response:
-        if _is_loopback_request(request):
-            return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
         try:
             session = _WEB_AUTH_STORE.register_member(
@@ -1359,6 +1400,7 @@ class WebApiServer:
             user = _WEB_AUTH_STORE.update_member(
                 request.match_info["account_id"],
                 disabled=body.get("disabled") if "disabled" in body else None,
+                capabilities=body.get("capabilities") if isinstance(body.get("capabilities"), list) else None,
             )
         except AuthStoreError as exc:
             raise _auth_error(exc) from exc
@@ -1394,6 +1436,7 @@ class WebApiServer:
     async def post_install_plugin(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_RUN_PLUGINS)
         body = await self._parse_json(request)
+        body["_local_request"] = _is_loopback_request(request)
         return _json({"ok": True, "data": await install_plugin(self.manager, auth, dict(body or {}))})
 
     async def patch_plugin(self, request: web.Request) -> web.Response:
@@ -1898,6 +1941,7 @@ class WebApiServer:
         )
 
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
+        self._require_websocket_origin(request)
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
@@ -2018,6 +2062,7 @@ class WebApiServer:
         return ws
 
     async def notifications_ws(self, request: web.Request) -> web.WebSocketResponse:
+        self._require_websocket_origin(request)
         auth = await self._with_auth(request)
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
@@ -2344,6 +2389,7 @@ class WebApiServer:
         return _json({"ok": True, "data": await self._debug_service.evaluate(alias, auth.user_id, body)})
 
     async def debug_ws(self, request: web.Request) -> web.WebSocketResponse:
+        self._require_websocket_origin(request)
         auth = await self._with_capability(request, CAP_DEBUG_EXEC)
         alias = str(request.query.get("alias") or "").strip().lower()
         if not alias:
@@ -2659,8 +2705,7 @@ class WebApiServer:
         if field is None or field.name != "file":
             raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
         filename = field.filename or ""
-        data = await field.read(decode=False)
-        result = save_uploaded_file(self.manager, alias, auth.user_id, filename, data)
+        result = await save_uploaded_file_from_chunks(self.manager, alias, auth.user_id, filename, _iter_field_chunks(field))
         return _json({"ok": True, "data": result})
 
     async def upload_chat_attachment(self, request: web.Request) -> web.Response:
@@ -2671,8 +2716,7 @@ class WebApiServer:
         if field is None or field.name != "file":
             raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
         filename = field.filename or ""
-        data = await field.read(decode=False)
-        result = save_chat_attachment(self.manager, alias, auth.user_id, filename, data)
+        result = await save_chat_attachment_from_chunks(self.manager, alias, auth.user_id, filename, _iter_field_chunks(field))
         return _json({"ok": True, "data": result})
 
     async def delete_chat_attachment_view(self, request: web.Request) -> web.Response:
@@ -3921,11 +3965,9 @@ class WebApiServer:
             logger.warning("自动后台下载更新失败: %s", exc)
 
     def _build_app(self) -> web.Application:
-        # Desktop file editing/preview can legitimately exceed the default aiohttp body cap.
-        # Upload routes still enforce their own explicit limits in api_service.
         app = web.Application(
             middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware],
-            client_max_size=0,
+            client_max_size=25 * 1024 * 1024,
         )
         for module in (
             auth_routes,

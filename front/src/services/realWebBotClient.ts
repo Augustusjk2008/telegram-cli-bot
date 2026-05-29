@@ -570,6 +570,7 @@ type RawAdminUser = {
   username?: string;
   role?: string;
   disabled?: boolean;
+  capabilities?: Capability[];
   created_at?: string;
   allowed_bots?: string[];
   owned_bots?: string[];
@@ -2205,6 +2206,7 @@ function mapAdminUser(raw: RawAdminUser): AdminUser {
     username: String(raw.username || ""),
     role: (raw.role as AdminUser["role"]) || "member",
     disabled: Boolean(raw.disabled),
+    capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map((item) => item as Capability) : [],
     createdAt: String(raw.created_at || ""),
     allowedBots: Array.isArray(raw.allowed_bots) ? raw.allowed_bots.map((item) => String(item)) : [],
     ownedBots: Array.isArray(raw.owned_bots) ? raw.owned_bots.map((item) => String(item)) : [],
@@ -3540,6 +3542,7 @@ export class RealWebBotClient implements WebBotClient {
       },
       body: JSON.stringify({
         ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
+        ...(Array.isArray(input.capabilities) ? { capabilities: input.capabilities } : {}),
       }),
     });
     return mapAdminUser(data);

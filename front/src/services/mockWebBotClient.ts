@@ -1654,6 +1654,7 @@ export class MockWebBotClient implements WebBotClient {
       username: "demo",
       role: "member",
       disabled: false,
+      capabilities: [...MEMBER_CAPABILITIES],
       createdAt: "2026-05-01T09:00:00+08:00",
       allowedBots: ["main", "team2"],
       botCreateLimit: MEMBER_BOT_LIMIT,
@@ -1663,6 +1664,7 @@ export class MockWebBotClient implements WebBotClient {
       username: "alice",
       role: "member",
       disabled: false,
+      capabilities: [...MEMBER_CAPABILITIES],
       createdAt: "2026-05-02T09:00:00+08:00",
       allowedBots: ["main"],
       botCreateLimit: MEMBER_BOT_LIMIT,
@@ -1928,6 +1930,7 @@ export class MockWebBotClient implements WebBotClient {
       username: username.trim() || normalizedId,
       role: "member",
       disabled: false,
+      capabilities: resolveMemberCapabilities(username),
       createdAt: new Date().toISOString(),
       allowedBots: Array.from(this.bots.keys()),
       botCreateLimit: MEMBER_BOT_LIMIT,
@@ -2742,6 +2745,7 @@ export class MockWebBotClient implements WebBotClient {
     this.adminUsers.set(accountId, {
       ...current,
       disabled: typeof input.disabled === "boolean" ? input.disabled : current.disabled,
+      capabilities: Array.isArray(input.capabilities) ? [...input.capabilities] : current.capabilities,
     });
     return this.buildAdminUser(accountId);
   }

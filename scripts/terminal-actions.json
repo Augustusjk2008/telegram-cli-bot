@@ -42,8 +42,8 @@
       "linuxCommand": "sudo shutdown now",
       "macosCommand": "",
       "cwd": ".",
-      "confirm": false,
-      "enabled": true
+      "confirm": true,
+      "enabled": false
     },
     {
       "id": "Publish",
@@ -53,7 +53,7 @@
       "linuxCommand": "",
       "macosCommand": "",
       "cwd": ".",
-      "confirm": false,
+      "confirm": true,
       "enabled": true
     },
     {
@@ -82,11 +82,11 @@
       "id": "restart",
       "label": "重启程序",
       "icon": "Terminal",
-      "windowsCommand": "Invoke-RestMethod -Method Post \"http://127.0.0.1:8765/api/admin/restart\" -Headers @{ Authorization = \"Bearer adsadaqda2ii2ijdfq0rj1ejdsad1\" }",
+      "windowsCommand": "Invoke-RestMethod -Method Post \"http://127.0.0.1:8765/api/admin/restart\"",
       "linuxCommand": "cd /home/ubuntu/telegram-cli-bot-master && TOKEN=$(awk -F= '$1==\"WEB_API_TOKEN\"{print $2}' .env | tr -d '\"'\\'\"'\"' ') && curl -fsS -X POST \"http://127.0.0.1:8765/api/admin/restart\" -H \"Authorization: Bearer $TOKEN\"",
       "macosCommand": "",
       "cwd": ".",
-      "confirm": false,
+      "confirm": true,
       "enabled": true
     }
   ]

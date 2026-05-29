@@ -126,6 +126,7 @@ const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
 const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
+const CHAT_RENDER_WINDOW_SIZE = 80;
 const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 
 function fallbackAgents(): AgentSummary[] {
@@ -1050,6 +1051,7 @@ export function ChatScreen({
   onRequestDesktopPreview,
 }: Props) {
   const [items, setItems] = useState<ChatMessage[]>([]);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamMode, setStreamMode] = useState<"" | "sse" | "poll">("");
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
@@ -1069,6 +1071,7 @@ export function ChatScreen({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [previewDownloadProgress, setPreviewDownloadProgress] = useState<FileDownloadProgress | null>(null);
+  const previewRequestSeqRef = useRef(0);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
@@ -1153,6 +1156,7 @@ export function ChatScreen({
     clearStoredQueuedMessage(previousBotAliasRef.current, activeAgentIdRef.current || "main");
     setQueuedMessage(null);
     queuedMessageRef.current = null;
+    setHistoryExpanded(false);
     previousBotAliasRef.current = botAlias;
     assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias));
@@ -1881,6 +1885,8 @@ export function ChatScreen({
   }
 
   const loadPreview = useCallback(async (name: string, mode: "preview" | "full") => {
+    const requestSeq = previewRequestSeqRef.current + 1;
+    previewRequestSeqRef.current = requestSeq;
     setPreviewLoading(true);
     setError("");
     try {
@@ -1890,15 +1896,22 @@ export function ChatScreen({
       if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
         result = await client.readFileFull(botAlias, name);
       }
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
       result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
       setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
-      setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
+      if (requestSeq === previewRequestSeqRef.current) {
+        setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
+      }
     } finally {
-      setPreviewLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setPreviewLoading(false);
+      }
     }
   }, [botAlias, client]);
 
@@ -2795,7 +2808,12 @@ export function ChatScreen({
     }
     return next;
   }, [deletingAttachmentKeys]);
-  const messageRowModels = useMemo<ChatMessageRowModel[]>(() => items.map((item) => {
+  const hiddenHistoryCount = historyExpanded ? 0 : Math.max(0, items.length - CHAT_RENDER_WINDOW_SIZE);
+  const visibleItems = useMemo(
+    () => (hiddenHistoryCount > 0 ? items.slice(hiddenHistoryCount) : items),
+    [hiddenHistoryCount, items],
+  );
+  const messageRowModels = useMemo<ChatMessageRowModel[]>(() => visibleItems.map((item) => {
     const messageClientStateKey = getMessageClientStateKey(item);
     const planDraft = item.role === "assistant" && item.state === "done"
       ? extractPlanDraft(item.text)
@@ -2808,7 +2826,7 @@ export function ChatScreen({
       deletedAttachmentKeys: deletedAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
     };
-  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, items]);
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, visibleItems]);
 
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";
@@ -2914,6 +2932,17 @@ export function ChatScreen({
           {items.length === 0 && !isStreaming && !loading ? (
             <div className="text-center text-[var(--muted)] mt-10">
               暂无消息，开始聊天吧
+            </div>
+          ) : null}
+          {hiddenHistoryCount > 0 ? (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => setHistoryExpanded(true)}
+                className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+              >
+                展开较早消息（{hiddenHistoryCount}）
+              </button>
             </div>
           ) : null}
           <ChatMessageList

@@ -35,6 +35,17 @@ CAP_RUN_PLUGINS = "run_plugins"
 CAP_ADMIN_OPS = "admin_ops"
 CAP_MANAGE_REGISTER_CODES = "manage_register_codes"
 
+_HIGH_RISK_MEMBER_CAPABILITIES = frozenset(
+    {
+        CAP_ADMIN_OPS,
+        CAP_DEBUG_EXEC,
+        CAP_GIT_OPS,
+        CAP_RUN_PLUGINS,
+        CAP_TERMINAL_EXEC,
+        CAP_WRITE_FILES,
+    }
+)
+
 GUEST_CAPABILITIES = frozenset(
     {
         CAP_VIEW_BOTS,
@@ -50,19 +61,14 @@ MEMBER_CAPABILITIES = frozenset(
         CAP_MUTATE_BROWSE_STATE,
         CAP_VIEW_CHAT_TRACE,
         CAP_READ_FILE_CONTENT,
-        CAP_WRITE_FILES,
         CAP_CHAT_SEND,
-        CAP_TERMINAL_EXEC,
-        CAP_DEBUG_EXEC,
-        CAP_GIT_OPS,
         CAP_MANAGE_CLI_PARAMS,
         CAP_VIEW_PLUGINS,
-        CAP_RUN_PLUGINS,
-        CAP_ADMIN_OPS,
     }
 )
 
-LOCAL_ADMIN_CAPABILITIES = frozenset({*MEMBER_CAPABILITIES, CAP_MANAGE_REGISTER_CODES})
+LOCAL_ADMIN_CAPABILITIES = frozenset({*MEMBER_CAPABILITIES, *_HIGH_RISK_MEMBER_CAPABILITIES, CAP_MANAGE_REGISTER_CODES})
+_KNOWN_CAPABILITIES = frozenset({*LOCAL_ADMIN_CAPABILITIES, *GUEST_CAPABILITIES})
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$")
 _PASSWORD_MIN_LENGTH = 6
@@ -171,6 +177,7 @@ class WebAuthStore:
             salt = secrets.token_bytes(16)
             hashed_password = self._hash_password(resolved_password, salt, _PBKDF2_ITERATIONS)
             account_id = f"member_{secrets.token_hex(8)}"
+            session_user_id = self._generate_session_user_id(user_items, account_id)
             created_at = _utc_now()
             user_items.append(
                 {
@@ -179,6 +186,8 @@ class WebAuthStore:
                     "username_enc": self._encrypt_text(resolved_username),
                     "role": ROLE_MEMBER,
                     "disabled": False,
+                    "session_user_id": session_user_id,
+                    "capabilities": sorted(MEMBER_CAPABILITIES),
                     "password_salt": salt.hex(),
                     "password_hash": hashed_password,
                     "password_iterations": _PBKDF2_ITERATIONS,
@@ -203,7 +212,7 @@ class WebAuthStore:
                 username=resolved_username,
                 role=ROLE_MEMBER,
                 disabled=False,
-                session_user_id=None,
+                session_user_id=session_user_id,
             )
         )
 
@@ -228,6 +237,8 @@ class WebAuthStore:
             expected = self._hash_password(resolved_password, bytes.fromhex(salt_hex), iterations)
             if not secrets.compare_digest(expected, hash_hex):
                 self._raise(401, "invalid_credentials", "用户名或密码错误")
+            if self._ensure_account_defaults(user_item, user_items):
+                self._write_json(self.users_path, users_data)
         return self._issue_session(self._account_from_item(user_item))
 
     def get_session(self, token: str) -> WebAuthSession | None:
@@ -235,7 +246,10 @@ class WebAuthStore:
         if not resolved_token:
             return None
         with self._lock:
-            return self._sessions.get(resolved_token)
+            session = self._sessions.get(resolved_token)
+            if session is None:
+                return None
+            return self._refresh_session_from_store(resolved_token, session)
 
     def delete_session(self, token: str) -> None:
         resolved_token = str(token or "").strip()
@@ -251,47 +265,6 @@ class WebAuthStore:
 
     def can_bootstrap_without_auth(self) -> bool:
         return not self.has_member_accounts()
-
-    def list_members(self) -> dict[str, Any]:
-        with self._lock:
-            data = self._read_json(self.users_path)
-            items = [
-                {
-                    "account_id": str(item.get("account_id") or ""),
-                    "username": self._read_username_from_item(item),
-                    "role": str(item.get("role") or ROLE_MEMBER),
-                    "disabled": bool(item.get("disabled")),
-                    "created_at": str(item.get("created_at") or ""),
-                }
-                for item in self._items(data)
-                if str(item.get("role") or ROLE_MEMBER) == ROLE_MEMBER
-            ]
-        items.sort(key=lambda item: item["username"].casefold())
-        return {"items": items}
-
-    def update_member(self, account_id: str, *, disabled: bool | None = None) -> dict[str, Any]:
-        resolved_id = str(account_id or "").strip()
-        if not resolved_id:
-            self._raise(400, "invalid_account_id", "账号 ID 不能为空")
-        with self._lock:
-            data = self._read_json(self.users_path)
-            target = None
-            for item in self._items(data):
-                if str(item.get("account_id") or "").strip() == resolved_id:
-                    target = item
-                    break
-            if target is None:
-                self._raise(404, "account_not_found", "账号不存在")
-            if disabled is not None:
-                target["disabled"] = bool(disabled)
-            self._write_json(self.users_path, data)
-            return {
-                "account_id": str(target.get("account_id") or ""),
-                "username": self._read_username_from_item(target),
-                "role": str(target.get("role") or ROLE_MEMBER),
-                "disabled": bool(target.get("disabled")),
-                "created_at": str(target.get("created_at") or ""),
-            }
 
     def create_register_code(
         self,
@@ -342,6 +315,7 @@ class WebAuthStore:
                     "username": self._read_username_from_item(item),
                     "role": str(item.get("role") or ROLE_MEMBER),
                     "disabled": bool(item.get("disabled")),
+                    "capabilities": sorted(self._capabilities_for_item(item)),
                     "created_at": str(item.get("created_at") or ""),
                 }
                 for item in self._items(data)
@@ -350,7 +324,13 @@ class WebAuthStore:
         items.sort(key=lambda item: item["username"].casefold())
         return {"items": items}
 
-    def update_member(self, account_id: str, *, disabled: bool | None = None) -> dict[str, Any]:
+    def update_member(
+        self,
+        account_id: str,
+        *,
+        disabled: bool | None = None,
+        capabilities: list[str] | None = None,
+    ) -> dict[str, Any]:
         resolved_id = str(account_id or "").strip()
         if not resolved_id:
             self._raise(400, "invalid_account_id", "账号 ID 不能为空")
@@ -365,12 +345,16 @@ class WebAuthStore:
                 self._raise(404, "account_not_found", "账号不存在")
             if disabled is not None:
                 target["disabled"] = bool(disabled)
+            if capabilities is not None:
+                target["capabilities"] = sorted(self._sanitize_capabilities(capabilities))
             self._write_json(self.users_path, data)
+            self._refresh_account_sessions(target)
             return {
                 "account_id": str(target.get("account_id") or ""),
                 "username": self._read_username_from_item(target),
                 "role": str(target.get("role") or ROLE_MEMBER),
                 "disabled": bool(target.get("disabled")),
+                "capabilities": sorted(self._capabilities_for_item(target)),
                 "created_at": str(target.get("created_at") or ""),
             }
 
@@ -419,7 +403,7 @@ class WebAuthStore:
 
     def _issue_session(self, account: WebAccount, *, capabilities: frozenset[str] | None = None) -> WebAuthSession:
         token = f"web_sess_{secrets.token_urlsafe(24)}"
-        resolved_capabilities = capabilities or capabilities_for_role(account.role)
+        resolved_capabilities = capabilities or self._capabilities_for_account(account)
         session = WebAuthSession(
             token=token,
             account=account,
@@ -429,6 +413,44 @@ class WebAuthStore:
         with self._lock:
             self._sessions[token] = session
         return session
+
+    def _refresh_account_sessions(self, item: dict[str, Any]) -> None:
+        account = self._account_from_item(item)
+        for token, session in list(self._sessions.items()):
+            if session.account.account_id != account.account_id:
+                continue
+            if account.disabled:
+                self._sessions.pop(token, None)
+                continue
+            self._sessions[token] = WebAuthSession(
+                token=token,
+                account=account,
+                created_at=session.created_at,
+                capabilities=tuple(sorted(self._capabilities_for_item(item))),
+            )
+
+    def _refresh_session_from_store(self, token: str, session: WebAuthSession) -> WebAuthSession | None:
+        if session.account.account_id in {"local-admin", "guest"}:
+            return session
+        data = self._read_json(self.users_path)
+        for item in self._items(data):
+            if str(item.get("account_id") or "").strip() != session.account.account_id:
+                continue
+            if bool(item.get("disabled")):
+                self._sessions.pop(token, None)
+                return None
+            if self._ensure_account_defaults(item, self._items(data)):
+                self._write_json(self.users_path, data)
+            refreshed = WebAuthSession(
+                token=token,
+                account=self._account_from_item(item),
+                created_at=session.created_at,
+                capabilities=tuple(sorted(self._capabilities_for_item(item))),
+            )
+            self._sessions[token] = refreshed
+            return refreshed
+        self._sessions.pop(token, None)
+        return None
 
     def build_local_admin_session(self, username: str = "127.0.0.1") -> WebAuthSession:
         return self._issue_session(
@@ -483,8 +505,57 @@ class WebAuthStore:
             username=self._read_username_from_item(item),
             role=str(item.get("role") or ROLE_MEMBER),
             disabled=bool(item.get("disabled")),
-            session_user_id=None,
+            session_user_id=self._parse_session_user_id(item.get("session_user_id")),
         )
+
+    def _parse_session_user_id(self, value: Any) -> int | None:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return None
+        return resolved if resolved > 0 else None
+
+    def _generate_session_user_id(self, items: list[dict[str, Any]], account_id: str) -> int:
+        used = {
+            parsed
+            for item in items
+            if (parsed := self._parse_session_user_id(item.get("session_user_id"))) is not None
+        }
+        seed = int(hashlib.sha256(str(account_id).encode("utf-8")).hexdigest()[:12], 16)
+        candidate = 1_000_000 + seed % 8_000_000_000
+        while candidate in used:
+            candidate += 1
+        return candidate
+
+    def _ensure_account_defaults(self, item: dict[str, Any], items: list[dict[str, Any]]) -> bool:
+        changed = False
+        if self._parse_session_user_id(item.get("session_user_id")) is None:
+            item["session_user_id"] = self._generate_session_user_id(items, str(item.get("account_id") or ""))
+            changed = True
+        if not isinstance(item.get("capabilities"), list):
+            item["capabilities"] = sorted(capabilities_for_role(str(item.get("role") or ROLE_MEMBER)))
+            changed = True
+        return changed
+
+    def _sanitize_capabilities(self, values: list[str]) -> frozenset[str]:
+        return frozenset(str(value).strip() for value in values if str(value).strip() in _KNOWN_CAPABILITIES)
+
+    def _capabilities_for_item(self, item: dict[str, Any]) -> frozenset[str]:
+        raw = item.get("capabilities")
+        if isinstance(raw, list):
+            return self._sanitize_capabilities(raw)
+        return capabilities_for_role(str(item.get("role") or ROLE_MEMBER))
+
+    def _capabilities_for_account(self, account: WebAccount) -> frozenset[str]:
+        if account.account_id == "local-admin":
+            return LOCAL_ADMIN_CAPABILITIES
+        with self._lock:
+            data = self._read_json(self.users_path)
+            for item in self._items(data):
+                if str(item.get("account_id") or "").strip() != account.account_id:
+                    continue
+                return self._capabilities_for_item(item)
+        return capabilities_for_role(account.role)
 
     def _find_user_item(self, items: list[dict[str, Any]], normalized_username: str) -> dict[str, Any] | None:
         expected_key = self._stable_lookup_key(normalized_username)

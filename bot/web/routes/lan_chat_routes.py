@@ -128,6 +128,7 @@ async def post_read(request: web.Request) -> web.Response:
 
 async def browser_ws(request: web.Request) -> web.WebSocketResponse:
     server = request.app["server"]
+    server._require_websocket_origin(request)
     auth = await server._with_capability(request, CAP_VIEW_CHAT_HISTORY)
     user = server.lan_chat_service.local_user(auth)
     ws = web.WebSocketResponse(heartbeat=30.0)
@@ -178,6 +179,7 @@ async def post_node_message(request: web.Request) -> web.Response:
 async def node_ws(request: web.Request) -> web.WebSocketResponse:
     _require_node_key(request)
     server = request.app["server"]
+    server._require_websocket_origin(request)
     instance_id = str(request.headers.get("X-Lan-Chat-Instance-Id") or request.query.get("instance_id") or "").strip()
     if not instance_id:
         raise web.HTTPBadRequest(text='{"ok":false,"error":{"code":"invalid_lan_chat_node","message":"节点无效"}}')

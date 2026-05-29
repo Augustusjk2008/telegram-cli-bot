@@ -6,9 +6,10 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from bot.manager import MultiBotManager
 from bot.messages import msg
@@ -30,6 +31,37 @@ _RASTER_IMAGE_CONTENT_TYPES = {
     ".gif": "image/gif",
     ".webp": "image/webp",
 }
+
+
+async def _write_limited_chunks(target_path: str | Path, chunks: AsyncIterator[bytes], *, replace_existing: bool) -> int:
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    temp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=str(target.parent), prefix=f".{target.name}.", delete=False) as handle:
+            temp_name = handle.name
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > UPLOAD_MAX_FILE_SIZE_BYTES:
+                    _raise(413, "file_too_large", msg("upload", "file_too_large"))
+                handle.write(chunk)
+        if total <= 0:
+            _raise(400, "empty_file", "文件内容不能为空")
+        if replace_existing:
+            os.replace(temp_name, target)
+        else:
+            Path(temp_name).replace(target)
+        temp_name = ""
+        return total
+    finally:
+        if temp_name:
+            try:
+                os.remove(temp_name)
+            except OSError:
+                pass
 
 
 def get_browser_directory(session: UserSession) -> str:
@@ -671,6 +703,25 @@ def save_chat_attachment(manager: MultiBotManager, alias: str, user_id: int, fil
     }
 
 
+async def save_chat_attachment_from_chunks(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    filename: str,
+    chunks: AsyncIterator[bytes],
+) -> dict[str, Any]:
+    ensure_file_browser_supported(manager, alias)
+    attachment_dir = build_chat_attachment_dir(alias, user_id)
+    os.makedirs(attachment_dir, exist_ok=True)
+    file_path, stored_filename = resolve_unique_upload_path(attachment_dir, filename)
+    size = await _write_limited_chunks(file_path, chunks, replace_existing=False)
+    return {
+        "filename": stored_filename,
+        "saved_path": file_path,
+        "size": size,
+    }
+
+
 def delete_chat_attachment(
     manager: MultiBotManager,
     alias: str,
@@ -717,6 +768,26 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
         "filename": filename,
         "saved_path": file_path,
         "size": len(data),
+    }
+
+
+async def save_uploaded_file_from_chunks(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    filename: str,
+    chunks: AsyncIterator[bytes],
+) -> dict[str, Any]:
+    ensure_file_browser_supported(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = require_real_browser_directory(get_browser_directory(session))
+    file_path = resolve_safe_write_path(browser_dir, filename)
+    size = await _write_limited_chunks(file_path, chunks, replace_existing=True)
+    invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
+    return {
+        "filename": filename,
+        "saved_path": file_path,
+        "size": size,
     }
 
 

@@ -7,6 +7,7 @@ import type {
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   BotSummary,
+  Capability,
   CreateAnnouncementInput,
   EnvConfigItem,
   EnvConfigPatchInput,
@@ -71,6 +72,18 @@ const DEFAULT_ANNOUNCEMENT_DRAFT: CreateAnnouncementInput = {
     { label: "操作", items: ["点关闭后不再重复弹出"] },
   ],
 };
+
+const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
+  { id: "chat_send", label: "聊天" },
+  { id: "read_file_content", label: "读文件" },
+  { id: "write_files", label: "写文件" },
+  { id: "terminal_exec", label: "终端" },
+  { id: "debug_exec", label: "调试" },
+  { id: "git_ops", label: "Git" },
+  { id: "run_plugins", label: "运行插件" },
+  { id: "admin_ops", label: "管理操作" },
+  { id: "manage_register_codes", label: "邀请码/用户" },
+];
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -417,6 +430,25 @@ export function AdminCenterScreen({
       setNotice(`${user.username} 的 Bot 权限已更新`);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "更新 Bot 权限失败"));
+    }
+  };
+
+  const updateUserCapabilityGrant = async (user: AdminUser, capability: Capability, enabled: boolean) => {
+    const nextCapabilities = enabled
+      ? Array.from(new Set([...user.capabilities, capability]))
+      : user.capabilities.filter((item) => item !== capability);
+    setError("");
+    setNotice("");
+    try {
+      const updated = await client.updateUser(user.accountId, { capabilities: nextCapabilities });
+      setUsers((prev) => prev.map((item) => (
+        item.accountId === user.accountId
+          ? { ...item, capabilities: updated.capabilities }
+          : item
+      )));
+      setNotice(`${user.username} 的账号能力已更新`);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "更新账号能力失败"));
     }
   };
 
@@ -814,10 +846,24 @@ export function AdminCenterScreen({
                     </button>
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {ACCOUNT_CAPABILITY_OPTIONS.map((capability) => (
+                      <label key={`${user.accountId}-${capability.id}`} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                        <input
+                          type="checkbox"
+                          aria-label={`${user.username} 账号能力 ${capability.label}`}
+                          checked={user.capabilities.includes(capability.id)}
+                          onChange={(event) => void updateUserCapabilityGrant(user, capability.id, event.target.checked)}
+                        />
+                        <span>{capability.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {bots.map((bot) => (
                       <label key={`${user.accountId}-${bot.alias}`} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
                         <input
                           type="checkbox"
+                          aria-label={`${user.username} 可操作 Bot ${bot.alias}`}
                           checked={user.allowedBots.includes(bot.alias)}
                           onChange={(event) => void updateUserBotGrant(user, bot.alias, event.target.checked)}
                         />

@@ -125,6 +125,7 @@ class TerminalSessionManager:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._sessions: dict[str, ManagedTerminalSession] = {}
+        self._rebuild_locks: dict[str, asyncio.Lock] = {}
 
     def _key(self, user_id: int, owner_id: str) -> str:
         return f"{user_id}:{owner_id}"
@@ -187,6 +188,29 @@ class TerminalSessionManager:
             return self._build_snapshot_locked(self._sessions.get(self._key(user_id, owner_id)))
 
     async def rebuild(
+        self,
+        user_id: int,
+        owner_id: str,
+        *,
+        cwd: str,
+        shell_type: str,
+        cols: int | None,
+        rows: int | None,
+    ) -> dict[str, Any]:
+        key = self._key(user_id, owner_id)
+        async with self._lock:
+            rebuild_lock = self._rebuild_locks.setdefault(key, asyncio.Lock())
+        async with rebuild_lock:
+            return await self._rebuild_locked(
+                user_id,
+                owner_id,
+                cwd=cwd,
+                shell_type=shell_type,
+                cols=cols,
+                rows=rows,
+            )
+
+    async def _rebuild_locked(
         self,
         user_id: int,
         owner_id: str,
@@ -276,6 +300,7 @@ class TerminalSessionManager:
         async with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
+            self._rebuild_locks.clear()
         for session in sessions:
             await self._terminate_process(session)
 

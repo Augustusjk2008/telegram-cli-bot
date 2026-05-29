@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -21,13 +20,29 @@ def _get_browser_directory(session) -> str:
     return session.working_dir
 
 
-def _resolve_safe_path(base_dir: str, filename: str) -> str:
+def _is_within_path(root: Path, path: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_safe_path(workspace_root: str, base_dir: str, filename: str) -> str:
     candidate = str(filename or "").strip()
     if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_path", "文件路径不安全")
-    if os.path.isabs(candidate):
-        return os.path.abspath(os.path.expanduser(candidate))
-    return os.path.abspath(os.path.join(base_dir, os.path.expanduser(candidate)))
+    raw_path = Path(candidate).expanduser()
+    if raw_path.is_absolute():
+        _raise(400, "unsafe_path", "插件输入不允许使用绝对路径")
+    root = Path(workspace_root).expanduser().resolve()
+    base = Path(base_dir).expanduser().resolve()
+    if not _is_within_path(root, base):
+        _raise(403, "path_outside_workspace", "当前目录不在工作区内")
+    resolved = (base / raw_path).resolve()
+    if not _is_within_path(base, resolved) or not _is_within_path(root, resolved):
+        _raise(403, "path_outside_workspace", "插件只能访问当前目录或工作区内文件")
+    return resolved.relative_to(root).as_posix()
 
 
 async def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: bool = False) -> list[dict[str, Any]]:
@@ -50,8 +65,12 @@ async def install_plugin(
     _require_capability(auth, CAP_RUN_PLUGINS)
     plugin_id = str(body.get("pluginId") or body.get("plugin_id") or body.get("id") or "").strip()
     source_path = str(body.get("sourcePath") or body.get("source_path") or "").strip()
+    if source_path:
+        dev_enabled = bool(body.get("dev") or body.get("devMode") or body.get("allowDevSourcePath"))
+        if not (auth.is_local_admin and bool(body.get("_local_request")) and dev_enabled):
+            _raise(403, "plugin_source_path_forbidden", "仅本机管理员开发模式可从目录安装插件")
     if not plugin_id and not source_path:
-        _raise(400, "missing_plugin_id", "插件 ID 或目录不能为空")
+        _raise(400, "missing_plugin_id", "插件 ID 不能为空")
     install_args = {}
     if source_path:
         install_args["source_path"] = source_path
@@ -121,8 +140,9 @@ def _resolve_plugin_render_input(
     if path_value is None:
         return resolved
     session = get_session_for_alias(manager, alias, user_id)
+    profile = get_profile_or_raise(manager, alias)
     browser_dir = _require_real_browser_directory(_get_browser_directory(session))
-    resolved["path"] = _resolve_safe_path(browser_dir, str(path_value))
+    resolved["path"] = _resolve_safe_path(profile.working_dir, browser_dir, str(path_value))
     return resolved
 
 

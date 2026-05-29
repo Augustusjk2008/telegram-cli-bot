@@ -264,14 +264,28 @@ class PluginRuntime:
         self._manifests[key] = manifest
         wrapped.stderr_task = asyncio.create_task(self._read_stderr(key, process))
         wrapped.reader_task = asyncio.create_task(self._reader_loop(key, wrapped))
-        await self._invoke(
-            wrapped,
-            "plugin.initialize",
-            {
-                "context": self._context_payload(bot_alias, manifest),
-            },
-        )
-        return wrapped
+        try:
+            await asyncio.wait_for(
+                self._invoke(
+                    wrapped,
+                    "plugin.initialize",
+                    {
+                        "context": self._context_payload(bot_alias, manifest),
+                    },
+                ),
+                timeout=self._call_timeout_seconds,
+            )
+            return wrapped
+        except asyncio.TimeoutError as exc:
+            self._processes.pop(key, None)
+            self._manifests.pop(key, None)
+            await self._stop_process(key, wrapped, send_shutdown=False)
+            raise RuntimeError(f"插件响应超时: {manifest.plugin_id}") from exc
+        except Exception:
+            self._processes.pop(key, None)
+            self._manifests.pop(key, None)
+            await self._stop_process(key, wrapped, send_shutdown=False)
+            raise
 
     async def _ensure_process(self, bot_alias: str, manifest: PluginManifest) -> _PluginProcess:
         key = (bot_alias, manifest.plugin_id)
@@ -373,10 +387,10 @@ class PluginRuntime:
             },
         )
 
-    async def _stop_process(self, key: tuple[str, str], wrapped: _PluginProcess) -> None:
+    async def _stop_process(self, key: tuple[str, str], wrapped: _PluginProcess, *, send_shutdown: bool = True) -> None:
         process = wrapped.process
         manifest = self._manifests.get(key)
-        if process.returncode is None and manifest is not None:
+        if send_shutdown and process.returncode is None and manifest is not None:
             try:
                 await asyncio.wait_for(
                     self._invoke(wrapped, "plugin.shutdown", {"context": self._context_payload(key[0], manifest)}),

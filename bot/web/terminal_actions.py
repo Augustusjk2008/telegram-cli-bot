@@ -38,6 +38,10 @@ SAFE_TERMINAL_ACTION_ICONS = frozenset(
     }
 )
 DEFAULT_TERMINAL_ACTION_ICON = "Terminal"
+FORCED_CONFIRM_COMMAND_RE = re.compile(
+    r"\b(?:restart|shutdown|publish|sudo|Invoke-RestMethod)\b",
+    re.IGNORECASE,
+)
 
 
 class TerminalActionValidationError(ValueError):
@@ -166,6 +170,10 @@ def _select_runtime_command(
     return linux_command
 
 
+def _requires_forced_confirmation(*commands: str) -> bool:
+    return any(FORCED_CONFIRM_COMMAND_RE.search(command or "") for command in commands)
+
+
 def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction:
     current = _expect_mapping(item, f"actions[{index}]")
     action_id = str(current.get("id") or "").strip()
@@ -198,7 +206,7 @@ def _parse_action(workspace_root: Path, item: Any, index: int) -> TerminalAction
         command=command,
         cwd=cwd,
         resolved_cwd=str(resolved_cwd),
-        confirm=bool(current.get("confirm", False)),
+        confirm=bool(current.get("confirm", False)) or _requires_forced_confirmation(windows_command, linux_command, macos_command),
         enabled=bool(current.get("enabled", True)),
     )
 

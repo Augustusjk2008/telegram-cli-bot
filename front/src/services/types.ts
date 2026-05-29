@@ -77,6 +77,7 @@ export type AdminUser = {
   username: string;
   role: AccountRole | "member";
   disabled: boolean;
+  capabilities: Capability[];
   createdAt: string;
   allowedBots: string[];
   ownedBots: string[];
@@ -86,6 +87,7 @@ export type AdminUser = {
 
 export type AdminUserUpdateInput = {
   disabled?: boolean;
+  capabilities?: Capability[];
 };
 
 export type UserBotPermissions = {

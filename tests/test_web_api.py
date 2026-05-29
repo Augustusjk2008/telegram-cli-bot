@@ -161,6 +161,19 @@ def isolated_web_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         secret_path=tmp_path / ".web_auth_secret.json",
     )
     monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    return store
+
+
+@pytest.fixture(autouse=True)
+def default_web_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WebAuthStore:
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.default.json",
+        register_codes_path=tmp_path / ".web_register_codes.default.json",
+        secret_path=tmp_path / ".web_auth_secret.default.json",
+    )
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
     return store
 
 
@@ -3265,6 +3278,28 @@ async def test_auth_route_auto_authenticates_direct_loopback_request(
 
 
 @pytest.mark.asyncio
+async def test_auth_route_ignores_stale_session_token_for_loopback(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me", headers={"Authorization": "Bearer web_sess_stale"})
+            assert resp.status == 200
+            payload = await resp.json()
+
+    assert payload["data"]["username"] == "127.0.0.1"
+    assert payload["data"]["account_id"] == "local-admin"
+    assert payload["data"]["user_id"] == 1001
+
+
+@pytest.mark.asyncio
 async def test_auth_route_rejects_forwarded_loopback_request_for_local_admin(
     web_manager: MultiBotManager,
     isolated_web_auth_store: WebAuthStore,
@@ -3458,7 +3493,7 @@ for line in sys.stdin:
         ),
         encoding="utf-8",
     )
-    wave_dir = temp_dir / "waves"
+    wave_dir = repo_root / "waves"
     wave_dir.mkdir()
     wave_file = wave_dir / "demo.vcd"
     wave_file.write_text("$timescale 1ns $end\n", encoding="utf-8")
@@ -3512,7 +3547,7 @@ for line in sys.stdin:
 
             open_response = await client.post(
                 "/api/bots/main/plugins/vivado-waveform/views/waveform/open",
-                json={"input": {"path": str(wave_file)}},
+                json={"input": {"path": "waves/demo.vcd"}},
                 headers={"Accept-Encoding": "gzip"},
             )
             open_payload = await open_response.json()
@@ -3609,7 +3644,12 @@ async def test_web_api_lists_installable_plugins_and_installs_plugin(
                 }
             ]
 
-            install_response = await client.post("/api/plugins/install", json={"sourcePath": str(source_plugin_dir)})
+            source_path_response = await client.post("/api/plugins/install", json={"sourcePath": str(source_plugin_dir)})
+            source_path_payload = await source_path_response.json()
+            assert source_path_response.status == 403
+            assert source_path_payload["error"]["code"] == "plugin_source_path_forbidden"
+
+            install_response = await client.post("/api/plugins/install", json={"pluginId": "fresh-plugin"})
             install_payload = await install_response.json()
             assert install_payload["ok"] is True
             assert install_payload["data"]["id"] == "fresh-plugin"
@@ -3812,7 +3852,7 @@ for line in sys.stdin:
 
             open_response = await client.post(
                 "/api/bots/main/plugins/timing-report/views/timing-table/open",
-                json={"input": {"path": str(report)}},
+                json={"input": {"path": "reports/timing.rpt"}},
             )
             open_payload = await open_response.json()
             session_id = open_payload["data"]["sessionId"]
@@ -3831,7 +3871,7 @@ for line in sys.stdin:
                     "viewId": "timing-table",
                     "sessionId": session_id,
                     "actionId": "export-all",
-                    "payload": {"path": str(report)},
+                    "payload": {"path": "reports/timing.rpt"},
                 },
             )
             action_payload = await action_response.json()
@@ -4884,7 +4924,7 @@ async def test_open_workdir_route_rejects_non_local_admin(
             payload = await resp.json()
 
     assert resp.status == 403
-    assert payload["error"]["code"] == "local_admin_required"
+    assert payload["error"]["code"] == "forbidden"
 
 
 @pytest.mark.asyncio
@@ -11222,6 +11262,10 @@ async def test_member_sees_all_bots_but_ungranted_bot_is_read_only(
         secret_path=tmp_path / ".web_auth_secret.json",
     )
     session = store.register_member("alice", "pw-123", "INVITE-001")
+    store.update_member(
+        session.account.account_id,
+        capabilities=["admin_ops", "view_bots", "view_bot_status"],
+    )
     permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
     permissions.set_allowed_bots(session.account.account_id, ["main"])
 
@@ -11261,7 +11305,7 @@ async def test_member_sees_all_bots_but_ungranted_bot_is_read_only(
 
 
 @pytest.mark.asyncio
-async def test_web_member_accounts_share_default_runtime_session(
+async def test_web_member_accounts_use_isolated_runtime_sessions(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -11336,19 +11380,21 @@ async def test_web_member_accounts_share_default_runtime_session(
     assert bob_me.status == 200
     alice_user_id = alice_payload["data"]["user_id"]
     bob_user_id = bob_payload["data"]["user_id"]
-    assert alice_user_id == 1001
-    assert bob_user_id == 1001
-    assert captured_chat_user_ids == [1001, 1001]
+    assert alice_user_id == alice.account.session_user_id
+    assert bob_user_id == bob.account.session_user_id
+    assert alice_user_id != bob_user_id
+    assert captured_chat_user_ids == [alice_user_id, bob_user_id]
     assert alice_chat.status == 200
     assert bob_chat.status == 200
-    assert get_session_for_alias(web_manager, "main", 1001).codex_session_id == "thread-bob"
+    assert get_session_for_alias(web_manager, "main", alice_user_id).codex_session_id == "thread-alice"
+    assert get_session_for_alias(web_manager, "main", bob_user_id).codex_session_id == "thread-bob"
     assert alice_cd.status == 200
     assert bob_pwd.status == 200
-    assert bob_pwd_payload["data"]["working_dir"] == str(tmp_path)
+    assert bob_pwd_payload["data"]["working_dir"] == web_manager.main_profile.working_dir
 
 
 @pytest.mark.asyncio
-async def test_web_member_reset_and_kill_use_shared_default_runtime_session(
+async def test_web_member_reset_and_kill_use_isolated_runtime_sessions(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -11378,13 +11424,15 @@ async def test_web_member_reset_and_kill_use_shared_default_runtime_session(
     permissions.set_allowed_bots(bob.account.account_id, ["main"])
     monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
 
-    shared_session = get_session_for_alias(web_manager, "main", 1001)
-    shared_session.codex_session_id = "thread-shared"
+    alice_session = get_session_for_alias(web_manager, "main", alice.account.session_user_id or 0)
+    alice_session.codex_session_id = "thread-alice"
+    bob_session = get_session_for_alias(web_manager, "main", bob.account.session_user_id or 0)
+    bob_session.codex_session_id = "thread-bob"
     bob_process = MagicMock()
     bob_process.poll.return_value = None
-    with shared_session._lock:
-        shared_session.process = bob_process
-        shared_session.is_processing = True
+    with bob_session._lock:
+        bob_session.process = bob_process
+        bob_session.is_processing = True
 
     app = WebApiServer(web_manager)._build_app()
     alice_headers = {"Authorization": f"Bearer {alice.token}", "Host": "example.test"}
@@ -11396,7 +11444,8 @@ async def test_web_member_reset_and_kill_use_shared_default_runtime_session(
 
     assert alice_reset.status == 200
     assert bob_kill.status == 200
-    assert get_session_for_alias(web_manager, "main", 1001).codex_session_id is None
+    assert get_session_for_alias(web_manager, "main", alice.account.session_user_id or 0).codex_session_id is None
+    assert get_session_for_alias(web_manager, "main", bob.account.session_user_id or 0).codex_session_id == "thread-bob"
     assert bob_process.poll.called is True
 
 
@@ -11445,6 +11494,10 @@ async def test_member_create_bot_quota_and_auto_grant(
         secret_path=tmp_path / ".web_auth_secret.json",
     )
     session = store.register_member("alice", "pw-123", "INVITE-001")
+    store.update_member(
+        session.account.account_id,
+        capabilities=["admin_ops", "view_bots", "view_bot_status"],
+    )
     permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
 
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -11593,6 +11646,92 @@ async def test_local_admin_can_list_users_and_update_bot_permissions(
             patch_payload = await patch_response.json()
             assert patch_response.status == 200
             assert patch_payload["data"]["allowed_bots"] == ["main", "sub1"]
+
+
+@pytest.mark.asyncio
+async def test_local_admin_can_update_member_capabilities_and_bot_permissions(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.web.permission_store import BotPermissionStore
+
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=codes_path,
+        secret_path=tmp_path / ".web_auth_secret.json",
+    )
+    session = store.register_member("alice", "pw-123", "INVITE-001")
+    permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", store)
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            users_response = await client.get("/api/admin/users")
+            users_payload = await users_response.json()
+            assert users_response.status == 200
+            assert "terminal_exec" not in users_payload["data"]["items"][0]["capabilities"]
+
+            monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+            login_before_patch_response = await client.post(
+                "/api/auth/login",
+                headers={"Host": "example.test"},
+                json={"username": "alice", "password": "pw-123"},
+            )
+            login_before_patch_payload = await login_before_patch_response.json()
+            existing_member_headers = {
+                "Authorization": f"Bearer {login_before_patch_payload['data']['token']}",
+                "Host": "example.test",
+            }
+
+            monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+            patch_user_response = await client.patch(
+                f"/api/admin/users/{session.account.account_id}",
+                json={"capabilities": ["view_bots", "view_bot_status", "terminal_exec", "write_files"]},
+            )
+            patch_user_payload = await patch_user_response.json()
+            assert patch_user_response.status == 200
+            assert {"terminal_exec", "write_files"}.issubset(set(patch_user_payload["data"]["capabilities"]))
+
+            await client.patch(
+                f"/api/admin/users/{session.account.account_id}/permissions",
+                json={"allowed_bots": ["main"]},
+            )
+
+            monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+            login_response = await client.post(
+                "/api/auth/login",
+                headers={"Host": "example.test"},
+                json={"username": "alice", "password": "pw-123"},
+            )
+            login_payload = await login_response.json()
+            member_headers = {"Authorization": f"Bearer {login_payload['data']['token']}", "Host": "example.test"}
+
+            terminal_response = await client.get("/api/terminal/session?owner_id=main", headers=member_headers)
+            refreshed_terminal_response = await client.get(
+                "/api/terminal/session?owner_id=main",
+                headers=existing_member_headers,
+            )
+            create_response = await client.post(
+                "/api/bots/main/files/create",
+                headers=member_headers,
+                json={"filename": "notes.md", "content": "# ok\n"},
+            )
+
+    assert login_response.status == 200
+    assert {"terminal_exec", "write_files"}.issubset(set(login_payload["data"]["capabilities"]))
+    assert terminal_response.status == 200
+    assert refreshed_terminal_response.status == 200
+    assert create_response.status == 200
 
 
 @pytest.mark.asyncio

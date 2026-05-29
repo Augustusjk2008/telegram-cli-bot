@@ -549,6 +549,7 @@ test("disables the stage-all button when there are no unstaged or untracked file
 
 test("discards a single changed file", async () => {
   const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   const discardSpy = vi.fn(async () => ({
     message: "已丢弃所选文件改动",
     overview: buildRepoOverview({
@@ -581,6 +582,7 @@ test("discards a single changed file", async () => {
 
 test("discards all changes from the commit panel", async () => {
   const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   const discardAllSpy = vi.fn(async () => ({
     message: "已丢弃全部改动",
     overview: buildRepoOverview({

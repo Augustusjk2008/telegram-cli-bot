@@ -210,6 +210,14 @@ export function GitScreen({
   );
   const totalChanges = groups.staged.length + groups.unstaged.length + groups.untracked.length;
 
+  function confirmDiscardPath(path: string) {
+    return window.confirm(`确定丢弃 ${path} 的改动吗？`);
+  }
+
+  function confirmDiscardAll(count: number) {
+    return window.confirm(`确定丢弃全部 ${count} 个文件的改动吗？`);
+  }
+
   function syncOverview(next: GitOverview | null) {
     setOverview(next);
     onOverviewChange?.(next);
@@ -719,7 +727,12 @@ export function GitScreen({
                                       type="button"
                                       aria-label={`丢弃 ${item.path}`}
                                       title={`丢弃 ${item.path}`}
-                                      onClick={() => void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]))}
+                                      onClick={() => {
+                                        if (!confirmDiscardPath(item.path)) {
+                                          return;
+                                        }
+                                        void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]));
+                                      }}
                                       disabled={mutationBusy}
                                       className={iconButtonClass()}
                                     >
@@ -1051,7 +1064,12 @@ export function GitScreen({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void runAction("discard-all", () => client.discardAllGitChanges(botAlias))}
+                      onClick={() => {
+                        if (!confirmDiscardAll(totalChanges)) {
+                          return;
+                        }
+                        void runAction("discard-all", () => client.discardAllGitChanges(botAlias));
+                      }}
                       disabled={mutationBusy || overview.isClean}
                       className={buttonClass()}
                     >

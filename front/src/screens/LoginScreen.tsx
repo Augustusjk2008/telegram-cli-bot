@@ -13,9 +13,9 @@ import type { PublicHostInfo } from "../services/types";
 type LoginMode = "login" | "register";
 
 type Props = {
-  onLogin?: (input: { username: string; password: string }) => Promise<void> | void;
-  onRegister?: (input: { username: string; password: string; registerCode: string }) => Promise<void> | void;
-  onGuestLogin?: () => Promise<void> | void;
+  onLogin?: (input: { username: string; password: string; remember?: boolean }) => Promise<void> | void;
+  onRegister?: (input: { username: string; password: string; registerCode: string; remember?: boolean }) => Promise<void> | void;
+  onGuestLogin?: (input?: { remember?: boolean }) => Promise<void> | void;
   isLoading?: boolean;
   error?: string;
   hostInfo?: PublicHostInfo | null;
@@ -34,6 +34,7 @@ export function LoginScreen({
   onThemeChange,
 }: Props) {
   const [mode, setMode] = useState<LoginMode>("login");
+  const [rememberLogin, setRememberLogin] = useState(false);
   const allowLegacyTokenLogin = import.meta.env.MODE === "test";
   const hostSummary = hostInfo
     ? `${hostInfo.username} @ ${hostInfo.operatingSystem} · ${hostInfo.hardwarePlatform} · ${hostInfo.hardwareSpec}`
@@ -139,6 +140,7 @@ export function LoginScreen({
                   const formData = new FormData(event.currentTarget);
                   const username = String(formData.get("username") || "").trim();
                   const password = String(formData.get("password") || "");
+                  const remember = formData.get("rememberLogin") === "on";
                   const legacyTokenMode = allowLegacyTokenLogin && mode === "login" && Boolean(username) && !password;
                   if (!username || (!password && !legacyTokenMode)) {
                     return;
@@ -148,10 +150,10 @@ export function LoginScreen({
                     if (!registerCode) {
                       return;
                     }
-                    void onRegister?.({ username, password, registerCode });
+                    void onRegister?.({ username, password, registerCode, remember });
                     return;
                   }
-                  void onLogin?.({ username, password });
+                  void onLogin?.({ username, password, remember });
                 }}
               >
                 <div className="flex flex-col gap-2">
@@ -192,6 +194,16 @@ export function LoginScreen({
                     {error}
                   </div>
                 ) : null}
+                <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                  <input
+                    type="checkbox"
+                    name="rememberLogin"
+                    checked={rememberLogin}
+                    onChange={(event) => setRememberLogin(event.currentTarget.checked)}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                  />
+                  <span>记住登录</span>
+                </label>
                 <button
                   type="submit"
                   disabled={isLoading}
@@ -201,7 +213,7 @@ export function LoginScreen({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onGuestLogin?.()}
+                  onClick={() => void onGuestLogin?.({ remember: rememberLogin })}
                   disabled={isLoading}
                   className="w-full border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
                 >

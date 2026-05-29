@@ -82,6 +82,9 @@ class PluginService:
         self.sessions = PluginViewSessionStore()
         self._snapshot_cache: dict[str, dict[str, Any]] = {}
         self._snapshot_cache_plugins: dict[str, set[str]] = {}
+        self._snapshot_inflight: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._session_inflight: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._inflight_lock = asyncio.Lock()
         self._render_semaphore = asyncio.Semaphore(max(1, int(render_concurrency)))
         self._last_idle_eviction_at = 0.0
         self._idle_eviction_interval_seconds = 5.0
@@ -139,6 +142,7 @@ class PluginService:
         keys = self._snapshot_cache_plugins.pop(plugin_id, set())
         for key in keys:
             self._snapshot_cache.pop(key, None)
+            self._snapshot_inflight.pop(key, None)
 
     def _resolve_input_payload(self, bot_alias: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return resolve_input_payload(bot_alias, input_payload, self._workspace_root_for)
@@ -175,6 +179,7 @@ class PluginService:
                     pass
         self.artifacts.clear_plugin(plugin_id)
         self._snapshot_cache_clear_plugin(plugin_id)
+        self._session_inflight.clear()
         await self.runtime.stop_plugin_instances(plugin_id)
 
     def _read_manifest_json(self, path: Path) -> dict[str, Any] | None:
@@ -426,19 +431,44 @@ class PluginService:
             )
             await self.evict_idle_runtimes(throttle=True)
             return cached
+        async with self._inflight_lock:
+            cached = self._snapshot_cache_get(cache_key)
+            if cached is not None:
+                return cached
+            inflight = self._snapshot_inflight.get(cache_key)
+            if inflight is None:
+                inflight = asyncio.get_running_loop().create_future()
+                inflight.add_done_callback(lambda future: future.exception() if future.done() and not future.cancelled() else None)
+                self._snapshot_inflight[cache_key] = inflight
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            return copy.deepcopy(await inflight)
         async with self._render_semaphore:
-            result = await self.runtime.render_view(bot_alias, manifest, view_id, resolved_input)
-        payload = self._validate_render_result(plugin_id, view, result, expect_session=False)
-        self._snapshot_cache_remember(plugin_id, cache_key, payload)
-        self._record_audit(
-            event="render_view",
-            plugin_id=plugin_id,
-            view_id=view_id,
-            payload=payload,
-            audit_context=audit_context,
-        )
-        await self.evict_idle_runtimes(throttle=True)
-        return payload
+            try:
+                result = await self.runtime.render_view(bot_alias, manifest, view_id, resolved_input)
+                payload = self._validate_render_result(plugin_id, view, result, expect_session=False)
+                self._snapshot_cache_remember(plugin_id, cache_key, payload)
+                self._record_audit(
+                    event="render_view",
+                    plugin_id=plugin_id,
+                    view_id=view_id,
+                    payload=payload,
+                    audit_context=audit_context,
+                )
+                if not inflight.done():
+                    inflight.set_result(copy.deepcopy(payload))
+                await self.evict_idle_runtimes(throttle=True)
+                return payload
+            except Exception as exc:
+                if not inflight.done():
+                    inflight.set_exception(exc)
+                raise
+            finally:
+                async with self._inflight_lock:
+                    if self._snapshot_inflight.get(cache_key) is inflight:
+                        self._snapshot_inflight.pop(cache_key, None)
 
     async def open_view(
         self,
@@ -469,39 +499,64 @@ class PluginService:
         if cached is not None:
             await self.evict_idle_runtimes(throttle=True)
             return dict(cached.opened_payload)
+        async with self._inflight_lock:
+            cached = self.sessions.get_cached(cache_key)
+            if cached is not None:
+                return dict(cached.opened_payload)
+            inflight = self._session_inflight.get(cache_key)
+            if inflight is None:
+                inflight = asyncio.get_running_loop().create_future()
+                inflight.add_done_callback(lambda future: future.exception() if future.done() and not future.cancelled() else None)
+                self._session_inflight[cache_key] = inflight
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            return dict(copy.deepcopy(await inflight))
 
-        result = await self.runtime.open_view(bot_alias, manifest, view_id, resolved_input)
-        payload = self._validate_render_result(plugin_id, view, result, expect_session=True)
+        try:
+            result = await self.runtime.open_view(bot_alias, manifest, view_id, resolved_input)
+            payload = self._validate_render_result(plugin_id, view, result, expect_session=True)
 
-        stale = self.sessions.replace(
-            PluginViewSessionRecord(
-                bot_alias=bot_alias,
+            stale = self.sessions.replace(
+                PluginViewSessionRecord(
+                    bot_alias=bot_alias,
+                    plugin_id=plugin_id,
+                    view_id=view_id,
+                    session_id=payload["sessionId"],
+                    renderer=payload["renderer"],
+                    source_identity=source_identity,
+                    source_fingerprint=source_fingerprint,
+                    resolved_input=resolved_input,
+                    opened_payload=payload,
+                )
+            )
+            if stale is not None:
+                try:
+                    await self.runtime.dispose_view(stale.bot_alias, manifest, stale.session_id)
+                except Exception:
+                    pass
+
+            self._record_audit(
+                event="open_view",
                 plugin_id=plugin_id,
                 view_id=view_id,
+                payload=payload,
+                audit_context=audit_context,
                 session_id=payload["sessionId"],
-                renderer=payload["renderer"],
-                source_identity=source_identity,
-                source_fingerprint=source_fingerprint,
-                resolved_input=resolved_input,
-                opened_payload=payload,
             )
-        )
-        if stale is not None:
-            try:
-                await self.runtime.dispose_view(stale.bot_alias, manifest, stale.session_id)
-            except Exception:
-                pass
-
-        self._record_audit(
-            event="open_view",
-            plugin_id=plugin_id,
-            view_id=view_id,
-            payload=payload,
-            audit_context=audit_context,
-            session_id=payload["sessionId"],
-        )
-        await self.evict_idle_runtimes(throttle=True)
-        return payload
+            if not inflight.done():
+                inflight.set_result(copy.deepcopy(payload))
+            await self.evict_idle_runtimes(throttle=True)
+            return payload
+        except Exception as exc:
+            if not inflight.done():
+                inflight.set_exception(exc)
+            raise
+        finally:
+            async with self._inflight_lock:
+                if self._session_inflight.get(cache_key) is inflight:
+                    self._session_inflight.pop(cache_key, None)
 
     async def get_view_window(
         self,
@@ -636,4 +691,6 @@ class PluginService:
         self.artifacts.clear_all()
         self._snapshot_cache.clear()
         self._snapshot_cache_plugins.clear()
+        self._snapshot_inflight.clear()
+        self._session_inflight.clear()
         await self.runtime.shutdown()

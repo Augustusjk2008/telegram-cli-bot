@@ -427,6 +427,30 @@ function Write-DistributionMarker {
     Set-Content -LiteralPath (Join-Path $Root ".distribution.json") -Value $payload -Encoding UTF8
 }
 
+function New-Sha256File {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $checksumPath = "$Path.sha256"
+    $line = "{0}  {1}" -f $hash, (Split-Path -Leaf $Path)
+    Set-Content -LiteralPath $checksumPath -Value $line -Encoding ASCII
+    return $checksumPath
+}
+
+function New-ArchiveChecksumFiles {
+    param($Archives)
+    $checksums = @()
+    foreach ($archive in @($Archives.WindowsArchive, $Archives.WindowsInstallerArchive, $Archives.LinuxArchive, $Archives.MacOSArchive)) {
+        $checksum = New-Sha256File -Path $archive
+        if (-not [string]::IsNullOrWhiteSpace($checksum)) {
+            $checksums += $checksum
+        }
+    }
+    return $checksums
+}
+
 function New-ReleaseArchives {
     param([string]$NormalizedVersion)
 
@@ -582,6 +606,7 @@ function Publish-GitHubRelease {
         [string]$WindowsInstallerArchive,
         [string]$LinuxArchive,
         [string]$MacOSArchive,
+        [string[]]$ChecksumArchives,
         [string]$ReleaseNotesFile,
         [string]$ReleaseBranch
     )
@@ -610,6 +635,9 @@ function Publish-GitHubRelease {
         $releaseAssets += $WindowsArchive
     }
     $releaseAssets += @($WindowsInstallerArchive, $LinuxArchive, $MacOSArchive)
+    if ($ChecksumArchives) {
+        $releaseAssets += $ChecksumArchives
+    }
 
     Write-Step ("创建 GitHub Release {0}" -f $ReleaseTag)
     $releaseArguments = @(
@@ -703,10 +731,11 @@ try {
     Write-Info ("Windows 安装版包: {0}" -f $archives.WindowsInstallerArchive)
     Write-Info ("Linux 包: {0}" -f $archives.LinuxArchive)
     Write-Info ("macOS 包: {0}" -f $archives.MacOSArchive)
+    $checksumArchives = New-ArchiveChecksumFiles -Archives $archives
 
     if ($shouldPublish) {
         Ensure-TagAtHead -ReleaseTag $releaseTag
-        Publish-GitHubRelease -ReleaseTag $releaseTag -Repo $normalizedRepository -WindowsArchive $archives.WindowsArchive -WindowsInstallerArchive $archives.WindowsInstallerArchive -LinuxArchive $archives.LinuxArchive -MacOSArchive $archives.MacOSArchive -ReleaseNotesFile $releaseNotesPath -ReleaseBranch $normalizedReleaseBranch
+        Publish-GitHubRelease -ReleaseTag $releaseTag -Repo $normalizedRepository -WindowsArchive $archives.WindowsArchive -WindowsInstallerArchive $archives.WindowsInstallerArchive -LinuxArchive $archives.LinuxArchive -MacOSArchive $archives.MacOSArchive -ChecksumArchives $checksumArchives -ReleaseNotesFile $releaseNotesPath -ReleaseBranch $normalizedReleaseBranch
     } else {
         Write-Info "已跳过 GitHub Release 发布。"
     }

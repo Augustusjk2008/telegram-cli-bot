@@ -47,6 +47,7 @@ class _QueuedRun:
     event_queue: asyncio.Queue[dict[str, Any] | object] | None = None
     status: RunStatus = field(default="queued")
     enqueued_monotonic: float = field(default_factory=time.perf_counter)
+    finished_monotonic: float | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,8 @@ class AssistantRuntimeCoordinator:
         *,
         result_executor: ResultExecutor,
         stream_executor: StreamExecutor | None = None,
+        max_retained_runs: int = 50,
+        retained_run_ttl_seconds: float = 3600.0,
     ) -> None:
         self._result_executor = result_executor
         self._stream_executor = stream_executor
@@ -104,6 +107,8 @@ class AssistantRuntimeCoordinator:
         self._runs: dict[str, _QueuedRun] = {}
         self._worker_task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._max_retained_runs = max(0, int(max_retained_runs))
+        self._retained_run_ttl_seconds = max(0.0, float(retained_run_ttl_seconds))
 
     async def start(self) -> None:
         if self._worker_task is not None and not self._worker_task.done():
@@ -193,6 +198,37 @@ class AssistantRuntimeCoordinator:
         )
         return snapshot.to_dict()
 
+    def _mark_finished(self, run: _QueuedRun) -> None:
+        run.finished_monotonic = time.monotonic()
+        self._cleanup_finished_runs()
+
+    def _cleanup_finished_runs(self) -> None:
+        pending_ids = {
+            run_id
+            for run_id, run in self._runs.items()
+            if run.status in {"queued", "running"} or run.finished_monotonic is None
+        }
+        finished = [
+            (run_id, run)
+            for run_id, run in self._runs.items()
+            if run_id not in pending_ids
+        ]
+        if not finished:
+            return
+        now = time.monotonic()
+        expired_ids = {
+            run_id
+            for run_id, run in finished
+            if self._retained_run_ttl_seconds > 0
+            and run.finished_monotonic is not None
+            and now - run.finished_monotonic > self._retained_run_ttl_seconds
+        }
+        finished.sort(key=lambda item: item[1].finished_monotonic or 0)
+        overflow = max(0, len(finished) - self._max_retained_runs)
+        evict_ids = expired_ids | {run_id for run_id, _run in finished[:overflow]}
+        for run_id in evict_ids:
+            self._runs.pop(run_id, None)
+
     def _enqueue(self, request: AssistantRunRequest, *, mode: Literal["result", "stream", "background"]) -> _QueuedRun:
         if self._stopping or self._worker_task is None or self._worker_task.done():
             raise RuntimeError("assistant runtime coordinator is not started")
@@ -227,6 +263,7 @@ class AssistantRuntimeCoordinator:
 
     def _fail_run(self, run: _QueuedRun, message: str) -> None:
         run.status = "failed"
+        run.finished_monotonic = time.monotonic()
         if run.mode == "stream" and run.event_queue is not None:
             run.event_queue.put_nowait(
                 {
@@ -369,6 +406,7 @@ class AssistantRuntimeCoordinator:
                 finally:
                     if run.mode == "stream" and run.event_queue is not None:
                         await run.event_queue.put(_STOP)
+                    self._mark_finished(run)
                 current_run = None
         except asyncio.CancelledError:
             if current_run is not None and not current_run.future.done():

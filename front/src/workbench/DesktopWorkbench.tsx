@@ -202,6 +202,7 @@ export function DesktopWorkbench({
   const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
+  const previewRequestSeqRef = useRef(0);
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
   const [isResizingPane, setIsResizingPane] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<DesktopWorkspaceView>("editor");
@@ -591,6 +592,8 @@ export function DesktopWorkbench({
     if (!canPreviewFiles) {
       return;
     }
+    const requestSeq = previewRequestSeqRef.current + 1;
+    previewRequestSeqRef.current = requestSeq;
     setPreviewLoading(true);
     try {
       let result = mode === "full"
@@ -599,13 +602,18 @@ export function DesktopWorkbench({
       if (mode === "preview" && shouldAutoLoadFullHtmlPreview(path, result)) {
         result = await client.readFileFull(botAlias, path);
       }
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
       result = withDetectedPreviewKind(path, result);
       setPreviewName(path);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
       setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } finally {
-      setPreviewLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setPreviewLoading(false);
+      }
     }
   }, [botAlias, canPreviewFiles, client]);
 

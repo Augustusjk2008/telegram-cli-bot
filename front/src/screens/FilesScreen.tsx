@@ -114,6 +114,7 @@ export function FilesScreen({
   const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
   const [statusText, setStatusText] = useState("");
   const listingRequestSeqRef = useRef(0);
+  const previewRequestSeqRef = useRef(0);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
 
@@ -277,6 +278,8 @@ export function FilesScreen({
     if (!canPreviewFiles) {
       return;
     }
+    const requestSeq = previewRequestSeqRef.current + 1;
+    previewRequestSeqRef.current = requestSeq;
     setPreviewLoading(true);
     try {
       let result = mode === "full"
@@ -285,16 +288,23 @@ export function FilesScreen({
       if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
         result = await client.readFileFull(botAlias, name);
       }
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
       result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
       setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
       setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
-      setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
-      setStatusText("");
+      if (requestSeq === previewRequestSeqRef.current) {
+        setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
+        setStatusText("");
+      }
     } finally {
-      setPreviewLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setPreviewLoading(false);
+      }
     }
   };
 

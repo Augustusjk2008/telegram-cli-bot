@@ -16,6 +16,7 @@ test("login screen submits username and password", async () => {
   expect(onLogin).toHaveBeenCalledWith({
     username: "alice",
     password: "pw-123",
+    remember: false,
   });
 });
 
@@ -37,6 +38,7 @@ test("login screen switches to register mode and submits register code", async (
     username: "alice",
     password: "pw-123",
     registerCode: "INVITE-001",
+    remember: false,
   });
 });
 

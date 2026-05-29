@@ -16,6 +16,7 @@ class _IndexEntry:
 
 
 _CACHE: dict[str, _IndexEntry] = {}
+_LOAD_LOCKS: dict[str, threading.Lock] = {}
 _LOCK = threading.RLock()
 DEFAULT_TTL_SECONDS = 30.0
 
@@ -37,10 +38,17 @@ def get_workspace_files(
         cached = _CACHE.get(key)
         if cached and cached.expires_at > now:
             return list(cached.files)
+        load_lock = _LOAD_LOCKS.setdefault(key, threading.Lock())
 
-    files = loader(root)
-    with _LOCK:
-        _CACHE[key] = _IndexEntry(files=list(files), expires_at=now + max(0.1, ttl_seconds))
+    with load_lock:
+        now = time.monotonic()
+        with _LOCK:
+            cached = _CACHE.get(key)
+            if cached and cached.expires_at > now:
+                return list(cached.files)
+        files = loader(root)
+        with _LOCK:
+            _CACHE[key] = _IndexEntry(files=list(files), expires_at=now + max(0.1, ttl_seconds))
     return list(files)
 
 
@@ -56,3 +64,4 @@ def invalidate_workspace_index(workspace: Path | str) -> None:
 def clear_workspace_indexes() -> None:
     with _LOCK:
         _CACHE.clear()
+        _LOAD_LOCKS.clear()

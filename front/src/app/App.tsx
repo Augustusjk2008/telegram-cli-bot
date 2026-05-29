@@ -95,7 +95,7 @@ function readStoredToken() {
   }
 }
 
-function storeToken(token: string) {
+function storeToken(token: string, remember = false) {
   const trimmed = token.trim();
   if (!trimmed) {
     try {
@@ -111,8 +111,13 @@ function storeToken(token: string) {
   try {
     sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
     sessionStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
-    localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
-    localStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
+    if (remember) {
+      localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
+      localStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
+    } else {
+      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
+    }
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
@@ -588,14 +593,14 @@ export function App() {
       });
   }, [useMockClient]);
 
-  async function handleLogin(input: { username: string; password: string }) {
+  async function handleLogin(input: { username: string; password: string; remember?: boolean }) {
     const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
     setLoginError("");
     try {
       const nextSession = await nextClient.login(input);
       const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
-      storeToken(nextSession.token || "");
+      storeToken(nextSession.token || "", Boolean(input.remember));
       setClient(nextClient);
       setSession(nextSession);
       setCurrentBot(restoredAlias || null);
@@ -612,14 +617,14 @@ export function App() {
     }
   }
 
-  async function handleRegister(input: { username: string; password: string; registerCode: string }) {
+  async function handleRegister(input: { username: string; password: string; registerCode: string; remember?: boolean }) {
     const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
     setLoginError("");
     try {
       const nextSession = await nextClient.register(input);
       const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
-      storeToken(nextSession.token || "");
+      storeToken(nextSession.token || "", Boolean(input.remember));
       setClient(nextClient);
       setSession(nextSession);
       setCurrentBot(restoredAlias || null);
@@ -636,14 +641,14 @@ export function App() {
     }
   }
 
-  async function handleGuestLogin() {
+  async function handleGuestLogin(input?: { remember?: boolean }) {
     const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
     setLoginError("");
     try {
       const nextSession = await nextClient.loginGuest();
       const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
-      storeToken(nextSession.token || "");
+      storeToken(nextSession.token || "", Boolean(input?.remember));
       setClient(nextClient);
       setSession(nextSession);
       setCurrentBot(restoredAlias || null);

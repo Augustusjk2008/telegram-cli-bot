@@ -17,6 +17,8 @@ function createClient() {
     upsertAnnouncement: vi.spyOn(client, "upsertAnnouncement"),
     previewEnvConfig: vi.spyOn(client, "previewEnvConfig"),
     updateEnvConfig: vi.spyOn(client, "updateEnvConfig"),
+    updateUser: vi.spyOn(client, "updateUser"),
+    updateUserBotPermissions: vi.spyOn(client, "updateUserBotPermissions"),
     restartService: vi.spyOn(client, "restartService"),
   };
 }
@@ -65,6 +67,30 @@ test("admin center loads user permissions without waiting for unrelated tabs", a
   expect(listRegisterCodes).not.toHaveBeenCalled();
   expect(getUpdateStatus).not.toHaveBeenCalled();
   expect(listOfflineUpdatePackages).not.toHaveBeenCalled();
+});
+
+test("admin center updates account capabilities separately from bot grants", async () => {
+  const user = userEvent.setup();
+  const { client, updateUser, updateUserBotPermissions } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  const terminalCapability = await screen.findByRole("checkbox", { name: "demo 账号能力 终端" });
+  await user.click(terminalCapability);
+
+  await waitFor(() => {
+    expect(updateUser).toHaveBeenCalledWith("demo", expect.objectContaining({
+      capabilities: expect.not.arrayContaining(["terminal_exec"]),
+    }));
+  });
+  expect(updateUserBotPermissions).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("checkbox", { name: "demo 可操作 Bot main" }));
+
+  await waitFor(() => {
+    expect(updateUserBotPermissions).toHaveBeenCalledWith("demo", expect.not.arrayContaining(["main"]));
+  });
 });
 
 test("admin center shows macOS update packages", async () => {

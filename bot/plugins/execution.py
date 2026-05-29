@@ -32,10 +32,15 @@ def resolve_input_payload(
     if path_value is None:
         return resolved_input
     raw_path = Path(str(path_value))
+    workspace_root = workspace_root_for(bot_alias)
     if raw_path.is_absolute():
-        resolved_input["path"] = str(raw_path.expanduser().resolve())
+        try:
+            raw_path.resolve().relative_to(workspace_root.resolve())
+        except ValueError as exc:
+            raise ValueError("插件输入路径必须位于工作区内") from exc
+        resolved_input["path"] = str(raw_path.resolve())
         return resolved_input
-    resolved_input["path"] = str(resolve_workspace_path(workspace_root_for(bot_alias), str(path_value)))
+    resolved_input["path"] = str(resolve_workspace_path(workspace_root, str(path_value)))
     return resolved_input
 
 

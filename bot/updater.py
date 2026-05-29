@@ -77,6 +77,7 @@ def get_update_status(repo_root: Path | None = None) -> dict[str, Any]:
         "pending_update_notes": settings["pending_update_notes"],
         "pending_update_platform": settings["pending_update_platform"],
         "pending_update_package_kind": settings["pending_update_package_kind"],
+        "pending_update_sha256": settings.get("pending_update_sha256", ""),
         "update_last_error": settings["update_last_error"],
     }
 
@@ -185,14 +186,19 @@ def download_latest_update(
         settings["last_available_notes"] = str(release.get("body") or "")
 
         asset = _select_release_asset(release.get("assets", []), package_kind)
+        checksum_asset = _select_release_checksum_asset(release.get("assets", []), str(asset.get("name") or ""))
         cache_root = _prepare_update_cache_dir(repo_root, progress_callback=effective_progress_callback)
         target_path = cache_root / asset["name"]
+        checksum_path = cache_root / checksum_asset["name"]
         _emit_download_log(effective_progress_callback, f"找到更新包: {asset['name']}")
         _download_file(
             asset["browser_download_url"],
             target_path,
             progress_callback=effective_progress_callback,
         )
+        _download_text_file(checksum_asset["browser_download_url"], checksum_path)
+        expected_sha256 = _read_sha256_file(checksum_path, asset["name"])
+        _verify_file_sha256(target_path, expected_sha256)
     except Exception as exc:
         settings["update_last_error"] = str(exc)
         app_settings._save_settings(settings)
@@ -203,6 +209,7 @@ def download_latest_update(
     settings["pending_update_notes"] = str(release.get("body") or "")
     settings["pending_update_platform"] = _pending_update_platform(package_kind)
     settings["pending_update_package_kind"] = package_kind
+    settings["pending_update_sha256"] = expected_sha256
     app_settings._save_settings(settings)
     _emit_download_log(effective_progress_callback, f"更新包已保存到: {target_path}")
     return get_update_status(repo_root)
@@ -276,6 +283,7 @@ def prepare_offline_update(
         str(distribution.get("platform") or "").strip() or _pending_update_platform(package_kind)
     )
     settings["pending_update_package_kind"] = package_kind
+    settings["pending_update_sha256"] = _file_sha256(package)
     settings["update_last_error"] = ""
     app_settings._save_settings(settings)
     _emit_apply_log(log_callback, "离线更新包已设置为待应用。关闭当前程序后重新运行 start.bat 生效。")
@@ -328,6 +336,20 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
         app_settings._save_settings(settings)
         _emit_apply_log(log_callback, settings["update_last_error"])
         return {"applied": False, "reason": "missing_package", "path": str(package_path)}
+    expected_sha256 = str(settings.get("pending_update_sha256") or "").strip()
+    if expected_sha256:
+        try:
+            _verify_file_sha256(package_path, expected_sha256)
+        except Exception as exc:
+            settings["update_last_error"] = str(exc)
+            app_settings._save_settings(settings)
+            _emit_apply_log(log_callback, settings["update_last_error"])
+            return {
+                "applied": False,
+                "reason": "checksum_mismatch",
+                "package_path": str(package_path),
+                "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+            }
 
     try:
         distribution = _read_package_distribution_from_package(package_path)
@@ -497,6 +519,57 @@ def _select_release_asset(assets: list[dict[str, Any]], package_kind: str | None
         raise RuntimeError(f"未找到 Windows {label} release 包")
 
     raise RuntimeError("未找到当前平台的 release 包")
+
+
+def _select_release_checksum_asset(assets: list[dict[str, Any]], package_name: str) -> dict[str, Any]:
+    expected_name = f"{str(package_name or '').strip()}.sha256".lower()
+    for asset in assets:
+        if str(asset.get("name") or "").strip().lower() == expected_name:
+            return asset
+    raise RuntimeError(f"未找到更新包校验文件: {expected_name}")
+
+
+def _download_text_file(url: str, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "text/plain",
+            "User-Agent": f"cli-bridge/{APP_VERSION}",
+        },
+    )
+    opener = _build_url_opener()
+    with opener.open(request, timeout=30) as response:
+        target.write_bytes(response.read())
+
+
+def _read_sha256_file(path: Path, package_name: str) -> str:
+    text = path.read_text(encoding="utf-8").strip()
+    for line in text.splitlines():
+        parts = line.strip().split()
+        if not parts:
+            continue
+        digest = parts[0].lower()
+        if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest):
+            return digest
+    raise RuntimeError(f"更新包校验文件无效: {package_name}.sha256")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(DOWNLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_file_sha256(path: Path, expected_sha256: str) -> None:
+    actual = _file_sha256(path)
+    if actual.lower() != str(expected_sha256 or "").strip().lower():
+        raise RuntimeError("更新包 SHA256 校验失败")
 
 
 def _pending_update_platform(package_kind: str) -> str:
@@ -1240,6 +1313,7 @@ def _clear_pending_update(settings: dict[str, Any]) -> None:
     settings["pending_update_notes"] = ""
     settings["pending_update_platform"] = ""
     settings["pending_update_package_kind"] = ""
+    settings["pending_update_sha256"] = ""
 
 
 def _normalize_tag_name(tag_name: Any) -> str:
