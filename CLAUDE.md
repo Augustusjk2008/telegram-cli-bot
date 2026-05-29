@@ -209,6 +209,14 @@ The Vivado waveform plugin uses a Python JSON-RPC stdio backend. It builds a VCD
 - `.env` loading uses `python-dotenv`
 - The repository has backend tests and frontend tests, but no backend linter or backend type checker configured
 
+## CodeGraph 使用约定
+
+- 宿主项目较大；找代码、跨模块修改、重构、调用链分析、影响面分析前，优先使用 CodeGraph 定位入口、调用链和影响面。
+- 优先流程：`codegraph_status` 确认索引健康，`codegraph_context` / `codegraph_search` 找相关代码，`codegraph_callers` / `codegraph_callees` / `codegraph_trace` / `codegraph_impact` 查调用链和影响面，再用 `rg` / 直接读文件核对细节。
+- 已知文件的小修、配置改动、文案改动、单文件 bug 不强制使用 CodeGraph。
+- CodeGraph 只作为结构导航层，不替代源码阅读、测试、日志和 `git diff`。
+- 若 CodeGraph 未安装、未初始化或 MCP 不可用，说明原因后退回 `rg` / 读文件，不要卡住任务。
+
 ## Testing Notes
 
 - 避免同一事实在组件/页面/壳层测试里重复断言同个文案或 UI 过渡态；发现类似重复覆盖时，默认顺手收敛测试，只保留最合适的一层。

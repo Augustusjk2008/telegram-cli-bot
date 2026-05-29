@@ -22,11 +22,17 @@ from bot.web.lan_chat_types import (
 
 
 class LanChatService:
-    def __init__(self, *, repo_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        repo_root: Path,
+        config_path: Path | None = None,
+        messages_path: Path | None = None,
+    ) -> None:
         self.repo_root = Path(repo_root)
         self.store = LanChatStore(
-            config_path=self.repo_root / ".web_lan_chat.json",
-            messages_path=self.repo_root / ".web_lan_chat_messages.json",
+            config_path=config_path or self.repo_root / ".web_lan_chat.json",
+            messages_path=messages_path or self.repo_root / ".web_lan_chat_messages.json",
         )
         self._browser_sockets: dict[web.WebSocketResponse, str] = {}
         self._node_sockets: dict[str, web.WebSocketResponse] = {}

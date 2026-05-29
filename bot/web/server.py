@@ -51,6 +51,17 @@ from bot.config import (
 from bot.debug.service import DebugService
 from bot.manager import MultiBotManager
 from bot.platform.runtime import get_default_shell
+from bot.runtime_paths import (
+    get_announcements_content_path,
+    get_announcements_reads_path,
+    get_auth_accounts_dir,
+    get_auth_register_codes_path,
+    get_auth_secret_path,
+    get_lan_chat_config_path,
+    get_lan_chat_messages_path,
+    get_permissions_root,
+    get_tunnel_state_path,
+)
 from bot.updater import (
     check_for_updates,
     download_latest_update,
@@ -223,6 +234,7 @@ from .api_service import (
     verify_cluster_mcp_request,
 )
 from bot.assistant.admin_audit import list_admin_audit, summarize_request, write_admin_audit
+from bot.migrations.runner import migration_diagnostics
 from .git_service import (
     apply_git_stash,
     commit_git_message,
@@ -277,12 +289,36 @@ _CLIENT_DISCONNECT_ERRORS = (
     BrokenPipeError,
 )
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_WEB_AUTH_STORE = WebAuthStore(
-    users_path=_REPO_ROOT / ".web_users.json",
-    register_codes_path=_REPO_ROOT / ".web_register_codes.json",
-)
-_BOT_PERMISSION_STORE = BotPermissionStore(_REPO_ROOT / ".web_permissions.json")
-_ANNOUNCEMENT_STORE = AnnouncementStore(_REPO_ROOT / ".web_announcements.json")
+
+
+def _build_default_auth_store() -> WebAuthStore:
+    return WebAuthStore(
+        users_path=get_auth_accounts_dir(),
+        register_codes_path=get_auth_register_codes_path(),
+        secret_path=get_auth_secret_path(),
+    )
+
+
+def _build_default_permission_store() -> BotPermissionStore:
+    return BotPermissionStore(get_permissions_root(), legacy_path=_REPO_ROOT / ".web_permissions.json")
+
+
+def _build_default_announcement_store() -> AnnouncementStore:
+    return AnnouncementStore(get_announcements_content_path(), reads_path=get_announcements_reads_path())
+
+
+def _resolve_tunnel_state_file() -> Path:
+    raw_value = str(WEB_TUNNEL_STATE_FILE or "").strip()
+    if raw_value:
+        raw_path = Path(raw_value).expanduser()
+        if raw_path.is_absolute():
+            return raw_path
+    return get_tunnel_state_path()
+
+
+_WEB_AUTH_STORE = _build_default_auth_store()
+_BOT_PERMISSION_STORE = _build_default_permission_store()
+_ANNOUNCEMENT_STORE = _build_default_announcement_store()
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -774,7 +810,11 @@ class WebApiServer:
             preview_chars=PUSHPLUS_PREVIEW_CHARS,
         )
         self.announcement_store = _ANNOUNCEMENT_STORE
-        self.lan_chat_service = LanChatService(repo_root=_REPO_ROOT)
+        self.lan_chat_service = LanChatService(
+            repo_root=_REPO_ROOT,
+            config_path=get_lan_chat_config_path(),
+            messages_path=get_lan_chat_messages_path(),
+        )
         self.env_config_service = EnvConfigService(_REPO_ROOT)
         self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
         self._git_smart_commit_latest_by_alias: dict[str, str] = {}
@@ -787,7 +827,7 @@ class WebApiServer:
             autostart=WEB_TUNNEL_AUTOSTART,
             public_url=WEB_PUBLIC_URL,
             cloudflared_path=WEB_TUNNEL_CLOUDFLARED_PATH,
-            state_file=WEB_TUNNEL_STATE_FILE,
+            state_file=str(_resolve_tunnel_state_file()),
         )
 
     def _auth_context(self, request: web.Request) -> AuthContext:
@@ -3039,6 +3079,10 @@ class WebApiServer:
     async def admin_get_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": get_update_status(_REPO_ROOT)})
+
+    async def admin_runtime_diagnostics(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": migration_diagnostics(_REPO_ROOT)})
 
     async def admin_patch_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

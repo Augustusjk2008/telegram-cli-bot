@@ -644,7 +644,7 @@ class TestManagerValidation:
         assert restored.main_profile.cli_type == "claude"
         assert restored.main_profile.cli_path == "claude"
 
-    def test_manager_uses_storage_local_settings_for_main_bot_profile(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_manager_uses_configured_global_settings_for_main_bot_profile(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         global_settings = temp_dir / "global" / ".web_admin_settings.json"
@@ -657,8 +657,8 @@ class TestManagerValidation:
 
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", cli_type="codex", cli_path="codex"), str(storage))
 
-        assert manager.main_profile.cli_type == "codex"
-        assert manager.main_profile.cli_path == "codex"
+        assert manager.main_profile.cli_type == "claude"
+        assert manager.main_profile.cli_path == "claude"
 
     @pytest.mark.asyncio
     async def test_main_bot_workdir_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):

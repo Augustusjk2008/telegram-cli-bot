@@ -41,7 +41,7 @@ class MultiBotManager:
         self.main_profile = main_profile
         self.storage_file = Path(storage_file)
         self.repo_root = self.storage_file.resolve().parent
-        self.app_settings_file = self.repo_root / ".web_admin_settings.json"
+        self.app_settings_file = app_settings.APP_SETTINGS_FILE
         self.git_commit_cli_config_file = self.repo_root / ".git_commit_cli_config.json"
         self._git_commit_cli_config: GitCommitMessageCliConfig | None = None
         self.plugin_service = PluginService(

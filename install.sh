@@ -349,11 +349,8 @@ initialize_register_code() {
   fi
 
   local invite_json
-  invite_json="$(CLI_BRIDGE_USERS_PATH="$SCRIPT_DIR/.web_users.json" \
-    CLI_BRIDGE_REGISTER_CODES_PATH="$SCRIPT_DIR/.web_register_codes.json" \
-    CLI_BRIDGE_AUTH_SECRET_PATH="$SCRIPT_DIR/.web_auth_secret.json" \
-    CLI_BRIDGE_REGISTER_CODE_MAX_USES="$max_uses" \
-    "$python_bin" -c 'import json, os; from bot.web.auth_store import WebAuthStore; store = WebAuthStore(os.environ["CLI_BRIDGE_USERS_PATH"], os.environ["CLI_BRIDGE_REGISTER_CODES_PATH"], os.environ["CLI_BRIDGE_AUTH_SECRET_PATH"]); print(json.dumps(store.create_register_code(created_by="install-script", max_uses=int(os.environ["CLI_BRIDGE_REGISTER_CODE_MAX_USES"])), ensure_ascii=False))')"
+  invite_json="$(CLI_BRIDGE_REGISTER_CODE_MAX_USES="$max_uses" \
+    "$python_bin" -c 'import json, os; from bot.runtime_paths import get_auth_accounts_dir, get_auth_register_codes_path, get_auth_secret_path; from bot.web.auth_store import WebAuthStore; store = WebAuthStore(get_auth_accounts_dir(), get_auth_register_codes_path(), get_auth_secret_path()); print(json.dumps(store.create_register_code(created_by="install-script", max_uses=int(os.environ["CLI_BRIDGE_REGISTER_CODE_MAX_USES"])), ensure_ascii=False))')"
   info "邀请码: $(printf '%s' "$invite_json" | "$python_bin" -c 'import json,sys; print(json.loads(sys.stdin.read())["code"])')"
 }
 

@@ -136,3 +136,16 @@ def test_service_start_clears_stale_online_participants(tmp_path: Path) -> None:
     service = LanChatService(repo_root=tmp_path)
 
     assert service.store.list_participants()[0]["online"] is False
+
+
+def test_lan_chat_service_accepts_explicit_store_paths(tmp_path: Path) -> None:
+    service = LanChatService(
+        repo_root=tmp_path / "repo",
+        config_path=tmp_path / "data" / "lan_chat" / "config.json",
+        messages_path=tmp_path / "data" / "lan_chat" / "messages.json",
+    )
+
+    service.update_config({"mode": "host", "room_key": "tcbr_secret"})
+
+    assert (tmp_path / "data" / "lan_chat" / "config.json").exists()
+    assert not (tmp_path / "repo" / ".web_lan_chat.json").exists()

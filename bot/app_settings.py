@@ -16,10 +16,10 @@ from bot.cluster.config import (
     normalize_agent_cluster_config,
     normalize_bot_cluster_config,
 )
-from bot.config import MANAGED_BOTS_FILE
 from bot.models import normalize_prompt_presets
+from bot.runtime_paths import get_app_settings_path
 
-APP_SETTINGS_FILE = Path(MANAGED_BOTS_FILE).resolve().parent / ".web_admin_settings.json"
+APP_SETTINGS_FILE = get_app_settings_path()
 _SETTINGS_LOCK = threading.Lock()
 _DEFAULT_SETTINGS = {
     "git_proxy_address": "",

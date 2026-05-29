@@ -655,23 +655,18 @@ function Initialize-WebRegisterCode {
     $code = @"
 import json
 import os
+from bot.runtime_paths import get_auth_accounts_dir, get_auth_register_codes_path, get_auth_secret_path
 from bot.web.auth_store import WebAuthStore
 store = WebAuthStore(
-    users_path=os.environ["CLI_BRIDGE_USERS_PATH"],
-    register_codes_path=os.environ["CLI_BRIDGE_REGISTER_CODES_PATH"],
-    secret_path=os.environ["CLI_BRIDGE_AUTH_SECRET_PATH"],
+    users_path=get_auth_accounts_dir(),
+    register_codes_path=get_auth_register_codes_path(),
+    secret_path=get_auth_secret_path(),
 )
 payload = store.create_register_code(created_by="install-script", max_uses=int(os.environ["CLI_BRIDGE_REGISTER_CODE_MAX_USES"]))
 print(json.dumps(payload, ensure_ascii=False))
 "@
 
-    $previousUsersPath = $env:CLI_BRIDGE_USERS_PATH
-    $previousCodesPath = $env:CLI_BRIDGE_REGISTER_CODES_PATH
-    $previousSecretPath = $env:CLI_BRIDGE_AUTH_SECRET_PATH
     $previousMaxUses = $env:CLI_BRIDGE_REGISTER_CODE_MAX_USES
-    $env:CLI_BRIDGE_USERS_PATH = Join-Path $script:RootDir ".web_users.json"
-    $env:CLI_BRIDGE_REGISTER_CODES_PATH = Join-Path $script:RootDir ".web_register_codes.json"
-    $env:CLI_BRIDGE_AUTH_SECRET_PATH = Join-Path $script:RootDir ".web_auth_secret.json"
     $env:CLI_BRIDGE_REGISTER_CODE_MAX_USES = [string]$maxUses
     try {
         $output = & $PythonInfo.Command @($PythonInfo.PrefixArgs + @("-c", $code))
@@ -679,9 +674,6 @@ print(json.dumps(payload, ensure_ascii=False))
             throw "初始化邀请码失败。"
         }
     } finally {
-        $env:CLI_BRIDGE_USERS_PATH = $previousUsersPath
-        $env:CLI_BRIDGE_REGISTER_CODES_PATH = $previousCodesPath
-        $env:CLI_BRIDGE_AUTH_SECRET_PATH = $previousSecretPath
         $env:CLI_BRIDGE_REGISTER_CODE_MAX_USES = $previousMaxUses
     }
 

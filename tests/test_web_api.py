@@ -202,7 +202,20 @@ def _seed_chat_turn(
 def test_web_manager_uses_temp_session_store(web_manager: MultiBotManager, temp_dir: Path):
     import bot.session_store as session_store
 
-    assert session_store.STORE_FILE == temp_dir / ".session_store.json"
+    assert session_store.STORE_FILE.parent == temp_dir
+
+
+def test_web_server_defaults_runtime_stores_to_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot.runtime_paths import get_app_data_root
+    from bot.web import server as web_server
+
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "data"))
+    data_root = get_app_data_root()
+
+    assert web_server._build_default_auth_store().users_path == data_root / "auth" / "accounts"
+    assert web_server._build_default_permission_store().root == data_root / "permissions"
+    assert web_server._build_default_announcement_store().path == data_root / "announcements" / "content.json"
+    assert web_server._resolve_tunnel_state_file() == data_root / "tunnel" / "state.json"
 
 def test_no_cli_message_points_to_web_settings_not_legacy_command():
     text = msg("chat", "no_cli", cli_path="missing-cli")
@@ -865,6 +878,33 @@ async def test_run_cli_chat_injects_cluster_mcp_config_for_kimi(web_manager: Mul
     extra_args = captured["params"]["extra_args"]
     assert "--mcp-config" in extra_args
     config = json.loads(extra_args[extra_args.index("--mcp-config") + 1])
+    assert config["mcpServers"]["tcb-cluster"]["command"].endswith(("tcb-cluster-mcp.cmd", "tcb-cluster-mcp.sh"))
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_injects_cluster_mcp_config_file_for_claude(
+    web_manager: MultiBotManager, tmp_path: Path
+):
+    web_manager.main_profile.cli_type = "claude"
+    captured = {}
+
+    def fake_build_cli_command(**kwargs):
+        captured["params"] = kwargs["params_config"].get_params("claude")
+        return ["claude"], False
+
+    fake_process = MagicMock()
+    with patch("bot.web.api_service.Path.home", return_value=tmp_path), \
+         patch("bot.web.api_service.resolve_cli_executable", return_value="claude"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process), \
+         patch("bot.web.api_service._communicate_claude_process", new_callable=AsyncMock, return_value=("ok", "thread-1", 0)):
+        await run_cli_chat(web_manager, "main", 1001, "hello", cluster_run_id="clr_test")
+
+    extra_args = captured["params"]["extra_args"]
+    assert "--mcp-config" in extra_args
+    config_path = Path(extra_args[extra_args.index("--mcp-config") + 1])
+    assert config_path.exists()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     assert config["mcpServers"]["tcb-cluster"]["command"].endswith(("tcb-cluster-mcp.cmd", "tcb-cluster-mcp.sh"))
 
 

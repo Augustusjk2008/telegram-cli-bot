@@ -188,6 +188,13 @@ try {
         Write-Warn "更新未成功应用，继续启动当前程序。"
     }
 
+    Write-Info "正在迁移运行数据..."
+    & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.migrations", "run", "--repo-root", $scriptDir))
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "运行数据迁移失败。"
+        exit $LASTEXITCODE
+    }
+
     Show-TunnelHint -Path $envPath
 
     while ($true) {

@@ -14,13 +14,13 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from bot.config import MANAGED_BOTS_FILE
+from bot.runtime_paths import get_session_store_path
 
 logger = logging.getLogger(__name__)
 LOCAL_HISTORY_BACKEND = "local_v1"
 
-# 存储文件路径（与托管bots文件同级目录）
-STORE_FILE = Path(MANAGED_BOTS_FILE).parent / ".session_store.json"
+# 存储文件路径
+STORE_FILE = get_session_store_path()
 
 _store_lock = threading.Lock()
 

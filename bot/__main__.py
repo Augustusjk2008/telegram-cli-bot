@@ -13,6 +13,10 @@ if _package_root not in sys.path:
 
 ensure_nofile_limit()
 
+from bot.migrations.runner import run_pending_migrations
+
+run_pending_migrations(repo_root=_package_root)
+
 from bot.main import main
 
 if __name__ == "__main__":

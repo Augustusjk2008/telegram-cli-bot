@@ -114,6 +114,45 @@ def test_permission_store_bootstraps_empty_permissions(tmp_path: Path):
     assert store.owned_bot_aliases("member_1") == set()
 
 
+def test_permission_store_writes_per_account_files_when_given_directory(tmp_path: Path):
+    store = BotPermissionStore(tmp_path / "permissions")
+
+    store.set_allowed_bots("member_1", ["Main", "team2"])
+    store.set_bot_owner("Team2", "member_1", grant_owner=False)
+
+    account_file = tmp_path / "permissions" / "accounts" / "member_1.json"
+    bots_file = tmp_path / "permissions" / "bots.json"
+    assert account_file.exists()
+    assert bots_file.exists()
+    assert json.loads(account_file.read_text(encoding="utf-8"))["allowed_bots"] == ["main", "team2"]
+    assert json.loads(bots_file.read_text(encoding="utf-8"))["bots"]["team2"]["owner_account_id"] == "member_1"
+    assert store.allowed_bots_for_account("member_1") == {"main", "team2"}
+    assert store.owned_bot_aliases("member_1") == {"team2"}
+
+
+def test_permission_store_reads_legacy_single_json_and_writes_new_layout(tmp_path: Path):
+    legacy_path = tmp_path / ".web_permissions.json"
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "users": {"member_1": {"allowed_bots": ["main"], "updated_at": "t1"}},
+                "bots": {"main": {"owner_account_id": "member_1"}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    store = BotPermissionStore(tmp_path / "permissions", legacy_path=legacy_path)
+    store.set_allowed_bots("member_1", ["main", "team2"])
+
+    assert store.owned_bot_aliases("member_1") == {"main"}
+    assert json.loads((tmp_path / "permissions" / "accounts" / "member_1.json").read_text(encoding="utf-8"))[
+        "allowed_bots"
+    ] == ["main", "team2"]
+
+
 def test_permission_store_grants_allowed_bots(tmp_path: Path):
     store = BotPermissionStore(tmp_path / ".web_permissions.json")
 

@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import hashlib
+import importlib
 from pathlib import Path
 
 import bot.runtime_paths as runtime_paths
@@ -44,3 +47,18 @@ def test_workspace_key_normalization_applies_normcase_on_windows(monkeypatch):
     assert runtime_paths.get_chat_workspace_key(r"C:\Repo\Demo") == hashlib.sha256(
         r"c:\repo\demo".encode("utf-8")
     ).hexdigest()
+
+
+def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    data = tmp_path / "data"
+    repo.mkdir()
+    (repo / ".env").write_text(f"TCB_DATA_DIR={data}\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+
+    import bot.runtime_paths as runtime_paths
+
+    reloaded = importlib.reload(runtime_paths)
+
+    assert reloaded.get_app_data_root() == data

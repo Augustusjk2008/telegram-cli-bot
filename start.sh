@@ -114,6 +114,10 @@ if ! "$PYTHON_BIN" -m bot.env_migration --env-path "$SCRIPT_DIR/.env"; then
 fi
 
 "$PYTHON_BIN" -m bot.updater apply-pending --repo-root "$SCRIPT_DIR"
+if ! "$PYTHON_BIN" -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
+  echo "[错误] 运行数据迁移失败。" >&2
+  exit 1
+fi
 show_tunnel_hint
 raise_nofile_limit
 

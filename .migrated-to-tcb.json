@@ -1,0 +1,10 @@
+{
+  "migrations": [
+    {
+      "id": "001_repo_state_to_user_home",
+      "completed_at": "2026-05-29T05:08:41Z",
+      "data_root": "C:\\Users\\JiangKai\\.tcb\\orbit-safe-claw",
+      "backup_dir": "C:\\Users\\JiangKai\\.tcb\\orbit-safe-claw\\migrations\\backups\\20260529T050841Z"
+    }
+  ]
+}

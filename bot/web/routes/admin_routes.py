@@ -31,6 +31,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/admin/update/offline/prepare", server.admin_update_offline_prepare)
     app.router.add_post("/api/admin/update/offline/prepare/stream", server.admin_update_offline_prepare_stream)
     app.router.add_get("/api/admin/env", server.admin_env_get)
+    app.router.add_get("/api/admin/runtime-diagnostics", server.admin_runtime_diagnostics)
     app.router.add_patch("/api/admin/env", server.admin_env_patch)
     app.router.add_post("/api/admin/env/reload-preview", server.admin_env_reload_preview)
     app.router.add_post("/api/admin/restart", server.admin_restart)

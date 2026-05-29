@@ -139,6 +139,7 @@ class WebAuthStore:
         self.users_path = Path(users_path)
         self.register_codes_path = Path(register_codes_path)
         self.secret_path = Path(secret_path) if secret_path else self.users_path.parent / ".web_auth_secret.json"
+        self.username_index_path = self.users_path.parent / "username_index.json" if self.users_path.suffix == "" else None
         self._lock = threading.RLock()
         self._sessions: dict[str, WebAuthSession] = {}
         self._secret: bytes | None = None
@@ -749,6 +750,8 @@ class WebAuthStore:
         return items
 
     def _read_json(self, path: Path) -> dict[str, Any]:
+        if path == self.users_path and self.users_path.suffix == "":
+            return self._read_accounts_dir()
         if not path.exists():
             return {"items": []} if path != self.secret_path else {}
         try:
@@ -766,11 +769,57 @@ class WebAuthStore:
         return data
 
     def _write_json(self, path: Path, data: dict[str, Any]) -> None:
+        if path == self.users_path and self.users_path.suffix == "":
+            self._write_accounts_dir(data)
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def _read_accounts_dir(self) -> dict[str, Any]:
+        if not self.users_path.exists():
+            return {"items": []}
+        items: list[dict[str, Any]] = []
+        for path in sorted(self.users_path.glob("*.json")):
+            if not path.is_file():
+                continue
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise AuthStoreError(
+                    status=500,
+                    code="invalid_auth_store",
+                    message=f"无法解析存储文件: {path.name}",
+                ) from exc
+            if isinstance(item, dict):
+                items.append(item)
+        return {"items": items}
+
+    def _write_accounts_dir(self, data: dict[str, Any]) -> None:
+        self.users_path.mkdir(parents=True, exist_ok=True)
+        username_index: dict[str, str] = {}
+        for item in self._items(data):
+            if not isinstance(item, dict):
+                continue
+            account_id = str(item.get("account_id") or "").strip()
+            if not account_id:
+                continue
+            username_key = str(item.get("username_key") or "").strip()
+            if username_key:
+                username_index[username_key] = account_id
+            account_path = self.users_path / f"{account_id}.json"
+            account_path.write_text(
+                json.dumps({**item, "schema": "auth_account_v1"}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        if self.username_index_path is not None:
+            self.username_index_path.parent.mkdir(parents=True, exist_ok=True)
+            self.username_index_path.write_text(
+                json.dumps({"version": 1, "items": username_index}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
     def _raise(self, status: int, code: str, message: str, data: dict[str, Any] | None = None) -> None:
         raise AuthStoreError(status=status, code=code, message=message, data=data)
