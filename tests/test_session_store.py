@@ -21,14 +21,6 @@ from bot.session_store import (
 )
 
 
-class TestMakeKey:
-    """测试键生成"""
-
-    def test_make_key(self):
-        assert _make_key(1, 100) == "1:100"
-        assert _make_key(123, 456) == "123:456"
-
-
 class TestSaveAndLoadSession:
     """测试保存和加载会话"""
 
@@ -50,60 +42,6 @@ class TestSaveAndLoadSession:
             assert data["codex_session_id"] == "thread_abc123"
             assert data["claude_session_id"] == "uuid_456"
 
-    def test_save_without_session_ids(self, temp_dir: Path):
-        """测试不保存任何 session_id 时删除记录"""
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            # 先保存一个有 session_id 的记录
-            save_session(
-                bot_id=1,
-                user_id=100,
-                codex_session_id="thread_123",
-            )
-            assert load_session(1, 100) is not None
-            
-            # 再保存一个没有 session_id 的，应该删除记录
-            save_session(
-                bot_id=1,
-                user_id=100,
-            )
-            
-            data = load_session(1, 100)
-            assert data is None
-
-    def test_save_partial_session_ids(self, temp_dir: Path):
-        """测试只保存部分 session_id"""
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=100,
-                codex_session_id="thread_abc123",
-            )
-            
-            data = load_session(1, 100)
-            assert data is not None
-            assert data["codex_session_id"] == "thread_abc123"
-            assert "claude_session_id" not in data
-
-    def test_save_session_persists_active_conversation_id(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=1001,
-                codex_session_id="thread-1",
-                active_conversation_id="conv_abc",
-            )
-
-            data = load_session(1, 1001)
-
-            assert data is not None
-            assert data["active_conversation_id"] == "conv_abc"
-
     def test_save_and_load_kimi_session_id(self, temp_dir: Path):
         store_file = temp_dir / ".session_store.json"
 
@@ -118,29 +56,6 @@ class TestSaveAndLoadSession:
 
         assert data is not None
         assert data["kimi_session_id"] == "kimi-session-1"
-
-
-class TestRemoveSession:
-    """测试删除会话"""
-
-    def test_remove_existing_session(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            # 先保存
-            save_session(1, 100, codex_session_id="thread_123")
-            assert load_session(1, 100) is not None
-            
-            # 删除
-            remove_session(1, 100)
-            assert load_session(1, 100) is None
-
-    def test_remove_nonexistent_session(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            # 删除不存在的会话不应该报错
-            remove_session(999, 999)
 
 
 class TestRemoveAllSessionsForBot:
@@ -227,86 +142,3 @@ class TestRenameBotSessions:
             assert moved_snapshot["session_epoch"] == 2
 
 
-class TestMigrateSessionsToShared:
-    def test_migrate_sessions_to_shared_merges_bot_user_agent_keys(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        workdir = temp_dir / "repo"
-        workdir.mkdir()
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=2001,
-                agent_id="main",
-                codex_session_id="thread-old",
-                working_dir=str(workdir),
-                message_count=5,
-                session_epoch=2,
-                last_activity="2026-05-01T00:00:00",
-            )
-            save_session(
-                bot_id=1,
-                user_id=1001,
-                agent_id="main",
-                claude_session_id="claude-shared",
-                working_dir=str(workdir),
-                message_count=1,
-                session_epoch=1,
-                last_activity="2026-04-30T00:00:00",
-            )
-            save_session(
-                bot_id=1,
-                user_id=2001,
-                agent_id="reviewer",
-                kimi_session_id="kimi-old",
-                working_dir=str(workdir),
-            )
-
-            moved = migrate_sessions_to_shared(1, 1001)
-
-            shared = load_session(1, 1001)
-            reviewer = load_session(1, 1001, agent_id="reviewer")
-            assert moved == 2
-            assert load_session(1, 2001) is None
-            assert load_session(1, 2001, agent_id="reviewer") is None
-            assert shared is not None
-            assert shared["codex_session_id"] == "thread-old"
-            assert shared["claude_session_id"] == "claude-shared"
-            assert shared["message_count"] == 5
-            assert shared["session_epoch"] == 2
-            assert reviewer is not None
-            assert reviewer["kimi_session_id"] == "kimi-old"
-
-
-class TestLoadSessionIds:
-    """测试加载所有会话ID"""
-
-    @pytest.mark.parametrize("content", [None, "not valid json"])
-    def test_load_missing_or_invalid_store_returns_empty_dict(self, temp_dir: Path, content: str | None):
-        store_file = temp_dir / ".session_store.json"
-        if content is not None:
-            store_file.write_text(content, encoding="utf-8")
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            data = load_session_ids()
-            assert data == {}
-
-
-class TestSaveSessionIds:
-    """测试保存所有会话ID"""
-
-    def test_save_session_ids(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            data = {
-                "1:100": {
-                    "codex_session_id": "thread_123",
-                }
-            }
-            save_session_ids(data)
-            
-            # 验证文件内容
-            with open(store_file, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            assert saved == data

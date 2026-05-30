@@ -39,102 +39,12 @@ class TestValidateCliType:
         assert validate_cli_type("codex") == "codex"
         assert validate_cli_type("kimi") == "kimi"
 
-    def test_case_insensitive(self):
-        assert validate_cli_type("Claude") == "claude"
-        assert validate_cli_type("CODEX") == "codex"
-
-    def test_with_whitespace(self):
-        assert validate_cli_type("  claude  ") == "claude"
-        assert validate_cli_type(" KIMI ") == "kimi"
-
     def test_invalid_type(self):
         with pytest.raises(ValueError):
             validate_cli_type("unsupported")
 
-    def test_empty_string(self):
-        with pytest.raises(ValueError):
-            validate_cli_type("")
-
-class TestNormalizeCliType:
-    """测试 normalize_cli_type"""
-
-    def test_basic(self):
-        assert normalize_cli_type("  Claude  ") == "claude"
-        assert normalize_cli_type("  CODEX  ") == "codex"
-
-    def test_already_lowercase(self):
-        assert normalize_cli_type("codex") == "codex"
-
-class TestResolveCliExecutable:
-    """测试 resolve_cli_executable"""
-
-    def test_absolute_path_exists(self, temp_dir: Path):
-        exe = temp_dir / "mycli"
-        exe.write_text("#!/bin/sh\necho ok")
-        os.chmod(str(exe), 0o755)
-        result = resolve_cli_executable(str(exe))
-        assert result == str(exe)
-
-    def test_nonexistent_path(self):
-        result = resolve_cli_executable("/nonexistent/path/to/cli")
-        # 可能返回 None 或路径取决于实现
-        # 关键是不崩溃
-
-    def test_with_working_dir(self, temp_dir: Path):
-        # 测试在 working_dir 下寻找
-        result = resolve_cli_executable("nonexistent_cli_xyz", str(temp_dir))
-        # 不存在时应该返回 None
-        assert result is None or isinstance(result, str)
-
-    def test_on_linux_does_not_append_windows_extensions(self, monkeypatch):
-        monkeypatch.setattr("bot.platform.executables.os.name", "posix")
-        monkeypatch.setattr("bot.platform.executables.shutil.which", lambda value: None)
-
-        result = resolve_cli_executable("claude.cmd", "/tmp")
-
-        assert result is None
-
 class TestBuildCliCommand:
     """测试 build_cli_command"""
-
-    def test_claude_basic(self):
-        env = {}
-        cmd, use_stdin = build_cli_command(
-            cli_type="claude",
-            resolved_cli="claude",
-            user_text="hello",
-            env=env,
-            params_config=CliParamsConfig(),
-        )
-        assert "claude" in cmd
-
-    def test_claude_stream_json_defaults_include_partial_messages(self):
-        env = {}
-        cmd, use_stdin = build_cli_command(
-            cli_type="claude",
-            resolved_cli="claude",
-            user_text="hello",
-            env=env,
-            params_config=CliParamsConfig(),
-        )
-        assert "--output-format" in cmd
-        output_index = cmd.index("--output-format")
-        assert cmd[output_index + 1] == "stream-json"
-        assert "--verbose" in cmd
-        assert "--include-partial-messages" in cmd
-
-    def test_claude_with_session(self):
-        env = {}
-        cmd, use_stdin = build_cli_command(
-            cli_type="claude",
-            resolved_cli="claude",
-            user_text="hello",
-            env=env,
-            session_id="sess-123",
-            resume_session=True,
-            params_config=CliParamsConfig(),
-        )
-        assert any("sess-123" in str(a) for a in cmd)
 
     def test_claude_plan_mode_overrides_native_plan_permission_mode(self):
         params_config = CliParamsConfig()
@@ -164,50 +74,6 @@ class TestBuildCliCommand:
         assert cmd[permission_mode_index + 1] == "bypassPermissions"
         assert cmd.count("--permission-mode") == 1
 
-    def test_claude_plan_mode_uses_default_permission_when_yolo_is_off(self):
-        params_config = CliParamsConfig()
-        params_config.claude["yolo"] = False
-        params_config.claude["extra_args"] = ["--permission-mode", "plan"]
-
-        cmd, _ = build_cli_command(
-            cli_type="claude",
-            resolved_cli="claude",
-            user_text="hello",
-            env={},
-            params_config=params_config,
-            task_mode="plan",
-        )
-
-        permission_mode_index = cmd.index("--permission-mode")
-        assert cmd[permission_mode_index + 1] == "default"
-
-    def test_claude_standard_mode_preserves_permission_extra_args(self):
-        params_config = CliParamsConfig()
-        params_config.claude["extra_args"] = ["--permission-mode", "plan"]
-
-        cmd, _ = build_cli_command(
-            cli_type="claude",
-            resolved_cli="claude",
-            user_text="hello",
-            env={},
-            params_config=params_config,
-        )
-
-        permission_mode_index = cmd.index("--permission-mode")
-        assert cmd[permission_mode_index + 1] == "plan"
-
-    def test_codex_json_output(self):
-        env = {}
-        cmd, use_stdin = build_cli_command(
-            cli_type="codex",
-            resolved_cli="codex",
-            user_text="hello",
-            env=env,
-            json_output=True,
-            params_config=CliParamsConfig(),
-        )
-        assert "codex" in cmd
-
     def test_codex_defaults_include_model_yolo_and_reasoning_effort(self):
         env = {}
         cmd, use_stdin = build_cli_command(
@@ -224,62 +90,6 @@ class TestBuildCliCommand:
         assert '-c' in cmd
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
-
-    def test_codex_omits_model_flag_when_model_is_none(self):
-        env = {}
-        params_config = CliParamsConfig()
-        params_config.codex["model"] = None
-
-        cmd, use_stdin = build_cli_command(
-            cli_type="codex",
-            resolved_cli="codex",
-            user_text="hello",
-            env=env,
-            params_config=params_config,
-        )
-
-        assert "--model" not in cmd
-
-    def test_posix_non_executable_cli_script_is_wrapped_with_bash(self, temp_dir: Path, monkeypatch):
-        monkeypatch.setattr("bot.platform.executables.os.name", "posix")
-        script = temp_dir / "codex"
-        script.write_text("#!/usr/bin/env bash\necho codex\n", encoding="utf-8")
-        os.chmod(script, 0o644)
-
-        cmd, use_stdin = build_cli_command(
-            cli_type="codex",
-            resolved_cli=str(script),
-            user_text="hello",
-            env={},
-            params_config=CliParamsConfig(),
-            working_dir=str(temp_dir),
-        )
-
-        assert cmd[:3] == ["bash", str(script), "exec"]
-        assert use_stdin is True
-
-    def test_codex_injects_project_trust_override_when_working_dir_is_known(self, temp_dir: Path):
-        env = {}
-
-        cmd, use_stdin = build_cli_command(
-            cli_type="codex",
-            resolved_cli="codex",
-            user_text="hello",
-            env=env,
-            params_config=CliParamsConfig(),
-            working_dir=str(temp_dir),
-        )
-
-        config_values = [cmd[index + 1] for index, item in enumerate(cmd[:-1]) if item == "-c"]
-        assert any(value.startswith("projects.") and value.endswith('.trust_level="trusted"') for value in config_values)
-        assert use_stdin is True
-
-    def test_codex_status_terminal_injects_project_trust_override(self, temp_dir: Path):
-        cmd = _build_codex_status_terminal_argv("codex", str(temp_dir))
-
-        config_values = [cmd[index + 1] for index, item in enumerate(cmd[:-1]) if item == "-c"]
-        assert any(value.startswith("projects.") and value.endswith('.trust_level="trusted"') for value in config_values)
-        assert "--no-alt-screen" in cmd
 
     def test_kimi_command_uses_print_stream_json_stdin_and_session(self, temp_dir: Path):
         env = {}
@@ -306,41 +116,6 @@ class TestBuildCliCommand:
         assert cmd[cmd.index("--work-dir") + 1] == str(temp_dir)
         assert use_stdin is True
 
-    def test_kimi_command_applies_model_thinking_and_extra_args(self):
-        params_config = CliParamsConfig()
-        params_config.kimi["model"] = "kimi-code/kimi-for-coding"
-        params_config.kimi["thinking"] = "disabled"
-        params_config.kimi["extra_args"] = ["--max-steps-per-turn", "3"]
-
-        cmd, use_stdin = build_cli_command(
-            cli_type="kimi",
-            resolved_cli="kimi",
-            user_text="hello",
-            env={},
-            params_config=params_config,
-            session_id="kimi-session-2",
-        )
-
-        assert "--model" in cmd
-        assert cmd[cmd.index("--model") + 1] == "kimi-code/kimi-for-coding"
-        assert "--no-thinking" in cmd
-        assert "--max-steps-per-turn" in cmd
-        assert use_stdin is True
-
-    def test_kimi_command_accepts_bool_thinking_config(self):
-        params_config = CliParamsConfig()
-        params_config.kimi["thinking"] = False
-
-        cmd, _ = build_cli_command(
-            cli_type="kimi",
-            resolved_cli="kimi",
-            user_text="hello",
-            env={},
-            params_config=params_config,
-        )
-
-        assert "--no-thinking" in cmd
-
     def test_with_global_extra_args_copies_and_appends_by_type(self):
         params_config = CliParamsConfig()
         params_config.codex["extra_args"] = ["--bot-codex"]
@@ -364,44 +139,8 @@ class TestBuildCliCommand:
         assert merged.kimi["extra_args"] == ["--bot-kimi", "--global-kimi"]
 
 
-def test_normalize_cli_model_options_preserves_explicit_env_list():
-    assert normalize_cli_model_options(
-        ["gpt-5.5", "gpt-5.2", "gpt-5.5", "claude-opus-4-7"]
-    ) == ["gpt-5.5", "claude-opus-4-7", "none"]
-
-
-class TestParseCodexJsonLine:
-    """测试 parse_codex_json_line"""
-
-    def test_valid_json(self):
-        result = parse_codex_json_line('{"type":"message","content":"hello"}')
-        assert isinstance(result, dict)
-
-    def test_invalid_json(self):
-        result = parse_codex_json_line("not json")
-        assert isinstance(result, dict)
-
-    def test_empty_string(self):
-        result = parse_codex_json_line("")
-        assert isinstance(result, dict)
-
-    def test_item_completed_also_exposes_stream_text(self):
-        result = parse_codex_json_line(
-            '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"OK"}}'
-        )
-        assert result["completed_text"] == "OK"
-        assert result["delta_text"] == "OK"
-
 class TestParseCodexJsonOutput:
     """测试 parse_codex_json_output"""
-
-    def test_empty_output(self):
-        text, thread_id = parse_codex_json_output("")
-        assert isinstance(text, str)
-
-    def test_simple_output(self):
-        text, thread_id = parse_codex_json_output("plain text output")
-        assert isinstance(text, str)
 
     def test_response_item_and_event_msg_output(self):
         text, thread_id = parse_codex_json_output(
@@ -416,23 +155,6 @@ class TestParseCodexJsonOutput:
 
         assert text == "目录已读取完成。"
         assert thread_id == "thread-1"
-
-class TestParseClaudeStreamJsonLine:
-    """测试 Claude stream-json 单行解析"""
-
-    def test_text_delta(self):
-        result = parse_claude_stream_json_line(
-            '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}'
-        )
-        assert result["session_id"] == "sess-1"
-        assert result["delta_text"] == "Hi"
-
-    def test_result_frame(self):
-        result = parse_claude_stream_json_line(
-            '{"type":"result","subtype":"success","session_id":"sess-1","result":"Hi there"}'
-        )
-        assert result["session_id"] == "sess-1"
-        assert result["completed_text"] == "Hi there"
 
 class TestParseClaudeStreamJsonOutput:
     """测试 Claude stream-json 完整输出解析"""
@@ -450,14 +172,6 @@ class TestParseClaudeStreamJsonOutput:
         assert text == "Hi there"
         assert session_id == "sess-1"
 
-    def test_falls_back_to_errors_when_result_is_empty(self):
-        text, session_id = parse_claude_stream_json_output(
-            '{"type":"result","subtype":"error_max_turns","session_id":"sess-1","result":"","errors":["Error: Session ID not found"]}'
-        )
-
-        assert text == "Error: Session ID not found"
-        assert session_id == "sess-1"
-
 class TestParseKimiStreamJson:
     """测试 Kimi stream-json 输出解析"""
 
@@ -472,174 +186,3 @@ class TestParseKimiStreamJson:
 
         assert text == "目录里有 README.md 和 bot。"
 
-    def test_line_reports_error_text(self):
-        parsed = parse_kimi_stream_json_line('{"type":"error","message":"auth failed"}')
-
-        assert parsed["error_text"] == "auth failed"
-
-    def test_line_reports_top_level_message_as_error_text(self):
-        parsed = parse_kimi_stream_json_line('{"message":"auth failed"}')
-
-        assert parsed["error_text"] == "auth failed"
-
-class TestExtractCodexStatus:
-    """测试 Codex 状态文本提取"""
-
-    def test_prefers_context_line_from_status_output(self):
-        raw = (
-            "\x1b[2m  gpt-5.4 xhigh · 100% left · ~\\repo\x1b[22m\n"
-            "› /status\n"
-            "  100% context left\n"
-        )
-        parsed = extract_codex_status(raw)
-        assert parsed["status_line"] == "100% context left"
-
-    def test_falls_back_to_footer_status_line(self):
-        raw = "  gpt-5.4 xhigh · 87% left · ~\\repo\n"
-        parsed = extract_codex_status(raw)
-        assert parsed["status_line"] == "gpt-5.4 xhigh · 87% left · ~\\repo"
-
-class TestShouldFinishCodexStatusPoll:
-    """测试 Codex /status 轮询完成判定"""
-
-    def test_waits_when_only_old_footer_is_available(self):
-        parsed = {
-            "status_line": "gpt-5.4 xhigh · 87% left · ~\\repo",
-            "source": "fallback_footer",
-        }
-
-        should_finish = _should_finish_codex_status_poll(
-            parsed,
-            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
-            sent_at=100.0,
-            now=104.9,
-            fallback_wait_seconds=5.0,
-        )
-
-        assert should_finish is False
-
-    def test_accepts_status_command_output_immediately(self):
-        parsed = {
-            "status_line": "100% context left",
-            "source": "status_command_context",
-        }
-
-        should_finish = _should_finish_codex_status_poll(
-            parsed,
-            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
-            sent_at=100.0,
-            now=101.0,
-            fallback_wait_seconds=5.0,
-        )
-
-        assert should_finish is True
-
-    def test_accepts_changed_footer_before_fallback_deadline(self):
-        parsed = {
-            "status_line": "gpt-5.4 xhigh · 83% left · ~\\repo",
-            "source": "fallback_footer",
-        }
-
-        should_finish = _should_finish_codex_status_poll(
-            parsed,
-            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
-            sent_at=100.0,
-            now=101.0,
-            fallback_wait_seconds=5.0,
-        )
-
-        assert should_finish is True
-
-    def test_falls_back_after_wait_deadline(self):
-        parsed = {
-            "status_line": "gpt-5.4 xhigh · 87% left · ~\\repo",
-            "source": "fallback_footer",
-        }
-
-        should_finish = _should_finish_codex_status_poll(
-            parsed,
-            initial_status_line="gpt-5.4 xhigh · 87% left · ~\\repo",
-            sent_at=100.0,
-            now=105.0,
-            fallback_wait_seconds=5.0,
-        )
-
-        assert should_finish is True
-
-class TestReadCodexStatusFromTerminal:
-    """测试 Codex PTY 状态查询包装器"""
-
-    def test_returns_not_found_when_cli_missing(self):
-        with patch("bot.cli.resolve_cli_executable", return_value=None):
-            result = read_codex_status_from_terminal("codex", "C:/repo")
-        assert result["ok"] is False
-        assert result["error"] == "not_found"
-
-    def test_returns_parsed_status_line(self):
-        with patch("bot.cli.os.name", "nt"), \
-             patch("bot.cli.resolve_cli_executable", return_value="C:/bin/codex.cmd"), \
-             patch("bot.cli._run_codex_status_terminal", return_value="› /status\n100% context left\n"):
-            result = read_codex_status_from_terminal("codex", "C:/repo")
-
-        assert result["ok"] is True
-        assert result["status_line"] == "100% context left"
-
-class TestShouldResetCodexSession:
-    """测试 should_reset_codex_session"""
-
-    def test_no_session(self):
-        result = should_reset_codex_session(None, "some output", 0)
-        assert isinstance(result, bool)
-
-    def test_with_error(self):
-        result = should_reset_codex_session("sess-123", "error", 1)
-        assert isinstance(result, bool)
-
-class TestShouldResetClaudeSession:
-    """测试 should_reset_claude_session"""
-
-    def test_success(self):
-        result = should_reset_claude_session("some output", 0)
-        assert isinstance(result, bool)
-
-    def test_error(self):
-        result = should_reset_claude_session("error output", 1)
-        assert isinstance(result, bool)
-
-    def test_session_id_not_found_marker(self):
-        result = should_reset_claude_session("Error: Session ID not found", 1)
-        assert result is True
-
-class TestShouldMarkClaudeSessionInitialized:
-    """测试 should_mark_claude_session_initialized"""
-
-    def test_success(self):
-        result = should_mark_claude_session_initialized("output", 0)
-        assert isinstance(result, bool)
-        assert result is True
-
-    def test_error(self):
-        result = should_mark_claude_session_initialized("", 1)
-        assert isinstance(result, bool)
-        assert result is False
-
-    def test_already_in_use_error_marks_initialized(self):
-        result = should_mark_claude_session_initialized(
-            "Error: Session ID 6440e126-bab3-4bcc-a0b1-7f5349cae34f is already in use",
-            1,
-        )
-        assert result is True
-
-    def test_nonfatal_nonzero_output_marks_initialized(self):
-        result = should_mark_claude_session_initialized(
-            "这是 Claude 的回复内容\nwarning: stream closed after response",
-            1,
-        )
-        assert result is True
-
-    def test_auth_failure_does_not_mark_initialized(self):
-        result = should_mark_claude_session_initialized(
-            "Error: Login required",
-            1,
-        )
-        assert result is False

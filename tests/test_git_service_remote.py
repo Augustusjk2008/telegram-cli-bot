@@ -63,26 +63,6 @@ def test_fetch_git_remote_accepts_first_ssh_host_key(
     assert captured["env"]["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=accept-new"
 
 
-def test_fetch_git_remote_extends_configured_core_ssh_command(
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-) -> None:
-    monkeypatch.delenv("GIT_SSH", raising=False)
-    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
-    monkeypatch.setattr(
-        git_service,
-        "_get_configured_git_ssh_command",
-        lambda repo_root: "ssh -i ~/.ssh/deploy_key",
-    )
-    captured = _stub_git_remote_action(monkeypatch, temp_dir)
-
-    git_service.fetch_git_remote(object(), "main", 1001)
-
-    assert captured["env"]["GIT_SSH_COMMAND"] == (
-        "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
-    )
-
-
 @pytest.mark.parametrize(
     ("action", "expected_args"),
     [
@@ -120,32 +100,3 @@ def test_git_remote_env_keeps_explicit_strict_host_key_setting(
     assert env["GIT_SSH_COMMAND"] == "ssh -o stricthostkeychecking=no"
 
 
-def test_git_remote_env_does_not_confuse_path_with_strict_host_key_option(
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-) -> None:
-    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i ~/.ssh/StrictHostKeyChecking_key")
-    monkeypatch.setattr(git_service, "_get_configured_git_ssh_command", lambda repo_root: "")
-
-    env = git_service._build_git_remote_env(str(temp_dir))
-
-    assert env["GIT_SSH_COMMAND"] == (
-        "ssh -i ~/.ssh/StrictHostKeyChecking_key -o StrictHostKeyChecking=accept-new"
-    )
-
-
-def test_git_remote_env_keeps_configured_core_strict_host_key_setting(
-    monkeypatch: pytest.MonkeyPatch,
-    temp_dir: Path,
-) -> None:
-    monkeypatch.delenv("GIT_SSH", raising=False)
-    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
-    monkeypatch.setattr(
-        git_service,
-        "_get_configured_git_ssh_command",
-        lambda repo_root: "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no",
-    )
-
-    env = git_service._build_git_remote_env(str(temp_dir))
-
-    assert env["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"

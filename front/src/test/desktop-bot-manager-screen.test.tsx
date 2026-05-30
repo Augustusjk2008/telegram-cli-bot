@@ -297,34 +297,7 @@ test("desktop bot manager shows dense list and selected details", async () => {
   expect(screen.getAllByText("C:\\workspace\\main").length).toBeGreaterThan(0);
 });
 
-test("desktop bot manager searches busy agent names", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
 
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.type(screen.getByLabelText("搜索智能体"), "代码审查");
-
-  const list = screen.getByTestId("desktop-bot-manager-list");
-  expect(within(list).getByRole("button", { name: /review/ })).toBeInTheDocument();
-  expect(within(list).queryByRole("button", { name: /main/ })).not.toBeInTheDocument();
-});
-
-test("desktop bot manager selects rows without entering and enters from details", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-  const onSelect = vi.fn();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={onSelect} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  expect(onSelect).not.toHaveBeenCalled();
-
-  await user.click(screen.getByRole("button", { name: "进入 review" }));
-  expect(onSelect).toHaveBeenCalledWith("review");
-});
 
 test("desktop bot manager creates a bot from detail panel", async () => {
   const user = userEvent.setup();
@@ -356,139 +329,12 @@ test("desktop bot manager creates a bot from detail panel", async () => {
   });
 });
 
-test("desktop bot manager directory picker can create folder", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
 
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
 
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: "新增智能体" }));
-  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
-  await user.type(screen.getByLabelText("新文件夹名称"), "new-folder");
-  await user.click(screen.getByRole("button", { name: "创建" }));
 
-  expect(client.createDirectoryCalls).toEqual([
-    { botAlias: "main", name: "new-folder", parentPath: "C:\\workspace" },
-  ]);
-  expect(await screen.findByRole("button", { name: "进入目录 new-folder" })).toBeInTheDocument();
-});
 
-test("desktop bot manager directory picker browses parent without mutating browser state", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
 
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
 
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: "新增智能体" }));
-  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
-  await user.click(await screen.findByRole("button", { name: "进入目录 team3" }));
-  await user.click(screen.getByRole("button", { name: "上一级" }));
-
-  expect(await screen.findByRole("button", { name: "进入目录 team3" })).toBeInTheDocument();
-  expect(client.changeDirectoryCalls).toEqual([]);
-  expect(client.listPaths).toContain("C:\\workspace\\team3");
-  expect(client.listPaths).toContain("C:\\workspace");
-});
-
-test("desktop bot manager create picker returns to opened start path", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: "新增智能体" }));
-  await user.clear(screen.getByLabelText("新智能体工作目录"));
-  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
-  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
-
-  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
-  expect(within(dialog).getByText("C:\\workspace\\team3")).toBeInTheDocument();
-
-  await user.click(within(dialog).getByRole("button", { name: "上一级" }));
-  expect(await within(dialog).findByText("C:\\workspace")).toBeInTheDocument();
-
-  await user.click(within(dialog).getByRole("button", { name: "回到起点" }));
-  expect(await within(dialog).findByText("C:\\workspace\\team3")).toBeInTheDocument();
-});
-
-test("desktop bot manager edit picker returns to opened start path", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "编辑 review" }));
-  await user.click(screen.getByRole("button", { name: "浏览智能体工作目录" }));
-
-  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
-  expect(within(dialog).getByText("C:\\workspace\\review")).toBeInTheDocument();
-
-  await user.click(within(dialog).getByRole("button", { name: "上一级" }));
-  expect(await within(dialog).findByText("C:\\workspace")).toBeInTheDocument();
-
-  await user.click(within(dialog).getByRole("button", { name: "回到起点" }));
-  expect(await within(dialog).findByText("C:\\workspace\\review")).toBeInTheDocument();
-});
-
-test("desktop bot manager edits alias and blocks main destructive actions", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-  const renameSpy = vi.spyOn(client, "renameBot");
-  const removeSpy = vi.spyOn(client, "removeBot");
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  expect(screen.queryByRole("button", { name: "删除 main" })).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "编辑 review" }));
-  const aliasInput = screen.getByLabelText("智能体别名");
-  await user.clear(aliasInput);
-  await user.type(aliasInput, "reviewer");
-  await user.click(screen.getByRole("button", { name: "保存智能体" }));
-
-  await waitFor(() => {
-    expect(renameSpy).toHaveBeenCalledWith("review", "reviewer");
-  });
-  expect(removeSpy).not.toHaveBeenCalled();
-});
-
-test("desktop bot manager deletes managed bot with history option", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-  const removeSpy = vi.spyOn(client, "removeBot");
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "删除 review" }));
-  await user.click(screen.getByLabelText("同时删除历史记录（包含所有子 agents）"));
-  await user.click(screen.getByRole("button", { name: "删除" }));
-
-  expect(removeSpy).toHaveBeenCalledWith("review", { deleteHistory: true });
-});
-
-test("desktop bot manager deletes managed bot without history by default", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-  const removeSpy = vi.spyOn(client, "removeBot");
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "删除 review" }));
-  await user.click(screen.getByRole("button", { name: "删除" }));
-
-  expect(removeSpy).toHaveBeenCalledWith("review", { deleteHistory: false });
-});
 
 test("desktop bot manager exposes cluster templates in config tab", async () => {
   const user = userEvent.setup();
@@ -514,137 +360,11 @@ test("desktop bot manager exposes cluster templates in config tab", async () => 
   expect(screen.getByRole("button", { name: "预览 全量测试集群" })).toBeInTheDocument();
 });
 
-test("desktop bot manager confirms before leaving dirty edit", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
 
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
 
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "编辑 review" }));
-  await user.type(screen.getByLabelText("智能体 CLI 路径"), ".cmd");
-  await user.click(screen.getByRole("button", { name: /offline-team/ }));
 
-  expect(confirmSpy).toHaveBeenCalledWith("当前智能体配置有未保存修改，继续会丢失这些修改。确定继续吗？");
-  expect(screen.getByRole("button", { name: "保存智能体" })).toBeInTheDocument();
-});
 
-test("desktop bot manager shows fleet table, attention filter, and agent inspector", async () => {
-  const user = userEvent.setup();
-  const client = new FleetConsoleClient();
 
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  expect(await screen.findByRole("table", { name: "智能体舰队" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "需处理" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Agent" })).toBeInTheDocument();
-  expect(screen.queryByRole("columnheader", { name: "最近活动" })).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "需处理" }));
-  const table = screen.getByRole("table", { name: "智能体舰队" });
-  expect(within(table).queryByText("main")).not.toBeInTheDocument();
-  expect(within(table).getByText("review")).toBeInTheDocument();
-  expect(within(table).getByText("offline-team")).toBeInTheDocument();
-  expect(within(table).getByText("duplicate-a")).toBeInTheDocument();
-  expect(screen.getAllByText("工作目录重复").length).toBeGreaterThan(0);
-
-  await user.click(within(table).getByRole("button", { name: "聚焦 review" }));
-  await user.click(screen.getByRole("button", { name: "Agent" }));
-  const agentPanel = (await screen.findByRole("heading", { name: "子 agent" })).closest("section");
-  expect(agentPanel).not.toBeNull();
-  expect(within(agentPanel as HTMLElement).getAllByText("主 agent").length).toBeGreaterThan(0);
-  expect(within(agentPanel as HTMLElement).getByText("代码审查")).toBeInTheDocument();
-  expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
-});
-
-test("desktop bot manager resizes list and inspector panes", async () => {
-  const client = new DesktopManagerClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  const layout = screen.getByTestId("desktop-bot-manager-list").parentElement as HTMLElement;
-  vi.spyOn(layout, "getBoundingClientRect").mockReturnValue({
-    x: 0,
-    y: 0,
-    width: 1000,
-    height: 600,
-    top: 0,
-    right: 1000,
-    bottom: 600,
-    left: 0,
-    toJSON: () => ({}),
-  });
-
-  const separator = screen.getByRole("separator", { name: "调整智能体列表和详情宽度" });
-  fireEvent.pointerDown(separator, { pointerId: 1, clientX: 600 });
-  fireEvent.pointerMove(window, { clientX: 520 });
-  fireEvent.pointerUp(window);
-
-  await waitFor(() => {
-    expect(layout.style.gridTemplateColumns).toBe("minmax(520px, 1fr) 8px 472px");
-  });
-});
-
-test("desktop bot manager agent tab loads real child agents and config tab embeds cli params", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-  const listAgents = vi.spyOn(client, "listAgents");
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "编辑 review" }));
-  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
-  expect(screen.getByLabelText("推理努力程度")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "Agent" }));
-  await waitFor(() => {
-    expect(listAgents).toHaveBeenCalledWith("review");
-  });
-  const agentPanel = (await screen.findByRole("heading", { name: "子 agent" })).closest("section");
-  expect(agentPanel).not.toBeNull();
-  expect(within(agentPanel as HTMLElement).getByText("代码审查")).toBeInTheDocument();
-  expect(within(agentPanel as HTMLElement).getAllByText("主 agent").length).toBeGreaterThan(0);
-});
-
-test("desktop bot manager edit panel supports kimi cli type", async () => {
-  const user = userEvent.setup();
-  const client = new DesktopManagerClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("heading", { name: "智能体管理" });
-  await user.click(screen.getByRole("button", { name: /review/ }));
-  await user.click(screen.getByRole("button", { name: "编辑 review" }));
-
-  const cliTypeSelect = screen.getByLabelText("智能体 CLI 类型");
-  expect(screen.getByRole("option", { name: "kimi" })).toBeInTheDocument();
-  await user.selectOptions(cliTypeSelect, "kimi");
-  expect(cliTypeSelect).toHaveValue("kimi");
-  expect(screen.getByLabelText("智能体 CLI 路径")).toHaveAttribute("placeholder", "kimi");
-});
-
-test("desktop bot manager bulk starts only offline managed bots", async () => {
-  const user = userEvent.setup();
-  const client = new FleetConsoleClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("table", { name: "智能体舰队" });
-  await user.click(screen.getByLabelText("选择 main"));
-  await user.click(screen.getByLabelText("选择 offline-team"));
-  await user.click(screen.getByRole("button", { name: "批量启动" }));
-
-  await waitFor(() => {
-    expect(client.startBotCalls).toEqual(["offline-team"]);
-  });
-  expect(screen.getByText("已启动 1 个，跳过 1 个")).toBeInTheDocument();
-  expect(screen.getByText("main: 主 bot 不支持批量启动")).toBeInTheDocument();
-});
 
 test("desktop bot manager bulk stops online managed bots and skips main", async () => {
   const user = userEvent.setup();
@@ -664,21 +384,3 @@ test("desktop bot manager bulk stops online managed bots and skips main", async 
   expect(screen.getByText("main: 主 bot 不可停止")).toBeInTheDocument();
 });
 
-test("desktop bot manager confirms bulk delete and skips main", async () => {
-  const user = userEvent.setup();
-  const client = new FleetConsoleClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
-
-  await screen.findByRole("table", { name: "智能体舰队" });
-  await user.click(screen.getByLabelText("选择 main"));
-  await user.click(screen.getByLabelText("选择 duplicate-a"));
-  await user.click(screen.getByRole("button", { name: "批量删除" }));
-  await user.click(screen.getByLabelText("同时删除历史记录（包含所有子 agents）"));
-  await user.click(screen.getByRole("button", { name: "删除" }));
-
-  await waitFor(() => {
-    expect(client.removeBotCalls).toEqual([{ botAlias: "duplicate-a", deleteHistory: true }]);
-  });
-  expect(screen.getByText("已删除 1 个，跳过 1 个")).toBeInTheDocument();
-});

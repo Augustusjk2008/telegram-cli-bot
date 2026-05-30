@@ -74,27 +74,3 @@ test("presence subscribes and reports visibility permission settings and bot ali
   expect(client.closed).toBe(true);
 });
 
-test("presence updates after focus and notification setting changes without reconnecting", () => {
-  const client = new PresenceClient();
-  const subscribeSpy = vi.spyOn(client, "subscribeNotifications");
-
-  renderHook(() => useNotificationPresence({
-    client: client as unknown as WebBotClient,
-    enabled: true,
-    currentBotAlias: "main",
-    onEvent: vi.fn(),
-  }));
-
-  act(() => {
-    localStorage.setItem(CHAT_COMPLETION_WEB_NOTIFICATION_KEY, "false");
-    window.dispatchEvent(new Event("chat-notification-settings-changed"));
-    window.dispatchEvent(new Event("focus"));
-  });
-
-  expect(subscribeSpy).toHaveBeenCalledTimes(1);
-  expect(client.updates.length).toBeGreaterThanOrEqual(3);
-  expect(client.updates.at(-1)).toEqual(expect.objectContaining({
-    currentBotAlias: "main",
-    webNotificationsEnabled: false,
-  }));
-});

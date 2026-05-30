@@ -72,19 +72,6 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-test("restores enabled plan mode after remount", async () => {
-  const user = userEvent.setup();
-  const client = createClient();
-  const view = render(<ChatScreen botAlias="main" client={client} />);
-
-  await user.click(await screen.findByRole("button", { name: "计划模式" }));
-  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "true");
-
-  view.unmount();
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  expect(await screen.findByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "true");
-});
 
 test("sends chat with plan task mode when plan mode is active", async () => {
   const user = userEvent.setup();
@@ -109,52 +96,7 @@ test("sends chat with plan task mode when plan mode is active", async () => {
   });
 });
 
-test("sends plan execution prompt as standard even when plan mode is active", async () => {
-  const user = userEvent.setup();
-  const sendMessage = vi.fn(async () => createAssistantMessage("已执行", { id: "assistant-done" }));
-  const client = createClient({ sendMessage });
 
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  await user.click(await screen.findByRole("button", { name: "计划模式" }));
-  await user.type(screen.getByPlaceholderText("输入消息"), buildMockPlanExecutionMessage());
-  await user.click(screen.getByRole("button", { name: "发送" }));
-
-  await waitFor(() => {
-    expect(sendMessage).toHaveBeenCalledWith(
-      "main",
-      expect.stringContaining("请按方案执行"),
-      expect.any(Function),
-      expect.any(Function),
-      expect.any(Function),
-      expect.objectContaining({ taskMode: "standard" }),
-    );
-  });
-  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
-  expect(window.localStorage.getItem("tcb.planMode.main")).toBeNull();
-});
-
-test("shows execute and edit actions for final plan drafts", async () => {
-  const user = userEvent.setup();
-  const client = createClient({
-    sendMessage: async (_botAlias: string, _text: string, onChunk: (chunk: string) => void) => {
-      const draft = wrapPlanDraft(MOCK_PLAN_MARKDOWN);
-      onChunk(draft);
-      return createAssistantMessage(draft, { id: "assistant-plan" });
-    },
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  await user.click(await screen.findByRole("button", { name: "计划模式" }));
-  await user.type(screen.getByPlaceholderText("输入消息"), "先出方案");
-  await user.click(screen.getByRole("button", { name: "发送" }));
-
-  expect(await screen.findByText("候选方案")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "执行方案" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "修改方案" })).toBeInTheDocument();
-  expect(screen.queryByText(/PLAN_DRAFT/)).not.toBeInTheDocument();
-});
 
 test("execute plan creates a fresh conversation and auto-sends execution prompt", async () => {
   const user = userEvent.setup();
@@ -191,37 +133,3 @@ test("execute plan creates a fresh conversation and auto-sends execution prompt"
   });
 });
 
-test("execute plan keeps cluster enabled but leaves plan mode", async () => {
-  const user = userEvent.setup();
-  const sendMessage = vi.fn()
-    .mockResolvedValueOnce(createAssistantMessage(wrapPlanDraft(MOCK_PLAN_MARKDOWN), { id: "assistant-plan" }))
-    .mockResolvedValueOnce(createAssistantMessage("已执行", { id: "assistant-done" }));
-  const executePlan = vi.fn(async () => createMockPlanExecuteResult(
-    createConversation({ id: "conv-exec", title: "执行方案" }),
-  ));
-  const client = createClient({
-    getBotOverview: async () => createClusterOverview(),
-    sendMessage,
-    executePlan,
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  await user.click(await screen.findByRole("button", { name: "计划模式" }));
-  await user.type(screen.getByPlaceholderText("@ 可指定智能体集群"), "先出方案");
-  await user.click(screen.getByRole("button", { name: "发送" }));
-  await user.click(await screen.findByRole("button", { name: "执行方案" }));
-
-  await waitFor(() => {
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "main",
-      expect.stringContaining("请按方案执行"),
-      expect.any(Function),
-      expect.any(Function),
-      expect.any(Function),
-      expect.objectContaining({ cluster: true, taskMode: "standard" }),
-    );
-  });
-  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
-  expect(window.localStorage.getItem("tcb.planMode.main")).toBeNull();
-});

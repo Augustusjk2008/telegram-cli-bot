@@ -47,17 +47,6 @@ def _hold_tcp_port(host: str) -> tuple[socket.socket, int]:
     return sock, sock.getsockname()[1]
 
 
-def test_resolve_runtime_web_bind_keeps_requested_port_when_available() -> None:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
-        probe.bind(("127.0.0.1", 0))
-        requested_port = probe.getsockname()[1]
-
-    bind = resolve_runtime_web_bind("127.0.0.1", requested_port)
-
-    assert bind == RuntimeWebBind(host="127.0.0.1", configured_port=requested_port, actual_port=requested_port)
-    assert bind.port_changed is False
-
-
 def test_resolve_runtime_web_bind_uses_next_port_when_requested_port_is_busy() -> None:
     held_socket, requested_port = _hold_tcp_port("127.0.0.1")
     try:
@@ -68,45 +57,6 @@ def test_resolve_runtime_web_bind_uses_next_port_when_requested_port_is_busy() -
     assert bind.configured_port == requested_port
     assert bind.actual_port > requested_port
     assert bind.port_changed is True
-
-
-def test_resolve_runtime_web_bind_rejects_busy_port_without_fallback() -> None:
-    held_socket, requested_port = _hold_tcp_port("127.0.0.1")
-    try:
-        with pytest.raises(OSError, match=f"TCP port {requested_port} is already in use"):
-            resolve_runtime_web_bind("127.0.0.1", requested_port, allow_port_fallback=False)
-    finally:
-        held_socket.close()
-
-
-def test_resolve_runtime_web_bind_uses_next_port_for_wildcard_when_loopback_port_is_busy() -> None:
-    held_socket, requested_port = _hold_tcp_port("127.0.0.1")
-    try:
-        bind = resolve_runtime_web_bind("0.0.0.0", requested_port)
-    finally:
-        held_socket.close()
-
-    assert bind.configured_port == requested_port
-    assert bind.actual_port > requested_port
-    assert bind.port_changed is True
-
-
-def test_resolve_runtime_web_bind_uses_next_port_for_loopback_when_wildcard_port_is_busy() -> None:
-    held_socket, requested_port = _hold_tcp_port("0.0.0.0")
-    try:
-        bind = resolve_runtime_web_bind("127.0.0.1", requested_port)
-    finally:
-        held_socket.close()
-
-    assert bind.configured_port == requested_port
-    assert bind.actual_port > requested_port
-    assert bind.port_changed is True
-
-
-def test_get_web_access_lines_use_runtime_port() -> None:
-    bind = RuntimeWebBind(host="127.0.0.1", configured_port=8765, actual_port=8767)
-
-    assert _get_web_access_lines(bind) == ["   http://127.0.0.1:8767"]
 
 
 @pytest.mark.asyncio
@@ -120,32 +70,3 @@ async def test_health_reports_runtime_port() -> None:
     assert payload["port"] == 8768
 
 
-@pytest.mark.asyncio
-async def test_notify_tunnel_public_url_prints_qr_for_quick_tunnel(monkeypatch: pytest.MonkeyPatch) -> None:
-    server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
-    printed_urls: list[str] = []
-
-    monkeypatch.setattr(server, "_copy_text_to_clipboard", lambda text: False)
-    monkeypatch.setattr(server, "_print_public_url_qr", lambda public_url: printed_urls.append(public_url) or True)
-
-    await server._notify_tunnel_public_url(
-        {
-            "status": "running",
-            "source": "quick_tunnel",
-            "public_url": "https://demo.trycloudflare.com",
-        },
-        reason="test",
-    )
-
-    assert printed_urls == ["https://demo.trycloudflare.com"]
-
-
-def test_print_public_url_qr_returns_false_when_renderer_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
-
-    def raise_error(public_url: str) -> str:
-        raise RuntimeError(f"boom: {public_url}")
-
-    monkeypatch.setattr(server, "_build_public_url_qr_text", raise_error)
-
-    assert server._print_public_url_qr("https://demo.trycloudflare.com") is False

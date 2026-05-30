@@ -1,5 +1,0 @@
-{"type":"turn_context","role":"user","content":"列出当前目录"}
-{"type":"response_item","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我先检查目录结构。"}]}}
-{"type":"response_item","item":{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{\"command\":\"Get-ChildItem -Force\"}"}}
-{"type":"response_item","item":{"type":"function_call_output","call_id":"call_1","output":"README.md\nbot\nfront"}}
-{"type":"event_msg","payload":{"type":"agent_message","message":"目录已读取完成。"}}

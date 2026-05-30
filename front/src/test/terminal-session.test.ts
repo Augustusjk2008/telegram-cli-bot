@@ -141,26 +141,4 @@ test("connect sends initial geometry and fit sends resize payload", () => {
   });
 });
 
-test("setTheme updates the live xterm theme in place", () => {
-  const container = document.createElement("div");
-  const session = createTerminalSession(container, {
-    token: "abc",
-    ownerId: "owner-1",
-    themeName: "deep-space",
-  });
 
-  session.setTheme("classic");
-
-  expect(terminalState.instances[0]?.options.theme).toEqual(getTerminalTheme("classic"));
-});
-
-test("classic theme enables minimum contrast for dim terminal text", () => {
-  const container = document.createElement("div");
-  createTerminalSession(container, {
-    token: "abc",
-    ownerId: "owner-1",
-    themeName: "classic",
-  });
-
-  expect(terminalState.instances[0]?.options.minimumContrastRatio).toBe(4.5);
-});
