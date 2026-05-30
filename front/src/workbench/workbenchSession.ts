@@ -51,8 +51,10 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   };
 }
 
-export function buildWorkbenchSessionStorageKey(botAlias: string, workspaceRoot: string) {
-  return `web-workbench-session:v1:${botAlias}:${encodeURIComponent(workspaceRoot)}`;
+export function buildWorkbenchSessionStorageKey(botAlias: string, workspaceRoot: string, accountId?: string) {
+  const accountScope = accountId?.trim();
+  const prefix = accountScope ? `${accountScope}:` : "";
+  return `web-workbench-session:v1:${prefix}${botAlias}:${encodeURIComponent(workspaceRoot)}`;
 }
 
 export function selectTabsForPersistence(
@@ -144,18 +146,18 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
   };
 }
 
-export function readWorkbenchSession(botAlias: string, workspaceRoot: string): PersistedWorkbenchSession | null {
+export function readWorkbenchSession(botAlias: string, workspaceRoot: string, accountId?: string): PersistedWorkbenchSession | null {
   try {
-    const raw = localStorage.getItem(buildWorkbenchSessionStorageKey(botAlias, workspaceRoot));
+    const raw = localStorage.getItem(buildWorkbenchSessionStorageKey(botAlias, workspaceRoot, accountId));
     return raw ? normalizePersistedWorkbenchSession(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
 }
 
-export function writeWorkbenchSession(session: PersistedWorkbenchSession) {
+export function writeWorkbenchSession(session: PersistedWorkbenchSession, accountId?: string) {
   localStorage.setItem(
-    buildWorkbenchSessionStorageKey(session.botAlias, session.workspaceRoot),
+    buildWorkbenchSessionStorageKey(session.botAlias, session.workspaceRoot, accountId),
     JSON.stringify(session),
   );
 }

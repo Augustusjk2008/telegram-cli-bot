@@ -9,11 +9,12 @@ import { readWorkbenchSession, writeWorkbenchSession } from "./workbenchSession"
 
 type Props = {
   botAlias: string;
+  accountId?: string;
   workspaceRoot: string;
   snapshot: Omit<PersistedWorkbenchSession, "version" | "botAlias" | "workspaceRoot"> | null;
 };
 
-export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props) {
+export function useWorkbenchSession({ botAlias, accountId, workspaceRoot, snapshot }: Props) {
   const [restoredSession, setRestoredSession] = useState<PersistedWorkbenchSession | null>(null);
   const [restoreState, setRestoreState] = useState<WorkbenchRestoreState>("clean");
   const [restoreApplied, setRestoreApplied] = useState(false);
@@ -29,7 +30,7 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
       return;
     }
 
-    const nextSession = readWorkbenchSession(botAlias, workspaceRoot);
+    const nextSession = readWorkbenchSession(botAlias, workspaceRoot, accountId);
     setRestoredSession(nextSession);
     setRestoreState(
       nextSession?.tabs.some((tab) => tab.contentPersistence === "dirty_snapshot")
@@ -39,7 +40,7 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
           : "clean",
     );
     setRestoreLoaded(true);
-  }, [botAlias, workspaceRoot]);
+  }, [accountId, botAlias, workspaceRoot]);
 
   const persistedSnapshot = useMemo(() => {
     if (!workspaceRoot || !snapshot) {
@@ -64,7 +65,7 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
     }
 
     writeTimerRef.current = window.setTimeout(() => {
-      writeWorkbenchSession(persistedSnapshot);
+      writeWorkbenchSession(persistedSnapshot, accountId);
       writeTimerRef.current = null;
     }, WORKBENCH_SESSION_WRITE_DELAY_MS);
 
@@ -74,7 +75,7 @@ export function useWorkbenchSession({ botAlias, workspaceRoot, snapshot }: Props
         writeTimerRef.current = null;
       }
     };
-  }, [persistedSnapshot, restoreApplied]);
+  }, [accountId, persistedSnapshot, restoreApplied]);
 
   return {
     restoredSession,

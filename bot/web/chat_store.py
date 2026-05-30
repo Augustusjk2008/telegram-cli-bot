@@ -884,6 +884,73 @@ class ChatStore:
                 content_chars=len(str(content or "")),
             )
 
+    def replace_message_content(self, message_id: str, content: str, *, state: str = "done") -> dict[str, Any]:
+        started_at = time.perf_counter()
+        now = _utc_now()
+        try:
+            with self._connect_for_write() as conn:
+                row = conn.execute(
+                    """
+                    SELECT id, turn_id, conversation_id, role
+                    FROM messages
+                    WHERE id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(message_id)
+
+                conn.execute(
+                    "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
+                    (content, state, now, message_id),
+                )
+                if str(row["role"] or "") == "assistant":
+                    conn.execute(
+                        "UPDATE turns SET assistant_state = ?, updated_at = ? WHERE id = ?",
+                        (state, now, str(row["turn_id"])),
+                    )
+
+                latest_row = conn.execute(
+                    """
+                    SELECT m.content
+                    FROM messages AS m
+                    JOIN turns AS t ON t.id = m.turn_id
+                    WHERE m.conversation_id = ?
+                    ORDER BY
+                        t.seq DESC,
+                        CASE m.role WHEN 'user' THEN 0 ELSE 1 END DESC,
+                        m.created_at DESC,
+                        m.id DESC
+                    LIMIT 1
+                    """,
+                    (str(row["conversation_id"]),),
+                ).fetchone()
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET last_message_preview = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        self._summarize_preview(str(latest_row["content"] or "")) if latest_row is not None else "",
+                        now,
+                        str(row["conversation_id"]),
+                    ),
+                )
+            return self.get_message(message_id)
+        finally:
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            diag_log_slow(
+                logger,
+                "chat_store",
+                elapsed_ms,
+                op="replace_message_content",
+                message_id=message_id,
+                state=state,
+                content_chars=len(str(content or "")),
+            )
+
     def update_context_usage(self, turn_id: str, context_usage: dict[str, Any] | None) -> bool:
         if not isinstance(context_usage, dict) or not context_usage:
             return False

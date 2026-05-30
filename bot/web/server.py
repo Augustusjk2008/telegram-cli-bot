@@ -1699,7 +1699,7 @@ class WebApiServer:
         data = get_cluster_task_status(
             self.manager,
             alias,
-            auth.user_id,
+            self._chat_user_id(auth),
             run_id,
             task_ids=task_ids,
             include_output=include_output,

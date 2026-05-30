@@ -191,6 +191,32 @@ test("settings can browse and pick a workdir before saving", async () => {
   expect(client.browserPath).toBe("C:\\workspace");
 });
 
+test("settings directory picker returns to opened start path", async () => {
+  const user = userEvent.setup();
+  const client = new SettingsDirectoryPickerClient();
+  vi.spyOn(client, "getBotOverview").mockImplementation(async (botAlias) => {
+    const overview = await MockWebBotClient.prototype.getBotOverview.call(client, botAlias);
+    return {
+      ...overview,
+      workingDir: "C:\\workspace\\repos",
+    };
+  });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByLabelText("工作目录")).toHaveValue("C:\\workspace\\repos");
+  await user.click(screen.getByRole("button", { name: "浏览工作目录" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
+  expect(within(dialog).getByText("C:\\workspace\\repos")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "进入目录 team-a" }));
+  expect(await within(dialog).findByText("C:\\workspace\\repos\\team-a")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "回到起点" }));
+  expect(await within(dialog).findByText("C:\\workspace\\repos")).toBeInTheDocument();
+});
+
 test("settings directory picker shows restore failures and stays open", async () => {
   const user = userEvent.setup();
   const client = new SettingsDirectoryPickerClient();

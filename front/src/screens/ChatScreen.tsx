@@ -13,6 +13,7 @@ import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { WebApiClientError } from "../services/types";
 import type {
   AssistantRuntimePendingRun,
   AgentMention,
@@ -59,6 +60,7 @@ import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
 
 type Props = {
   botAlias: string;
+  accountId?: string;
   client?: WebBotClient;
   botAvatarName?: string;
   userAvatarName?: string;
@@ -133,53 +135,58 @@ function fallbackAgents(): AgentSummary[] {
   return [{ id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true }];
 }
 
-function activeAgentStorageKey(botAlias: string) {
-  return `tcb.activeAgent.${botAlias}`;
+function storageScopePrefix(accountId?: string) {
+  const normalized = accountId?.trim();
+  return normalized ? `${normalized}.` : "";
 }
 
-function planModeStorageKey(botAlias: string) {
-  return `tcb.planMode.${botAlias}`;
+function activeAgentStorageKey(botAlias: string, accountId?: string) {
+  return `tcb.activeAgent.${storageScopePrefix(accountId)}${botAlias}`;
+}
+
+function planModeStorageKey(botAlias: string, accountId?: string) {
+  return `tcb.planMode.${storageScopePrefix(accountId)}${botAlias}`;
 }
 
 function isPlanExecutionPrompt(text: string) {
   return text.trimStart().startsWith("请按方案执行。方案文件：");
 }
 
-function queuedMessageStorageKey(botAlias: string, agentId: string) {
-  return `tcb.queuedMessage.${botAlias}.${agentId || "main"}`;
+function queuedMessageStorageKey(botAlias: string, agentId: string, accountId?: string) {
+  return `tcb.queuedMessage.${storageScopePrefix(accountId)}${botAlias}.${agentId || "main"}`;
 }
 
-function readStoredAgentId(botAlias: string) {
+function readStoredAgentId(botAlias: string, accountId?: string) {
   if (typeof window === "undefined") {
     return "main";
   }
-  return window.localStorage.getItem(activeAgentStorageKey(botAlias)) || "main";
+  return window.localStorage.getItem(activeAgentStorageKey(botAlias, accountId)) || "main";
 }
 
-function readStoredPlanMode(botAlias: string) {
+function readStoredPlanMode(botAlias: string, accountId?: string) {
   if (typeof window === "undefined") {
     return false;
   }
-  return window.localStorage.getItem(planModeStorageKey(botAlias)) === "1";
+  return window.localStorage.getItem(planModeStorageKey(botAlias, accountId)) === "1";
 }
 
-function writeStoredPlanMode(botAlias: string, enabled: boolean) {
+function writeStoredPlanMode(botAlias: string, enabled: boolean, accountId?: string) {
   if (typeof window === "undefined") {
     return;
   }
   if (enabled) {
-    window.localStorage.setItem(planModeStorageKey(botAlias), "1");
+    window.localStorage.setItem(planModeStorageKey(botAlias, accountId), "1");
     return;
   }
-  window.localStorage.removeItem(planModeStorageKey(botAlias));
+  window.localStorage.removeItem(planModeStorageKey(botAlias, accountId));
 }
 
-function readStoredQueuedMessage(botAlias: string, agentId: string): QueuedChatMessage | null {
+function readStoredQueuedMessage(botAlias: string, agentId: string, accountId?: string): QueuedChatMessage | null {
   if (typeof window === "undefined") {
     return null;
   }
   try {
-    const rawValue = window.localStorage.getItem(queuedMessageStorageKey(botAlias, agentId));
+    const rawValue = window.localStorage.getItem(queuedMessageStorageKey(botAlias, agentId, accountId));
     if (!rawValue) {
       return null;
     }
@@ -202,27 +209,27 @@ function readStoredQueuedMessage(botAlias: string, agentId: string): QueuedChatM
     };
     return buildComposedMessageText(nextMessage.text, nextMessage.attachments) ? nextMessage : null;
   } catch {
-    window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId));
+    window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId, accountId));
     return null;
   }
 }
 
-function writeStoredQueuedMessage(botAlias: string, agentId: string, message: QueuedChatMessage) {
+function writeStoredQueuedMessage(botAlias: string, agentId: string, message: QueuedChatMessage, accountId?: string) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(queuedMessageStorageKey(botAlias, agentId), JSON.stringify({
+  window.localStorage.setItem(queuedMessageStorageKey(botAlias, agentId, accountId), JSON.stringify({
     text: message.text,
     attachments: message.attachments,
     sendOptions: message.sendOptions,
   }));
 }
 
-function clearStoredQueuedMessage(botAlias: string, agentId: string) {
+function clearStoredQueuedMessage(botAlias: string, agentId: string, accountId?: string) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId));
+  window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId, accountId));
 }
 
 function agentOptions(agentId?: string) {
@@ -258,6 +265,13 @@ function listScopedConversations(client: WebBotClient, botAlias: string, query: 
   return options
     ? client.listConversations(botAlias, query, options)
     : client.listConversations(botAlias, query);
+}
+
+function isMissingClusterRunError(err: unknown) {
+  return (
+    (err instanceof WebApiClientError && (err.status === 404 || err.code === "cluster_run_not_found"))
+    || (err instanceof Error && err.message.includes("未找到集群任务"))
+  );
 }
 
 function selectScopedConversation(client: WebBotClient, botAlias: string, conversationId: string, agentId: string) {
@@ -331,6 +345,10 @@ function assistantRuntimeRunLabel(run: AssistantRuntimePendingRun) {
     return assistantRuntimeSourceLabel(run);
   }
   return `${assistantRuntimeSourceLabel(run)} · ${detail}`;
+}
+
+function isSilentDreamRuntimeRun(run: AssistantRuntimePendingRun | null | undefined) {
+  return Boolean(run && run.taskMode === "dream" && !run.interactive);
 }
 
 function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRunEnqueuedDetail[]) {
@@ -1041,6 +1059,7 @@ const ChatMessageList = memo(function ChatMessageList({
 
 export function ChatScreen({
   botAlias,
+  accountId,
   client = new MockWebBotClient(),
   botAvatarName,
   userAvatarName,
@@ -1057,6 +1076,7 @@ export function ChatScreen({
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
 }: Props) {
+  const storageScope = accountId?.trim() || "";
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -1091,12 +1111,12 @@ export function ChatScreen({
   const [deletingConversationId, setDeletingConversationId] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
-  const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias));
+  const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias, storageScope));
   const [clusterRunId, setClusterRunId] = useState("");
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterSaving, setClusterSaving] = useState(false);
-  const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias));
+  const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
   const [composerPulseKey, setComposerPulseKey] = useState(0);
@@ -1129,45 +1149,50 @@ export function ChatScreen({
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const previousBotAliasRef = useRef(botAlias);
+  const previousStorageScopeRef = useRef(storageScope);
   const hasActivatedRef = useRef(false);
-  const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient } | null>(null);
+  const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const isSseStreaming = () => streamModeRef.current === "sse";
 
   const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
     setPlanModeState((current) => {
       const next = typeof value === "function" ? value(current) : value;
-      writeStoredPlanMode(previousBotAliasRef.current, next);
+      writeStoredPlanMode(previousBotAliasRef.current, next, previousStorageScopeRef.current);
       return next;
     });
   }, []);
 
   const setQueuedMessageState = useCallback((
     next: QueuedChatMessage | null,
-    context?: { botAlias: string; agentId: string },
+    context?: { botAlias: string; agentId: string; accountId?: string },
   ) => {
     const targetBotAlias = context?.botAlias || botAlias;
     const targetAgentId = context?.agentId || activeAgentIdRef.current || "main";
+    const targetScope = context?.accountId ?? storageScope;
     queuedMessageRef.current = next;
     setQueuedMessage(next);
     if (next) {
-      writeStoredQueuedMessage(targetBotAlias, targetAgentId, next);
+      writeStoredQueuedMessage(targetBotAlias, targetAgentId, next, targetScope);
     } else {
-      clearStoredQueuedMessage(targetBotAlias, targetAgentId);
+      clearStoredQueuedMessage(targetBotAlias, targetAgentId, targetScope);
     }
-  }, [botAlias]);
+  }, [botAlias, storageScope]);
 
   useLayoutEffect(() => {
-    if (previousBotAliasRef.current === botAlias) {
+    const previousBotAlias = previousBotAliasRef.current;
+    const previousScope = previousStorageScopeRef.current;
+    if (previousBotAlias === botAlias && previousScope === storageScope) {
       return;
     }
-    clearStoredQueuedMessage(previousBotAliasRef.current, activeAgentIdRef.current || "main");
+    clearStoredQueuedMessage(previousBotAlias, activeAgentIdRef.current || "main", previousScope);
     setQueuedMessage(null);
     queuedMessageRef.current = null;
     setHistoryExpanded(false);
     previousBotAliasRef.current = botAlias;
+    previousStorageScopeRef.current = storageScope;
     assistantSendVersionRef.current += 1;
-    setPlanModeState(readStoredPlanMode(botAlias));
-  }, [botAlias]);
+    setPlanModeState(readStoredPlanMode(botAlias, storageScope));
+  }, [botAlias, storageScope]);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -1187,10 +1212,10 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     setQueuedMessage(null);
     queuedMessageRef.current = null;
-    const storedAgentId = readStoredAgentId(botAlias);
+    const storedAgentId = readStoredAgentId(botAlias, storageScope);
     setActiveAgentId(storedAgentId);
     activeAgentIdRef.current = storedAgentId;
-  }, [botAlias]);
+  }, [botAlias, storageScope]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -1326,6 +1351,14 @@ export function ChatScreen({
     }
   }, []);
 
+  const clearClusterTaskState = useCallback(() => {
+    stopClusterTaskPoll();
+    clusterRunIdRef.current = "";
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+  }, [stopClusterTaskPoll]);
+
   const pollClusterTasks = useCallback(async () => {
     const runId = clusterRunIdRef.current;
     if (!runId) {
@@ -1349,9 +1382,13 @@ export function ChatScreen({
       if (clusterRunIdRef.current !== runId) {
         return;
       }
+      if (isMissingClusterRunError(err)) {
+        clearClusterTaskState();
+        return;
+      }
       setClusterTaskError(err instanceof Error ? err.message : "集群任务状态获取失败");
     }
-  }, [botAlias, client, stopClusterTaskPoll]);
+  }, [botAlias, clearClusterTaskState, client, stopClusterTaskPoll]);
 
   const restoreClusterRunFromOverview = useCallback((overview: BotOverview) => {
     const activeRun = overview.activeClusterRun;
@@ -1545,8 +1582,13 @@ export function ChatScreen({
 
   useEffect(() => {
     const activatedTarget = activationTargetRef.current;
-    if (!activatedTarget || activatedTarget.botAlias !== botAlias || activatedTarget.client !== client) {
-      activationTargetRef.current = { botAlias, client };
+    if (
+      !activatedTarget
+      || activatedTarget.botAlias !== botAlias
+      || activatedTarget.client !== client
+      || activatedTarget.storageScope !== storageScope
+    ) {
+      activationTargetRef.current = { botAlias, client, storageScope };
       hasActivatedRef.current = false;
     }
     if (!isVisible && !hasActivatedRef.current) {
@@ -1603,7 +1645,7 @@ export function ChatScreen({
         if (nextAgentId !== requestedAgentId) {
           setActiveAgentId(nextAgentId);
           activeAgentIdRef.current = nextAgentId;
-          window.localStorage.setItem(activeAgentStorageKey(botAlias), nextAgentId);
+          window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
           [messages, overview] = await Promise.all([
             listScopedMessages(client, botAlias, nextAgentId),
             getScopedOverview(client, botAlias, nextAgentId),
@@ -1616,7 +1658,7 @@ export function ChatScreen({
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
-        const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId);
+        const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
         const { shouldPoll } = applyHistoryView(messages, overview, []);
         loadingRef.current = false;
@@ -1654,6 +1696,7 @@ export function ChatScreen({
     setQueuedMessageState,
     stopAssistantPoll,
     stopSseRecoveryWatch,
+    storageScope,
   ]);
 
   useEffect(() => {
@@ -1712,25 +1755,29 @@ export function ChatScreen({
   const isAssistantBot = botOverview?.botMode === "assistant";
   const assistantRuntime = botOverview?.assistantRuntime || null;
   const assistantRuntimeActive = assistantRuntime?.active || null;
-  const assistantRuntimeQueuedCount = assistantRuntime?.queuedCount || 0;
-  const assistantRuntimeQueueLabels = (assistantRuntime?.queue || []).slice(0, 2).map(assistantRuntimeRunLabel);
+  const hasHiddenAssistantRuntimeActive = isSilentDreamRuntimeRun(assistantRuntimeActive);
+  const visibleAssistantRuntimeQueue = (assistantRuntime?.queue || []).filter((run) => !isSilentDreamRuntimeRun(run));
+  const visibleAssistantRuntimeActive = isSilentDreamRuntimeRun(assistantRuntimeActive) ? null : assistantRuntimeActive;
+  const assistantRuntimeQueuedCount = visibleAssistantRuntimeQueue.length;
+  const assistantRuntimeQueueLabels = visibleAssistantRuntimeQueue.slice(0, 2).map(assistantRuntimeRunLabel);
   const showAssistantRuntimeBanner = Boolean(
     isAssistantBot
-    && assistantRuntime
+    && (visibleAssistantRuntimeActive || assistantRuntimeQueuedCount > 0 || hasHiddenAssistantRuntimeActive)
     && (
       assistantRuntimeQueuedCount > 0
-      || (assistantRuntimeActive && !assistantRuntimeActive.interactive)
+      || (visibleAssistantRuntimeActive && !visibleAssistantRuntimeActive.interactive)
+      || (hasHiddenAssistantRuntimeActive && assistantRuntimeQueuedCount > 0)
     ),
   );
   let assistantRuntimeHeadline = "";
-  if (assistantRuntimeActive && assistantRuntimeQueuedCount > 0) {
-    assistantRuntimeHeadline = `assistant 串行队列忙碌中：1 项执行，${assistantRuntimeQueuedCount} 项排队`;
-  } else if (assistantRuntimeActive && !assistantRuntimeActive.interactive) {
+  if ((visibleAssistantRuntimeActive || hasHiddenAssistantRuntimeActive) && assistantRuntimeQueuedCount > 0) {
+    assistantRuntimeHeadline = "assistant 队列忙碌中，新消息会按顺序执行";
+  } else if (visibleAssistantRuntimeActive && !visibleAssistantRuntimeActive.interactive) {
     assistantRuntimeHeadline = "assistant 后台任务执行中，新消息会等待当前任务完成";
   } else if (assistantRuntimeQueuedCount > 0) {
     assistantRuntimeHeadline = `assistant 队列中 ${assistantRuntimeQueuedCount} 项，新消息会按顺序执行`;
   }
-  const assistantRuntimeActiveLabel = assistantRuntimeActive ? assistantRuntimeRunLabel(assistantRuntimeActive) : "";
+  const assistantRuntimeActiveLabel = visibleAssistantRuntimeActive ? assistantRuntimeRunLabel(visibleAssistantRuntimeActive) : "";
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
@@ -2170,7 +2217,7 @@ export function ChatScreen({
     setQueuedMessageState(null, { botAlias, agentId: previousAgentId });
     activeAgentIdRef.current = normalized;
     setActiveAgentId(normalized);
-    window.localStorage.setItem(activeAgentStorageKey(botAlias), normalized);
+    window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), normalized);
     assistantSendVersionRef.current += 1;
     stopAssistantPoll();
     stopSseRecoveryWatch();
@@ -2210,7 +2257,7 @@ export function ChatScreen({
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
         }
-        const storedQueuedMessage = readStoredQueuedMessage(botAlias, normalized);
+        const storedQueuedMessage = readStoredQueuedMessage(botAlias, normalized, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: normalized });
         const { shouldPoll } = applyHistoryView(messages, overview, []);
         loadingRef.current = false;
@@ -2227,7 +2274,7 @@ export function ChatScreen({
         loadingRef.current = false;
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, setQueuedMessageState, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, setQueuedMessageState, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, storageScope]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -2313,6 +2360,7 @@ export function ChatScreen({
     const sendBotAlias = botAlias;
     const sendAgentId = activeAgentIdRef.current || "main";
     const composedText = buildComposedMessageText(text, options.attachments || []);
+    const hideProcessPreview = options.sendOptions?.taskMode === "dream";
     if (!composedText) {
       return;
     }
@@ -2391,14 +2439,14 @@ export function ChatScreen({
           setClusterTaskError("");
           void pollClusterTasks();
         }
-        if (status.previewText || status.contextUsage) {
-          if (status.previewText) {
+        if ((status.previewText && !hideProcessPreview) || status.contextUsage) {
+          if (status.previewText && !hideProcessPreview) {
             usingPreviewReplace = true;
             usingTracePreview = false;
           }
           setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
-            text: status.previewText || item.text,
+            text: hideProcessPreview ? item.text : (status.previewText || item.text),
             state: "streaming",
             meta: status.contextUsage
               ? mergeMessageMeta(item.meta, { contextUsage: status.contextUsage })
@@ -2411,6 +2459,9 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
+        if (hideProcessPreview) {
+          return;
+        }
         setItems((prev) => updateLatestAssistantMessage(
           prev,
           assistantId,

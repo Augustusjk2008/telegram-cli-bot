@@ -156,7 +156,12 @@ export interface WebBotClient {
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
-  installPlugin(input: string | { pluginId?: string; sourcePath?: string; force?: boolean }): Promise<PluginSummary>;
+  installPlugin(input: string | {
+    pluginId?: string;
+    sourcePath?: string;
+    force?: boolean;
+    allowDevSourcePath?: boolean;
+  }): Promise<PluginSummary>;
   uninstallPlugin(pluginId: string): Promise<void>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   listAgents(botAlias: string): Promise<AgentListResult>;

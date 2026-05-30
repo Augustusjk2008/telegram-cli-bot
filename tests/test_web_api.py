@@ -47,6 +47,7 @@ from bot.web.api_service import (
     _stream_cli_chat,
     _build_stream_status_event,
     _extract_codex_stream_preview,
+    stream_assistant_run_request,
     WebApiError,
     build_bot_summary,
     build_session_snapshot,
@@ -1108,21 +1109,66 @@ async def test_cluster_poll_agent_tasks_can_wait_for_completion(web_manager: Mul
     assert poll["data"]["tasks"][0]["output"] == "done"
 
 
-def test_get_cluster_task_status_requires_owned_run(web_manager: MultiBotManager):
+def test_get_cluster_task_status_accepts_shared_run_for_any_chat_account(web_manager: MultiBotManager):
     from bot.cluster.config import BotClusterConfig
 
     profile = web_manager.main_profile
     profile.cluster = BotClusterConfig(enabled=True)
     run = api_service._CLUSTER_RUNTIME.start_run(
-        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+        api_service.ClusterRunRequest(bot_alias="main", user_id=chat_session_user_id(None), profile=profile)
     )
 
     data = api_service.get_cluster_task_status(web_manager, "main", 1001, run.run_id)
+    member_data = api_service.get_cluster_task_status(web_manager, "main", 2002, run.run_id)
 
     assert data["tasks"] == []
+    assert member_data["tasks"] == []
     with pytest.raises(api_service.WebApiError) as exc_info:
-        api_service.get_cluster_task_status(web_manager, "main", 2002, run.run_id)
+        api_service.get_cluster_task_status(web_manager, "missing", 2002, run.run_id)
     assert exc_info.value.status == 404
+
+    with pytest.raises(api_service.WebApiError) as exc_info:
+        api_service.get_cluster_task_status(web_manager, "main", 2002, "clr_missing")
+    assert exc_info.value.status == 404
+
+
+@pytest.mark.asyncio
+async def test_cluster_run_tasks_route_uses_shared_chat_user_for_member_account(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.cluster.config import BotClusterConfig
+    from bot.web.permission_store import BotPermissionStore
+
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    permissions = BotPermissionStore(tmp_path / ".web_permissions.json")
+    invite = isolated_web_auth_store.create_register_code(created_by="local-admin", code="INVITE-CLUSTER")
+    session = isolated_web_auth_store.register_member("alice", "pw-123", invite["code"])
+    permissions.set_allowed_bots(session.account.account_id, ["main"])
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=chat_session_user_id(None), profile=profile)
+    )
+    assert session.account.session_user_id != chat_session_user_id(None)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get(
+                f"/api/bots/main/cluster/runs/{run.run_id}/tasks",
+                headers={"Authorization": f"Bearer {session.token}", "Host": "example.test"},
+            )
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert payload["data"]["tasks"] == []
 
 
 def test_overview_includes_active_cluster_run_with_pending_child_task(web_manager: MultiBotManager):
@@ -7905,8 +7951,79 @@ async def test_execute_assistant_run_request_applies_dream_result_and_skips_capt
     assert build_mock.call_args.kwargs["user_text"] == "dream prompt payload"
     apply_mock.assert_called_once()
     assert result["output"] == "dream 完成"
+    assert result["message"]["content"] == "dream 完成"
+    assert "<DREAM_RESULT>" not in result["message"]["content"]
+    history = get_history(web_manager, "assistant1", 1001, limit=10)
+    assert history["items"][-1]["content"] == "dream 完成"
+    assert "<DREAM_RESULT>" not in history["items"][-1]["content"]
     assert result["proposal_id"] == "pr_123"
     assert result["applied_paths"] == ["C:/repo/.assistant/memory/working/recent_summary.md"]
+
+
+@pytest.mark.asyncio
+async def test_stream_assistant_run_request_finalizes_dream_without_trace(
+    web_manager: MultiBotManager, temp_dir: Path
+):
+    workdir = temp_dir / "assistant-root-dream-stream"
+    workdir.mkdir()
+    web_manager.managed_profiles["assistant1"] = BotProfile(
+        alias="assistant1",
+        token="",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(workdir),
+        enabled=True,
+        bot_mode="assistant",
+    )
+    request = AssistantRunRequest(
+        run_id="run_dream_stream_1",
+        source="cron",
+        bot_alias="assistant1",
+        user_id=-77,
+        text="根据近期工作做自我完善",
+        interactive=False,
+        visible_text="根据近期工作做自我完善",
+        context_user_id=1001,
+        task_mode="dream",
+        task_payload={
+            "prompt": "根据近期工作做自我完善",
+            "mode": "dream",
+            "deliver_mode": "silent",
+        },
+        job_id="daily_dream",
+        scheduled_at="2026-04-20T09:00:00+08:00",
+    )
+
+    async def fake_run_cli_chat(*args, **kwargs):
+        return {
+            "output": '摘要\n<DREAM_RESULT>{"summary":"dream 完成","working_memory":{},"knowledge_entries":[],"proposal":null}</DREAM_RESULT>',
+            "message": {
+                "id": "msg_dream_1",
+                "role": "assistant",
+                "content": '摘要\n<DREAM_RESULT>{"summary":"dream 完成","working_memory":{},"knowledge_entries":[],"proposal":null}</DREAM_RESULT>',
+                "state": "done",
+            },
+            "dream_prompt_text": "dream prompt payload",
+            "dream_context_stats": {"history_count": 2},
+        }
+
+    with patch("bot.web.api_service.run_cli_chat", new=AsyncMock(side_effect=fake_run_cli_chat)), \
+         patch(
+             "bot.web.api_service.apply_dream_result",
+             return_value=AssistantDreamApplyResult(
+                 summary="dream 完成",
+                 applied_paths=["C:/repo/.assistant/memory/working/recent_summary.md"],
+                 proposal_id="pr_123",
+                 audit_path="C:/repo/.assistant/audit/dream/run_dream_stream_1.json",
+             ),
+         ):
+        events = [event async for event in stream_assistant_run_request(web_manager, request)]
+
+    assert [event["type"] for event in events] == ["done"]
+    done_event = events[0]
+    assert done_event["output"] == "dream 完成"
+    assert done_event["message"]["content"] == "dream 完成"
+    assert "<DREAM_RESULT>" not in done_event["message"]["content"]
 
 @pytest.mark.asyncio
 async def test_run_cli_chat_resyncs_managed_prompts_after_noop_compaction(
@@ -8738,6 +8855,56 @@ def test_select_conversation_restores_codex_session_id(web_manager: MultiBotMana
 
     assert session.codex_session_id == "thread-1"
     assert selected["messages"][-1]["content"] == "ok"
+
+
+def test_select_conversation_clears_other_provider_session_ids(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.cli_type = "claude"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    session.codex_session_id = "codex-stale"
+    session.claude_session_id = "claude-stale"
+    session.kimi_session_id = "kimi-stale"
+    session.claude_session_initialized = True
+    session.persist()
+    store = ChatStore(tmp_path)
+    conversation_id = store.create_conversation(
+        bot_id=session.bot_id,
+        bot_alias="main",
+        user_id=chat_session_user_id(None),
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=1,
+        native_provider="codex",
+        title="codex 旧线程",
+    )
+    handle = store.begin_turn(
+        bot_id=session.bot_id,
+        bot_alias="main",
+        user_id=chat_session_user_id(None),
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=1,
+        user_text="hi",
+        native_provider="codex",
+        conversation_id=conversation_id,
+    )
+    store.complete_turn(handle, content="ok", completion_state="completed", native_session_id="codex-thread")
+
+    select_conversation(web_manager, "main", 1001, conversation_id)
+    persisted = load_session(session.bot_id, chat_session_user_id(None))
+
+    assert session.active_conversation_id == conversation_id
+    assert session.codex_session_id == "codex-thread"
+    assert session.claude_session_id is None
+    assert session.kimi_session_id is None
+    assert session.claude_session_initialized is False
+    assert persisted is not None
+    assert persisted["codex_session_id"] == "codex-thread"
+    assert "claude_session_id" not in persisted
+    assert "kimi_session_id" not in persisted
 
 
 def test_get_history_trace_returns_full_trace_for_assistant_message(

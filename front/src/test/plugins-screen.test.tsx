@@ -73,6 +73,7 @@ test("plugins screen opens folder picker before installing plugin", async () => 
 
   await waitFor(() => {
     expect(installSpy).toHaveBeenCalledWith({
+      allowDevSourcePath: true,
       force: true,
       sourcePath: expect.any(String),
     });

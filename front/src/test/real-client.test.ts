@@ -2511,6 +2511,38 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("installPlugin sends allowDevSourcePath for local source paths", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      id: "local-plugin",
+      name: "Local Plugin",
+      version: "1.0.0",
+      description: "",
+      enabled: true,
+      views: [],
+      actions: [],
+      config: {},
+    }));
+
+    const client = new RealWebBotClient();
+    await client.installPlugin({
+      sourcePath: "C:\\plugins\\local-plugin",
+      force: true,
+      allowDevSourcePath: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/plugins/install",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sourcePath: "C:\\plugins\\local-plugin",
+          force: true,
+          allowDevSourcePath: true,
+        }),
+      }),
+    );
+  });
+
   test("downloadFile reports streamed byte progress", async () => {
     const progressEvents: Array<{ downloadedBytes: number; totalBytes?: number; percent?: number }> = [];
     const createObjectURL = vi.fn(() => "blob:download");

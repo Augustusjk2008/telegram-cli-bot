@@ -246,6 +246,31 @@ test("admin center edits env config with diff confirmation and restart hint", as
   expect(await screen.findByText(/需重启: WEB_PORT/)).toBeInTheDocument();
 });
 
+test("admin center saves env config on first save click", async () => {
+  const user = userEvent.setup();
+  const { client, previewEnvConfig, updateEnvConfig } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: "Web" }));
+  await user.clear(screen.getByLabelText("Web 端口"));
+  await user.type(screen.getByLabelText("Web 端口"), "9001");
+  await user.click(screen.getByRole("button", { name: "保存环境配置" }));
+
+  await waitFor(() => {
+    expect(updateEnvConfig).toHaveBeenCalledWith({
+      values: {
+        WEB_PORT: 9001,
+      },
+    });
+  });
+  expect(previewEnvConfig).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: "环境配置 diff 确认" })).not.toBeInTheDocument();
+});
+
 test("admin center masks and clears sensitive env values", async () => {
   const user = userEvent.setup();
   const { client, previewEnvConfig } = createClient();

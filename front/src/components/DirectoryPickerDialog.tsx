@@ -69,6 +69,7 @@ export function DirectoryPickerDialog({
   const [newFolderName, setNewFolderName] = useState("");
   const currentPathRef = useRef("");
   const homePathRef = useRef("");
+  const startPathRef = useRef("");
   const originPathRef = useRef("");
   const originWasVirtualRootRef = useRef(false);
   const restoredRef = useRef(false);
@@ -198,6 +199,7 @@ export function DirectoryPickerDialog({
         homePathRef.current = homePath;
 
         const preferredPath = normalizePathInput(initialPath) || homePath || originListing.workingDir;
+        startPathRef.current = preferredPath;
         if (preferredPath && preferredPath !== originListing.workingDir) {
           try {
             if (!mutateBrowseState) {
@@ -279,8 +281,8 @@ export function DirectoryPickerDialog({
           </button>
           <button
             type="button"
-            onClick={() => void navigate(homePathRef.current, "返回起始目录失败")}
-            disabled={busy || loading || !homePathRef.current}
+            onClick={() => void navigate(startPathRef.current, "返回起始目录失败")}
+            disabled={busy || loading || !startPathRef.current}
             className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
           >
             <House className="h-4 w-4" />

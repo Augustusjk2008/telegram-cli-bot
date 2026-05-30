@@ -207,6 +207,9 @@ class ChatHistoryService:
     def replace_assistant_content(self, handle: ChatTurnHandle, content: str, *, state: str = "streaming") -> None:
         self.store.replace_assistant_content(handle, content, state=state)
 
+    def replace_message_content(self, message_id: str, content: str, *, state: str = "done") -> dict[str, Any]:
+        return self.store.replace_message_content(message_id, content, state=state)
+
     def complete_turn(
         self,
         handle: ChatTurnHandle,

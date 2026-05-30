@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
+import { WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-sonnet-4-6", "none"];
@@ -287,7 +288,7 @@ test("shows model selector in chat action bar and saves selected model", async (
     updateCliParam,
   });
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="main" client={client} accountId="acct1" />);
 
   const selector = await screen.findByLabelText("模型");
   expect(selector).toHaveValue("gpt-5.5");
@@ -308,7 +309,7 @@ test("shows none for null model and disables model param with none", async () =>
     updateCliParam,
   });
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="main" client={client} accountId="acct1" />);
 
   const selector = await screen.findByLabelText("模型");
   expect(selector).toHaveValue("none");
@@ -336,7 +337,7 @@ test("shows a user message after sending text", async () => {
     },
   });
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="main" client={client} accountId="acct1" />);
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "修一下这个 bug");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
@@ -496,7 +497,7 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "继续");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(screen.getByText("正在输出...")).toBeInTheDocument();
+  expect(screen.getByText("正在输出")).toBeInTheDocument();
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
@@ -847,6 +848,66 @@ test("restores active cluster tasks from bot overview", async () => {
   await waitFor(() => expect(getClusterTaskStatus).toHaveBeenCalledWith("main", "clr_restore"));
 });
 
+test("clears stale cluster run polling when backend reports it missing", async () => {
+  const getClusterTaskStatus = vi.fn(async () => {
+    throw new WebApiClientError("未找到集群任务", { status: 404, code: "cluster_run_not_found" });
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "", medium: "", high: "" },
+      },
+      activeClusterRun: {
+        runId: "clr_stale",
+        status: "running",
+        tasks: {
+          tasks: [
+            {
+              taskId: "clt_stale",
+              agentId: "tester",
+              status: "running",
+              modelTier: "medium",
+              allowWrite: false,
+              createdAt: "2026-05-06T10:00:00+08:00",
+              startedAt: "2026-05-06T10:00:01+08:00",
+              completedAt: "",
+              error: "",
+            },
+          ],
+          queuedCount: 0,
+          runningCount: 1,
+          completedCount: 0,
+          failedCount: 0,
+          pendingCount: 1,
+        },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    getClusterTaskStatus,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await waitFor(() => expect(getClusterTaskStatus).toHaveBeenCalledWith("main", "clr_stale"));
+  await waitFor(() => {
+    expect(screen.queryByText("智能体集群任务")).not.toBeInTheDocument();
+  });
+  expect(screen.queryByText("未找到集群任务")).not.toBeInTheDocument();
+});
+
 test("streamed trace count grows beyond the first process event", async () => {
   const user = userEvent.setup();
   const client = createClient({
@@ -869,7 +930,7 @@ test("streamed trace count grows beyond the first process event", async () => {
     },
   });
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="main" client={client} accountId="acct1" />);
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
 
   await user.type(screen.getByPlaceholderText("输入消息"), "执行");
@@ -1430,7 +1491,7 @@ test("chat message motion keeps assistant text and trace controls accessible", a
 });
 
 test("cluster mode keeps a previously active child agent as read-only", async () => {
-  window.localStorage.setItem("tcb.activeAgent.main", "reviewer");
+  window.localStorage.setItem("tcb.activeAgent.acct1.main", "reviewer");
   const listAgents = vi.fn(async () => ({
     items: [
       { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
@@ -1472,7 +1533,7 @@ test("cluster mode keeps a previously active child agent as read-only", async ()
   }));
   const client = createClient({ listAgents, listMessages, getBotOverview });
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="main" client={client} accountId="acct1" />);
 
   expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
   expect(screen.queryByText("main-history")).not.toBeInTheDocument();
@@ -1481,7 +1542,7 @@ test("cluster mode keeps a previously active child agent as read-only", async ()
   expect(screen.getByRole("textbox")).toBeDisabled();
   expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
   expect(screen.getByText("只读模式")).toBeInTheDocument();
-  expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("reviewer");
+  expect(window.localStorage.getItem("tcb.activeAgent.acct1.main")).toBe("reviewer");
 });
 
 test("cluster mode can switch to a child agent for read-only history", async () => {
@@ -1581,6 +1642,53 @@ test("chat screen switches agent and scopes history requests", async () => {
   await waitFor(() => {
     expect(listConversations).toHaveBeenLastCalledWith("main", "", { agentId: "reviewer" });
   });
+});
+
+test("chat screen scopes persisted agent, plan mode, and queued draft by account", async () => {
+  window.localStorage.setItem("tcb.activeAgent.alice.main", "reviewer");
+  window.localStorage.setItem("tcb.activeAgent.bob.main", "main");
+  window.localStorage.setItem("tcb.planMode.alice.main", "1");
+  window.localStorage.setItem("tcb.queuedMessage.alice.main.reviewer", JSON.stringify({
+    text: "alice draft",
+    attachments: [],
+  }));
+  window.localStorage.setItem("tcb.queuedMessage.bob.main.main", JSON.stringify({
+    text: "bob draft",
+    attachments: [],
+  }));
+  const listAgents = vi.fn(async () => ({
+    items: [
+      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+    ],
+  }));
+  const listMessages = vi.fn(async (_botAlias: string, options?: { agentId?: string }): Promise<ChatMessage[]> => (
+    options?.agentId === "reviewer"
+      ? [{
+        id: "reviewer-1",
+        role: "assistant",
+        text: "reviewer-history",
+        createdAt: new Date().toISOString(),
+        state: "done",
+      }]
+      : []
+  ));
+  const client = createClient({ listAgents, listMessages });
+
+  const { rerender } = render(<ChatScreen botAlias="main" client={client} accountId="alice" />);
+
+  expect(await screen.findByRole("combobox", { name: "当前 agent" })).toHaveValue("reviewer");
+  expect(await screen.findByText("alice draft")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "true");
+
+  rerender(<ChatScreen botAlias="main" client={client} accountId="bob" />);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "当前 agent" })).toHaveValue("main");
+  });
+  expect(await screen.findByText("bob draft")).toBeInTheDocument();
+  expect(screen.queryByText("alice draft")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
 });
 
 test("chat screen reports active child agent activity when sending", async () => {
@@ -2257,6 +2365,75 @@ test("shows streaming context usage from status updates", async () => {
   expect(await screen.findByText("74% left · 76.6K / 258K")).toBeInTheDocument();
   expect(await screen.findByText("完成")).toBeInTheDocument();
   expect(screen.getByText("74% left · 76.6K / 258K")).toBeInTheDocument();
+});
+
+test("dream send ignores streamed preview text and commentary while keeping context usage", async () => {
+  let resolveMessage: (message: ChatMessage) => void = () => undefined;
+  const sendMessage = vi.fn(async (
+    _botAlias: string,
+    _text: string,
+    _onChunk: (chunk: string) => void,
+    onStatus?: (status: {
+      previewText?: string;
+      contextUsage?: ChatMessage["meta"] extends infer T
+        ? T extends { contextUsage?: infer U }
+          ? U
+          : never
+        : never;
+    }) => void,
+    onTrace?: (trace: unknown) => void,
+  ) => new Promise<ChatMessage>((resolve) => {
+    onStatus?.({
+      previewText: "dream 过程预览",
+      contextUsage: {
+        provider: "codex",
+        source: "codex_session_token_count",
+        sessionId: "dream-1",
+        usedTokens: 76593,
+        contextWindow: 258400,
+        contextLeftPercent: 74,
+        usedDisplay: "76.6K",
+        windowDisplay: "258K",
+        statusText: "74% context left · 76.6K / 258K",
+      },
+    });
+    onTrace?.({ kind: "commentary", summary: "dream 过程 commentary" } as never);
+    resolveMessage = resolve;
+  }));
+  localStorage.setItem("tcb.queuedMessage.main.main", JSON.stringify({
+    text: "执行 silent dream",
+    attachments: [],
+    sendOptions: {
+      taskMode: "dream",
+    },
+  }));
+  const client = createClient({
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+  expect(screen.getByText("74% left · 76.6K / 258K")).toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
+  expect(screen.queryByText("dream 过程预览")).not.toBeInTheDocument();
+  expect(screen.queryByText("dream 过程 commentary")).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveMessage({
+      id: "assistant-dream-final",
+      role: "assistant",
+      text: "dream 完成",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
+
+  expect(await screen.findByText("dream 完成")).toBeInTheDocument();
+  expect(screen.queryByText("dream 过程预览")).not.toBeInTheDocument();
+  expect(screen.queryByText("dream 过程 commentary")).not.toBeInTheDocument();
 });
 
 test("assistant send does not let an old idle poll replace the finishing reply with a stale streaming row", async () => {
@@ -3416,7 +3593,7 @@ test("assistant proposal patch request event sends structured chat task and disp
   });
 });
 
-test("assistant chat shows explicit runtime queue banner for background tasks", async () => {
+test("assistant chat hides silent dream details and shows generic queue banner for visible work", async () => {
   const client = createClient({
     getBotOverview: async () => ({
       alias: "assistant1",
@@ -3456,9 +3633,48 @@ test("assistant chat shows explicit runtime queue banner for background tasks", 
 
   render(<ChatScreen botAlias="assistant1" client={client} />);
 
-  expect(await screen.findByText("assistant 串行队列忙碌中：1 项执行，1 项排队")).toBeInTheDocument();
-  expect(screen.getByText("当前：定时 dream · 每日自整理")).toBeInTheDocument();
+  expect(await screen.findByText("assistant 队列忙碌中，新消息会按顺序执行")).toBeInTheDocument();
   expect(screen.getByText("排队：聊天消息 · 帮我总结今天进度")).toBeInTheDocument();
+  expect(screen.queryByText("定时 dream")).not.toBeInTheDocument();
+  expect(screen.queryByText("每日自整理")).not.toBeInTheDocument();
+  expect(screen.queryByText("dream prompt")).not.toBeInTheDocument();
+});
+
+test("assistant chat hides banner when only silent dream runtime is active", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "assistant1",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+      assistantRuntime: {
+        pendingCount: 1,
+        queuedCount: 0,
+        active: {
+          runId: "run_active",
+          source: "cron",
+          status: "running",
+          taskMode: "dream",
+          interactive: false,
+          jobId: "daily_dream",
+          jobTitle: "每日自整理",
+          visibleText: "dream prompt",
+          enqueuedAt: "2026-04-16T18:05:00",
+        },
+        queue: [],
+      },
+    }),
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+
+  await screen.findByText("暂无消息，开始聊天吧");
+  expect(screen.queryByText(/新消息会/)).not.toBeInTheDocument();
+  expect(screen.queryByText("定时 dream")).not.toBeInTheDocument();
+  expect(screen.queryByText("每日自整理")).not.toBeInTheDocument();
+  expect(screen.queryByText("dream prompt")).not.toBeInTheDocument();
 });
 
 test("assistant queued send keeps the pending row visible while runtime queue is still busy", async () => {
@@ -3538,8 +3754,11 @@ test("assistant queued send keeps the pending row visible while runtime queue is
     await vi.advanceTimersByTimeAsync(2600);
   });
 
-  expect(screen.getByText("assistant 串行队列忙碌中：1 项执行，1 项排队")).toBeInTheDocument();
+  expect(screen.getByText("assistant 队列忙碌中，新消息会按顺序执行")).toBeInTheDocument();
   expect(screen.getByText("正在输出...")).toBeInTheDocument();
+  expect(screen.queryByText("定时 dream")).not.toBeInTheDocument();
+  expect(screen.queryByText("每日自整理")).not.toBeInTheDocument();
+  expect(screen.queryByText("dream prompt")).not.toBeInTheDocument();
 
   resolveSend?.({
     id: "assistant-final",

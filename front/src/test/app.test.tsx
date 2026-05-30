@@ -283,7 +283,7 @@ test("desktop bot switching restores sidebar view per bot session", async () => 
     chatWidthPx: 384,
     editorHeightPx: 420,
   }));
-  localStorage.setItem(buildWorkbenchSessionStorageKey("main", DEMO_MAIN_WORKDIR), JSON.stringify({
+  localStorage.setItem(buildWorkbenchSessionStorageKey("main", DEMO_MAIN_WORKDIR, "123"), JSON.stringify({
     version: 1,
     botAlias: "main",
     workspaceRoot: DEMO_MAIN_WORKDIR,
@@ -294,7 +294,7 @@ test("desktop bot switching restores sidebar view per bot session", async () => 
     tabs: [],
     focusedPane: null,
   }));
-  localStorage.setItem(buildWorkbenchSessionStorageKey("team2", DEMO_TEAM_WORKDIR), JSON.stringify({
+  localStorage.setItem(buildWorkbenchSessionStorageKey("team2", DEMO_TEAM_WORKDIR, "123"), JSON.stringify({
     version: 1,
     botAlias: "team2",
     workspaceRoot: DEMO_TEAM_WORKDIR,
@@ -567,6 +567,73 @@ test("opening bot switcher refreshes bot status and shows busy", async () => {
   expect(listBotsSpy).toHaveBeenCalledTimes(2);
   expect(await screen.findByText(/处理中/)).toBeInTheDocument();
   expect(screen.getByText("codex: C:\\workspace\\demo")).toBeInTheDocument();
+});
+
+test("login restores current bot from account scoped storage after bot list validation", async () => {
+  localStorage.setItem("web-current-bot.alice", "team2");
+  localStorage.setItem("web-current-bot.bob", "main");
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    currentBotAlias: "main",
+    currentPath: "/",
+    isLoggedIn: true,
+    token: "mock-session-alice",
+    userId: 2002,
+    accountId: "alice",
+    username: "alice",
+    role: "member",
+    capabilities: SUPER_ADMIN_SESSION.capabilities,
+  });
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "team2",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\team2",
+      lastActiveText: "运行中",
+    },
+  ]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "alice");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
+});
+
+test("login ignores stale account scoped current bot missing from visible bots", async () => {
+  localStorage.setItem("web-current-bot.alice", "main");
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    currentBotAlias: "main",
+    currentPath: "/",
+    isLoggedIn: true,
+    token: "mock-session-alice",
+    userId: 2002,
+    accountId: "alice",
+    username: "alice",
+    role: "member",
+    capabilities: SUPER_ADMIN_SESSION.capabilities,
+  });
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([
+    {
+      alias: "team2",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace\\team2",
+      lastActiveText: "运行中",
+    },
+  ]);
+
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "alice");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  expect(await screen.findByRole("button", { name: "team2" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "main" })).not.toBeInTheDocument();
 });
 
 test("marks a bot unread after a hidden reply completes and clears it on return", async () => {

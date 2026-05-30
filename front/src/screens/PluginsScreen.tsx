@@ -129,7 +129,7 @@ export function PluginsScreen({
     setInstallingPlugin(true);
     setError("");
     setNotice("");
-    client.installPlugin({ sourcePath, force: true })
+    client.installPlugin({ sourcePath, force: true, allowDevSourcePath: true })
       .then((installed) => {
         loadData(false, `${installed.name} 已安装`);
       })

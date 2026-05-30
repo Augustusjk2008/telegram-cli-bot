@@ -692,8 +692,8 @@ export function AdminCenterScreen({
   };
 
   const saveEnvChanges = async () => {
-    if (!envPreview) {
-      await previewEnvChanges();
+    if (!envChangedItems.length) {
+      setError("没有可保存的环境配置改动");
       return;
     }
     setEnvSaving(true);

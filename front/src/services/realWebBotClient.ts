@@ -3637,7 +3637,12 @@ export class RealWebBotClient implements WebBotClient {
     return Array.isArray(data) ? data : [];
   }
 
-  async installPlugin(input: string | { pluginId?: string; sourcePath?: string; force?: boolean }): Promise<PluginSummary> {
+  async installPlugin(input: string | {
+    pluginId?: string;
+    sourcePath?: string;
+    force?: boolean;
+    allowDevSourcePath?: boolean;
+  }): Promise<PluginSummary> {
     const body = typeof input === "string" ? { pluginId: input } : input;
     return this.requestJson<PluginSummary>("/api/plugins/install", {
       method: "POST",

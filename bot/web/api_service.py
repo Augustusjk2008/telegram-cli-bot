@@ -949,6 +949,7 @@ def get_cluster_task_status(
     include_messages: bool = False,
     message_limit: int = 20,
 ) -> dict[str, Any]:
+    user_id = chat_session_user_id(user_id)
     run = _CLUSTER_RUNTIME.get_run(run_id)
     if run is None or run.bot_alias != alias or run.user_id != user_id:
         _raise(404, "cluster_run_not_found", "未找到集群任务")
@@ -2126,6 +2127,10 @@ def select_conversation(
     native_session_id = str(conversation.get("native_session_id") or "").strip()
     with session._lock:
         session.active_conversation_id = str(conversation["id"])
+        session.codex_session_id = None
+        session.claude_session_id = None
+        session.kimi_session_id = None
+        session.claude_session_initialized = False
         if native_provider == "codex":
             session.codex_session_id = native_session_id or None
         if native_provider == "claude":
@@ -2922,6 +2927,24 @@ def _finalize_dream_execution(
     finalized["summary"] = applied.summary
     finalized["applied_paths"] = list(applied.applied_paths)
     finalized["audit_path"] = applied.audit_path
+    message = finalized.get("message")
+    if isinstance(message, dict):
+        next_message = dict(message)
+        next_message["content"] = applied.summary
+        next_message["state"] = "done"
+        finalized["message"] = next_message
+        message_id = str(next_message.get("id") or "").strip()
+        if message_id:
+            session = get_session_for_alias(manager, request.bot_alias, request.user_id)
+            service = _get_chat_history_service(session)
+            try:
+                finalized["message"] = service.replace_message_content(
+                    message_id,
+                    applied.summary,
+                    state="done",
+                )
+            except KeyError:
+                pass
     if applied.proposal_id:
         finalized["proposal_id"] = applied.proposal_id
     return finalized
@@ -5725,6 +5748,10 @@ async def stream_assistant_run_request(
     if _is_proposal_patch_request(request):
         async for event in _stream_assistant_proposal_patch_request(manager, request):
             yield event
+        return
+    if _is_dream_request(request):
+        result = await execute_assistant_run_request(manager, request)
+        yield {"type": "done", **result}
         return
     async for event in _stream_cli_chat(
         manager,

@@ -100,6 +100,7 @@ function formatDownloadProgress(downloadedBytes: number, totalBytes?: number) {
 
 type Props = {
   authToken?: string;
+  accountId?: string;
   botAlias: string;
   botAvatarName?: string;
   userAvatarName?: string;
@@ -140,6 +141,7 @@ type Props = {
 
 export function DesktopWorkbench({
   authToken = "",
+  accountId,
   botAvatarName,
   client = new MockWebBotClient(),
   botAlias,
@@ -258,6 +260,7 @@ export function DesktopWorkbench({
 
   const session = useWorkbenchSession({
     botAlias,
+    accountId,
     workspaceRoot: fileTree.rootPath,
     snapshot: fileTree.rootPath
       ? {

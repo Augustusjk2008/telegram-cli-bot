@@ -392,6 +392,49 @@ test("desktop bot manager directory picker browses parent without mutating brows
   expect(client.listPaths).toContain("C:\\workspace");
 });
 
+test("desktop bot manager create picker returns to opened start path", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  await user.clear(screen.getByLabelText("新智能体工作目录"));
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
+  await user.click(screen.getByRole("button", { name: "浏览新智能体工作目录" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
+  expect(within(dialog).getByText("C:\\workspace\\team3")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "上一级" }));
+  expect(await within(dialog).findByText("C:\\workspace")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "回到起点" }));
+  expect(await within(dialog).findByText("C:\\workspace\\team3")).toBeInTheDocument();
+});
+
+test("desktop bot manager edit picker returns to opened start path", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: /review/ }));
+  await user.click(screen.getByRole("button", { name: "编辑 review" }));
+  await user.click(screen.getByRole("button", { name: "浏览智能体工作目录" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "选择工作目录" });
+  expect(within(dialog).getByText("C:\\workspace\\review")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "上一级" }));
+  expect(await within(dialog).findByText("C:\\workspace")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "回到起点" }));
+  expect(await within(dialog).findByText("C:\\workspace\\review")).toBeInTheDocument();
+});
+
 test("desktop bot manager edits alias and blocks main destructive actions", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();

@@ -2801,7 +2801,12 @@ export class MockWebBotClient implements WebBotClient {
     return this.installablePlugins.map((plugin) => this.cloneInstallablePlugin(plugin));
   }
 
-  async installPlugin(input: string | { pluginId?: string; sourcePath?: string; force?: boolean }): Promise<PluginSummary> {
+  async installPlugin(input: string | {
+    pluginId?: string;
+    sourcePath?: string;
+    force?: boolean;
+    allowDevSourcePath?: boolean;
+  }): Promise<PluginSummary> {
     const pluginId = typeof input === "string" ? input : (input.pluginId || "").trim();
     const sourcePath = typeof input === "string" ? "" : (input.sourcePath || "").trim();
     const force = typeof input === "string" ? false : Boolean(input.force);

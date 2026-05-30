@@ -134,29 +134,39 @@ function clearStoredToken() {
   }
 }
 
-function readStoredBotAlias() {
+function sessionAccountKey(session: SessionState | null) {
+  return (session?.accountId || session?.username || "").trim();
+}
+
+function scopedStorageKey(baseKey: string, accountKey?: string) {
+  const normalized = accountKey?.trim();
+  return normalized ? `${baseKey}.${normalized}` : baseKey;
+}
+
+function readStoredBotAlias(accountKey?: string) {
   try {
-    return localStorage.getItem(BOT_STORAGE_KEY)?.trim() || "";
+    return localStorage.getItem(scopedStorageKey(BOT_STORAGE_KEY, accountKey))?.trim() || "";
   } catch {
     return "";
   }
 }
 
-function storeBotAlias(alias: string | null) {
+function storeBotAlias(alias: string | null, accountKey?: string) {
   const trimmed = alias?.trim() || "";
-  if (!trimmed) {
-    return;
-  }
   try {
-    localStorage.setItem(BOT_STORAGE_KEY, trimmed);
+    if (!trimmed) {
+      localStorage.removeItem(scopedStorageKey(BOT_STORAGE_KEY, accountKey));
+      return;
+    }
+    localStorage.setItem(scopedStorageKey(BOT_STORAGE_KEY, accountKey), trimmed);
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
 }
 
-function readUnreadBots() {
+function readUnreadBots(accountKey?: string) {
   try {
-    const raw = localStorage.getItem(UNREAD_STORAGE_KEY);
+    const raw = localStorage.getItem(scopedStorageKey(UNREAD_STORAGE_KEY, accountKey));
     if (!raw) {
       return [];
     }
@@ -167,13 +177,14 @@ function readUnreadBots() {
   }
 }
 
-function storeUnreadBots(items: string[]) {
+function storeUnreadBots(items: string[], accountKey?: string) {
   try {
+    const key = scopedStorageKey(UNREAD_STORAGE_KEY, accountKey);
     if (items.length === 0) {
-      localStorage.removeItem(UNREAD_STORAGE_KEY);
+      localStorage.removeItem(key);
       return;
     }
-    localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(key, JSON.stringify(items));
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }
@@ -235,16 +246,48 @@ function buildDisplayBots(
   return sortBotsForSwitcher(applyUnreadStatus(applyBotActivityOverrides(bots, botActivityOverrides), unreadBots));
 }
 
-function updateMountedChatBots(prev: string[], currentBot: string | null) {
-  if (!currentBot) {
+function chatInstanceKeyFor(accountKey: string, alias: string | null) {
+  if (!alias) {
+    return "";
+  }
+  return accountKey ? `${accountKey}:${alias}` : alias;
+}
+
+function chatAliasFromInstanceKey(instanceKey: string) {
+  const separatorIndex = instanceKey.indexOf(":");
+  return separatorIndex >= 0 ? instanceKey.slice(separatorIndex + 1) : instanceKey;
+}
+
+function updateMountedChatBots(prev: string[], currentBot: string | null, accountKey: string) {
+  const instanceKey = chatInstanceKeyFor(accountKey, currentBot);
+  if (!instanceKey) {
     return prev;
   }
 
-  const next = [...prev.filter((alias) => alias !== currentBot), currentBot].slice(-MAX_CACHED_CHAT_SCREENS);
+  const next = [...prev.filter((key) => key !== instanceKey), instanceKey].slice(-MAX_CACHED_CHAT_SCREENS);
   if (next.length === prev.length && next.every((alias, index) => alias === prev[index])) {
     return prev;
   }
   return next;
+}
+
+async function resolveVisibleBotSelection(
+  client: WebBotClient,
+  session: SessionState,
+): Promise<{ bots: BotSummary[]; alias: string | null }> {
+  let visibleBots: BotSummary[] = [];
+  try {
+    visibleBots = await client.listBots();
+  } catch {
+    return { bots: [], alias: null };
+  }
+  const aliases = new Set(visibleBots.map((bot) => bot.alias));
+  const accountKey = sessionAccountKey(session);
+  const preferredAlias = readStoredBotAlias(accountKey) || session.currentBotAlias || "";
+  const alias = preferredAlias && aliases.has(preferredAlias)
+    ? preferredAlias
+    : visibleBots[0]?.alias || null;
+  return { bots: visibleBots, alias };
 }
 
 export function App() {
@@ -331,12 +374,14 @@ export function App() {
   const canViewAssistantOps = effectiveLayoutMode === "desktop"
     && currentBotSummary?.botMode === "assistant"
     && hasCapability(session, "admin_ops");
+  const accountKey = sessionAccountKey(session);
+  const chatInstanceKey = chatInstanceKeyFor(accountKey, currentBot);
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
     setShowBotManager(false);
     setShowAdminCenter(false);
-    storeBotAlias(alias);
+    storeBotAlias(alias, accountKey);
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
   }
@@ -412,11 +457,15 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || bots.length > 0) {
       return;
     }
     client.listBots().then(setBots).catch(() => setBots([]));
-  }, [client, isLoggedIn]);
+  }, [bots.length, client, isLoggedIn]);
+
+  useEffect(() => {
+    setUnreadBots(readUnreadBots(accountKey));
+  }, [accountKey]);
 
   const allowedTabs = useMemo(() => {
     const nextTabs: AppTab[] = ["chat", "files"];
@@ -536,8 +585,8 @@ export function App() {
   }, [canOpenAdminCenter, showAdminCenter]);
 
   useEffect(() => {
-    storeUnreadBots(unreadBots);
-  }, [unreadBots]);
+    storeUnreadBots(unreadBots, accountKey);
+  }, [accountKey, unreadBots]);
 
   useEffect(() => {
     if (!isLoggedIn || bots.length === 0) {
@@ -552,14 +601,14 @@ export function App() {
       return;
     }
 
-    const storedAlias = readStoredBotAlias();
+    const storedAlias = readStoredBotAlias(accountKey);
     if (storedAlias && bots.some((bot) => bot.alias === storedAlias)) {
       setCurrentBot(storedAlias);
       return;
     }
 
     setCurrentBot(null);
-  }, [bots, currentBot, isLoggedIn, showAdminCenter, showBotManager]);
+  }, [accountKey, bots, currentBot, isLoggedIn, showAdminCenter, showBotManager]);
 
   useEffect(() => {
     const storedToken = readStoredToken();
@@ -569,14 +618,16 @@ export function App() {
     const nextClient = useMockClient ? new MockWebBotClient() : new RealWebBotClient();
     setLoginLoading(true);
     nextClient.restoreSession(storedToken)
-      .then((nextSession) => {
-        const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      .then(async (nextSession) => {
+        const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
         setClient(nextClient);
         setSession(nextSession);
+        setBots(visibleBots);
+        setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
         setCurrentBot(restoredAlias || null);
         setShowBotManager(false);
         setShowAdminCenter(false);
-        setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+        setMountedChatBots(restoredAlias ? [chatInstanceKeyFor(sessionAccountKey(nextSession), restoredAlias)] : []);
         setDesktopChatStatusByBot({});
         setLoginError("");
         setIsTerminalImmersive(false);
@@ -599,14 +650,16 @@ export function App() {
     setLoginError("");
     try {
       const nextSession = await nextClient.login(input);
-      const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
       storeToken(nextSession.token || "", Boolean(input.remember));
       setClient(nextClient);
       setSession(nextSession);
+      setBots(visibleBots);
+      setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setShowAdminCenter(false);
-      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setMountedChatBots(restoredAlias ? [chatInstanceKeyFor(sessionAccountKey(nextSession), restoredAlias)] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
       void refreshAnnouncements(nextClient, true);
@@ -623,14 +676,16 @@ export function App() {
     setLoginError("");
     try {
       const nextSession = await nextClient.register(input);
-      const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
       storeToken(nextSession.token || "", Boolean(input.remember));
       setClient(nextClient);
       setSession(nextSession);
+      setBots(visibleBots);
+      setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setShowAdminCenter(false);
-      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setMountedChatBots(restoredAlias ? [chatInstanceKeyFor(sessionAccountKey(nextSession), restoredAlias)] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
       void refreshAnnouncements(nextClient, true);
@@ -647,14 +702,16 @@ export function App() {
     setLoginError("");
     try {
       const nextSession = await nextClient.loginGuest();
-      const restoredAlias = readStoredBotAlias() || nextSession.currentBotAlias || "";
+      const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
       storeToken(nextSession.token || "", Boolean(input?.remember));
       setClient(nextClient);
       setSession(nextSession);
+      setBots(visibleBots);
+      setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setShowAdminCenter(false);
-      setMountedChatBots(restoredAlias ? [restoredAlias] : []);
+      setMountedChatBots(restoredAlias ? [chatInstanceKeyFor(sessionAccountKey(nextSession), restoredAlias)] : []);
       setDesktopChatStatusByBot({});
       setIsTerminalImmersive(false);
       void refreshAnnouncements(nextClient, true);
@@ -668,7 +725,7 @@ export function App() {
   function handleLogout() {
     void client.logout().catch(() => undefined);
     clearStoredToken();
-    storeUnreadBots([]);
+    storeUnreadBots([], accountKey);
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
     setSession(null);
     setCurrentBot(null);
@@ -718,8 +775,8 @@ export function App() {
     if (!currentBot) {
       return;
     }
-    setMountedChatBots((prev) => updateMountedChatBots(prev, currentBot));
-  }, [currentBot]);
+    setMountedChatBots((prev) => updateMountedChatBots(prev, currentBot, accountKey));
+  }, [accountKey, currentBot]);
 
   useEffect(() => {
     if (currentTab !== "chat" || !currentBot) {
@@ -827,25 +884,29 @@ export function App() {
   if (currentTab === "chat") {
     activeScreen = (
       <div className="absolute inset-0">
-        {mountedChatBots.map((alias) => (
-          <div key={`chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
+        {mountedChatBots.map((instanceKey) => {
+          const alias = chatAliasFromInstanceKey(instanceKey);
+          return (
+          <div key={`chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
             <ChatScreen
               botAlias={alias}
+              accountId={accountKey}
               client={client}
               botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
               userAvatarName={userAvatarName}
-              isVisible={alias === currentBot}
+              isVisible={instanceKey === chatInstanceKey}
               readOnly={chatReadOnly || !canOperateCurrentBot}
               allowTrace={allowTrace}
-              isImmersive={alias === currentBot ? isChatImmersive : false}
-              onToggleImmersive={alias === currentBot
+              isImmersive={instanceKey === chatInstanceKey ? isChatImmersive : false}
+              onToggleImmersive={instanceKey === chatInstanceKey
                 ? () => setIsChatImmersive((prev) => !prev)
                 : undefined}
               onUnreadResult={markBotUnread}
               onBotActivityChange={handleBotActivityChange}
             />
           </div>
-        ))}
+          );
+        })}
       </div>
     );
   } else if (currentTab === "files") {
@@ -992,6 +1053,7 @@ export function App() {
         <PersistentTerminalProvider client={client}>
           <DesktopWorkbench
             authToken={readStoredToken()}
+            accountId={accountKey}
             botAlias={currentBot}
             botAvatarName={currentBotSummary?.avatarName}
             userAvatarName={userAvatarName}
@@ -1023,14 +1085,17 @@ export function App() {
             chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
             chatPaneContent={({ requestPreview }) => (
               <div className="h-full">
-                {mountedChatBots.map((alias) => (
-                  <div key={`desktop-chat-${alias}`} className={clsx("h-full", alias === currentBot ? "block" : "hidden")}>
+                {mountedChatBots.map((instanceKey) => {
+                  const alias = chatAliasFromInstanceKey(instanceKey);
+                  return (
+                  <div key={`desktop-chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
                     <ChatScreen
                       botAlias={alias}
+                      accountId={accountKey}
                       client={client}
                       botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
                       userAvatarName={userAvatarName}
-                      isVisible={alias === currentBot && desktopChatPaneVisible}
+                      isVisible={instanceKey === chatInstanceKey && desktopChatPaneVisible}
                       readOnly={chatReadOnly || !canOperateCurrentBot}
                       allowTrace={allowTrace}
                       embedded
@@ -1056,7 +1121,8 @@ export function App() {
                       }}
                     />
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             onViewModeChange={setViewMode}
