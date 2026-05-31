@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { BotIdentity } from "../components/BotIdentity";
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
+import { StateBadge } from "../components/StateBadge";
+import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   GitBlamePayload,
@@ -64,59 +66,57 @@ function countLabel(title: string, count: number) {
 
 function changeGroupTone(key: GitFileGroupKey) {
   if (key === "staged") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return "success";
   }
   if (key === "unstaged") {
-    return "border-yellow-200 bg-yellow-50 text-yellow-700";
+    return "warning";
   }
-  return "border-sky-200 bg-sky-50 text-sky-700";
+  return "accent";
 }
 
 function iconButtonClass() {
-  return "inline-flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)] disabled:opacity-50";
+  return toolbarButtonClass("ghost", "icon", "h-7 w-7 border-[var(--workbench-hairline)]");
 }
 
 function buttonClass(kind: "plain" | "primary" = "plain") {
-  return clsx(
-    "inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-50",
-    kind === "primary"
-      ? "bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90"
-      : "border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-strong)]",
-  );
+  return toolbarButtonClass(kind, "sm");
 }
 
 function sectionClass(extra = "") {
-  return clsx("min-w-0 bg-[var(--workbench-panel-bg)]", extra);
+  return clsx(
+    "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)]",
+    extra,
+  );
 }
 
 function sectionStackClass(extra = "") {
-  return clsx("min-w-0 space-y-2 bg-[var(--workbench-titlebar-bg)]", extra);
+  return clsx("min-w-0 space-y-3 bg-[var(--workbench-titlebar-bg)]", extra);
 }
 
 function sectionHeaderClass(extra = "") {
   return clsx(
-    "flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-1.5",
+    "flex items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2",
     extra,
   );
 }
 
 function sectionBodyClass(extra = "") {
-  return clsx("px-3", extra);
+  return clsx("px-3 py-3", extra);
 }
 
 function listClass(extra = "") {
-  return clsx("divide-y divide-[var(--border)]/70", extra);
+  return clsx("divide-y divide-[var(--workbench-hairline)]", extra);
 }
 
 function listRowClass(extra = "") {
   return clsx(
-    "flex min-w-0 items-center justify-between gap-2 px-1.5 py-1.5 hover:bg-[var(--surface-strong)]",
+    "flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-2 transition-colors hover:bg-[var(--workbench-hover-bg)]",
     extra,
   );
 }
 
 function emptyStateClass(extra = "") {
-  return clsx("border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]", extra);
+  return clsx("rounded-md border border-dashed border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-xs text-[var(--muted)]", extra);
 }
 
 function identityForScope(config: GitIdentityConfig | null, scope: GitIdentityScope) {
@@ -554,9 +554,9 @@ export function GitScreen({
   }
 
   return (
-    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--surface)]" : "bg-[var(--bg)]")}>
+    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
       {embedded ? null : (
-        <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3">
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -591,18 +591,22 @@ export function GitScreen({
         data-testid="git-scroll-region"
         className={clsx(
           "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto",
-          embedded ? "bg-[var(--workbench-titlebar-bg)] py-0.5" : "py-3",
+          embedded ? "bg-[var(--workbench-titlebar-bg)] py-0.5" : "bg-[var(--workbench-panel-bg)] p-3",
         )}
       >
-        <div className={sectionStackClass()}>
-          {loading ? <div className="text-center text-[var(--muted)]">加载中...</div> : null}
+        <div className={sectionStackClass("mx-auto w-full max-w-6xl")}>
+          {loading ? (
+            <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">
+              加载中...
+            </div>
+          ) : null}
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
               {error}
             </div>
           ) : null}
           {notice ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-[var(--shadow-soft)]">
               {notice}
             </div>
           ) : null}
@@ -655,7 +659,7 @@ export function GitScreen({
                       type="button"
                       aria-label="刷新 Git 状态"
                       onClick={() => void loadOverview()}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--surface-strong)]"
+                      className={iconButtonClass()}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                     </button>
@@ -663,28 +667,28 @@ export function GitScreen({
                       type="button"
                       aria-label={changesCollapsed ? "展开变更" : "收起变更"}
                       onClick={() => setChangesCollapsed((value) => !value)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--surface-strong)]"
+                      className={iconButtonClass()}
                     >
                       {changesCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
                   </div>
                 </div>
                 {!changesCollapsed ? (
-                  <div data-testid="git-changes-content" className={sectionBodyClass("mt-2 space-y-3")}>
+                  <div data-testid="git-changes-content" className={sectionBodyClass("space-y-4")}>
                     {changeGroups.map(([key, title, items]) => (
-                      <div key={key} className="space-y-2">
+                      <div key={key} className="space-y-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-2">
                         <div className="flex items-center justify-between text-xs font-medium text-[var(--muted)]">
                           <span>{countLabel(title, items.length)}</span>
-                          <span className={clsx("rounded-full border px-2 py-0.5", changeGroupTone(key))}>
+                          <StateBadge tone={changeGroupTone(key)}>
                             {key === "staged" ? "Index" : key === "unstaged" ? "Worktree" : "New"}
-                          </span>
+                          </StateBadge>
                         </div>
                         {items.length === 0 ? (
                           <div className={emptyStateClass()}>
                             当前分组暂无文件
                           </div>
                         ) : (
-                          <div className={listClass()}>
+                          <div className="space-y-1">
                             {items.map((item) => (
                               <div
                                 key={`${key}-${item.path}`}
@@ -812,19 +816,16 @@ export function GitScreen({
                         <p className="mt-1 break-all text-xs text-[var(--muted)]">{overview.repoPath}</p>
                       </div>
                     </div>
-                    <span className={clsx(
-                      "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
-                      overview.isClean ? "bg-emerald-50 text-emerald-700" : "bg-yellow-50 text-yellow-700",
-                    )}>
+                    <StateBadge tone={overview.isClean ? "success" : "warning"} className="shrink-0">
                       {overview.isClean ? "工作区干净" : "存在改动"}
-                    </span>
+                    </StateBadge>
                   </div>
                   <div className={sectionBodyClass("grid grid-cols-2 gap-2 text-xs")}>
-                    <div className="border-l border-[var(--border)] px-2 py-1.5">
+                    <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
                       <div className="text-[var(--muted)]">当前分支</div>
                       <div className="mt-1 truncate font-medium">{overview.currentBranch || "-"}</div>
                     </div>
-                    <div className="border-l border-[var(--border)] px-2 py-1.5">
+                    <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
                       <div className="text-[var(--muted)]">Ahead / Behind</div>
                       <div className="mt-1 font-medium">{overview.aheadCount} / {overview.behindCount}</div>
                     </div>
@@ -1036,7 +1037,7 @@ export function GitScreen({
                     />
                   </div>
                   {smartCommitJob ? (
-                    <div className={sectionBodyClass("space-y-1 text-xs")} data-testid="git-smart-commit-status">
+                    <div className={sectionBodyClass("mx-3 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-xs")} data-testid="git-smart-commit-status">
                       <div className="font-medium text-[var(--text)]">{gitSmartCommitStatusText(smartCommitJob, overview)}</div>
                       {smartCommitJob.message && smartCommitJob.status !== "succeeded" ? (
                         <div className="whitespace-pre-wrap text-[var(--muted)]">{smartCommitJob.message}</div>
@@ -1108,7 +1109,7 @@ export function GitScreen({
                       type="button"
                       aria-label={commitsCollapsed ? "展开最近提交" : "收起最近提交"}
                       onClick={() => setCommitsCollapsed((value) => !value)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--surface-strong)]"
+                      className={iconButtonClass()}
                     >
                       {commitsCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>

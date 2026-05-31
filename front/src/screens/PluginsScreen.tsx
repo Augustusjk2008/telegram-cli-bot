@@ -4,6 +4,9 @@ import { createPortal } from "react-dom";
 import { Puzzle } from "lucide-react";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { PluginCatalog } from "../components/PluginCatalog";
+import { SectionHeader } from "../components/SectionHeader";
+import { SurfacePanel } from "../components/SurfacePanel";
+import { ToolbarButton, toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { HostEffect, PluginSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -22,19 +25,8 @@ type Props = {
   }) => Promise<void> | void;
 };
 
-function sectionClass(extra = "") {
-  return clsx("min-w-0 bg-[var(--workbench-panel-bg)]", extra);
-}
-
 function sectionStackClass(extra = "") {
-  return clsx("min-w-0 space-y-0.5 bg-[var(--workbench-titlebar-bg)]", extra);
-}
-
-function sectionHeaderClass(extra = "") {
-  return clsx(
-    "flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-1.5",
-    extra,
-  );
+  return clsx("min-w-0 space-y-3 bg-[var(--workbench-titlebar-bg)]", extra);
 }
 
 function sectionBodyClass(extra = "") {
@@ -42,10 +34,7 @@ function sectionBodyClass(extra = "") {
 }
 
 function buttonClass(extra = "") {
-  return clsx(
-    "inline-flex h-7 items-center justify-center rounded border border-[var(--border)] px-2 text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60",
-    extra,
-  );
+  return toolbarButtonClass("plain", "sm", extra);
 }
 
 export function PluginsScreen({
@@ -163,35 +152,33 @@ export function PluginsScreen({
 
   const headerActions = (
     <div className="flex shrink-0 items-center gap-1.5">
-      <button
+      <ToolbarButton
         type="button"
         onClick={() => setInstallPickerOpen(true)}
         disabled={!canOperate || loading || installingPlugin}
-        className={buttonClass()}
       >
         安装插件
-      </button>
-      <button
+      </ToolbarButton>
+      <ToolbarButton
         type="button"
         onClick={() => loadData(true)}
         disabled={loading}
-        className={buttonClass()}
       >
         刷新
-      </button>
+      </ToolbarButton>
     </div>
   );
 
   const uninstallDialog = pendingUninstallPlugin ? (
     <div role="dialog" aria-modal="true" aria-labelledby="plugin-uninstall-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+      <SurfacePanel className="w-full max-w-md p-4">
         <h2 id="plugin-uninstall-title" className="text-base font-semibold text-[var(--text)]">卸载插件</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">卸载后会停止插件运行时并清理视图缓存。</p>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={() => setPendingUninstallPlugin("")} className={buttonClass()}>取消</button>
           <button type="button" disabled={!canOperate || updatingPluginId === pendingUninstallPlugin} onClick={() => uninstallPlugin(pendingUninstallPlugin)} className={buttonClass("border-red-200 text-red-700 hover:bg-red-50")}>确认卸载</button>
         </div>
-      </div>
+      </SurfacePanel>
     </div>
   ) : null;
   const renderedUninstallDialog = uninstallDialog && typeof document !== "undefined"
@@ -212,9 +199,9 @@ export function PluginsScreen({
 
   return (
     <>
-      <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--surface)]" : "bg-[var(--bg)]")}>
+      <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
         {embedded ? null : (
-          <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3">
+          <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -232,33 +219,32 @@ export function PluginsScreen({
           data-testid="plugins-scroll-region"
           className={clsx(
             "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto",
-            embedded ? "bg-[var(--workbench-titlebar-bg)] py-0.5" : "py-3",
+            embedded ? "bg-[var(--workbench-titlebar-bg)] py-0.5" : "bg-[var(--workbench-panel-bg)] p-3",
           )}
         >
-          <div className={sectionStackClass()}>
+          <div className={sectionStackClass("mx-auto w-full max-w-6xl")}>
             {embedded ? (
-              <section data-testid="plugins-overview-panel" className={sectionClass()}>
-                <div data-testid="plugins-overview-header" className={sectionHeaderClass("gap-3")}>
-                  <div className="min-w-0">
-                    <h1 className="flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
-                      <Puzzle className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
-                      插件
-                    </h1>
-                  </div>
-                  {headerActions}
+              <SurfacePanel data-testid="plugins-overview-panel">
+                <div data-testid="plugins-overview-header">
+                  <SectionHeader
+                    title="插件"
+                    icon={<Puzzle className="h-4 w-4" aria-hidden="true" />}
+                    actions={headerActions}
+                    className="gap-3"
+                  />
                 </div>
                 <div className={sectionBodyClass("py-2")}>
                   <p className="text-sm text-[var(--muted)]">安装时选直接包含 plugin.json 的插件根目录。</p>
                   {!canOperate ? <p className="mt-1 text-xs text-[var(--muted)]">只读模式</p> : null}
                 </div>
-              </section>
+              </SurfacePanel>
             ) : (
-              <section data-testid="plugins-overview-panel" className={sectionClass()}>
+              <SurfacePanel data-testid="plugins-overview-panel">
                 <div className={sectionBodyClass("py-2")}>
                   <p className="text-sm text-[var(--muted)]">打开匹配文件会自动进入对应插件视图。</p>
                   {!canOperate ? <p className="mt-1 text-xs text-[var(--muted)]">只读模式</p> : null}
                 </div>
-              </section>
+              </SurfacePanel>
             )}
 
             <PluginCatalog
@@ -284,9 +270,9 @@ export function PluginsScreen({
               )}
             />
             {notice ? (
-              <section className={sectionClass()}>
+              <SurfacePanel className="border-emerald-200 bg-emerald-50 shadow-[var(--shadow-soft)]">
                 <div className={sectionBodyClass("py-2 text-sm text-emerald-700")}>{notice}</div>
-              </section>
+              </SurfacePanel>
             ) : null}
           </div>
         </section>

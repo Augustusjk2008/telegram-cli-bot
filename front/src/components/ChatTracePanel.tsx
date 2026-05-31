@@ -102,7 +102,7 @@ function ChatTracePanelInner({
   return (
     <section
       data-testid={`chat-trace-panel-${messageId}`}
-      className="mt-2 rounded-2xl border border-slate-200 bg-slate-50/90 px-3 py-2"
+      className="mt-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 shadow-[var(--shadow-soft)]"
     >
       <div className="flex w-full items-center justify-between gap-3">
         <button
@@ -112,9 +112,9 @@ function ChatTracePanelInner({
           onClick={onToggleExpanded}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
-          <ListTree className="h-4 w-4 shrink-0 text-slate-500" />
-          <span className="truncate text-sm font-medium text-slate-800">{buttonLabel}</span>
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-[var(--muted)]" /> : <ChevronRight className="h-4 w-4 shrink-0 text-[var(--muted)]" />}
+          <ListTree className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+          <span className="truncate text-sm font-medium text-[var(--text)]">{buttonLabel}</span>
         </button>
         <span className="flex shrink-0 items-center gap-1.5">
           {onCopyFinalAnswer ? (
@@ -128,13 +128,13 @@ function ChatTracePanelInner({
                 void handleCopyFinalAnswer();
               }}
               className={copiedFinalAnswer
-                ? "inline-flex h-6 w-6 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors disabled:cursor-not-allowed"
-                : "inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-700"}
+                ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors disabled:cursor-not-allowed"
+                : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}
             >
               {copiedFinalAnswer ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             </button>
           ) : null}
-          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
+          <span className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-0.5 text-[11px] text-[var(--muted)]">
             {summary.processCount} 条过程
             {summary.toolCallCount > 0 ? ` · ${summary.toolCallCount} 次工具` : ""}
           </span>
@@ -147,19 +147,19 @@ function ChatTracePanelInner({
             {...resolveMotionProps(premiumMotion.tracePanel, reduceMotion)}
           >
             {isLoading && events.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
+              <div className="flex items-center gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm text-[var(--text)]">
                 <LoaderCircle className="h-4 w-4 animate-spin" />
                 <span>正在加载过程详情...</span>
               </div>
             ) : null}
             {!isLoading && loadError && events.length === 0 ? (
-              <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
                 <div>{loadError}</div>
                 {onLoadTrace ? (
                   <button
                     type="button"
                     onClick={onLoadTrace}
-                    className="mt-2 inline-flex rounded-full border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                    className="mt-2 inline-flex rounded-md border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                   >
                     重试
                   </button>
@@ -195,8 +195,8 @@ function ChatTracePanelInner({
                   key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
                   data-trace-seq={index}
                   className={isGenericEvent
-                    ? "rounded-2xl border border-violet-200 bg-violet-50/80 px-3 py-2"
-                    : "rounded-2xl border border-slate-200 bg-white px-3 py-2"}
+                    ? "rounded-lg border border-violet-200 bg-violet-50/80 px-3 py-2"
+                    : "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-2"}
                   {...traceItemMotion}
                 >
                   <div

@@ -81,15 +81,17 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
   return (
     <div
       className={align === "right"
-        ? "mb-1 flex items-center justify-end gap-2 text-xs"
-        : "mb-1 flex items-center gap-2 text-xs"}
+        ? "mb-1.5 flex items-center justify-end gap-2 text-xs"
+        : "mb-1.5 flex items-center gap-2 text-xs"}
     >
       {align === "left" ? avatar : null}
-      <span className="max-w-[12rem] truncate text-[var(--text)]">{name}</span>
+      <span className="max-w-[12rem] truncate font-medium text-[var(--text)]">{name}</span>
       <span className="text-[var(--muted)]">{formatTime(createdAt)}</span>
       {context ? (
         <span
-          className={context.isLow ? "font-medium text-red-600" : "text-[var(--muted)]"}
+          className={context.isLow
+            ? "rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
+            : "rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]"}
           title={context.title}
         >
           {context.text}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { History, LoaderCircle, MessageSquarePlus, Pin, Search, Trash2, X } from "lucide-react";
+import { toolbarButtonClass } from "./ToolbarButton";
 import type { ConversationSummary } from "../services/types";
 
 type Props = {
@@ -76,8 +77,8 @@ export function ConversationHistoryPanel({
 
   return (
     <div className="workbench-dialog-backdrop absolute inset-0 z-30 flex items-end bg-black/20 sm:items-stretch sm:bg-black/10">
-      <aside className="workbench-sheet-panel flex max-h-[85%] w-full flex-col rounded-t-2xl border-t border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] sm:h-full sm:max-h-none sm:w-[360px] sm:rounded-none sm:border-r sm:border-t-0">
-        <header className="border-b border-[var(--border)] p-3">
+      <aside className="workbench-sheet-panel flex max-h-[85%] w-full flex-col rounded-t-lg border-t border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-card)] sm:h-full sm:max-h-none sm:w-[380px] sm:rounded-none sm:border-r sm:border-t-0">
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3">
           <div className="flex items-center justify-between gap-2">
             <div className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
               <History className="h-4 w-4" />
@@ -88,7 +89,7 @@ export function ConversationHistoryPanel({
                 type="button"
                 disabled={disabled}
                 onClick={onNewConversation}
-                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
+                className={toolbarButtonClass("primary", "sm", "h-8")}
               >
                 <MessageSquarePlus className="h-4 w-4" />
                 新会话
@@ -97,13 +98,13 @@ export function ConversationHistoryPanel({
                 type="button"
                 aria-label="关闭历史会话"
                 onClick={onClose}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                className={toolbarButtonClass("ghost", "icon", "h-8 w-8")}
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2">
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2">
             <Search className="h-4 w-4 text-[var(--muted)]" />
             <input
               aria-label="搜索会话"
@@ -133,8 +134,8 @@ export function ConversationHistoryPanel({
                   key={item.id}
                   aria-current={item.active ? "true" : undefined}
                   className={item.active
-                    ? "flex rounded-lg border border-[var(--accent)] bg-[var(--surface-strong)] disabled:opacity-60"
-                    : "flex rounded-lg border border-transparent hover:bg-[var(--surface-strong)] disabled:opacity-60"}
+                    ? "flex rounded-lg border border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] shadow-[var(--shadow-soft)] disabled:opacity-60"
+                    : "flex rounded-lg border border-transparent hover:border-[var(--workbench-hairline)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"}
                 >
                   <button
                     type="button"
@@ -164,7 +165,7 @@ export function ConversationHistoryPanel({
                       setDeleteNativeSession(true);
                       setPendingDelete(item);
                     }}
-                    className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--bg)] hover:text-red-600 disabled:opacity-60"
+                    className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-red-600 disabled:opacity-60"
                   >
                     {itemDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   </button>
@@ -181,7 +182,7 @@ export function ConversationHistoryPanel({
             role="dialog"
             aria-modal="true"
             aria-labelledby="delete-conversation-title"
-            className="w-full max-w-sm rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-card)]"
+            className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-card)]"
           >
             <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">删除会话</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">共享会话，删除会影响所有可访问该 bot 的用户。</p>
@@ -199,7 +200,7 @@ export function ConversationHistoryPanel({
                 type="button"
                 disabled={deleting}
                 onClick={() => setPendingDelete(null)}
-                className="inline-flex h-9 items-center rounded-lg border border-[var(--border)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className={toolbarButtonClass("plain", "md")}
               >
                 取消
               </button>
@@ -207,7 +208,7 @@ export function ConversationHistoryPanel({
                 type="button"
                 disabled={deleting}
                 onClick={() => onDeleteConversation(pendingDelete, deleteNativeSession)}
-                className="inline-flex h-9 items-center rounded-lg bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                className={toolbarButtonClass("danger", "md")}
               >
                 删除
               </button>

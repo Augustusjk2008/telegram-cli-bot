@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Settings, Trash2, X } from "lucide-react";
+import { toolbarButtonClass } from "./ToolbarButton";
 import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
 
 type ComposerAttachment = {
@@ -85,9 +86,11 @@ export function ChatComposer({
   onSavePromptPresets,
 }: Props) {
   const shellClassName = compact
-    ? "chat-composer-delight border-t border-[var(--border)] bg-[var(--surface-strong)] px-2 py-2"
-    : "chat-composer-delight border-t border-[var(--border)] bg-[var(--surface-strong)] px-3 py-3";
-  const formClassName = compact ? "flex items-end gap-2" : "flex items-end gap-2";
+    ? "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-2"
+    : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-3";
+  const formClassName = compact
+    ? "flex items-end gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-2 shadow-[var(--shadow-soft)]"
+    : "flex items-end gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-2 shadow-[var(--shadow-soft)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
@@ -272,12 +275,12 @@ export function ChatComposer({
   return (
     <div data-testid="chat-composer-root" data-pulse={pulse ? "true" : "false"} className={shellClassName}>
       {attachments.length > 0 || uploadingAttachments ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-2">
           {attachments.map((attachment) => (
             <span
               key={attachment.id}
               title={attachment.savedPath}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-xs text-[var(--text)]"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-1 text-xs text-[var(--text)]"
             >
               <Paperclip className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
               <span className="truncate">{attachment.filename}</span>
@@ -286,14 +289,14 @@ export function ChatComposer({
                 aria-label={`移除附件 ${attachment.filename}`}
                 onClick={() => onRemoveAttachment(attachment.id)}
                 disabled={inputDisabled}
-                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[var(--muted)] hover:bg-[var(--border)] disabled:opacity-50"
+                className="inline-flex h-4 w-4 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-50"
               >
                 <X className="h-3 w-3" />
               </button>
             </span>
           ))}
           {uploadingAttachments ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-700">
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
               正在上传附件
             </span>
@@ -302,7 +305,7 @@ export function ChatComposer({
       ) : null}
 
       {clusterMode && clusterAgents.length > 0 ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-2 py-2 text-xs">
           <span className="font-medium text-emerald-700">智能体集群</span>
           {clusterAgents.map((agent) => (
             <button
@@ -311,7 +314,7 @@ export function ChatComposer({
               aria-label={`@${agent.id} ${agent.name}`}
               onClick={() => insertMention(agent)}
               disabled={inputDisabled}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-200 bg-white/80 px-2.5 py-1 text-emerald-900 hover:border-emerald-400 hover:bg-white disabled:opacity-60"
             >
               <span className="font-medium">@{agent.id}</span>
               <span className="truncate text-[var(--muted)]">{agent.name}</span>
@@ -331,7 +334,7 @@ export function ChatComposer({
           setMentionQuery(null);
         }}
       >
-        <label className="relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">
+        <label className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]">
           <Paperclip className="h-4 w-4" />
           <span className="sr-only">上传附件</span>
           <input
@@ -383,7 +386,7 @@ export function ChatComposer({
               }
               form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             }}
-            className={`max-h-72 w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60`}
+            className={`max-h-72 w-full resize-none rounded-md border border-transparent bg-transparent p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--workbench-hover-border)] focus:bg-[var(--workbench-panel-elevated-bg)] disabled:opacity-60`}
           />
           {showPromptPresetControls ? (
             <button
@@ -393,7 +396,7 @@ export function ChatComposer({
               title="提示词预设"
               disabled={inputDisabled}
               onClick={() => setPresetMenuOpen((value) => !value)}
-              className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--accent)] disabled:opacity-50"
+              className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:opacity-50"
             >
               <ChevronDown className="h-4 w-4" />
             </button>
@@ -402,7 +405,7 @@ export function ChatComposer({
             <div
               role="listbox"
               aria-label="提示词预设"
-              className="absolute bottom-full right-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+              className="absolute bottom-full right-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
             >
               {showAnyPromptPresets ? (
                 <div className="max-h-64 overflow-y-auto">
@@ -431,7 +434,7 @@ export function ChatComposer({
             <div
               role="listbox"
               aria-label="智能体集群列表"
-              className="absolute bottom-full left-0 z-30 mb-2 max-h-56 w-full overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+              className="absolute bottom-full left-0 z-30 mb-2 max-h-56 w-full overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
             >
               {mentionOptions.map((agent) => (
                 <button
@@ -453,9 +456,7 @@ export function ChatComposer({
         <button
           type="submit"
           disabled={inputDisabled}
-          className={compact
-            ? "px-3.5 py-2 bg-[var(--accent)] text-[var(--accent-foreground)] rounded-lg disabled:opacity-50"
-            : "px-4 py-2 bg-[var(--accent)] text-[var(--accent-foreground)] rounded-lg disabled:opacity-50"}
+          className={toolbarButtonClass("primary", "md", compact ? "h-10 px-3.5" : "h-10 px-4")}
         >
           {uploadingAttachments ? "上传中..." : "发送"}
         </button>

@@ -5,6 +5,8 @@ import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
+import { SurfacePanel } from "../components/SurfacePanel";
+import { ToolbarButton } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileDownloadProgress, FileEntry, FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -527,13 +529,13 @@ export function FilesScreen({
   };
 
   return (
-    <main className="flex flex-col h-full bg-[var(--bg)]">
-      <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)] flex items-center justify-between">
+    <main className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
+      <header className="flex items-center justify-between border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
         <div className="flex items-center gap-2 overflow-hidden">
           {currentPath !== "/" && currentPath !== "." && !isVirtualRoot && !isEditorOpen ? (
-            <button onClick={() => void handleBack()} className="p-1 rounded-md hover:bg-[var(--border)]">
+            <ToolbarButton type="button" size="icon" variant="ghost" onClick={() => void handleBack()} aria-label="返回上级目录">
               <ChevronLeft className="w-5 h-5" />
-            </button>
+            </ToolbarButton>
           ) : null}
           <div className="min-w-0">
             {botAvatarName ? (
@@ -552,50 +554,54 @@ export function FilesScreen({
         </div>
         {!isEditorOpen ? (
           <div className="flex items-center gap-1">
-            <button
+            <ToolbarButton
               type="button"
               aria-label="Home"
               title="回到工作目录"
               onClick={() => void handleHome()}
-              className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+              size="icon"
+              variant="plain"
             >
               <House className="w-5 h-5" />
-            </button>
+            </ToolbarButton>
             {canMutateFiles && canOpenSystemFolder ? (
-              <button
+              <ToolbarButton
                 type="button"
                 aria-label="在系统文件夹中打开"
                 title="在系统文件夹中打开"
                 onClick={() => void handleOpenWorkdir()}
-                className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+                size="icon"
+                variant="plain"
               >
                 <FolderOpen className="w-5 h-5" />
-              </button>
+              </ToolbarButton>
             ) : null}
             {canMutateFiles && !isVirtualRoot ? (
-              <button
+              <ToolbarButton
                 type="button"
                 aria-label="新建文件"
                 title="新建文件"
                 onClick={() => void handleOpenCreateFileDialog()}
-                className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+                size="icon"
+                variant="plain"
               >
                 <FilePlus className="w-5 h-5" />
-              </button>
+              </ToolbarButton>
             ) : null}
             {canMutateFiles && !isVirtualRoot ? (
-              <button
+              <ToolbarButton
                 type="button"
                 aria-label="新建文件夹"
                 title="新建文件夹"
                 onClick={() => void handleCreateDirectory()}
-                className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)]"
+                size="icon"
+                variant="plain"
               >
                 <FolderPlus className="w-5 h-5" />
-              </button>
+              </ToolbarButton>
             ) : null}
             {canMutateFiles && !isVirtualRoot ? (
-              <label className="p-2 rounded-md hover:bg-[var(--border)] text-[var(--accent)] cursor-pointer">
+              <label className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]">
                 <Upload className="w-5 h-5" />
                 <input
                   type="file"
@@ -632,20 +638,20 @@ export function FilesScreen({
       ) : (
         <section className="flex-1 overflow-y-auto p-4">
           {error ? (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <SurfacePanel className="mb-4 border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-none">
               {error}
-            </div>
+            </SurfacePanel>
           ) : null}
           {statusText ? (
-            <div role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            <SurfacePanel role="status" className="mb-4 border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-none">
               {statusText}
-            </div>
+            </SurfacePanel>
           ) : null}
           {downloadProgress ? (
-            <div
+            <SurfacePanel
               role="status"
               aria-label="下载进度"
-              className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm shadow-sm"
+              className="mb-4 px-4 py-3 text-sm"
             >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <span className="min-w-0 truncate font-medium">正在下载 {downloadProgress.filename}</span>
@@ -667,7 +673,7 @@ export function FilesScreen({
                 />
               </div>
               <div className="mt-1 text-xs text-[var(--muted)]">{formatDownloadDetail(downloadProgress)}</div>
-            </div>
+            </SurfacePanel>
           ) : null}
           {loading ? (
             <div className="text-center text-[var(--muted)] mt-10">加载中...</div>

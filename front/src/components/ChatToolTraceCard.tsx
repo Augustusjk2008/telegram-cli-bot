@@ -123,21 +123,21 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
   const label = total > 1 ? `返回 ${index + 1}` : "返回";
 
   return (
-    <div className={`rounded-xl border px-3 py-3 ${tones.container}`}>
+    <div className={`rounded-lg border px-3 py-3 ${tones.container}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</div>
         <div className="flex flex-wrap items-center gap-2">
           {typeof parsedStatus.exitCode === "number" ? (
-            <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tones.badge}`}>
+            <span className={`rounded-md border px-2 py-0.5 text-[11px] ${tones.badge}`}>
               Exit {parsedStatus.exitCode}
             </span>
           ) : typeof parsedStatus.success === "boolean" ? (
-            <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tones.badge}`}>
+            <span className={`rounded-md border px-2 py-0.5 text-[11px] ${tones.badge}`}>
               {parsedStatus.success ? "成功" : "失败"}
             </span>
           ) : null}
           {parsedStatus.wallTime ? (
-            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+            <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
               {parsedStatus.wallTime}
             </span>
           ) : null}
@@ -169,7 +169,7 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
             <span>{rawExpanded ? "收起原始内容" : "展开原始内容"}</span>
           </button>
           {rawExpanded ? (
-            <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100">
+            <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100">
               {payloadText}
             </pre>
           ) : null}
@@ -191,25 +191,25 @@ export function ChatToolTraceCard({ entry }: Props) {
   const label = entry.call ? `工具调用 ${entry.toolIndex}` : "工具返回（未匹配）";
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 shadow-[var(--shadow-soft)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
             <Wrench className="h-3.5 w-3.5" />
             <span>{label}</span>
           </div>
         </div>
         {toolName ? (
-          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+          <span className="shrink-0 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 py-0.5 text-[11px] text-[var(--muted)]">
             {toolName}
           </span>
         ) : null}
       </div>
 
       {entry.call ? (
-        <div className="mt-3 rounded-xl border border-b-0 border-slate-200 bg-slate-50/70 px-3 py-3">
-          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">调用</div>
-          <div className="mt-2 whitespace-pre-wrap break-all text-sm text-slate-900">{renderedCallSummary}</div>
+        <div className="mt-3 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-3">
+          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">调用</div>
+          <div className="mt-2 whitespace-pre-wrap break-all text-sm text-[var(--text)]">{renderedCallSummary}</div>
           {collapsedCallSummary.truncated ? (
             <button
               type="button"
@@ -233,7 +233,7 @@ export function ChatToolTraceCard({ entry }: Props) {
                 <span>{callRawExpanded ? "收起原始内容" : "展开原始内容"}</span>
               </button>
               {callRawExpanded ? (
-                <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100">
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100">
                   {callPayloadText}
                 </pre>
               ) : null}
@@ -253,7 +253,7 @@ export function ChatToolTraceCard({ entry }: Props) {
             />
           ))
         ) : (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-3 text-sm text-amber-800">
+          <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-3 text-sm text-amber-800">
             <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700">返回</div>
             <div className="mt-2 font-medium">等待返回</div>
             <div className="mt-1">尚无返回；若工具未完成、会话被终止，或原始 trace 缺失，此处保持 pending。</div>

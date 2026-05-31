@@ -1,4 +1,5 @@
 import { Download, FileText, Folder, Pencil, SquarePen, Trash2 } from "lucide-react";
+import { toolbarButtonClass } from "./ToolbarButton";
 import { FileEntry } from "../services/types";
 
 type Props = {
@@ -18,14 +19,14 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
   }
 
   return (
-    <ul className="divide-y divide-[var(--border)] bg-[var(--surface)] rounded-xl border border-[var(--border)] overflow-hidden">
+    <ul className="overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] divide-y divide-[var(--workbench-hairline)]">
       {files.map((file) => (
         <li key={file.name} className="flex items-center gap-2 p-2">
           <button
             type="button"
             aria-label={`${file.isDir ? "进入" : "打开"} ${file.name}`}
             onClick={() => file.isDir ? onDirClick(file.name) : onFileClick(file.name)}
-            className="min-w-0 flex-1 flex items-center gap-3 rounded-lg p-2 hover:bg-[var(--surface-strong)] active:bg-[var(--border)] transition-colors text-left"
+            className="min-w-0 flex-1 flex items-center gap-3 rounded-md p-2 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)] transition-colors text-left"
           >
             {file.isDir ? (
               <Folder className="w-5 h-5 text-blue-500" />
@@ -52,7 +53,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
               aria-label={`编辑 ${file.name}`}
               title={`编辑 ${file.name}`}
               onClick={() => onEdit(file)}
-              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--accent)] hover:bg-[var(--surface-strong)]"
+              className={toolbarButtonClass("plain", "icon", "h-8 w-8 text-[var(--accent)]")}
             >
               <SquarePen className="w-4 h-4" />
             </button>
@@ -63,7 +64,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
               aria-label={`重命名 ${file.name}`}
               title={`重命名 ${file.name}`}
               onClick={() => onRename(file)}
-              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--accent)] hover:bg-[var(--surface-strong)]"
+              className={toolbarButtonClass("plain", "icon", "h-8 w-8 text-[var(--accent)]")}
             >
               <Pencil className="w-4 h-4" />
             </button>
@@ -74,7 +75,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
               aria-label={`下载 ${file.name}`}
               title={`下载 ${file.name}`}
               onClick={() => onDownload(file)}
-              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--accent)] hover:bg-[var(--surface-strong)]"
+              className={toolbarButtonClass("plain", "icon", "h-8 w-8 text-[var(--accent)]")}
             >
               <Download className="w-4 h-4" />
             </button>
@@ -85,7 +86,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
               aria-label={`删除 ${file.name}`}
               title={`删除 ${file.name}`}
               onClick={() => onDelete(file)}
-              className="shrink-0 rounded-lg border border-[var(--border)] p-2 text-red-600 hover:bg-red-50"
+              className={toolbarButtonClass("danger", "icon", "h-8 w-8")}
             >
               <Trash2 className="w-4 h-4" />
             </button>

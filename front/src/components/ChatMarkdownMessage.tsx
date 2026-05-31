@@ -37,7 +37,7 @@ class ChatMarkdownBoundary extends Component<Props, State> {
     }
 
     return (
-      <div data-testid="assistant-markdown-message" className="min-w-0 w-full">
+      <div data-testid="assistant-markdown-message" className="min-w-0 w-full overflow-hidden">
         <MarkdownContent content={this.props.content} variant="chat" onFileLinkClick={this.props.onFileLinkClick} />
       </div>
     );

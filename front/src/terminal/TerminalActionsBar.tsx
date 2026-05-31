@@ -1,4 +1,5 @@
 import { Settings } from "lucide-react";
+import { toolbarButtonClass } from "../components/ToolbarButton";
 import type { TerminalAction, TerminalRuntimePlatform } from "../services/types";
 import { isTerminalActionVisible, resolveTerminalActionCommand } from "./terminalActionPlatform";
 import { getTerminalActionIcon } from "./terminalActionIcons";
@@ -28,7 +29,7 @@ export function TerminalActionsBar({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+    <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
       {visibleActions.map((action) => {
         const Icon = getTerminalActionIcon(action.icon);
         const running = runningActionId === action.id;
@@ -41,7 +42,7 @@ export function TerminalActionsBar({
             title={command}
             onClick={() => onRunAction(action)}
             disabled={disabled || running}
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border)] px-2 text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            className={toolbarButtonClass("plain", "sm", "h-8 max-w-36")}
           >
             <Icon className="h-3.5 w-3.5" />
             <span className="max-w-24 truncate">{running ? "执行中" : action.label}</span>
@@ -55,7 +56,7 @@ export function TerminalActionsBar({
           title="编辑快捷命令"
           onClick={onOpenConfig}
           disabled={disabled}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+          className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
         >
           <Settings className="h-3.5 w-3.5" />
         </button>

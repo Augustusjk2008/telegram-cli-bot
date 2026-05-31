@@ -10,6 +10,7 @@ import type {
   TerminalRuntimePlatform,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { toolbarButtonClass } from "../components/ToolbarButton";
 import { TerminalActionsBar } from "../terminal/TerminalActionsBar";
 import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDialog";
 import { isTerminalActionVisible, resolveTerminalActionCommand } from "../terminal/terminalActionPlatform";
@@ -530,19 +531,19 @@ export function TerminalScreen({
   }, [connectionText, onWorkbenchStatusChange, runningWorkingDir, stagedWorkingDir, terminal.snapshot.closed, terminal.snapshot.started]);
 
   return (
-    <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--bg)]">
-      <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
+    <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--workbench-panel-bg)]">
+      <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-semibold text-[var(--text)]">{connectionText}</h1>
               {stagedWorkingDir ? (
-                <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
+                <span className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
                   下次重建目录
                 </span>
               ) : null}
               {resolvedPtyMode !== null ? (
-                <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
+                <span className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
                   {resolvedPtyMode ? "PTY" : "PIPE"}
                 </span>
               ) : null}
@@ -570,7 +571,7 @@ export function TerminalScreen({
                 aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
                 title={focused ? "退出聚焦终端" : "聚焦终端"}
                 onClick={onToggleFocus}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+                className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
               >
                 {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </button>
@@ -579,7 +580,7 @@ export function TerminalScreen({
               type="button"
               onClick={closeTerminal}
               disabled={!canCloseTerminal}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface)] disabled:opacity-50"
+              className={toolbarButtonClass("plain", "sm", "h-8")}
             >
               <X className="h-3.5 w-3.5" />
               关闭终端
@@ -588,7 +589,7 @@ export function TerminalScreen({
               type="button"
               onClick={rebuildTerminal}
               disabled={!canRebuildTerminal}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface)] disabled:opacity-60"
+              className={toolbarButtonClass("primary", "sm", "h-8")}
             >
               <RefreshCw className="h-3.5 w-3.5" />
               重建终端
@@ -596,14 +597,14 @@ export function TerminalScreen({
           </div>
         </div>
         {stagedWorkingDir ? (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs">
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-soft)]">
             <span className="font-medium text-[var(--text)]">下次重建目录</span>
             <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
             <button
               type="button"
               onClick={onAcceptPendingWorkingDir}
               disabled={terminalDisabled}
-              className="rounded border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
+              className={toolbarButtonClass("plain", "sm", "h-7")}
             >
               设为下次重建
             </button>
@@ -611,7 +612,7 @@ export function TerminalScreen({
               type="button"
               onClick={onCancelPendingWorkingDir}
               disabled={terminalDisabled}
-              className="rounded border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-strong)]"
+              className={toolbarButtonClass("ghost", "sm", "h-7")}
             >
               取消
             </button>
@@ -622,7 +623,7 @@ export function TerminalScreen({
         </div>
       </header>
 
-      <section className="relative flex-1 overflow-hidden bg-[var(--terminal-bg)]">
+      <section className="relative flex-1 overflow-hidden border-b border-[var(--workbench-hairline)] bg-[var(--terminal-bg)]">
         {!terminal.snapshot.started || terminal.snapshot.closed ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--terminal-muted)]">
             {terminal.snapshot.closed ? "终端已关闭" : "未启动终端"}
@@ -638,7 +639,7 @@ export function TerminalScreen({
             }}
             className="h-full"
           >
-            <div data-testid="terminal-shell-frame" className="h-full w-full px-3 py-2">
+            <div data-testid="terminal-shell-frame" className="h-full w-full bg-[var(--terminal-bg)] px-3 py-2">
               {/* Keep padding off the xterm host; FitAddon measures the host size directly. */}
               <div ref={containerRef} className="terminal-shell h-full w-full min-h-full min-w-0" />
             </div>
@@ -648,7 +649,7 @@ export function TerminalScreen({
           <button
             type="button"
             onClick={jumpToLatest}
-            className="absolute bottom-4 right-4 rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)] shadow-[var(--shadow-card)]"
+            className="absolute bottom-4 right-4 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)] shadow-[var(--shadow-card)]"
           >
             回到最新输出
           </button>
@@ -658,7 +659,7 @@ export function TerminalScreen({
       {visibleActions.length > 0 ? (
         <div
           data-testid="terminal-actions-panel"
-          className="border-t border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+          className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2"
         >
           <TerminalActionsBar
             actions={visibleActions}
@@ -677,21 +678,21 @@ export function TerminalScreen({
           type="button"
           onClick={onToggleImmersive}
           aria-label={isImmersive ? "退出沉浸模式" : "进入沉浸模式"}
-          className="absolute bottom-24 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-card)] backdrop-blur hover:bg-[var(--surface-strong)]"
+          className="absolute bottom-24 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--text)] shadow-[var(--shadow-card)] backdrop-blur hover:bg-[var(--workbench-hover-bg)]"
         >
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
 
       {!embedded ? (
-        <div className="grid grid-cols-4 gap-2 border-t border-[var(--border)] bg-[var(--surface)] p-3 pb-safe">
+        <div className="grid grid-cols-4 gap-2 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3 pb-safe">
           <button
             type="button"
             onClick={() => {
               if (!terminalDisabled) sessionRef.current?.sendControl("\u0003");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             Ctrl+C
           </button>
@@ -701,7 +702,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.sendControl("\t");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             Tab
           </button>
@@ -711,7 +712,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.sendControl("\u001b");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             Esc
           </button>
@@ -721,7 +722,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.focus();
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             键盘
           </button>
@@ -731,7 +732,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[A");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             ↑
           </button>
@@ -741,7 +742,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[B");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             ↓
           </button>
@@ -751,7 +752,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[D");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             ←
           </button>
@@ -761,7 +762,7 @@ export function TerminalScreen({
               if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[C");
             }}
             disabled={terminalDisabled}
-            className="rounded-xl border border-[var(--border)] px-3 py-3 text-sm font-medium"
+            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
             →
           </button>

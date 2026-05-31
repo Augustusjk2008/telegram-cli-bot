@@ -1,5 +1,6 @@
 import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square } from "lucide-react";
 import { AgentSwitcher } from "./AgentSwitcher";
+import { toolbarButtonClass } from "./ToolbarButton";
 import type { AgentSummary } from "../services/types";
 
 type Props = {
@@ -28,9 +29,11 @@ type Props = {
   killTaskBusy?: boolean;
 };
 
-const groupClassName = "inline-flex shrink-0 items-center gap-2";
-const neutralButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] hover:bg-[var(--surface-strong)] disabled:opacity-60";
-const iconButtonClassName = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]";
+const groupClassName = "inline-flex shrink-0 items-center gap-1 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-1";
+const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2.5 text-[var(--muted)]");
+const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
+const activeClusterButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2.5 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 
 export function ChatActionBar({
   visibleModelOptions,
@@ -58,10 +61,10 @@ export function ChatActionBar({
   killTaskBusy = false,
 }: Props) {
   return (
-    <section className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+    <section className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
       <div
         data-testid="chat-action-bar"
-        className="flex max-w-full gap-2 overflow-x-auto pb-1"
+        className="flex max-w-full gap-2 overflow-x-auto"
       >
         <div className={groupClassName} role="group" aria-label="聊天上下文">
           {visibleModelOptions.length > 0 ? (
@@ -70,7 +73,7 @@ export function ChatActionBar({
               value={selectedModel}
               disabled={modelDisabled}
               onChange={(event) => onModelChange(event.target.value)}
-              className="h-8 max-w-[10rem] shrink-0 truncate rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              className="h-8 max-w-[10rem] shrink-0 truncate rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60"
             >
               {visibleModelOptions.map((model) => (
                 <option key={model} value={model}>{model}</option>
@@ -93,7 +96,7 @@ export function ChatActionBar({
               onClick={onToggleClusterMode}
               disabled={clusterDisabled}
               className={clusterMode
-                ? "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                ? activeClusterButtonClassName
                 : neutralButtonClassName}
             >
               {clusterSaving ? (
@@ -111,7 +114,7 @@ export function ChatActionBar({
             onClick={onTogglePlanMode}
             disabled={planDisabled}
             className={planMode
-              ? "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-3 text-sm font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+              ? activePlanButtonClassName
               : neutralButtonClassName}
           >
             <ClipboardList className="h-4 w-4" />
@@ -123,7 +126,7 @@ export function ChatActionBar({
             type="button"
             aria-label="历史会话"
             onClick={onOpenHistoryPanel}
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
+            className={toolbarButtonClass("plain", "sm", "h-8 rounded-md px-2.5")}
           >
             <History className="h-4 w-4" />
             会话
@@ -145,7 +148,7 @@ export function ChatActionBar({
               aria-label="终止任务"
               onClick={onKillTask}
               disabled={killTaskDisabled}
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
+              className={toolbarButtonClass("danger", "sm", "h-8 rounded-md px-2.5")}
             >
               {killTaskBusy ? (
                 <LoaderCircle className="h-4 w-4 animate-spin" />

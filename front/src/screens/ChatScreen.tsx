@@ -762,16 +762,16 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
   }
   const agentNameMap = new Map(agents.map((agent) => [agent.id, agent.name || agent.id]));
   return (
-    <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-950">
+    <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-950 shadow-[var(--shadow-soft)]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">智能体集群任务</span>
         {status.pendingCount > 0 ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs text-emerald-800">
+          <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-0.5 text-xs text-emerald-800">
             <LoaderCircle className="h-3 w-3 animate-spin" />
             {status.pendingCount} 项进行中
           </span>
         ) : (
-          <span className="rounded-full bg-white px-2 py-0.5 text-xs text-emerald-800">已汇总</span>
+          <span className="rounded-md bg-white px-2 py-0.5 text-xs text-emerald-800">已汇总</span>
         )}
       </div>
       <div className="mt-3 space-y-2">
@@ -779,13 +779,13 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
           const agentId = task.agentId || "agent";
           const agentName = agentNameMap.get(agentId) || "";
           return (
-            <div key={task.taskId} className="rounded-md border border-emerald-100 bg-white px-3 py-2">
+            <div key={task.taskId} className="rounded-md border border-emerald-100 bg-white/90 px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">@{agentId}</span>
                 {agentName && agentName !== agentId ? (
                   <span className="text-xs text-emerald-800">{agentName}</span>
                 ) : null}
-                <span className={`rounded-full px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
+                <span className={`rounded-md px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
                   {clusterTaskStatusText(task)}
                 </span>
                 {task.modelTier ? <span className="text-xs text-emerald-800">{task.modelTier}</span> : null}
@@ -841,7 +841,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   if (item.role === "system") {
     return (
       <div className="flex justify-center">
-        <div className="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2 text-slate-700 whitespace-pre-wrap break-all">
+        <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-2 text-sm text-[var(--muted)] whitespace-pre-wrap break-all">
           {item.text}
         </div>
       </div>
@@ -885,10 +885,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
           className={[
             "chat-message-bubble-delight",
             isUser && isCurrentUserMessage
-              ? "rounded-2xl bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)]"
+              ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
               : item.state === "error"
-                ? "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-red-700"
-                : "min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text)]",
+                ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
+                : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
           ].join(" ")}
         >
           {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
@@ -951,7 +951,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           )}
         </div>
         {item.role === "assistant" && item.state === "streaming" ? (
-          <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+          <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
             <span>正在输出</span>
           </div>
@@ -2901,9 +2901,9 @@ export function ChatScreen({
   }
 
   return (
-    <main className="relative flex flex-col h-full">
+    <main className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
       {showTopChrome ? (
-        <header className="p-4 border-b border-[var(--border)] bg-[var(--surface-strong)]">
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-4">
           <BotIdentity
             alias={botAlias}
             avatarName={assistantAvatarName}
@@ -2945,7 +2945,7 @@ export function ChatScreen({
       {showAssistantRuntimeBanner ? (
         <section
           data-workbench-status="active"
-          className="chat-runtime-banner border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900"
+          className="chat-runtime-banner border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-[var(--shadow-soft)]"
         >
           <div className="flex items-center gap-2 text-sm font-medium">
             <LoaderCircle className="h-4 w-4 animate-spin" />
@@ -2976,19 +2976,19 @@ export function ChatScreen({
         onWheel={markUserScrollIntent}
         onTouchMove={markUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
-        className={isImmersive ? "flex-1 overflow-y-auto px-4 pb-24 pt-4" : "flex-1 overflow-y-auto p-4"}
+        className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-4 pb-24 pt-4" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-4"}
       >
-        <div ref={scrollContentRef} className="space-y-4">
+        <div ref={scrollContentRef} className="mx-auto w-full max-w-5xl space-y-4">
           {loading ? (
-            <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
+            <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">加载中...</div>
           ) : null}
           {error ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
               {error}
             </div>
           ) : null}
           {items.length === 0 && !isStreaming && !loading ? (
-            <div className="text-center text-[var(--muted)] mt-10">
+            <div className="mt-10 rounded-lg border border-dashed border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-10 text-center text-sm text-[var(--muted)]">
               暂无消息，开始聊天吧
             </div>
           ) : null}
@@ -2997,7 +2997,7 @@ export function ChatScreen({
               <button
                 type="button"
                 onClick={() => setHistoryExpanded(true)}
-                className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-1.5 text-xs text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)]"
               >
                 展开较早消息（{hiddenHistoryCount}）
               </button>
@@ -3027,7 +3027,7 @@ export function ChatScreen({
             />
           ) : null}
           {clusterTaskError ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
               {clusterTaskError}
             </div>
           ) : null}
@@ -3060,12 +3060,12 @@ export function ChatScreen({
           {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         </button>
       ) : null}
-      <div className="border-t border-[var(--border)] bg-[var(--surface)]">
+      <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         {chatMutationsDisabled ? (
           <p className="px-4 pt-3 text-xs text-[var(--muted)]">只读模式</p>
         ) : null}
         {queuedMessage ? (
-          <div className="mx-3 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <div className="mx-3 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-[var(--shadow-soft)]">
             <div className="font-medium">排队中</div>
             <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
               {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}

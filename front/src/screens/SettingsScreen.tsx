@@ -7,7 +7,9 @@ import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotIdentity } from "../components/BotIdentity";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
+import { StateBadge } from "../components/StateBadge";
 import { ThemeDropdown } from "../components/ThemeDropdown";
+import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
@@ -74,6 +76,27 @@ type Props = {
 };
 
 const TUNNEL_STATUS_REFRESH_INTERVAL_MS = 5000;
+
+function settingsPanelClass(extra = "") {
+  return clsx(
+    "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-soft)]",
+    extra,
+  );
+}
+
+function settingsActionPanelClass(extra = "") {
+  return clsx(
+    "overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)]",
+    extra,
+  );
+}
+
+function settingsButtonClass(kind: "plain" | "primary" | "danger" = "plain", extra = "") {
+  if (kind === "danger") {
+    return toolbarButtonClass("danger", "md", extra);
+  }
+  return toolbarButtonClass(kind, "md", extra);
+}
 
 function isValidGitProxyAddress(value: string) {
   const address = value.trim();
@@ -560,9 +583,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
   ) : null;
 
   return (
-    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--surface)]" : "bg-[var(--bg)]")}>
+    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
       {embedded ? null : (
-        <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] p-4">
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-4">
           {botAvatarName || overview?.avatarName ? (
             <BotIdentity
               alias={overview?.alias || botAlias}
@@ -577,23 +600,23 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         </header>
       )}
 
-      <section className={clsx("flex-1 overflow-y-auto space-y-6", embedded ? "p-3" : "p-4")}>
+      <section className={clsx("flex-1 overflow-y-auto space-y-4", embedded ? "bg-[var(--workbench-titlebar-bg)] p-3" : "p-4")}>
         {loading ? (
           <div className="text-center text-[var(--muted)]">加载中...</div>
         ) : null}
         {error ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         ) : null}
         {notice ? (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
             {notice}
           </div>
         ) : null}
 
         {botAlias === "main" ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+          <div className={settingsPanelClass("space-y-4")}>
             <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
 
             <div className="space-y-2">
@@ -661,7 +684,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </div>
         ) : null}
 
-        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+        <div className={settingsPanelClass("space-y-4")}>
           <div className="flex items-center gap-2">
             <Bell className="h-5 w-5 text-[var(--accent)]" />
             <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
@@ -692,7 +715,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               type="button"
               onClick={() => void requestNotificationPermission()}
               disabled={requestingNotificationPermission || notificationPermission === "unsupported"}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              className={settingsButtonClass("plain")}
             >
               <Bell className="h-4 w-4" />
               {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
@@ -701,21 +724,21 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               type="button"
               onClick={() => void sendPushPlusTest()}
               disabled={testingPushPlus || !notificationSettings?.pushPlusEnabled}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              className={settingsButtonClass("plain")}
             >
               {testingPushPlus ? "发送中..." : "测试 PushPlus 推送"}
             </button>
             <button
               type="button"
               onClick={() => setShowPushPlusGuide(true)}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+              className={settingsButtonClass("plain")}
             >
               PushPlus 配置教程
             </button>
           </div>
         </div>
 
-        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+        <div className={settingsPanelClass("space-y-4")}>
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-base font-semibold text-[var(--text)]">我的头像</h2>
             <AvatarPicker
@@ -736,7 +759,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           showBotRuntimeSettings ? (
             <section
               aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-              className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)] space-y-4"
+              className={settingsPanelClass("space-y-4 text-sm text-[var(--muted)]")}
             >
               <div className="space-y-1">
                 <h2
@@ -793,7 +816,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void saveCliConfig()}
                   disabled={!canManageBotRuntime || savingCliConfig}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                  className={settingsButtonClass("primary")}
                 >
                   <Save className="h-4 w-4" />
                   {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
@@ -828,7 +851,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       aria-label="浏览工作目录"
                       onClick={() => setShowWorkdirPicker(true)}
                       disabled={!canManageBotRuntime || savingWorkdir}
-                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      className={settingsButtonClass("plain")}
                     >
                       浏览目录
                     </button>
@@ -836,7 +859,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       type="button"
                       onClick={() => void saveWorkdir()}
                       disabled={!canManageBotRuntime || savingWorkdir}
-                      className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                      className={settingsButtonClass("primary")}
                     >
                       <Save className="h-4 w-4" />
                       {savingWorkdir ? "保存中..." : "保存工作目录"}
@@ -863,7 +886,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {isMainBot ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+          <div className={settingsPanelClass("space-y-4")}>
             <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
             <div className="flex items-center gap-2">
               <input
@@ -880,7 +903,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 aria-label="保存 Git 代理"
                 onClick={() => void saveGitProxy()}
                 disabled={savingGitProxy}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                className={settingsButtonClass("primary")}
               >
                 <Save className="h-4 w-4" />
                 {savingGitProxy ? "保存中..." : "保存"}
@@ -911,7 +934,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {tunnel ? (
-          <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 space-y-4">
+          <div className={settingsPanelClass("space-y-4")}>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
@@ -920,9 +943,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 </div>
                 <p className="text-sm text-[var(--muted)]">状态: {tunnelStatusText(tunnel.status)}</p>
               </div>
-              <span className="rounded-full bg-[var(--surface-strong)] px-3 py-1 text-xs text-[var(--muted)]">
+              <StateBadge tone="neutral">
                 {tunnel.source === "manual_config" ? "手工地址" : "Quick Tunnel"}
-              </span>
+              </StateBadge>
             </div>
 
             <div className="space-y-2 text-sm text-[var(--muted)]">
@@ -943,7 +966,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void runTunnelAction("start")}
                     disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting" || tunnel.status === "connected" || tunnel.status === "verifying_public" || tunnel.status === "waiting_url"}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                    className={settingsButtonClass("plain")}
                   >
                     启动 Tunnel
                   </button>
@@ -951,7 +974,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void runTunnelAction("stop")}
                     disabled={tunnelAction !== "" || tunnel.status === "stopped"}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                    className={settingsButtonClass("plain")}
                   >
                     停止 Tunnel
                   </button>
@@ -959,14 +982,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void runTunnelAction("restart")}
                     disabled={tunnelAction !== ""}
-                    className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                    className={settingsButtonClass("plain")}
                   >
                     <RotateCw className="h-4 w-4" />
                     重启 Tunnel
                   </button>
                 </>
               ) : (
-                <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
+                <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--muted)]">
                   当前使用 `WEB_PUBLIC_URL` 手工配置地址
                 </div>
               )}
@@ -975,7 +998,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 type="button"
                 onClick={() => void copyTunnelUrl()}
                 disabled={tunnelAction !== "" || !tunnel.publicUrl}
-                className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className={settingsButtonClass("plain")}
               >
                 <Copy className="h-4 w-4" />
                 复制公网地址
@@ -984,10 +1007,10 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </div>
         ) : null}
 
-        <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] overflow-hidden divide-y divide-[var(--border)]">
+        <div className={settingsActionPanelClass("divide-y divide-[var(--workbench-hairline)]")}>
           <button
             onClick={() => setShowKillConfirm(true)}
-            className="w-full flex items-center justify-between p-4 hover:bg-[var(--surface-strong)] active:bg-[var(--border)] text-[var(--danger)]"
+            className="w-full flex items-center justify-between p-4 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)] text-[var(--danger)]"
           >
             <span className="flex items-center gap-3">
               <Square className="w-5 h-5" />
@@ -997,7 +1020,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           {embedded ? null : (
             <button
               onClick={onLogout}
-              className="w-full flex items-center justify-between p-4 hover:bg-[var(--surface-strong)] active:bg-[var(--border)]"
+              className="w-full flex items-center justify-between p-4 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
             >
               <span className="flex items-center gap-3">
                 <LogOut className="w-5 h-5" />
