@@ -8,13 +8,20 @@ html, body, #root {
     radial-gradient(circle at 88% 0%, var(--bg-glow-strong) 0, transparent 26%),
     linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
   color: var(--text);
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-ui);
+  color-scheme: inherit;
+}
+
+html {
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--muted) 48%, transparent) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -29,12 +36,12 @@ html, body, #root {
 *::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background-color: color-mix(in srgb, var(--muted) 40%, transparent);
+  background-color: color-mix(in srgb, var(--muted) 46%, transparent);
   background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 68%, transparent);
 }
 
 *::-webkit-scrollbar-thumb:active {
@@ -43,6 +50,87 @@ html, body, #root {
 
 *::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+::selection {
+  background: var(--accent-soft-strong);
+  color: var(--text);
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+textarea:disabled,
+select:disabled {
+  cursor: not-allowed;
+}
+
+:where(button, [role="button"], a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--accent-outline);
+  outline-offset: 2px;
+}
+
+:root[data-theme="high-contrast"] * {
+  scrollbar-color: var(--accent) #000000;
+}
+
+:root[data-theme="high-contrast"] *::-webkit-scrollbar-thumb {
+  background-color: var(--accent);
+}
+
+:root[data-theme="high-contrast"] ::selection {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+:root[data-theme="high-contrast"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:where(.rounded-sm) {
+  border-radius: var(--radius-sm);
+}
+
+:where(.rounded-md, .rounded-lg) {
+  border-radius: var(--radius-md);
+}
+
+:where(.rounded-xl, .rounded-2xl, .rounded-3xl) {
+  border-radius: var(--radius-lg);
+}
+
+:where(.rounded-t-lg, .rounded-t-xl, .rounded-t-2xl) {
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}
+
+:where(.rounded-b-lg, .rounded-b-xl, .rounded-b-2xl) {
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
+
+:where(.shadow-sm) {
+  box-shadow: var(--shadow-soft);
+}
+
+:where(.shadow-2xl) {
+  box-shadow: var(--shadow-elevated);
+}
+
+:where(.shadow-\[var\(--shadow-card\)\]) {
+  box-shadow: var(--shadow-card);
 }
 
 @media (hover: none) and (pointer: coarse) {

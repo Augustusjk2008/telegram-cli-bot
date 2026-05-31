@@ -2,10 +2,11 @@
   position: relative;
   --desktop-workbench-control-radius: 6px;
   --desktop-workbench-chip-radius: 6px;
+  --desktop-workbench-pane-radius: 8px;
   animation: workbenchShellReveal 120ms ease-out;
   background:
-    radial-gradient(circle at top, var(--bg-glow), transparent 38%),
-    radial-gradient(circle at top right, var(--bg-glow-strong), transparent 26%),
+    radial-gradient(circle at 22% 0%, var(--bg-glow), transparent 34%),
+    radial-gradient(circle at 88% 0%, var(--bg-glow-strong), transparent 28%),
     var(--workbench-shell-bg);
 }
 
@@ -28,15 +29,25 @@
 
 .desktop-workbench-pane {
   position: relative;
+  border-radius: var(--desktop-workbench-pane-radius);
   border: 1px solid var(--workbench-hairline);
   background: var(--workbench-panel-bg);
-  box-shadow: none;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
   will-change: opacity, box-shadow;
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
     opacity 160ms ease,
     background-color 160ms ease;
+}
+
+.desktop-workbench-pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
 }
 
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
@@ -52,14 +63,16 @@
 }
 
 .desktop-workbench-root[data-has-focus="true"] .desktop-workbench-pane:not([data-focused="true"]) {
-  opacity: 0.28;
+  opacity: 0.18;
   pointer-events: none;
+  filter: saturate(0.72);
 }
 
 .desktop-workbench-pane[data-focused="true"] {
   z-index: 30;
   animation: workbenchFocusedPaneLift 160ms ease-out;
-  box-shadow: 0 0 0 1px var(--workbench-focus-ring), 0 28px 80px rgba(0, 0, 0, 0.32);
+  border-color: var(--workbench-focus-ring);
+  box-shadow: 0 0 0 1px var(--workbench-focus-ring), 0 28px 80px rgba(0, 0, 0, 0.34);
 }
 
 .desktop-workbench-pane[data-focused="true"]::before {
@@ -97,6 +110,28 @@
   backdrop-filter: blur(2px);
 }
 
+.desktop-workbench-root [role="separator"] {
+  position: relative;
+  z-index: 12;
+  background: var(--workbench-titlebar-bg);
+  touch-action: none;
+}
+
+.desktop-workbench-root [role="separator"]::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+.desktop-workbench-root [role="separator"] > div {
+  background: transparent;
+}
+
+.desktop-workbench-root [role="separator"]:hover > div,
+.desktop-workbench-root [role="separator"]:focus-visible > div {
+  background: var(--accent-soft-strong);
+}
+
 .desktop-workbench-root [data-testid="desktop-file-drop-overlay"] {
   animation: workbenchOverlayFadeIn 120ms ease-out;
 }
@@ -124,6 +159,68 @@
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
   animation: workbenchStatusSweep 1.6s linear infinite;
+}
+
+.workbench-topbar {
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.workbench-topbar-logo,
+.workbench-bot-switch,
+.workbench-status-chip,
+.workbench-segmented,
+.workbench-rail-toggle,
+.workbench-activity-button,
+.workbench-pane-header button {
+  border-radius: var(--desktop-workbench-control-radius);
+}
+
+.workbench-status-chip {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--surface-glass) 82%, transparent);
+  padding-inline: 8px;
+  font-size: 12px;
+}
+
+.workbench-segmented {
+  overflow: hidden;
+}
+
+.workbench-activity-rail {
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.workbench-activity-button {
+  position: relative;
+  isolation: isolate;
+}
+
+.workbench-activity-button[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.workbench-activity-button[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 7px auto 7px -6px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: workbenchActivityGlide 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.workbench-pane-chrome,
+.workbench-pane-header {
+  min-width: 0;
+}
+
+.desktop-workbench-statusbar {
+  min-height: 26px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
 }
 
 .chat-message-bubble-delight {
@@ -183,23 +280,6 @@
 
 [data-testid="bot-switcher-unread-indicator"][data-unread-bump="true"] {
   animation: workbenchBadgeBump 220ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.workbench-activity-button {
-  position: relative;
-}
-
-.workbench-activity-button[data-active="true"]::before {
-  content: "";
-  position: absolute;
-  left: -7px;
-  top: 7px;
-  bottom: 7px;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--accent);
-  transform-origin: center;
-  animation: workbenchActivityGlide 180ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .workbench-dialog-backdrop {
@@ -432,7 +512,7 @@
   .chat-runtime-banner[data-workbench-status="active"]::before,
   [data-runtime-status-settle="true"],
   [data-testid="bot-switcher-unread-indicator"][data-unread-bump="true"],
-  .workbench-activity-button[data-active="true"]::before,
+  .workbench-activity-button[data-active="true"]::after,
   .workbench-dialog-backdrop,
   .workbench-dialog-panel,
   .workbench-sheet-panel,

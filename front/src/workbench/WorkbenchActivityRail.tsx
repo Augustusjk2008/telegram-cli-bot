@@ -35,16 +35,17 @@ export function WorkbenchActivityRail({
   return (
     <aside
       data-testid="desktop-workbench-activity-rail"
-      className="flex h-full min-h-0 flex-col items-center gap-2 border-r border-[var(--border)] bg-[var(--surface-strong)] px-2 py-3"
+      className="workbench-activity-rail flex h-full min-h-0 flex-col items-center gap-1.5 border-r border-[var(--workbench-hairline)] bg-[var(--workbench-sidebar-bg)] px-1.5 py-2"
     >
       <button
         type="button"
         aria-label={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
         onClick={onToggleSidebar}
-        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)]"
+        className="workbench-rail-toggle inline-flex h-9 w-9 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]"
       >
         {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </button>
+      <div className="my-1 h-px w-6 bg-[var(--workbench-hairline)]" aria-hidden="true" />
       {items.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
@@ -55,8 +56,8 @@ export function WorkbenchActivityRail({
           data-active={id === activeItem ? "true" : "false"}
           onClick={() => onSelectItem(id)}
           className={clsx(
-            "workbench-activity-button inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
-            id === activeItem && "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]",
+            "workbench-activity-button inline-flex h-9 w-9 items-center justify-center border border-transparent text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]",
+            id === activeItem && "bg-[var(--workbench-active-bg)] text-[var(--accent)]",
           )}
         >
           <Icon className="h-4 w-4" />

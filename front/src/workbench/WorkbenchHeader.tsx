@@ -2,6 +2,10 @@ import { clsx } from "clsx";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 import {
+  Bot,
+  FolderGit2,
+  GitBranch,
+  MonitorSmartphone,
   PanelBottom,
   PanelBottomDashed,
   PanelLeft,
@@ -14,6 +18,12 @@ import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { AppLogo } from "../components/AppLogo";
 
 type LayoutControlId = "sidebar" | "terminal" | "chat";
+
+const VIEW_MODE_OPTIONS: Array<{ value: ViewMode; label: string; shortLabel: string }> = [
+  { value: "auto", label: "自动", shortLabel: "Auto" },
+  { value: "mobile", label: "竖屏版", shortLabel: "竖" },
+  { value: "desktop", label: "横屏版", shortLabel: "横" },
+];
 
 type Props = {
   currentBot: string;
@@ -85,18 +95,22 @@ export function WorkbenchHeader({
   return (
     <header
       data-testid="desktop-workbench-titlebar"
-      className="flex items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"
+      className="workbench-topbar flex min-h-10 items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-1.5"
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <AppLogo size={24} decorative />
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)]">
+          <AppLogo size={21} decorative />
+        </span>
         <button
           type="button"
+          aria-label={`切换 Bot: ${currentBot}`}
           onClick={(event) => onOpenBotSwitcher(event.currentTarget.getBoundingClientRect())}
           className={clsx(
-            "relative rounded-lg border border-[var(--border)] px-2.5 py-1 text-sm font-medium hover:bg-[var(--surface)]",
+            "workbench-bot-switch relative inline-flex h-7 max-w-[13rem] items-center gap-1.5 border border-[var(--border)] bg-[var(--surface-glass)] px-2 text-xs font-semibold text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
             hasUnreadOtherBots ? "pr-4.5" : "",
           )}
         >
+          <Bot className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
           {hasUnreadOtherBots ? (
             <span
               data-testid="bot-switcher-unread-indicator"
@@ -108,17 +122,21 @@ export function WorkbenchHeader({
           <AnimatePresence mode="wait" initial={false}>
             <motion.span
               key={currentBot}
-              className="inline-block"
+              className="inline-block min-w-0 truncate"
               {...botLabelMotion}
             >
               {currentBot}
             </motion.span>
           </AnimatePresence>
         </button>
-        <span className="truncate text-xs text-[var(--muted)]">{workspaceName}</span>
+        <span className="workbench-status-chip min-w-0 max-w-[22rem] text-[var(--muted)]">
+          <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-[var(--accent-strong)]" />
+          <span className="truncate">{workspaceName}</span>
+        </span>
         {branchName ? (
-          <span className="rounded-md border border-[var(--border)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--muted)]">
-            {branchName}
+          <span className="workbench-status-chip max-w-[14rem] font-mono text-[var(--muted)]">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+            <span className="truncate">{branchName}</span>
           </span>
         ) : null}
       </div>
@@ -129,7 +147,7 @@ export function WorkbenchHeader({
         {layoutControls.length > 0 ? (
           <div
             aria-label="布局开关"
-            className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5"
+            className="workbench-segmented inline-flex border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
             role="group"
           >
             {layoutControls.map(({ id, visible, Icon, label, onToggle }) => (
@@ -141,9 +159,9 @@ export function WorkbenchHeader({
                 title={label}
                 onClick={onToggle}
                 className={clsx(
-                  "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                  "inline-flex h-7 w-7 items-center justify-center transition-colors",
                   visible
-                    ? "bg-[var(--surface-strong)] text-[var(--text)]"
+                    ? "bg-[var(--workbench-active-bg)] text-[var(--accent)]"
                     : "text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
                 )}
               >
@@ -152,24 +170,25 @@ export function WorkbenchHeader({
             ))}
           </div>
         ) : null}
-        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
-          {([
-            ["auto", "自动"],
-            ["mobile", "竖屏版"],
-            ["desktop", "横屏版"],
-          ] as const).map(([nextMode, label]) => (
+        <div aria-label="视图模式" className="workbench-segmented inline-flex border border-[var(--border)] bg-[var(--surface-glass)] p-0.5">
+          <span className="hidden h-7 items-center px-1.5 text-[var(--muted)] sm:inline-flex" aria-hidden="true">
+            <MonitorSmartphone className="h-3.5 w-3.5" />
+          </span>
+          {VIEW_MODE_OPTIONS.map(({ value: nextMode, label, shortLabel }) => (
             <button
               key={nextMode}
               type="button"
+              aria-label={label}
+              title={label}
               onClick={() => onViewModeChange(nextMode)}
               className={clsx(
-                "rounded-md px-2.5 py-0.5 text-xs transition-colors",
+                "h-7 px-2 text-xs font-medium transition-colors",
                 viewMode === nextMode
                   ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                   : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
               )}
             >
-              {label}
+              {shortLabel}
             </button>
           ))}
         </div>
