@@ -840,6 +840,8 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
                 "enabled": agent.enabled,
                 "allow_cluster": agent.cluster.allow_cluster,
                 "allow_write": agent.cluster.allow_write,
+                "session_policy": agent.cluster.session_policy,
+                "timeout_seconds": agent.cluster.timeout_seconds,
             }
             for agent in profile.normalized_agents()
             if agent.id != "main"
@@ -1082,6 +1084,7 @@ async def handle_cluster_mcp_tool(
                 "agent_id": task.agent_id,
                 "status": task.status,
                 "model_tier": task.model_tier,
+                "timeout_seconds": task.timeout_seconds,
                 "created_at": task.created_at,
             },
         }

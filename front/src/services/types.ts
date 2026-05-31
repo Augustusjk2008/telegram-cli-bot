@@ -254,6 +254,8 @@ export type ClusterAgentStatus = {
   enabled: boolean;
   allowCluster: boolean;
   allowWrite: boolean;
+  sessionPolicy: AgentClusterConfig["sessionPolicy"];
+  timeoutSeconds: number;
 };
 
 export type ClusterStatus = {

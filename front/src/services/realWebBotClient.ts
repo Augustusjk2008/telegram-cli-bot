@@ -1416,6 +1416,8 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
         enabled: agent.enabled !== false,
         allowCluster: agent.allow_cluster !== false && agent.allowCluster !== false,
         allowWrite: Boolean(agent.allow_write ?? agent.allowWrite ?? false),
+        sessionPolicy: String(agent.session_policy ?? agent.sessionPolicy ?? "persistent") as AgentClusterConfig["sessionPolicy"],
+        timeoutSeconds: Number(agent.timeout_seconds ?? agent.timeoutSeconds ?? 600),
       };
     }) : [],
   };

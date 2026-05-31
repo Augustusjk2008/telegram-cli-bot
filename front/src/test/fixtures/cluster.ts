@@ -135,7 +135,15 @@ export function createClusterStatus(overrides: Partial<ClusterStatus> = {}): Clu
       claude: { state: "not_checked", message: "未使用" },
       kimi: { state: "not_checked", message: "未使用" },
     },
-    agents: [{ id: "tester", name: "测试专家", enabled: true, allowCluster: true, allowWrite: false }],
+    agents: [{
+      id: "tester",
+      name: "测试专家",
+      enabled: true,
+      allowCluster: true,
+      allowWrite: false,
+      sessionPolicy: "ephemeral",
+      timeoutSeconds: 600,
+    }],
   };
   return {
     ...base,

@@ -476,6 +476,8 @@ class ClusterRuntime:
                 "enabled": agent.enabled,
                 "allow_cluster": agent.cluster.allow_cluster,
                 "allow_write": agent.cluster.allow_write,
+                "session_policy": agent.cluster.session_policy,
+                "timeout_seconds": agent.cluster.timeout_seconds,
             })
         return {
             "run_id": run.run_id,
@@ -490,22 +492,30 @@ class ClusterRuntime:
         run = self._runs[str(run_id)]
         agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip().lower()
         message = str(payload.get("message") or "").strip()
-        allow_write = _bool(payload.get("allow_write", payload.get("allowWrite")))
-        model_tier = _model_tier(payload.get("model_tier", payload.get("modelTier")))
-        timeout_seconds = _int(
-            payload.get("timeout_seconds", payload.get("timeoutSeconds")),
-            run.profile.cluster.default_timeout_seconds,
-            minimum=60,
-            maximum=3600,
-        )
         if not message:
             raise ClusterToolError("cluster_empty_message", "子 agent 消息不能为空")
+        if not agent_id:
+            raise ClusterToolError("cluster_agent_not_found", "未找到子 agent")
         if agent_id == "main":
             raise ClusterToolError("cluster_tool_forbidden", "不能通过 ask_agent 调用主 agent")
         try:
             agent = run.profile.get_agent(agent_id)
         except KeyError as exc:
             raise ClusterToolError("cluster_agent_not_found", "未找到子 agent") from exc
+        allow_write = _bool(payload.get("allow_write", payload.get("allowWrite")))
+        model_tier = _model_tier(payload.get("model_tier", payload.get("modelTier")))
+        if "timeout_seconds" in payload:
+            timeout_source = payload.get("timeout_seconds")
+        elif "timeoutSeconds" in payload:
+            timeout_source = payload.get("timeoutSeconds")
+        else:
+            timeout_source = agent.cluster.timeout_seconds
+        timeout_seconds = _int(
+            timeout_source,
+            run.profile.cluster.default_timeout_seconds,
+            minimum=60,
+            maximum=3600,
+        )
         if not agent.enabled or not agent.cluster.allow_cluster:
             raise ClusterToolError("cluster_agent_disabled", "子 agent 未启用集群调用")
         if allow_write and run.profile.cluster.write_policy == "main_only":

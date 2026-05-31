@@ -69,7 +69,15 @@ describe("RealWebBotClient", () => {
         kimi: { state: "installed", message: "已安装" },
       },
       modelTiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
-      agents: [{ id: "reviewer", name: "代码审查", enabled: true, allowCluster: true, allowWrite: false }],
+      agents: [{
+        id: "reviewer",
+        name: "代码审查",
+        enabled: true,
+        allowCluster: true,
+        allowWrite: false,
+        sessionPolicy: "ephemeral",
+        timeoutSeconds: 180,
+      }],
     });
     fetchMock.mockResolvedValue({
       ok: true,
@@ -92,6 +100,8 @@ describe("RealWebBotClient", () => {
             enabled: agent.enabled,
             allow_cluster: agent.allowCluster,
             allow_write: agent.allowWrite,
+            session_policy: agent.sessionPolicy,
+            timeout_seconds: agent.timeoutSeconds,
           })),
         },
       }),
@@ -108,6 +118,8 @@ describe("RealWebBotClient", () => {
     expect(status.mcp.kimi.state).toBe("installed");
     expect(status.modelTiers.low).toBe("fast-model");
     expect(status.agents[0].allowWrite).toBe(false);
+    expect(status.agents[0].sessionPolicy).toBe("ephemeral");
+    expect(status.agents[0].timeoutSeconds).toBe(180);
   });
 
   

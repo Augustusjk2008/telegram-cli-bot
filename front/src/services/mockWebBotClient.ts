@@ -3000,6 +3000,8 @@ export class MockWebBotClient implements WebBotClient {
           enabled: agent.enabled,
           allowCluster: agent.cluster?.allowCluster !== false,
           allowWrite: Boolean(agent.cluster?.allowWrite),
+          sessionPolicy: agent.cluster?.sessionPolicy || "persistent",
+          timeoutSeconds: agent.cluster?.timeoutSeconds || 600,
         })),
     };
   }

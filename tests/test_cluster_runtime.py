@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from bot.cluster.config import AgentClusterConfig
+from bot.cluster.config import AgentClusterConfig, BotClusterConfig
 from bot.cluster.runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
 from bot.models import AgentProfile, BotProfile
 
@@ -44,6 +44,42 @@ def test_cluster_runtime_creates_agent_task():
     status = runtime.build_task_status(run.run_id, [task.task_id], include_output=True)
     assert status["queued_count"] == 1
     assert status["tasks"][0]["task_id"] == task.task_id
+
+
+def test_cluster_runtime_ask_agent_uses_agent_timeout_by_default():
+    profile = BotProfile(
+        alias="main",
+        cluster=BotClusterConfig(default_timeout_seconds=900),
+        agents=[
+            AgentProfile(
+                id="tester",
+                name="测试专家",
+                cluster=AgentClusterConfig(timeout_seconds=180),
+            )
+        ],
+    )
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+
+    default_request = runtime.validate_ask_agent(run.run_id, {"agent_id": "tester", "message": "跑测试"})
+    explicit_request = runtime.validate_ask_agent(
+        run.run_id,
+        {"agent_id": "tester", "message": "跑测试", "timeout_seconds": 240},
+    )
+
+    assert default_request.timeout_seconds == 180
+    assert explicit_request.timeout_seconds == 240
+
+
+def test_cluster_runtime_ask_agent_rejects_empty_agent_id():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="tester", name="测试专家")])
+    runtime = ClusterRuntime()
+    run = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile))
+
+    with pytest.raises(ClusterToolError) as exc_info:
+        runtime.validate_ask_agent(run.run_id, {"message": "跑测试"})
+
+    assert exc_info.value.code == "cluster_agent_not_found"
 
 
 def test_cluster_runtime_completes_agent_task():

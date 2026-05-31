@@ -23,12 +23,12 @@ def _tools_for_environment() -> list[dict[str, Any]]:
     return [
         {
             "name": "cluster_status",
-            "description": "查看当前 TCB 集群运行状态和可用子 agent。必须传 run_id。",
+            "description": "查看当前 TCB 集群运行状态和可用子 agent。必须传 run_id。返回 agent session_policy/timeout_seconds。",
             "inputSchema": {"type": "object", "properties": {"run_id": {"type": "string"}}},
         },
         {
             "name": "list_agents",
-            "description": "列出当前 TCB 集群可调用子 agent。必须传 run_id。",
+            "description": "列出当前 TCB 集群可调用子 agent。必须传 run_id。返回 agent session_policy/timeout_seconds。",
             "inputSchema": {
                 "type": "object",
                 "properties": {"include_disabled": {"type": "boolean"}, "run_id": {"type": "string"}},
@@ -36,7 +36,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "ask_agent",
-            "description": "异步启动个 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。timeout_seconds 是软期限，超时不强行中断子 agent；poll_agent_tasks 会返回 deadline_exceeded。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
+            "description": "异步启动个 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。timeout_seconds 是软期限，未传时使用目标 agent 的 cluster.timeout_seconds，超时不强行中断子 agent；poll_agent_tasks 会返回 deadline_exceeded。model_tier 可选 low/medium/high，effort/reasoning 继承主 agent。",
             "inputSchema": {
                 "type": "object",
                 "required": ["agent_id", "message"],

@@ -60,6 +60,7 @@ from bot.web.api_service import (
     get_chat_session_for_alias,
     get_history,
     get_history_trace,
+    get_cluster_status,
     get_session_for_alias,
     get_overview,
     get_processing_sessions,
@@ -286,6 +287,76 @@ async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: Multi
         "poll_agent_tasks",
         {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
     )
+
+
+@pytest.mark.asyncio
+async def test_cluster_mcp_tools_report_effective_agent_timeout(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, default_timeout_seconds=900, max_parallel_agents=2)
+    await web_manager.create_bot_agent(
+        "main",
+        {
+            "id": "tester",
+            "name": "测试专家",
+            "cluster": {"session_policy": "ephemeral", "timeout_seconds": 180},
+        },
+    )
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=1001, profile=profile)
+    )
+
+    async def fake_stream_cli_chat(*_args, **_kwargs):
+        yield {"type": "done", "output": "done", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream_cli_chat)
+
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+    task_id = result["data"]["task_id"]
+
+    assert result["data"]["timeout_seconds"] == 180
+    poll = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
+    )
+    assert poll["data"]["tasks"][0]["timeout_seconds"] == 180
+
+    explicit = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试", "timeout_seconds": 240},
+    )
+    explicit_task_id = explicit["data"]["task_id"]
+    assert explicit["data"]["timeout_seconds"] == 240
+    explicit_poll = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [explicit_task_id], "wait_seconds": 1, "include_output": True},
+    )
+    assert explicit_poll["data"]["tasks"][0]["timeout_seconds"] == 240
+
+    status = await api_service.handle_cluster_mcp_tool(web_manager, run.run_id, "cluster_status", {})
+    listed = await api_service.handle_cluster_mcp_tool(web_manager, run.run_id, "list_agents", {})
+    web_status = get_cluster_status(web_manager, "main")
+    status_agent = status["data"]["agents"][0]
+    listed_agent = listed["data"][0]
+    web_status_agent = web_status["agents"][0]
+    assert status_agent["session_policy"] == "ephemeral"
+    assert status_agent["timeout_seconds"] == 180
+    assert listed_agent["session_policy"] == "ephemeral"
+    assert listed_agent["timeout_seconds"] == 180
+    assert web_status_agent["session_policy"] == "ephemeral"
+    assert web_status_agent["timeout_seconds"] == 180
 
 
 @pytest.mark.asyncio

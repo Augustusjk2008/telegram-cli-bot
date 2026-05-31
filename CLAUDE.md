@@ -1,250 +1,152 @@
-# Agent Guide
+# Agent 指南
 
-This file provides guidance to coding agents working in this repository.
+本文件说明本仓库内 coding agent 的工作约定。
 
-## Session Constraint
+## 会话约束
 
 - 当前 agent 工作目录固定为 `C:\Users\JiangKai\telegram_cli_bridge\refactoring`
-- 任何时候不得主动关闭、重启、kill 当前 agent 自身，或通过停服务/重启服务等方式让当前 agent 退出
-- 如需重启 `python -m bot`、Web 服务或其它宿主进程，必须先让用户自己执行，或得到用户明确指令
+- 不得主动关闭、重启、kill 当前 agent 自身，或通过停服务/重启服务等方式让当前 agent 退出
+- 如需重启 `python -m bot`、Web 服务或其它宿主进程，先让用户执行，或取得明确指令
 
-## Project Snapshot
+## 项目概况
 
-Orbit Safe Claw is a Windows-first Python Web control surface that forwards user messages to local AI coding CLIs.
+Orbit Safe Claw 是 Windows 优先的 Python Web 控制台，用于把用户消息转发给本地 AI coding CLI。
 
-The Web UI also exposes local filesystem, Git, terminal/debug utilities, announcements, admin center operations, and plugin-rendered file views such as VCD waveform preview.
+- CLI 目标：`claude`、`codex`、`kimi`
+- 运行模式：`cli`、`assistant`
+- 主 bot 来自 `.env`；托管子 bot 来自本地 `managed_bots.json`
+- 同时最多允许一个 `assistant` bot profile
+- Web UI 覆盖 chat、assistant ops、files、Git、terminal/debug、plugins、settings、admin center、announcements、updates、tunnel status
 
-Current local CLI targets:
-
-- `claude`
-- `codex`
-
-Current runtime bot modes:
-
-- `cli`
-- `assistant`
-
-The repository supports one main bot plus multiple managed sub-bots loaded from `managed_bots.json`.
-
-At most one `assistant` bot profile is allowed at a time.
-
-## Commands
+## 常用命令
 
 ```bash
-# Linux install / startup
+# 安装 / 启动
 bash install.sh
 bash start.sh
-# Linux startup as root
-[ "$(id -u)" -eq 0 ] && CLI_BRIDGE_ALLOW_ROOT=1 bash start.sh || sudo env CLI_BRIDGE_ALLOW_ROOT=1 bash start.sh
-# Linux background startup as root
-sudo sh -c 'CLI_BRIDGE_ALLOW_ROOT=1 nohup bash ./start.sh >> logs/host.log 2>&1 < /dev/null & echo $! > .host.pid'
-
-# Start the Web runtime
 python -m bot
 
-# Run the backend test suite
+# 后端测试
 python -m pytest tests -q
-
-# Run focused backend tests
-python -m pytest tests/test_handlers/test_chat.py -q
-python -m pytest tests/test_web_api.py -q
-python -m pytest tests/test_assistant.py -q
-python -m pytest tests/test_updater.py -q
-python -m pytest tests/test_release_assets.py -q
+python -m pytest tests/test_cli.py tests/test_manager.py tests/test_sessions.py -q
+python -m pytest tests/test_web_api.py tests/test_assistant.py tests/test_updater.py tests/test_release_assets.py -q
 python -m pytest tests/test_plugin_manifest.py tests/test_plugin_service.py tests/test_plugin_runtime.py tests/test_vivado_waveform_plugin.py -q
 
-# Run frontend tests
+# 前端测试 / 构建
 cd front && npm test
-
-# Run focused frontend plugin tests
 cd front && npm test -- --run src/test/plugins-screen.test.tsx src/test/plugin-view-surface.test.tsx src/test/desktop-workbench.test.tsx
-
-# Build the frontend
 cd front && npm run build
-
-# Optional frontend type check
 cd front && npm run lint
 
-# Build and publish a release
+# Release
 pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <version> -RunChecks -AutoConfirmDirtyWorktree
-
-# Build and publish with a custom GitHub Release body from Markdown
 pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <version> -RunChecks -AutoConfirmDirtyWorktree -ReleaseNotesFile .\docs\release-notes\v<version>.md
 ```
 
-Do not assume the committed `venv/` is usable on every machine. Prefer the active Python environment unless you have verified the local virtualenv.
+不要假设仓库内 `venv/` 在所有机器可用。优先使用当前激活的 Python 环境，除非已验证本地 venv。
 
-## Runtime Shape
+## 运行结构
 
-### Entry Point
+### 入口
 
-- `bot/__main__.py` imports `bot/main.py:main()`
-- `main()` runs `asyncio.run(run_all_bots())` inside a restart loop
-- `/restart` sets `config.RESTART_REQUESTED` and `config.RESTART_EVENT`, then re-execs the process
+- `bot/__main__.py` 导入 `bot/main.py:main()`
+- `main()` 在 restart loop 内执行 `asyncio.run(run_all_bots())`
+- `/restart` 设置 `config.RESTART_REQUESTED` 和 `config.RESTART_EVENT`，再 re-exec 进程
 
 ### Multi-Bot Manager
 
-`bot/manager.py:MultiBotManager` is the central profile manager.
+`bot/manager.py:MultiBotManager` 管理 bot profile。
 
-- Main bot comes from `.env`
-- Managed bots come from local `managed_bots.json`
-- `managed_bots.example.json` is the public example file; do not commit the real `managed_bots.json`
-- Current runtime is Web-only; no per-bot Telegram application lifecycle remains
+- `managed_bots.example.json` 是公开示例；不要提交真实 `managed_bots.json`
+- 当前 runtime 仅 Web；不再有 per-bot Telegram application lifecycle
+- 旧 `webcli` 代码仅作兼容；manager 拒绝新 `webcli` bot，并把旧 profile 降级为 `cli`
 
-### Active Bot Modes
+## 核心区域
 
-Two modes are active in the current runtime:
+### Sessions 和 Chat History
 
-- `cli`: forwards messages to local CLI tools
-- `assistant`: routes messages to the API-backed assistant flow with memory tools
+`bot/sessions.py` 按 `(bot_id, shared_user_id, agent_id)` 存 session。Web user 通过 `bot/chat_identity.py:chat_session_user_id()` 归一化。
 
-Legacy `webcli` code still exists in the repository, but manager validation now rejects new `webcli` bots and downgrades legacy saved `webcli` profiles to `cli`. Treat `webcli` as legacy compatibility code, not a current production mode.
+`UserSession` 跟踪当前工作目录、processing state、active subprocess、active conversation id、`codex` / `claude` / `kimi` 原生 CLI session id。
 
-## Core Modules
-
-### Sessions
-
-`bot/sessions.py` stores sessions by `(bot_id, user_id, agent_id)`.
-
-Each `UserSession` in `bot/models.py` tracks:
-
-- current working directory
-- conversation history in memory
-- processing state and active subprocess
-- per-CLI session ids for `codex` and `claude`
-- active conversation id
-
-Only CLI session ids are persisted to `.session_store.json`. Full chat history remains in memory.
+- 原生 CLI session id 持久化到 `.session_store.json`
+- chat history 通过 `bot/web/chat_store.py` 持久化
+- 运行态和 overlays 保留在内存
 
 ### CLI Chat Flow
 
-- Web / shared CLI chat path: `bot/web/api_service.py`
-- Command construction and CLI parameter handling: `bot/cli.py`, `bot/cli_params.py`
-- Supported CLI types: `claude`, `codex`
+- Web/shared chat 路径：`bot/web/api_service.py`
+- 命令构造和 CLI 参数：`bot/cli.py`、`bot/cli_params.py`
+- 支持的 CLI 类型：`claude`、`codex`、`kimi`
 
-Important behavior:
+关键行为：
 
-- user text starting with `//` is rewritten to `/...` before sending to the CLI
-- Codex runs with JSON output and is parsed by `parse_codex_json_output()`
-- long Web chat replies are streamed and finalized through the Web API layer
-- CLI bots can define child agents; non-cluster chat scopes one active agent at a time, while cluster mode dispatches child agents through `@agent_id` mentions
+- 用户文本以 `//` 开头时改写为 `/...`
+- Codex 使用 JSON output，由 `parse_codex_json_output()` 解析
+- Kimi 使用 streaming JSON，由 `parse_kimi_stream_json_output()` 解析
+- 长 Web 回复在 Web API 层 streaming 和 finalize
+- CLI bot 可定义 child agents；非 cluster chat 只绑定一个 active agent，cluster mode 通过 `@agent_id` 分发 child agents
 
-### Web API And Frontend
+### Web API 和 Frontend
 
-The repository also contains a Web control surface:
+- 后端 API：`bot/web/server.py`、`bot/web/api_service.py`、`bot/web/git_service.py`
+- 前端 app：`front/`
+- 前端 screen 包括 chat、files、Git、terminal、debug、plugins、settings、assistant ops、admin center
+- 已完成 assistant 回复用 Markdown 渲染，失败时 fallback 到 raw text
+- plugin file view 支持 session-backed heavy views 和 VCD waveform rendering
+- Git UI 支持 overview、diff、stage/unstage、commit、fetch/pull/push、stash/pop
 
-- backend API server: `bot/web/server.py`, `bot/web/api_service.py`, `bot/web/git_service.py`
-- frontend app: `front/`
+## Plugin System
 
-The frontend currently includes screens for:
+Plugin 默认位于 `Path.home() / ".tcb" / "plugins"`。示例 Vivado waveform plugin 位于 `examples/plugins/vivado-waveform`，会 copy/sync 到用户 plugin 目录供本地使用。
 
-- chat
-- assistant ops
-- files
-- git
-- terminal
-- debug
-- plugins
-- admin center
-- settings
+关键模块：
 
-Current Web capabilities include:
+- manifest loading：`bot/plugins/manifest.py`
+- registry 和 file matching：`bot/plugins/registry.py`
+- runtime process 管理：`bot/plugins/runtime.py`
+- orchestration、session cache、hot reload、config 写入：`bot/plugins/service.py`
+- Web routes：`bot/web/api_service.py`、`bot/web/server.py`
 
-- streaming Web chat for `cli` and `assistant` bot modes
-- CLI child-agent management, non-cluster active-agent switching, cluster templates / JSON config, and cluster MCP / model-tier settings
-- assistant ops for proposals, patch generation / apply, memory, diagnostics, audit, and Automation queue / cron / runs
-- Markdown rendering for completed assistant chat replies, with raw-text fallback on render failure
-- file browsing and file preview
-- plugin file views, including session-backed heavy views and VCD waveform rendering
-- Git overview, diff, stage/unstage, stage-all, commit, fetch/pull/push, stash/pop, using a flatter desktop-style panel layout
-- CLI parameter editing
-- terminal, debug, and system script panels
-- admin center user permissions, invite codes, announcements, and update controls
-- announcement timeline dialog; announcement title/summary/items may render sanitized inline HTML with a small style whitelist
-- main-bot update status, manual check, update download controls, and faster offline package listing
-- tunnel status management
-- admin script execution and service restart hooks
+`plugin.json` 支持 schema version 1 和 2。
 
-### Plugin System
+- v1：`enabled`、可变 `config`、`views[].viewMode`（`snapshot` / `session`）、`views[].dataProfile`（`light` / `heavy`）
+- v2 增加 runtime permissions、`configSchema`、`catalogActions`
 
-Plugin code lives outside the repo by default under `Path.home() / ".tcb" / "plugins"`. The example Vivado waveform plugin is kept under `examples/plugins/vivado-waveform` and is copied/synced into the user plugin directory for local use.
+通过 Web API 更新 plugin 会写 `plugin.json`、清理 plugin view sessions、关闭 plugin runtime，下次访问再从磁盘 reload。刷新 plugin 页面也会重新扫描 manifest 并重启 plugin runtime。
 
-Key backend modules:
+Vivado waveform plugin 使用 Python JSON-RPC stdio backend。它按 source fingerprint 建 VCD index，返回 summary 和 initial window，并按需提供可见 time/signal window。`config.lodEnabled` 控制 dense-segment LOD；dense 压缩不得隐藏 signal activity。
 
-- manifest loading: `bot/plugins/manifest.py`
-- registry and file handler matching: `bot/plugins/registry.py`
-- runtime process management: `bot/plugins/runtime.py`
-- service orchestration, session cache, hot reload, and plugin config writes: `bot/plugins/service.py`
-- Web API routes: `bot/web/api_service.py`, `bot/web/server.py`
+## 安装和更新
 
-`plugin.json` schema version 1 supports:
-
-- `enabled`: disables file handler matching and plugin execution while still showing the plugin in the catalog
-- `config`: plugin-owned mutable config persisted back into `plugin.json`
-- `views[].viewMode`: `snapshot` or `session`
-- `views[].dataProfile`: `light` or `heavy`
-
-Updating a plugin through the Web API writes `plugin.json`, clears plugin view sessions, and shuts down plugin runtime processes so the next access reloads from disk. Refreshing the plugin page also rescans manifests and restarts plugin runtimes.
-
-Installing a plugin from the Web UI allows overwrite by default. Uninstall actions live on plugin cards; there is no separate install-management panel.
-
-The Vivado waveform plugin uses a Python JSON-RPC stdio backend. It builds a VCD index once per source fingerprint, returns a summary plus initial window, and serves visible time/signal windows on demand. `config.lodEnabled` controls dense-segment LOD compression. LOD may compress dense changes into `"kind": "dense"` activity segments, but must not hide signal activity.
-
-## Install And Update
-
-- Windows install entrypoints: `install.bat`, `install.ps1`
-- Linux install entrypoint: `install.sh`
-- Windows startup entrypoints: `start.bat`, `start.ps1`
-- Linux startup entrypoint: `start.sh`
-- Automatic update only checks GitHub Releases
+- Windows install：`install.bat`、`install.ps1`
+- Linux install：`install.sh`
+- Windows startup：`start.bat`、`start.ps1`
+- Linux startup：`start.sh`
+- 自动更新只检查 GitHub Releases
 - `docs/` 必须保持在 git 外；release note 也不要 force-add 或提交
-- GitHub Release body comes from `.release-local/publish-release.ps1 -ReleaseNotesFile <markdown-file>`; omit it to use `gh release create --generate-notes`
-- Downloaded updates are applied on the next startup via `python -m bot.updater apply-pending --repo-root <repo>`
+- GitHub Release body 来自 `.release-local/publish-release.ps1 -ReleaseNotesFile <markdown-file>`；省略则用 `gh release create --generate-notes`
+- 下载的更新在下次启动时通过 `python -m bot.updater apply-pending --repo-root <repo>` 应用
 
-## Conventions
+## 约定
 
-- User-facing strings are Chinese
-- Brand/logo assets live under `front/public/assets/app-logo*.svg`; login page, favicon, mobile shell, and workbench header should stay aligned
-- Config is loaded from environment variables in `bot/config.py`
-- `.env` loading uses `python-dotenv`
-- The repository has backend tests and frontend tests, but no backend linter or backend type checker configured
+- 用户可见文案使用中文
+- Brand/logo assets 位于 `front/public/assets/app-logo*.svg`；login page、favicon、mobile shell、workbench header 应保持一致
+- config 从 `bot/config.py` 的环境变量加载；`.env` 使用 `python-dotenv`
+- 有后端和前端测试；未配置后端 linter/type checker
 
-## CodeGraph 使用约定
+## CodeGraph
 
-- 宿主项目较大；找代码、跨模块修改、重构、调用链分析、影响面分析前，优先使用 CodeGraph 定位入口、调用链和影响面。
-- 优先流程：`codegraph_status` 确认索引健康，`codegraph_context` / `codegraph_search` 找相关代码，`codegraph_callers` / `codegraph_callees` / `codegraph_trace` / `codegraph_impact` 查调用链和影响面，再用 `rg` / 直接读文件核对细节。
-- 已知文件的小修、配置改动、文案改动、单文件 bug 不强制使用 CodeGraph。
-- CodeGraph 只作为结构导航层，不替代源码阅读、测试、日志和 `git diff`。
-- 若 CodeGraph 未安装、未初始化或 MCP 不可用，说明原因后退回 `rg` / 读文件，不要卡住任务。
+- 跨模块修改、架构分析、重构、调用链或影响面分析前，优先用可用的 CodeGraph MCP 工具，如 `codegraph_context`、`codegraph_search`、`codegraph_trace`、`codegraph_node`
+- CodeGraph 只作导航；细节仍需用源码阅读、`rg`、测试、日志、`git diff` 核对
+- 普通改动由 watcher 自动同步；大规模结构变更后，运行 `codegraph sync .` 或 `codegraph index .` 刷新 `.codegraph/codegraph.db`
+- 已知文件小改、配置改动、文案改动、单文件 bug 不强制用 CodeGraph
+- 如 CodeGraph 不可用，简述原因后改用 `rg` / 读源码，不要卡住任务
 
-## Testing Notes
+## 测试说明
 
-- 避免同一事实在组件/页面/壳层测试里重复断言同个文案或 UI 过渡态；发现类似重复覆盖时，默认顺手收敛测试，只保留最合适的一层。
-
-Backend tests use:
-
-- `pytest`
-- `pytest-asyncio`
-- `unittest.mock`
-
-Useful fixtures from `tests/conftest.py`:
-
-- `mock_update`
-- `mock_context`
-- `clean_sessions`
-
-Frontend tests use:
-
-- `vitest`
-- Testing Library
-- Playwright for browser-level layout checks
-
-Useful frontend test files include:
-
-- `front/src/test/chat-screen.test.tsx`
-- `front/src/test/chat-composer.test.tsx`
-- `front/src/test/desktop-bot-manager-screen.test.tsx`
-- `front/src/test/files-screen.test.tsx`
-- `front/src/test/git-screen.test.tsx`
-- `front/src/test/app.test.tsx`
-- `front/src/test/mobile-layout.spec.ts`
+- 避免在 component/page/shell 测试里重复断言同一事实；保留最合适的一层
+- 后端测试使用 `pytest`、`pytest-asyncio`、`unittest.mock`
+- 常用 fixtures：`tests/conftest.py` 中的 `mock_update`、`mock_context`、`clean_sessions`
+- 前端测试使用 Vitest、Testing Library、Playwright（浏览器级 layout check）
+- 常用前端测试：`front/src/test/chat-screen.test.tsx`、`desktop-bot-manager-screen.test.tsx`、`files-screen.test.tsx`、`git-screen.test.tsx`、`app.test.tsx`、`mobile-layout.spec.ts`
