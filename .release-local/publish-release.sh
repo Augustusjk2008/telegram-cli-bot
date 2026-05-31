@@ -375,8 +375,8 @@ reset_directory() {
 invoke_release_prep_checks() {
   write_step "运行后端发布检查"
   run_checked_command "$repo_root" "后端发布检查失败" "$python_bin" -m pytest \
-    tests/test_install_scripts.py \
-    tests/test_start_scripts.py \
+    tests/test_runtime_web_startup.py \
+    tests/test_runtime_paths.py \
     tests/test_updater.py \
     tests/test_web_api.py \
     tests/test_release_assets.py \

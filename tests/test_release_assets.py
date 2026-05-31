@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from bot import updater
@@ -48,5 +49,24 @@ def test_publish_release_shell_generates_and_publishes_checksum_assets():
     assert content.index('  new_archive_checksum_files\n\n  if [[ "$should_publish" == "1" ]]; then') < content.index(
         'publish_github_release "$release_tag"'
     )
+
+
+def test_publish_release_scripts_reference_existing_release_check_files():
+    script_paths = [
+        Path(".release-local/publish-release.ps1"),
+        Path(".release-local/publish-release.sh"),
+        Path(".release-local/portable-win/build-portable.ps1"),
+    ]
+
+    for script_path in script_paths:
+        content = script_path.read_text(encoding="utf-8")
+        referenced_paths = set(re.findall(r"(?:tests|src/test)/[-A-Za-z0-9_./]+", content))
+        missing = []
+        for referenced_path in referenced_paths:
+            root = Path("front") if referenced_path.startswith("src/test/") else Path(".")
+            if not (root / referenced_path).exists():
+                missing.append(referenced_path)
+
+        assert not missing, f"{script_path} references missing release check files: {sorted(missing)}"
 
 

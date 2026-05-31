@@ -195,7 +195,7 @@ function Get-AppVersion {
 function Set-AppVersion {
     param([string]$NormalizedVersion)
 
-    Set-Content -LiteralPath $script:VersionFile -Value "$NormalizedVersion`n" -Encoding UTF8
+    Set-Content -LiteralPath $script:VersionFile -Value $NormalizedVersion -Encoding UTF8
 }
 
 function Resolve-ReleaseNotesFile {
@@ -325,8 +325,8 @@ function Invoke-ReleasePrepChecks {
     Write-Step "运行后端发布检查"
     Invoke-CheckedCommand -FilePath "python" -Arguments @(
         "-m", "pytest",
-        "tests/test_install_scripts.py",
-        "tests/test_start_scripts.py",
+        "tests/test_runtime_web_startup.py",
+        "tests/test_runtime_paths.py",
         "tests/test_updater.py",
         "tests/test_web_api.py",
         "tests/test_release_assets.py",
