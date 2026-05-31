@@ -28,6 +28,12 @@ export async function loadFileEditorExtensions(path: string): Promise<EditorExte
     return [cpp()];
   }
 
+  if (/\.(v|vh|sv|svh)$/.test(normalizedPath)) {
+    const { StreamLanguage } = await import("@codemirror/language");
+    const { verilog } = await import("@codemirror/legacy-modes/mode/verilog");
+    return [StreamLanguage.define(verilog)];
+  }
+
   if (/\.(html|htm)$/.test(normalizedPath)) {
     const { html } = await import("@codemirror/lang-html");
     return [html()];

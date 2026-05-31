@@ -20,6 +20,8 @@
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.3.4",
     "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/legacy-modes": "^6.5.3",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@uiw/react-codemirror": "^4.25.2",
