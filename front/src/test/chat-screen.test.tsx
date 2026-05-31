@@ -329,7 +329,8 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "继续");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(screen.getByText("正在输出")).toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
+  expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 

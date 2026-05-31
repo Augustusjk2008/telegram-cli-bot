@@ -854,6 +854,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const parsedUserMessage = isUser ? parseUserMessageDisplay(item.text) : null;
   const visibleUserText = parsedUserMessage?.visibleText || "";
   const userAttachments = parsedUserMessage?.attachments || [];
+  const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
+  const hasStreamingText = isStreamingAssistant && item.text.trim().length > 0;
   const trace = item.meta?.trace;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0;
@@ -880,11 +882,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
           contextUsage={!isUser ? item.meta?.contextUsage : undefined}
         />
         <div
-          data-streaming={item.state === "streaming" ? "true" : "false"}
+          data-streaming={isStreamingAssistant ? "true" : "false"}
           className={[
             "chat-message-bubble-delight",
             isUser && isCurrentUserMessage
               ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
+              : isStreamingAssistant
+                ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
               : item.state === "error"
                 ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
                 : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
@@ -942,19 +946,18 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 </div>
               ) : null}
             </div>
+          ) : isStreamingAssistant && !hasStreamingText ? (
+            <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
+              <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
+              <span>正在输出...</span>
+            </div>
           ) : (
             <ChatPlainTextMessage
-              content={item.text || (item.state === "streaming" ? "正在输出..." : "")}
+              content={item.text}
               className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
             />
           )}
         </div>
-        {item.role === "assistant" && item.state === "streaming" ? (
-          <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            <span>正在输出</span>
-          </div>
-        ) : null}
         {hasTracePanel ? (
           <ChatTracePanel
             messageId={item.id}
