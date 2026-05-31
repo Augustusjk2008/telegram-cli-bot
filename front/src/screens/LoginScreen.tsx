@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { Cpu, KeyRound, Server, ShieldCheck, SquareTerminal } from "lucide-react";
 import {
+  APP_KICKER,
   APP_LOGIN_NAME,
-  APP_TAGLINE,
   APP_VERSION,
   DEFAULT_UI_THEME,
   type UiThemeName,
@@ -39,81 +40,101 @@ export function LoginScreen({
   const hostSummary = hostInfo
     ? `${hostInfo.username} @ ${hostInfo.operatingSystem} · ${hostInfo.hardwarePlatform} · ${hostInfo.hardwareSpec}`
     : "读取主机信息中...";
+  const hostStatusItems = [
+    { label: "宿主", value: hostInfo?.username || "读取中", Icon: Server },
+    { label: "系统", value: hostInfo?.operatingSystem || "等待", Icon: Cpu },
+    { label: "硬件", value: hostInfo?.hardwarePlatform || "未知", Icon: SquareTerminal },
+  ];
 
   return (
-    <main className="relative min-h-[100dvh] overflow-hidden bg-[var(--bg)] px-4 py-5 sm:px-6 sm:py-6">
+    <main className="relative min-h-[100dvh] overflow-x-hidden bg-[var(--workbench-shell-bg)] px-3 py-3 text-[var(--text)] sm:px-5 sm:py-5">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div
-          className="absolute inset-0 opacity-60"
+          className="absolute inset-0 opacity-55"
           style={{
             backgroundImage: [
               "linear-gradient(to right, var(--hero-grid) 1px, transparent 1px)",
               "linear-gradient(to bottom, var(--hero-grid) 1px, transparent 1px)",
-              "repeating-linear-gradient(180deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 6px)",
             ].join(","),
-            backgroundSize: "32px 32px, 32px 32px, auto",
-            maskImage: "linear-gradient(180deg, rgba(0,0,0,0.94), rgba(0,0,0,0.72) 72%, transparent 100%)",
+            backgroundSize: "32px 32px, 32px 32px",
+            maskImage: "linear-gradient(180deg, rgba(0,0,0,0.9), rgba(0,0,0,0.62) 72%, transparent 100%)",
           }}
         />
-        <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-[var(--hero-glow)] to-transparent" />
-        <div className="absolute left-[-8rem] top-8 h-56 w-56 border border-[var(--hero-ring)] opacity-80" />
-        <div className="absolute left-[-6rem] top-12 h-56 w-56 border border-[var(--hero-ring)] opacity-40" />
+        <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[var(--hero-glow)] to-transparent" />
         <div className="absolute right-[-5rem] top-[-2rem] h-72 w-72" style={{ background: "radial-gradient(circle, var(--bg-glow-strong) 0, transparent 66%)" }} />
       </div>
 
-      {onThemeChange ? (
-        <div className="absolute right-4 top-4 z-20 w-[min(13rem,calc(100vw-2rem))] sm:right-6 sm:top-6">
-          <ThemeDropdown value={themeName} onChange={onThemeChange} variant="compact" menuAlign="right" />
+      <div className="relative z-10 mx-auto flex min-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col gap-4 sm:min-h-[calc(100dvh-2.5rem)]">
+        <div className="flex min-h-10 items-center justify-between gap-3 border border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-2 shadow-[var(--shadow-soft)]">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-glass)]">
+              <AppLogo size={22} decorative />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{APP_LOGIN_NAME}</div>
+              <div className="truncate font-mono text-[10px] tracking-[0.16em] text-[var(--muted)]">{APP_KICKER}</div>
+            </div>
+          </div>
+          {onThemeChange ? (
+            <div className="w-[min(12rem,44vw)] shrink-0">
+              <ThemeDropdown value={themeName} onChange={onThemeChange} variant="compact" menuAlign="right" />
+            </div>
+          ) : null}
         </div>
-      ) : null}
 
-      <div className="relative mx-auto flex min-h-[calc(100dvh-2.5rem)] w-full max-w-6xl items-center justify-center">
-        <div className="grid w-full gap-5 lg:grid-cols-[1.16fr_0.84fr]">
-          <section className="relative overflow-hidden border border-[var(--accent-outline)] bg-[var(--surface-overlay)] px-5 py-6 shadow-[var(--shadow-card)] sm:px-7 sm:py-7">
-            <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,transparent,var(--accent),transparent)] opacity-80" />
-            <div className="relative flex h-full flex-col justify-center gap-6">
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-4">
-                  <AppLogo size={78} className="app-logo-mark" />
-                  <h1 className="text-[1.8rem] font-black tracking-[0.03em] text-[var(--text)] sm:text-[2.3rem] lg:text-[2.7rem]">
-                    {APP_LOGIN_NAME}
-                  </h1>
+        <div className="grid flex-1 items-center gap-4 lg:grid-cols-[1fr_25rem]">
+          <section className="min-w-0 border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-card)] sm:p-5">
+            <div className="flex min-w-0 items-start justify-between gap-3 border-b border-[var(--workbench-hairline)] pb-4">
+              <div className="min-w-0">
+                <div className="mb-2 inline-flex items-center gap-2 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 py-1 text-xs font-medium text-[var(--accent)]">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  本地 agent 控制台
                 </div>
-                <p className="max-w-2xl text-lg font-semibold text-[var(--accent)] sm:text-xl">
-                  {APP_TAGLINE}
-                </p>
-                <p className="max-w-2xl break-all text-sm leading-6 text-[var(--muted)]">
-                  {hostSummary}
+                <h1 className="text-xl font-bold text-[var(--text)] sm:text-2xl">{APP_LOGIN_NAME}</h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+                  登录后接入本机 bot、文件、终端、Git 和插件视图。当前入口只处理身份校验，不改变本地运行状态。
                 </p>
               </div>
+              <div className="hidden rounded-md border border-[var(--border)] bg-[var(--surface-glass)] px-2 py-1 font-mono text-[11px] text-[var(--muted)] sm:block">
+                v{APP_VERSION}
+              </div>
+            </div>
 
-              <div
-                className="h-px w-full max-w-sm opacity-80"
-                style={{
-                  background:
-                    "linear-gradient(90deg, var(--accent-strong), rgba(122, 246, 214, 0.18), transparent)",
-                }}
-              />
-              <div className="flex items-center gap-3 text-xs font-mono tracking-[0.18em] text-[var(--accent-strong)]">
-                <span className="h-2 w-2 bg-[var(--accent)] shadow-[0_0_16px_var(--accent)]" />
-                <span>{`AUTH GATE ${APP_VERSION}`}</span>
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              {hostStatusItems.map(({ label, value, Icon }) => (
+                <div key={label} className="min-w-0 border border-[var(--border)] bg-[var(--surface-glass)] p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs text-[var(--muted)]">
+                    <Icon className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    {label}
+                  </div>
+                  <div className="truncate text-sm font-semibold text-[var(--text)]" title={value}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 border border-[var(--border)] bg-[var(--surface-glass)] p-3">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-[var(--accent-strong)]">
+                <SquareTerminal className="h-3.5 w-3.5" />
+                主机摘要
               </div>
+              <p className="break-all text-sm leading-6 text-[var(--muted)]">{hostSummary}</p>
             </div>
           </section>
 
-          <section className="relative overflow-hidden border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--shadow-card)] sm:p-6">
-            <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,transparent,var(--accent-strong),transparent)] opacity-70" />
+          <section className="relative min-w-0 overflow-hidden border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)] sm:p-5">
+            <div className="absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--accent),transparent)] opacity-80" />
             <div className="relative">
-              <div className="font-mono text-[11px] tracking-[0.28em] text-[var(--accent-strong)]">
-                ACCESS
+              <div className="flex items-center gap-2 text-xs font-medium text-[var(--accent-strong)]">
+                <KeyRound className="h-3.5 w-3.5" />
+                访问控制
               </div>
-              <h2 className="mt-3 text-2xl font-bold text-[var(--text)]">接入控制台</h2>
+              <h2 className="mt-2 text-xl font-bold text-[var(--text)]">接入控制台</h2>
               <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                 账号登录，注册需注册码；也可 guest 只读进入。
                 {allowLegacyTokenLogin ? <span className="sr-only">输入访问口令，管理本地主 Bot 与子 Bot。</span> : null}
               </p>
 
-              <div className="mt-5 inline-flex rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] p-1">
+              <div className="mt-5 inline-flex rounded-md border border-[var(--border)] bg-[var(--surface-glass)] p-0.5">
                 {([
                   ["login", "登录"],
                   ["register", "注册"],
@@ -125,8 +146,8 @@ export function LoginScreen({
                     aria-selected={mode === value}
                     onClick={() => setMode(value)}
                     className={mode === value
-                      ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)]"
-                      : "rounded-lg px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)]"}
+                      ? "rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)]"
+                      : "rounded-md px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"}
                   >
                     {label}
                   </button>
@@ -163,7 +184,7 @@ export function LoginScreen({
                     name="username"
                     type="text"
                     aria-label={allowLegacyTokenLogin && mode === "login" ? "访问口令" : undefined}
-                    className="w-full border border-[var(--accent-outline)] bg-[var(--surface-strong)] px-4 py-3 text-[var(--text)] shadow-sm focus:border-[var(--accent)] focus:outline-none transition-colors"
+                    className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--surface-glass)] px-4 py-3 text-[var(--text)] shadow-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
                     placeholder="alice"
                   />
                 </div>
@@ -173,7 +194,7 @@ export function LoginScreen({
                     id="password"
                     name="password"
                     type="password"
-                    className="w-full border border-[var(--accent-outline)] bg-[var(--surface-strong)] px-4 py-3 text-[var(--text)] shadow-sm focus:border-[var(--accent)] focus:outline-none transition-colors"
+                    className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--surface-glass)] px-4 py-3 text-[var(--text)] shadow-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
                     placeholder="请输入密码"
                   />
                 </div>
@@ -184,13 +205,13 @@ export function LoginScreen({
                       id="registerCode"
                       name="registerCode"
                       type="text"
-                      className="w-full border border-[var(--accent-outline)] bg-[var(--surface-strong)] px-4 py-3 text-[var(--text)] shadow-sm focus:border-[var(--accent)] focus:outline-none transition-colors"
+                      className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--surface-glass)] px-4 py-3 text-[var(--text)] shadow-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
                       placeholder="INVITE-001"
                     />
                   </div>
                 ) : null}
                 {error ? (
-                  <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                     {error}
                   </div>
                 ) : null}
@@ -207,7 +228,7 @@ export function LoginScreen({
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full border border-[var(--accent-outline)] bg-[var(--accent)] px-4 py-3 text-base font-semibold text-[var(--accent-foreground)] shadow-[0_14px_32px_var(--accent-soft-strong)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                  className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--accent)] px-4 py-3 text-base font-semibold text-[var(--accent-foreground)] shadow-[0_14px_32px_var(--accent-soft-strong)] transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
                 >
                   {isLoading ? "处理中..." : mode === "register" ? "注册并登录" : "登录"}
                 </button>
@@ -215,7 +236,7 @@ export function LoginScreen({
                   type="button"
                   onClick={() => void onGuestLogin?.({ remember: rememberLogin })}
                   disabled={isLoading}
-                  className="w-full border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  className="w-full rounded-md border border-[var(--border)] bg-[var(--surface-glass)] px-4 py-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
                 >
                   以 guest 进入
                 </button>

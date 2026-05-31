@@ -29,8 +29,8 @@ function ThemePreviewSwatches({ option, compact = false }: { option: ThemeOption
   return (
     <div
       className={clsx(
-        "grid shrink-0 grid-cols-3 overflow-hidden rounded-md border",
-        compact ? "h-6 w-12" : "h-10 w-20",
+        "grid shrink-0 grid-cols-3 overflow-hidden rounded-md border shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
+        compact ? "h-5 w-10" : "h-8 w-16",
       )}
       style={{
         backgroundColor: option.preview.surface,
@@ -99,17 +99,17 @@ export function ThemeDropdown({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
         className={clsx(
-          "flex w-full items-center border border-[var(--border)] bg-[var(--bg)] text-left shadow-sm transition hover:border-[var(--accent)] hover:bg-[var(--surface-strong)]",
-          compact ? "gap-2 rounded-full px-2 py-1.5" : "gap-3 rounded-xl px-3 py-2.5",
+          "flex w-full items-center border border-[var(--border)] bg-[var(--surface-glass)] text-left shadow-sm transition hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
+          compact ? "h-8 gap-1.5 rounded-md px-2" : "gap-3 rounded-md px-3 py-2.5",
         )}
       >
         <span
           className={clsx(
-            "flex shrink-0 items-center justify-center bg-[var(--accent-soft)] text-[var(--accent)]",
-            compact ? "h-8 w-8 rounded-full" : "h-10 w-10 rounded-lg",
+            "flex shrink-0 items-center justify-center rounded-md bg-[var(--accent-soft)] text-[var(--accent)]",
+            compact ? "h-5 w-5" : "h-9 w-9",
           )}
         >
-          <SelectedIcon className={compact ? "h-4 w-4" : "h-5 w-5"} />
+          <SelectedIcon className={compact ? "h-3.5 w-3.5" : "h-4.5 w-4.5"} />
         </span>
         <span className="min-w-0 flex-1">
           {compact ? null : <span className="block text-xs text-[var(--muted)]">主题</span>}
@@ -126,8 +126,8 @@ export function ThemeDropdown({
           role="listbox"
           aria-label="界面主题选项"
           className={clsx(
-            "absolute z-50 mt-2 max-h-[min(28rem,70vh)] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--surface-overlay)] p-2 shadow-[var(--shadow-card)] backdrop-blur",
-            menuAlign === "right" ? "right-0 w-56" : "left-0 right-0",
+            "absolute z-50 mt-2 max-h-[min(28rem,70vh)] overflow-y-auto rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface-overlay)] p-1.5 shadow-[var(--shadow-card)] backdrop-blur",
+            menuAlign === "right" ? "right-0 w-64 max-w-[calc(100vw-1rem)]" : "left-0 right-0",
           )}
         >
           {UI_THEME_OPTIONS.map((option) => {
@@ -144,16 +144,19 @@ export function ThemeDropdown({
                   setOpen(false);
                 }}
                 className={clsx(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition",
-                  selected ? "bg-[var(--accent-soft)] text-[var(--text)]" : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+                  "flex w-full items-center gap-2.5 rounded-md border px-2 py-2 text-left transition",
+                  selected
+                    ? "border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] text-[var(--text)]"
+                    : "border-transparent text-[var(--text)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
                 )}
               >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-soft)] text-[var(--accent)]">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--accent-soft)] text-[var(--accent)]">
                   <ThemeIcon className="h-4.5 w-4.5" />
                 </span>
                 <ThemePreviewSwatches option={option} compact={compact} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{option.label}</span>
+                  <span className="block truncate text-xs text-[var(--muted)]">{option.description}</span>
                 </span>
                 {selected ? <Check className="h-4 w-4 shrink-0 text-[var(--accent)]" /> : <span className="h-4 w-4 shrink-0" />}
               </button>
