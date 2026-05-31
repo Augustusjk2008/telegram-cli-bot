@@ -105,25 +105,30 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, di
             {...resolveMotionProps(premiumMotion.palettePanel, reduceMotion)}
           >
             <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
-              <Search className="h-4 w-4 shrink-0 text-[var(--muted)]" />
-              <input
-                ref={inputRef}
-                aria-label="快速打开文件"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    onClose();
-                  }
-                  if (event.key === "Enter" && firstPath) {
-                    event.preventDefault();
-                    void openPath(firstPath);
-                  }
-                }}
-                className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
-                placeholder="输入文件名"
-              />
+              <div
+                data-testid="quick-open-search-field"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent px-2 focus-within:border-[var(--accent-outline)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--accent-outline)]"
+              >
+                <Search className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                <input
+                  ref={inputRef}
+                  aria-label="快速打开文件"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      onClose();
+                    }
+                    if (event.key === "Enter" && firstPath) {
+                      event.preventDefault();
+                      void openPath(firstPath);
+                    }
+                  }}
+                  className="min-w-0 flex-1 bg-transparent py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
+                  placeholder="输入文件名"
+                />
+              </div>
               <button
                 type="button"
                 aria-label="关闭快速打开"

@@ -39,6 +39,37 @@ test("plugins screen toggles plugin enabled state and saves schema config", asyn
   });
 });
 
+test("plugin catalog uses adaptive cards and narrow-screen controls", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  render(<PluginsScreen client={client} botAlias="main" />);
+
+  const catalog = await screen.findByTestId("plugins-catalog");
+  const grid = catalog.querySelector(".grid");
+  expect(grid).not.toBeNull();
+  if (!grid) {
+    throw new Error("plugin catalog grid missing");
+  }
+  expect(grid).toHaveClass("grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))]");
+  expect(grid).not.toHaveClass("lg:grid-cols-2");
+
+  await user.click(screen.getByRole("button", { name: "展开 Timing Report" }));
+
+  const timingCard = screen.getByTestId("plugin-catalog-item-timing-report");
+  const timingCardHeader = timingCard.querySelector(".sm\\:flex-row");
+  expect(timingCardHeader).not.toBeNull();
+  if (!timingCardHeader) {
+    throw new Error("plugin catalog card header missing");
+  }
+  expect(timingCardHeader).toHaveClass("flex-col", "sm:flex-row");
+  expect(within(timingCard).getByRole("button", { name: "保存 Timing Report 设置" })).toHaveClass("w-full", "sm:w-auto");
+
+  const pluginAction = within(timingCard).getByRole("button", { name: "导出 CSV" });
+  expect(pluginAction).toHaveClass("max-w-full");
+  expect(pluginAction.querySelector("span")).toHaveClass("truncate");
+});
+
 
 test("plugins screen opens folder picker before installing plugin", async () => {
   const user = userEvent.setup();

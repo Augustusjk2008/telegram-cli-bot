@@ -74,6 +74,15 @@ test("assistant bots lock the default workdir in settings", async () => {
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
 
+test("git proxy controls stack on narrow screens", async () => {
+  render(<SettingsScreen botAlias="main" client={new MockWebBotClient()} onLogout={() => undefined} />);
+
+  const row = await screen.findByTestId("git-proxy-control-row");
+  expect(row).toHaveClass("flex-col", "sm:flex-row", "sm:items-center");
+  expect(screen.getByLabelText("Git 代理地址")).toHaveClass("w-full", "min-w-0", "flex-1");
+  expect(screen.getByRole("button", { name: "保存 Git 代理" })).toHaveClass("tcb-solid-accent", "w-full", "sm:w-auto");
+});
+
 
 
 test("settings screen creates child agent", async () => {

@@ -420,7 +420,14 @@ test("renders markdown files as formatted content", async () => {
   expect(await screen.findByRole("heading", { name: "Markdown Title" })).toBeInTheDocument();
   expect(screen.getByText("item 1")).toBeInTheDocument();
   expect(screen.getByText("Cell")).toBeInTheDocument();
-  expect(screen.getByText("const answer = 42;")).toBeInTheDocument();
+  const code = screen.getByText("const answer = 42;");
+  expect(code).toBeInTheDocument();
+  expect(code.closest(".group")).toHaveClass("border", "border-[var(--code-border)]", "bg-[var(--code-bg)]");
+  expect(screen.getByRole("button", { name: "复制代码块" })).toHaveClass(
+    "border-[var(--code-copy-border)]",
+    "bg-[var(--code-copy-bg)]",
+    "text-[var(--code-copy-text)]",
+  );
 });
 
 

@@ -65,7 +65,10 @@ export function SearchPane({ botAlias, client, onOpenFile }: Props) {
         <label className="text-xs font-semibold uppercase tracking-normal text-[var(--muted)]" htmlFor="workspace-full-text-search">
           搜索
         </label>
-        <div className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-2">
+        <div
+          data-testid="workspace-search-field"
+          className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-2 focus-within:border-[var(--accent-outline)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--accent-outline)]"
+        >
           <Search className="h-4 w-4 shrink-0 text-[var(--muted)]" />
           <input
             id="workspace-full-text-search"

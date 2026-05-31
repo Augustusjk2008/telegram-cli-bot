@@ -57,6 +57,16 @@ html {
   color: var(--text);
 }
 
+.tcb-solid-accent {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.tcb-solid-danger {
+  background: var(--danger);
+  color: var(--danger-foreground);
+}
+
 button,
 input,
 textarea,

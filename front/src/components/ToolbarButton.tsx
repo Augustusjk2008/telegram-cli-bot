@@ -13,7 +13,7 @@ export function toolbarButtonClass(
     "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:pointer-events-none disabled:opacity-55",
     size === "icon" ? "h-8 w-8 px-0" : size === "md" ? "h-9 px-3" : "h-8 px-2.5",
     variant === "primary"
-      ? "border border-transparent bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90"
+      ? "tcb-solid-accent border border-transparent hover:opacity-90"
       : variant === "danger"
         ? "border border-[var(--workbench-hairline)] bg-[var(--surface-strong)] text-[var(--danger)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]"
         : variant === "ghost"

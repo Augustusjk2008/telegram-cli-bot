@@ -239,4 +239,36 @@ test("desktop assistant bot with admin ops opens assistant ops from the activity
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
 });
 
+test("desktop search inputs show a focus-within ring around icon and input", async () => {
+  const user = userEvent.setup();
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      botAvatarName="avatar_01.png"
+      userAvatarName="avatar_01.png"
+      client={new MockWebBotClient()}
+      themeName="deep-space"
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "搜索" }));
+  expect(await screen.findByTestId("workspace-search-field")).toHaveClass(
+    "focus-within:border-[var(--accent-outline)]",
+    "focus-within:outline",
+    "focus-within:outline-[var(--accent-outline)]",
+  );
+
+  fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+  expect(await screen.findByTestId("quick-open-search-field")).toHaveClass(
+    "focus-within:border-[var(--accent-outline)]",
+    "focus-within:outline",
+    "focus-within:outline-[var(--accent-outline)]",
+  );
+});
+
 

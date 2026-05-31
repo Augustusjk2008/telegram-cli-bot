@@ -21,7 +21,7 @@ export function PluginActionBar({ actions = [], onRunAction }: Props) {
     return null;
   }
   return (
-    <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
       {actions.map((action) => (
         <button
           key={action.id}
@@ -30,11 +30,11 @@ export function PluginActionBar({ actions = [], onRunAction }: Props) {
           title={action.tooltip || action.label}
           onClick={() => onRunAction?.(action)}
           className={clsx(
-            "inline-flex h-7 items-center justify-center rounded border px-2 text-xs font-medium transition hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60",
+            "inline-flex h-7 max-w-full items-center justify-center rounded border px-2 text-xs font-medium transition hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60",
             variantClass(action.variant),
           )}
         >
-          {action.label}
+          <span className="truncate">{action.label}</span>
         </button>
       ))}
     </div>

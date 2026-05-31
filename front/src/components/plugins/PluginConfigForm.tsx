@@ -153,7 +153,7 @@ export function PluginConfigForm({ plugin, disabled = false, onSubmit }: Props) 
             setError("");
             onSubmit({ config: nextConfig });
           }}
-          className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-60"
+          className="w-full rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-60 sm:w-auto"
           aria-label={`保存 ${plugin.name} 设置`}
         >
           保存

@@ -888,7 +888,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         {isMainBot ? (
           <div className={settingsPanelClass("space-y-4")}>
             <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
-            <div className="flex items-center gap-2">
+            <div data-testid="git-proxy-control-row" className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <input
                 aria-label="Git 代理地址"
                 type="text"
@@ -896,14 +896,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 value={gitProxyAddressDraft}
                 onChange={(event) => setGitProxyAddressDraft(event.target.value)}
                 placeholder="例如 192.168.1.10:7897 或 7897"
-                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                className="w-full min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
               />
               <button
                 type="button"
                 aria-label="保存 Git 代理"
                 onClick={() => void saveGitProxy()}
                 disabled={savingGitProxy}
-                className={settingsButtonClass("primary")}
+                className={settingsButtonClass("primary", "w-full sm:w-auto")}
               >
                 <Save className="h-4 w-4" />
                 {savingGitProxy ? "保存中..." : "保存"}
@@ -1065,7 +1065,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 type="button"
                 onClick={() => void confirmWorkdirChange()}
                 disabled={savingWorkdir}
-                className="rounded-full bg-[var(--danger)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-60"
+                className="tcb-solid-danger rounded-full px-4 py-2 text-sm hover:opacity-90 disabled:opacity-60"
               >
                 {savingWorkdir ? "切换中..." : "确认并切换"}
               </button>
@@ -1092,7 +1092,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               <button
                 onClick={() => void confirmKill()}
                 disabled={actionLoading === "kill"}
-                className="px-4 py-2 rounded-lg bg-[var(--danger)] text-white hover:opacity-90"
+                className="tcb-solid-danger px-4 py-2 rounded-lg hover:opacity-90"
               >
                 {actionLoading === "kill" ? "终止中..." : "确定终止"}
               </button>

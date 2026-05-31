@@ -157,7 +157,7 @@ function MarkdownCode({ className, children, node: _node, isChat, ...props }: Ma
   if (hasLanguageClass) {
     return (
       <code
-        className="block overflow-x-auto rounded-xl bg-[var(--code-bg)] px-4 py-3 font-mono text-[13px] leading-6 text-[var(--code-text)]"
+        className="block overflow-x-auto rounded-xl border border-[var(--code-border)] bg-[var(--code-bg)] px-4 py-3 font-mono text-[13px] leading-6 text-[var(--code-text)]"
         {...props}
       >
         {children}
@@ -228,7 +228,7 @@ function MarkdownPre({
   };
 
   return (
-    <div className={isChat ? "group relative min-w-0 overflow-hidden rounded-xl bg-[var(--code-bg)]" : "group relative my-4 min-w-0 overflow-hidden rounded-xl bg-[var(--code-bg)]"}>
+    <div className={isChat ? "group relative min-w-0 overflow-hidden rounded-xl border border-[var(--code-border)] bg-[var(--code-bg)]" : "group relative my-4 min-w-0 overflow-hidden rounded-xl border border-[var(--code-border)] bg-[var(--code-bg)]"}>
       <button
         type="button"
         aria-label={copyButtonLabel}
@@ -239,7 +239,7 @@ function MarkdownPre({
         }}
         className={copied
           ? "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] transition-colors disabled:cursor-not-allowed"
-          : "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-white/10 text-slate-200 opacity-0 transition-colors hover:bg-white/20 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"}
+          : "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--code-copy-border)] bg-[var(--code-copy-bg)] text-[var(--code-copy-text)] opacity-0 transition-colors hover:bg-[var(--code-copy-bg-hover)] focus-visible:opacity-100 group-hover:opacity-100"}
       >
         {copied ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </button>

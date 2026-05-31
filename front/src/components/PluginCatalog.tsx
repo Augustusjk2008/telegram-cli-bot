@@ -215,7 +215,7 @@ export function PluginCatalog({
       ) : null}
 
       <div className={sectionBodyClass("py-3")}>
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-3">
           {plugins.map((plugin) => (
             <article
               key={plugin.id}
@@ -236,8 +236,8 @@ export function PluginCatalog({
 
                 return (
                   <>
-                    <div className="flex items-start justify-between gap-3 px-3 py-3">
-                      <div className="min-w-0">
+                    <div className="flex min-w-0 flex-col gap-3 px-3 py-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-[var(--text)]">{plugin.name}</div>
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                           <span className={statusBadgeClass(pluginEnabled)}>{pluginEnabled ? "已启用" : "已禁用"}</span>
@@ -246,8 +246,12 @@ export function PluginCatalog({
                           {plugin.fileHandlers.length > 0 ? <span>{plugin.fileHandlers.length} 个文件处理器</span> : null}
                         </div>
                       </div>
-                      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                        {renderPluginActions ? renderPluginActions(plugin) : null}
+                      <div className="flex w-full max-w-full min-w-0 flex-wrap items-center gap-1.5 sm:w-auto sm:justify-end">
+                        {renderPluginActions ? (
+                          <span className="inline-flex max-w-full min-w-0 [&>*]:max-w-full">
+                            {renderPluginActions(plugin)}
+                          </span>
+                        ) : null}
                         {onUpdatePlugin ? (
                           <button
                             type="button"
