@@ -59,6 +59,7 @@
   --editor-line-height: 1.65;
   --editor-bg: #0c1526;
   --editor-text: #eaf4ff;
+  --editor-empty-art-opacity: 0.42;
   --editor-gutter-bg: #101a2c;
   --editor-gutter-text: #88a3c5;
   --terminal-bg: #07111d;
@@ -130,6 +131,7 @@
   --editor-line-height: 1.65;
   --editor-bg: #fffaf3;
   --editor-text: #1d1b18;
+  --editor-empty-art-opacity: 0.24;
   --editor-gutter-bg: #f2eadf;
   --editor-gutter-text: #6d675f;
   --terminal-bg: #fbf7ef;
@@ -194,6 +196,7 @@
   --code-copy-text: #f2f5f4;
   --editor-bg: #111315;
   --editor-text: #e6e8ea;
+  --editor-empty-art-opacity: 0.34;
   --editor-gutter-bg: #181c1f;
   --editor-gutter-text: #8c969f;
   --terminal-bg: #111315;
@@ -258,6 +261,7 @@
   --code-copy-text: #142033;
   --editor-bg: #ffffff;
   --editor-text: #142033;
+  --editor-empty-art-opacity: 0.24;
   --editor-gutter-bg: #eef3f8;
   --editor-gutter-text: #64748b;
   --terminal-bg: #f8fafc;
@@ -322,6 +326,7 @@
   --code-copy-text: #211d19;
   --editor-bg: #fffaf2;
   --editor-text: #211d19;
+  --editor-empty-art-opacity: 0.24;
   --editor-gutter-bg: #efe5d7;
   --editor-gutter-text: #766b5d;
   --terminal-bg: #f6f1e8;
@@ -386,6 +391,7 @@
   --code-copy-text: #ffffff;
   --editor-bg: #000000;
   --editor-text: #ffffff;
+  --editor-empty-art-opacity: 0;
   --editor-gutter-bg: #101010;
   --editor-gutter-text: #d4d4d4;
   --terminal-bg: #000000;

@@ -161,8 +161,11 @@ export function EditorPane({
 
   if (tabs.length === 0 || !activeTab) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center p-6 text-center text-sm text-[var(--muted)]">
-        <div className="space-y-2">
+      <div
+        data-testid="editor-empty-state"
+        className="editor-empty-state flex h-full min-h-0 items-center justify-center p-6 text-center text-sm text-[var(--muted)]"
+      >
+        <div className="relative z-10 space-y-2">
           <p>未打开文件</p>
           <p><kbd className="font-mono text-[var(--text)]">Ctrl+P</kbd> 快速打开文件</p>
           <p><kbd className="font-mono text-[var(--text)]">Ctrl+Shift+F</kbd> 全文搜索</p>

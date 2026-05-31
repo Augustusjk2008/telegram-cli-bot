@@ -65,6 +65,8 @@ test("desktop workbench shows four panes and persists collapse state", async () 
   expect(screen.getByTestId("desktop-pane-editor")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-pane-terminal")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-pane-chat")).toBeInTheDocument();
+  expect(screen.getByTestId("editor-empty-state")).toHaveTextContent("未打开文件");
+  expect(screen.getByTestId("editor-empty-state")).toHaveTextContent("Ctrl+P");
 
   await user.click(screen.getByRole("button", { name: "折叠侧边栏" }));
   expect(screen.getByTestId("desktop-pane-files")).toHaveAttribute("data-collapsed", "true");
