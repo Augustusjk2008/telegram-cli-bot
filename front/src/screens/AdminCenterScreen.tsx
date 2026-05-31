@@ -816,7 +816,7 @@ export function AdminCenterScreen({
               aria-selected={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               className={activeTab === tab
-                ? "rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)]"
+                ? "rounded-md px-3 py-2 text-sm tcb-selected-accent"
                 : "rounded-md border border-[var(--border)] px-3 py-2 text-sm"}
             >
               {tab === "users"
@@ -952,7 +952,7 @@ export function AdminCenterScreen({
                   type="button"
                   onClick={() => void createRegisterCode()}
                   disabled={registerCodeCreating}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   {registerCodeCreating ? "生成中..." : "生成邀请码"}
@@ -1130,7 +1130,7 @@ export function AdminCenterScreen({
               type="button"
               onClick={() => void saveLanChatConfig()}
               disabled={lanChatSaving}
-              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
               {lanChatSaving ? "保存中..." : "保存联机聊天配置"}
@@ -1159,7 +1159,7 @@ export function AdminCenterScreen({
                   type="button"
                   onClick={() => void saveEnvChanges()}
                   disabled={envSaving || envChangedItems.length === 0}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   {envSaving ? "保存中..." : "保存环境配置"}
@@ -1179,7 +1179,7 @@ export function AdminCenterScreen({
                     type="button"
                     onClick={() => void requestEnvRestart()}
                     disabled={envRestarting}
-                    className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                    className="rounded-lg border border-transparent bg-amber-600 px-3 py-2 text-sm text-white hover:bg-amber-700 disabled:opacity-60"
                   >
                     {envRestarting ? "请求中..." : "重启服务"}
                   </button>
@@ -1227,7 +1227,7 @@ export function AdminCenterScreen({
                   type="button"
                   onClick={() => void saveEnvChanges()}
                   disabled={envSaving}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   确认保存
@@ -1243,7 +1243,7 @@ export function AdminCenterScreen({
                     type="button"
                     onClick={() => setActiveEnvCategory(category)}
                     className={(activeEnvCategory || envCategories[0]) === category
-                      ? "whitespace-nowrap rounded-lg bg-[var(--accent)] px-3 py-2 text-left text-sm text-[var(--accent-foreground)]"
+                      ? "whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm tcb-selected-accent"
                       : "whitespace-nowrap rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"}
                   >
                     {ENV_CATEGORY_LABELS[category] || category}
@@ -1459,7 +1459,7 @@ export function AdminCenterScreen({
                 type="button"
                 onClick={() => void saveAnnouncement()}
                 disabled={announcementSaving}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
                 {announcementSaving ? "发布中..." : "发布公告"}

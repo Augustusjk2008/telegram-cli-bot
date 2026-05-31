@@ -115,7 +115,7 @@ export function MobileShell({
                   className={clsx(
                     "h-7 min-w-8 px-1.5 text-[11px] font-medium transition-colors",
                     viewMode === nextMode
-                      ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                      ? "tcb-selected-accent"
                       : "text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]",
                   )}
                 >
@@ -141,7 +141,7 @@ export function MobileShell({
               className={clsx(
                 "flex min-w-0 flex-1 flex-col items-center rounded-md border border-transparent px-1 py-1.5 transition-colors",
                 currentTab === tab
-                  ? "border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] text-[var(--accent)]"
+                  ? "tcb-selected-accent"
                   : "text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]",
               )}
             >

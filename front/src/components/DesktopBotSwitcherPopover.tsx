@@ -234,7 +234,7 @@ export function DesktopBotSwitcherPopover({
                 className={clsx(
                   "h-8 rounded px-2 text-xs",
                   statusFilter === filter.id
-                    ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                    ? "tcb-selected-accent"
                     : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
                 )}
               >
@@ -277,7 +277,7 @@ export function DesktopBotSwitcherPopover({
                   className={clsx(
                     "mb-1 grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-2.5 py-2 text-left",
                     "focus:outline-none focus:ring-2 focus:ring-[var(--accent)]",
-                    current ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-transparent hover:bg-[var(--surface-strong)]",
+                    current ? "tcb-soft-selected" : "border-transparent hover:bg-[var(--surface-strong)]",
                     focusedAlias === bot.alias && !current ? "bg-[var(--surface-strong)]" : "",
                     offline ? "cursor-not-allowed opacity-70" : "",
                     noAccess ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-zinc-200" : "",
@@ -291,13 +291,16 @@ export function DesktopBotSwitcherPopover({
                         <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">主</span>
                       ) : null}
                       {current ? (
-                        <span className="rounded border border-[var(--accent)] px-1 text-[10px] text-[var(--accent)]">当前</span>
+                        <span className="rounded border border-transparent px-1 text-[10px] tcb-selected-accent">当前</span>
                       ) : null}
                       {noAccess ? (
                         <span className="rounded border border-zinc-500 bg-white px-1 text-[10px] font-semibold text-zinc-900">无权限 · 只读</span>
                       ) : null}
                     </span>
-                    <span className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-[var(--muted)]">
+                    <span className={clsx(
+                      "mt-0.5 flex min-w-0 items-center gap-2 text-xs",
+                      current ? "text-[var(--text)]" : "text-[var(--muted)]",
+                    )}>
                       <span className="shrink-0">{bot.botMode || "cli"} · {bot.cliType}</span>
                       <span className="truncate" title={bot.workingDir}>{bot.workingDir}</span>
                     </span>
@@ -376,7 +379,7 @@ export function DesktopBotSwitcherPopover({
                         aria-disabled={isOffline(focusedBot)}
                         onClick={() => void selectBot(focusedBot)}
                         className={clsx(
-                          "inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)]",
+                          "inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent",
                           isOffline(focusedBot) ? "cursor-not-allowed opacity-60" : "",
                         )}
                       >
@@ -404,8 +407,8 @@ export function DesktopBotSwitcherPopover({
                           type="button"
                           onClick={onOpenInviteManager}
                           className={clsx(
-                            "inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium hover:bg-[var(--surface-strong)]",
-                            inviteManagerActive ? "border-[var(--accent)] bg-[var(--accent)]/5" : "border-[var(--border)] bg-[var(--surface)]",
+                            "inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium",
+                            inviteManagerActive ? "border-transparent tcb-selected-accent hover:opacity-90" : "border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-strong)]",
                           )}
                         >
                           <ShieldCheck className="h-4 w-4" />

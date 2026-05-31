@@ -161,7 +161,7 @@ export function WorkbenchHeader({
                 className={clsx(
                   "inline-flex h-7 w-7 items-center justify-center transition-colors",
                   visible
-                    ? "bg-[var(--workbench-active-bg)] text-[var(--accent)]"
+                    ? "tcb-selected-accent"
                     : "text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
                 )}
               >
@@ -184,7 +184,7 @@ export function WorkbenchHeader({
               className={clsx(
                 "h-7 px-2 text-xs font-medium transition-colors",
                 viewMode === nextMode
-                  ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                  ? "tcb-selected-accent"
                   : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
               )}
             >

@@ -174,7 +174,7 @@ export function BotCliParamsPanel({
             type="button"
             onClick={() => void save()}
             disabled={!canManage || saving || !hasChanges}
-            className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
           >
             <Save className="h-4 w-4" />
             {saving ? "保存中..." : "保存参数"}

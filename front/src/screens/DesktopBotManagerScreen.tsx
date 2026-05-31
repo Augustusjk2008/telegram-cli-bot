@@ -345,7 +345,7 @@ function CreatePanel({
           type="button"
           onClick={() => void submit()}
           disabled={!canManage || manager.savingAction !== ""}
-          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
+          className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:opacity-60"
         >
           <Plus className="h-4 w-4" />
           {manager.savingAction === "create" ? "创建中..." : "创建智能体"}
@@ -578,7 +578,7 @@ function EditPanel({
           type="button"
           onClick={() => void submit()}
           disabled={!canManage || manager.savingAction !== ""}
-          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:opacity-60"
+          className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:opacity-60"
         >
           <Save className="h-4 w-4" />
           保存智能体
@@ -1043,7 +1043,7 @@ export function DesktopBotManagerScreen({
             className={clsx(
               "h-8 rounded px-2 text-xs",
               inspectorTab === tab.id
-                ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                ? "tcb-selected-accent"
                 : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
             )}
           >
@@ -1133,7 +1133,7 @@ export function DesktopBotManagerScreen({
                   clearSelection();
                   setMode("create");
                 }}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)]"
+                className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent"
               >
                 <Plus className="h-4 w-4" />
                 新增智能体
@@ -1151,7 +1151,7 @@ export function DesktopBotManagerScreen({
               className={clsx(
                 "h-8 rounded px-2 text-xs",
                 statusFilter === filter.id
-                  ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                  ? "tcb-selected-accent"
                   : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
               )}
             >
@@ -1219,7 +1219,7 @@ export function DesktopBotManagerScreen({
                       aria-selected={focused}
                       className={clsx(
                         "border-b border-[var(--border)]",
-                        focused ? "bg-[var(--accent)]/5" : "hover:bg-[var(--surface-strong)]",
+                        focused ? "tcb-soft-selected" : "hover:bg-[var(--surface-strong)]",
                       )}
                     >
                       <td className="px-3 py-2 align-middle">
@@ -1248,7 +1248,7 @@ export function DesktopBotManagerScreen({
                             <span className="flex min-w-0 items-center gap-1.5">
                               <span className="truncate font-semibold">{bot.alias}</span>
                               {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">主</span> : null}
-                              {current ? <span className="rounded border border-[var(--accent)] px-1 text-[10px] text-[var(--accent)]">当前</span> : null}
+                              {current ? <span className="rounded border border-transparent px-1 text-[10px] tcb-selected-accent">当前</span> : null}
                             </span>
                             {issues.length > 0 ? (
                               <span className="mt-1 flex flex-wrap gap-1">
@@ -1268,8 +1268,17 @@ export function DesktopBotManagerScreen({
                           <StatusPill status={managerPillStatus(bot)} />
                         </div>
                       </td>
-                      <td className="px-2 py-2 align-middle text-xs text-[var(--muted)]">{bot.botMode || "cli"} · {bot.cliType}</td>
-                      <td className="truncate px-2 py-2 align-middle font-mono text-xs text-[var(--muted)]" title={bot.workingDir}>
+                      <td className={clsx(
+                        "px-2 py-2 align-middle text-xs",
+                        focused ? "text-[var(--text)]" : "text-[var(--muted)]",
+                      )}>{bot.botMode || "cli"} · {bot.cliType}</td>
+                      <td
+                        className={clsx(
+                          "truncate px-2 py-2 align-middle font-mono text-xs",
+                          focused ? "text-[var(--text)]" : "text-[var(--muted)]",
+                        )}
+                        title={bot.workingDir}
+                      >
                         {bot.workingDir || "未设置"}
                       </td>
                       <td className="px-2 py-2 align-middle">
@@ -1403,7 +1412,7 @@ export function DesktopBotManagerScreen({
                       aria-label={isBotOffline(focusedBot) ? `${focusedBot.alias} 当前离线，不可进入` : `进入 ${focusedBot.alias}`}
                       disabled={isBotOffline(focusedBot)}
                       onClick={() => onSelect(focusedBot.alias)}
-                      className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-[var(--accent-foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <LogIn className="h-4 w-4" />
                       进入

@@ -91,7 +91,7 @@
   --surface-overlay: rgba(255, 251, 244, 0.94);
   --text: #1f1d1a;
   --muted: #6f685f;
-  --accent: #0e8f7f;
+  --accent: #0d8072;
   --accent-strong: #cc7a21;
   --accent-foreground: #ffffff;
   --danger: #b85430;
@@ -101,9 +101,9 @@
   --shadow-soft: 0 12px 30px rgba(48, 34, 18, 0.1);
   --shadow-elevated: 0 20px 48px rgba(48, 34, 18, 0.14), 0 0 0 1px rgba(52, 43, 31, 0.05);
   --shadow-card: var(--shadow-elevated);
-  --accent-soft: rgba(14, 143, 127, 0.11);
-  --accent-soft-strong: rgba(14, 143, 127, 0.19);
-  --accent-outline: rgba(14, 143, 127, 0.34);
+  --accent-soft: rgba(13, 128, 114, 0.11);
+  --accent-soft-strong: rgba(13, 128, 114, 0.19);
+  --accent-outline: rgba(13, 128, 114, 0.34);
   --workbench-shell-bg: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
   --workbench-titlebar-bg: var(--surface-strong);
   --workbench-sidebar-bg: var(--surface);
@@ -111,12 +111,12 @@
   --workbench-panel-elevated-bg: var(--surface-strong);
   --workbench-statusbar-bg: var(--surface-strong);
   --workbench-hairline: var(--border);
-  --workbench-hover-bg: rgba(15, 140, 120, 0.07);
-  --workbench-hover-border: rgba(15, 140, 120, 0.22);
+  --workbench-hover-bg: rgba(13, 128, 114, 0.07);
+  --workbench-hover-border: rgba(13, 128, 114, 0.22);
   --workbench-active-bg: var(--accent-soft);
   --workbench-focus-ring: var(--accent-outline);
-  --hero-grid: rgba(15, 140, 120, 0.08);
-  --hero-ring: rgba(15, 140, 120, 0.16);
+  --hero-grid: rgba(13, 128, 114, 0.08);
+  --hero-ring: rgba(13, 128, 114, 0.16);
   --hero-glow: rgba(217, 139, 43, 0.18);
   --code-bg: #f3eadf;
   --code-text: #1f1d1a;

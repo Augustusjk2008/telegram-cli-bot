@@ -74,7 +74,7 @@ export function BotSwitcherSheet({
                   isOffline
                     ? "cursor-not-allowed border-red-200 bg-red-50/80 opacity-95"
                     : currentAlias === bot.alias
-                      ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                      ? "tcb-soft-selected"
                       : "border-[var(--border)] hover:bg-[var(--surface-strong)]",
                   noAccess
                     ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px]"
@@ -85,7 +85,13 @@ export function BotSwitcherSheet({
                   <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
                   <div className="flex min-w-0 flex-col items-start">
                     <span className="font-semibold">{bot.alias}</span>
-                    <span className="max-w-full truncate text-xs text-[var(--muted)]" title={`${bot.cliType}: ${bot.workingDir}`}>
+                    <span
+                      className={clsx(
+                        "max-w-full truncate text-xs",
+                        currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
+                      )}
+                      title={`${bot.cliType}: ${bot.workingDir}`}
+                    >
                       {bot.cliType}: {bot.workingDir}
                     </span>
                     {isOffline ? (
@@ -114,11 +120,12 @@ export function BotSwitcherSheet({
                   onOpenInviteManager?.();
                   onClose();
                 }}
-                className={`w-full rounded-xl border px-4 py-3 text-left font-medium ${
+                className={clsx(
+                  "w-full rounded-xl border px-4 py-3 text-left font-medium",
                   inviteManagerActive
-                    ? "border-[var(--accent)] bg-[var(--accent)]/5"
-                    : "border-[var(--border)] hover:bg-[var(--surface-strong)]"
-                }`}
+                    ? "border-transparent tcb-selected-accent"
+                    : "border-[var(--border)] hover:bg-[var(--surface-strong)]",
+                )}
               >
                 管理中心
               </button>
