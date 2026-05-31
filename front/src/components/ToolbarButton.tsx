@@ -15,7 +15,7 @@ export function toolbarButtonClass(
     variant === "primary"
       ? "border border-transparent bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90"
       : variant === "danger"
-        ? "border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+        ? "border border-[var(--workbench-hairline)] bg-[var(--surface-strong)] text-[var(--danger)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]"
         : variant === "ghost"
           ? "border border-transparent text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
           : "border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",

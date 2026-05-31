@@ -305,8 +305,8 @@ export function ChatComposer({
       ) : null}
 
       {clusterMode && clusterAgents.length > 0 ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-2 py-2 text-xs">
-          <span className="font-medium text-emerald-700">智能体集群</span>
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 py-2 text-xs">
+          <span className="font-medium text-[var(--accent)]">智能体集群</span>
           {clusterAgents.map((agent) => (
             <button
               key={agent.id}
@@ -314,7 +314,7 @@ export function ChatComposer({
               aria-label={`@${agent.id} ${agent.name}`}
               onClick={() => insertMention(agent)}
               disabled={inputDisabled}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-200 bg-white/80 px-2.5 py-1 text-emerald-900 hover:border-emerald-400 hover:bg-white disabled:opacity-60"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-2.5 py-1 text-[var(--text)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
             >
               <span className="font-medium">@{agent.id}</span>
               <span className="truncate text-[var(--muted)]">{agent.name}</span>
@@ -444,7 +444,7 @@ export function ChatComposer({
                   aria-label={`@${agent.id} ${agent.name}`}
                   aria-selected={false}
                   onClick={() => insertMention(agent)}
-                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  className="flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-sm hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]"
                 >
                   <span className="font-medium text-[var(--text)]">@{agent.id}</span>
                   <span className="truncate text-[var(--muted)]">{agent.name}</span>

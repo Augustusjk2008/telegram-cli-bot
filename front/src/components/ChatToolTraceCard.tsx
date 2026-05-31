@@ -91,22 +91,22 @@ function collapseText(value: string, maxLines = MAX_PREVIEW_LINES, maxChars = MA
 function toneClasses(tone: "neutral" | "success" | "error") {
   if (tone === "success") {
     return {
-      container: "border-emerald-200 bg-emerald-50/80",
-      badge: "border-emerald-200 bg-emerald-100 text-emerald-700",
-      text: "text-emerald-900",
+      container: "border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--text)]",
+      badge: "border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)]",
+      text: "text-[var(--text)]",
     };
   }
   if (tone === "error") {
     return {
-      container: "border-red-200 bg-red-50/80",
-      badge: "border-red-200 bg-red-100 text-red-700",
-      text: "text-red-900",
+      container: "border-[var(--workbench-hairline)] bg-[var(--surface-strong)] text-[var(--danger)]",
+      badge: "border-[var(--workbench-hairline)] bg-[var(--surface-strong)] text-[var(--danger)]",
+      text: "text-[var(--danger)]",
     };
   }
   return {
-    container: "border-sky-200 bg-sky-50/80",
-    badge: "border-sky-200 bg-sky-100 text-sky-700",
-    text: "text-sky-900",
+    container: "border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)]",
+    badge: "border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)]",
+    text: "text-[var(--text)]",
   };
 }
 
@@ -125,7 +125,7 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
   return (
     <div className={`rounded-lg border px-3 py-3 ${tones.container}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</div>
+        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">{label}</div>
         <div className="flex flex-wrap items-center gap-2">
           {typeof parsedStatus.exitCode === "number" ? (
             <span className={`rounded-md border px-2 py-0.5 text-[11px] ${tones.badge}`}>
@@ -137,7 +137,7 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
             </span>
           ) : null}
           {parsedStatus.wallTime ? (
-            <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+            <span className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-0.5 text-[11px] text-[var(--muted)]">
               {parsedStatus.wallTime}
             </span>
           ) : null}
@@ -150,7 +150,7 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
         <button
           type="button"
           onClick={() => setSummaryExpanded((prev) => !prev)}
-          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--muted)] hover:text-[var(--text)]"
         >
           {summaryExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           <span>{summaryExpanded ? "收起完整内容" : "展开完整内容"}</span>
@@ -163,7 +163,7 @@ function ToolResultSection({ event, index, total }: { event: ChatTraceEvent; ind
             aria-label={`${rawExpanded ? "收起" : "展开"}${label}原始内容`}
             aria-expanded={rawExpanded}
             onClick={() => setRawExpanded((prev) => !prev)}
-            className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted)] hover:text-[var(--text)]"
           >
             {rawExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
             <span>{rawExpanded ? "收起原始内容" : "展开原始内容"}</span>
@@ -214,7 +214,7 @@ export function ChatToolTraceCard({ entry }: Props) {
             <button
               type="button"
               onClick={() => setCallSummaryExpanded((prev) => !prev)}
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--muted)] hover:text-[var(--text)]"
             >
               {callSummaryExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
               <span>{callSummaryExpanded ? "收起完整内容" : "展开完整内容"}</span>
@@ -227,7 +227,7 @@ export function ChatToolTraceCard({ entry }: Props) {
                 aria-label={`${callRawExpanded ? "收起" : "展开"}调用原始内容`}
                 aria-expanded={callRawExpanded}
                 onClick={() => setCallRawExpanded((prev) => !prev)}
-                className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted)] hover:text-[var(--text)]"
               >
                 {callRawExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                 <span>{callRawExpanded ? "收起原始内容" : "展开原始内容"}</span>

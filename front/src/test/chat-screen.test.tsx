@@ -475,13 +475,18 @@ test("lazy-loads trace details and groups tool call/result into one trace card",
         },
       },
       {
+        kind: "event",
+        rawType: "thread.started",
+        summary: "同步事件已记录。",
+      },
+      {
         kind: "commentary",
         summary: "目录已读取完成。",
       },
     ],
-    traceCount: 4,
+    traceCount: 5,
     toolCallCount: 1,
-    processCount: 2,
+    processCount: 3,
   }));
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [
@@ -499,9 +504,9 @@ test("lazy-loads trace details and groups tool call/result into one trace card",
         createdAt: new Date().toISOString(),
         state: "done",
         meta: {
-          traceCount: 4,
+          traceCount: 5,
           toolCallCount: 1,
-          processCount: 2,
+          processCount: 3,
         },
       },
     ],
@@ -525,11 +530,14 @@ test("lazy-loads trace details and groups tool call/result into one trace card",
 
   const panel = screen.getByTestId("chat-trace-panel-assistant-1");
   const traceItems = Array.from(panel.querySelectorAll("[data-trace-seq]"));
-  expect(traceItems).toHaveLength(3);
+  expect(traceItems).toHaveLength(4);
   expect(traceItems[0]?.textContent).toContain("我先检查目录结构。");
   expect(traceItems[1]?.textContent).toContain("工具调用 1");
   expect(traceItems[1]?.textContent).toContain("Exit 1");
-  expect(traceItems[2]?.textContent).toContain("目录已读取完成。");
+  expect(traceItems[2]?.textContent).toContain("同步事件已记录。");
+  expect(traceItems[3]?.textContent).toContain("目录已读取完成。");
+  expect(screen.getByText("我先检查目录结构。").className).not.toContain("text-slate-800");
+  expect(traceItems[2]?.className).not.toContain("bg-violet-50");
 });
 
 

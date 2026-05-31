@@ -128,7 +128,7 @@ function ChatTracePanelInner({
                 void handleCopyFinalAnswer();
               }}
               className={copiedFinalAnswer
-                ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors disabled:cursor-not-allowed"
+                ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] transition-colors disabled:cursor-not-allowed"
                 : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}
             >
               {copiedFinalAnswer ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -195,21 +195,21 @@ function ChatTracePanelInner({
                   key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
                   data-trace-seq={index}
                   className={isGenericEvent
-                    ? "rounded-lg border border-violet-200 bg-violet-50/80 px-3 py-2"
+                    ? "rounded-lg border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-3 py-2"
                     : "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-2"}
                   {...traceItemMotion}
                 >
                   <div
                     className={isGenericEvent
-                      ? "text-[11px] font-medium uppercase tracking-[0.12em] text-violet-600"
-                      : "text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500"}
+                      ? "text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]"
+                      : "text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]"}
                   >
                     {describeProcessEvent(event)}
                   </div>
                   <div
                     className={isGenericEvent
-                      ? "mt-1 whitespace-pre-wrap break-all text-sm text-violet-900"
-                      : "mt-1 whitespace-pre-wrap break-all text-sm text-slate-800"}
+                      ? "mt-1 whitespace-pre-wrap break-all text-sm text-[var(--text)]"
+                      : "mt-1 whitespace-pre-wrap break-all text-sm text-[var(--text)]"}
                   >
                     {event.summary || "无摘要"}
                   </div>

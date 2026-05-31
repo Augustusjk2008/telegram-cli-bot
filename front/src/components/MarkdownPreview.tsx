@@ -238,7 +238,7 @@ function MarkdownPre({
           void handleCopyCode();
         }}
         className={copied
-          ? "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-emerald-300/70 bg-emerald-50 text-emerald-600 transition-colors disabled:cursor-not-allowed"
+          ? "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] transition-colors disabled:cursor-not-allowed"
           : "absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-white/10 text-slate-200 opacity-0 transition-colors hover:bg-white/20 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"}
       >
         {copied ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}

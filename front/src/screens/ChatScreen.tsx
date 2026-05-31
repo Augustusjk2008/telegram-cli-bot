@@ -750,10 +750,9 @@ function clusterTaskStatusText(task: ClusterAgentTask) {
 }
 
 function clusterTaskStatusClass(task: ClusterAgentTask) {
-  if (task.status === "completed") return "bg-emerald-100 text-emerald-700";
-  if (task.status === "failed") return "bg-red-100 text-red-700";
-  if (task.status === "running") return "bg-amber-100 text-amber-700";
-  return "bg-slate-100 text-slate-700";
+  if (task.status === "completed") return "bg-[var(--accent-soft)] text-[var(--accent)]";
+  if (task.status === "failed") return "bg-[var(--surface-strong)] text-[var(--danger)]";
+  return "bg-[var(--surface-strong)] text-[var(--text)]";
 }
 
 function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agents: AgentSummary[] }) {
@@ -762,16 +761,16 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
   }
   const agentNameMap = new Map(agents.map((agent) => [agent.id, agent.name || agent.id]));
   return (
-    <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-950 shadow-[var(--shadow-soft)]">
+    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-sm text-[var(--text)] shadow-[var(--shadow-soft)]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">智能体集群任务</span>
         {status.pendingCount > 0 ? (
-          <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-0.5 text-xs text-emerald-800">
+          <span className="inline-flex items-center gap-1 rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--text)]">
             <LoaderCircle className="h-3 w-3 animate-spin" />
             {status.pendingCount} 项进行中
           </span>
         ) : (
-          <span className="rounded-md bg-white px-2 py-0.5 text-xs text-emerald-800">已汇总</span>
+          <span className="rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--text)]">已汇总</span>
         )}
       </div>
       <div className="mt-3 space-y-2">
@@ -779,19 +778,19 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
           const agentId = task.agentId || "agent";
           const agentName = agentNameMap.get(agentId) || "";
           return (
-            <div key={task.taskId} className="rounded-md border border-emerald-100 bg-white/90 px-3 py-2">
+            <div key={task.taskId} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">@{agentId}</span>
                 {agentName && agentName !== agentId ? (
-                  <span className="text-xs text-emerald-800">{agentName}</span>
+                  <span className="text-xs text-[var(--muted)]">{agentName}</span>
                 ) : null}
                 <span className={`rounded-md px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
                   {clusterTaskStatusText(task)}
                 </span>
-                {task.modelTier ? <span className="text-xs text-emerald-800">{task.modelTier}</span> : null}
+                {task.modelTier ? <span className="text-xs text-[var(--muted)]">{task.modelTier}</span> : null}
               </div>
               {task.error ? (
-                <p className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700">{task.error}</p>
+                <p className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--danger)]">{task.error}</p>
               ) : null}
             </div>
           );
