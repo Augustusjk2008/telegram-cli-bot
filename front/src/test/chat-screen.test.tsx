@@ -277,6 +277,7 @@ function mockClipboardWrite() {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   window.localStorage.clear();
 });
 
@@ -332,6 +333,91 @@ test("shows streaming state before assistant message completes", async () => {
   expect(screen.getByText("正在输出...")).toBeInTheDocument();
   expect(screen.queryByText("正在输出")).not.toBeInTheDocument();
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
+});
+
+test("uses full width chat content outside embedded workbench", async () => {
+  render(<ChatScreen botAlias="main" client={createClient()} />);
+
+  expect(await screen.findByTestId("chat-scroll-content")).toHaveClass("w-full");
+  expect(screen.getByTestId("chat-scroll-content")).not.toHaveClass("max-w-5xl");
+});
+
+test("keeps embedded chat content capped", async () => {
+  render(<ChatScreen botAlias="main" client={createClient()} embedded />);
+
+  expect(await screen.findByTestId("chat-scroll-content")).toHaveClass("max-w-5xl");
+});
+
+test("shows read only reason and disables composer", async () => {
+  render(
+    <ChatScreen
+      botAlias="main"
+      client={createClient()}
+      readOnly
+      disabledReason="主机已关闭聊天，当前无法发送消息"
+    />,
+  );
+
+  expect(await screen.findAllByText("主机已关闭聊天，当前无法发送消息")).toHaveLength(2);
+  expect(screen.getByPlaceholderText("主机已关闭聊天，当前无法发送消息")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+});
+
+test("copies final answer using execCommand fallback when clipboard api is unavailable", async () => {
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: vi.fn(() => true),
+  });
+  const execCommand = vi.spyOn(document, "execCommand");
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
+  const client = createClient({
+    listMessages: async () => [{
+      id: "assistant-copy",
+      role: "assistant",
+      text: "最终答案",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { traceCount: 1, toolCallCount: 0, processCount: 1 },
+    }],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "复制最终回答" }));
+
+  expect(execCommand).toHaveBeenCalledWith("copy");
+  expect(await screen.findByRole("button", { name: "已复制最终回答" })).toBeInTheDocument();
+});
+
+test("renders prompt preset editor in a high level document portal", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      promptPresets: [{ id: "p1", title: "修复", content: "请修复" }],
+      effectiveCapabilities: ["admin_ops"],
+    } as BotOverview),
+  });
+
+  const { container } = render(<ChatScreen botAlias="main" client={client} />);
+  await userEvent.click(await screen.findByRole("button", { name: "打开提示词预设" }));
+  await userEvent.click(screen.getByRole("button", { name: "配置预设" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "配置提示词预设" });
+  const backdrop = dialog.parentElement;
+  expect(container).not.toContainElement(dialog);
+  expect(document.body).toContainElement(dialog);
+  expect(backdrop).toHaveClass("z-[1000]");
 });
 
 

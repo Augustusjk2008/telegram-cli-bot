@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Settings, Trash2, X } from "lucide-react";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
@@ -272,6 +273,138 @@ export function ChatComposer({
     );
   }
 
+  const presetEditorDialog = presetEditorOpen ? (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 px-4 py-6"
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !presetSaving) {
+          setPresetEditorOpen(false);
+        }
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="配置提示词预设"
+        className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)]"
+      >
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text)]">提示词预设</h2>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">{editingPresetScopeLabel} · {draftPresets.length}/50</p>
+            <div className="mt-2 inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-1">
+              <button
+                type="button"
+                onClick={() => setEditingPresetScope("global")}
+                disabled={presetSaving}
+                className={editingPresetScope === "global"
+                  ? "rounded-md bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] shadow-sm"
+                  : "rounded-md px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)]"}
+              >
+                全局
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditingPresetScope("bot")}
+                disabled={presetSaving}
+                className={editingPresetScope === "bot"
+                  ? "rounded-md bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] shadow-sm"
+                  : "rounded-md px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)]"}
+              >
+                当前 Bot
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="关闭提示词预设配置"
+            onClick={() => setPresetEditorOpen(false)}
+            disabled={presetSaving}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)] disabled:opacity-50"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          {draftPresets.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-[var(--border)] px-4 py-8 text-center text-sm text-[var(--muted)]">
+              暂无预设
+            </div>
+          ) : null}
+          {draftPresets.map((preset, index) => (
+            <div key={preset.id || index} className="rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-3">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <label className="block text-sm font-medium text-[var(--text)]">
+                    {`预设标题 ${index + 1}`}
+                    <input
+                      value={preset.title}
+                      maxLength={80}
+                      onChange={(event) => updateDraftPreset(index, { title: event.currentTarget.value })}
+                      className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-[var(--text)]">
+                    {`预设内容 ${index + 1}`}
+                    <textarea
+                      value={preset.content}
+                      maxLength={12000}
+                      rows={4}
+                      onChange={(event) => updateDraftPreset(index, { content: event.currentTarget.value })}
+                      className="mt-1 max-h-56 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`删除预设 ${preset.title || index + 1}`}
+                  onClick={() => removeDraftPreset(index)}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-red-50 hover:text-red-600"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {presetError ? (
+          <div className="border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{presetError}</div>
+        ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
+          <button
+            type="button"
+            onClick={addDraftPreset}
+            disabled={presetSaving || draftPresets.length >= 50}
+            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" />
+            新增预设
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPresetEditorOpen(false)}
+              disabled={presetSaving}
+              className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveDraftPresets()}
+              disabled={presetSaving}
+              className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-50"
+            >
+              {presetSaving ? "保存中..." : "保存预设"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div data-testid="chat-composer-root" data-pulse={pulse ? "true" : "false"} className={shellClassName}>
       {attachments.length > 0 || uploadingAttachments ? (
@@ -461,128 +594,7 @@ export function ChatComposer({
           {uploadingAttachments ? "上传中..." : "发送"}
         </button>
       </form>
-      {presetEditorOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 py-6">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="配置提示词预设"
-            className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)]"
-          >
-            <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-              <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">提示词预设</h2>
-                <p className="mt-0.5 text-xs text-[var(--muted)]">{editingPresetScopeLabel} · {draftPresets.length}/50</p>
-                <div className="mt-2 inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-1">
-                  <button
-                    type="button"
-                    onClick={() => setEditingPresetScope("global")}
-                    disabled={presetSaving}
-                    className={editingPresetScope === "global"
-                      ? "rounded-md bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] shadow-sm"
-                      : "rounded-md px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)]"}
-                  >
-                    全局
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingPresetScope("bot")}
-                    disabled={presetSaving}
-                    className={editingPresetScope === "bot"
-                      ? "rounded-md bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] shadow-sm"
-                      : "rounded-md px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)]"}
-                  >
-                    当前 Bot
-                  </button>
-                </div>
-              </div>
-              <button
-                type="button"
-                aria-label="关闭提示词预设配置"
-                onClick={() => setPresetEditorOpen(false)}
-                disabled={presetSaving}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)] disabled:opacity-50"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-              {draftPresets.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[var(--border)] px-4 py-8 text-center text-sm text-[var(--muted)]">
-                  暂无预设
-                </div>
-              ) : null}
-              {draftPresets.map((preset, index) => (
-                <div key={preset.id || index} className="rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-3">
-                  <div className="flex items-start gap-3">
-                    <div className="min-w-0 flex-1 space-y-2">
-                      <label className="block text-sm font-medium text-[var(--text)]">
-                        {`预设标题 ${index + 1}`}
-                        <input
-                          value={preset.title}
-                          maxLength={80}
-                          onChange={(event) => updateDraftPreset(index, { title: event.currentTarget.value })}
-                          className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
-                        />
-                      </label>
-                      <label className="block text-sm font-medium text-[var(--text)]">
-                        {`预设内容 ${index + 1}`}
-                        <textarea
-                          value={preset.content}
-                          maxLength={12000}
-                          rows={4}
-                          onChange={(event) => updateDraftPreset(index, { content: event.currentTarget.value })}
-                          className="mt-1 max-h-56 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
-                        />
-                      </label>
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={`删除预设 ${preset.title || index + 1}`}
-                      onClick={() => removeDraftPreset(index)}
-                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-red-50 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {presetError ? (
-              <div className="border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{presetError}</div>
-            ) : null}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
-              <button
-                type="button"
-                onClick={addDraftPreset}
-                disabled={presetSaving || draftPresets.length >= 50}
-                className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
-              >
-                <Plus className="h-4 w-4" />
-                新增预设
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPresetEditorOpen(false)}
-                  disabled={presetSaving}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-50"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveDraftPresets()}
-                  disabled={presetSaving}
-                  className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-50"
-                >
-                  {presetSaving ? "保存中..." : "保存预设"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {presetEditorDialog ? createPortal(presetEditorDialog, document.body) : null}
     </div>
   );
 }

@@ -88,6 +88,17 @@
       "cwd": ".",
       "confirm": true,
       "enabled": true
+    },
+    {
+      "id": "codegraph",
+      "label": "代码同步",
+      "icon": "Upload",
+      "windowsCommand": "codegraph sync .",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }

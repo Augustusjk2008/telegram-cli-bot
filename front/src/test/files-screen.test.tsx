@@ -430,6 +430,30 @@ test("renders markdown files as formatted content", async () => {
   );
 });
 
+test("markdown code block copy falls back to execCommand", async () => {
+  const user = userEvent.setup();
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: vi.fn(() => true),
+  });
+  const execCommand = vi.spyOn(document, "execCommand");
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
+
+  render(<FilesScreen botAlias="main" client={createClient()} />);
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  await user.click(await screen.findByRole("button", { name: "复制代码块" }));
+
+  expect(execCommand).toHaveBeenCalledWith("copy");
+  expect(await screen.findByRole("button", { name: "已复制代码块" })).toBeInTheDocument();
+});
+
 
 
 

@@ -366,6 +366,11 @@ export function App() {
   const canWriteCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "write_files");
   const structureOnly = !canReadCurrentBotFiles;
   const canUseCurrentBotTerminal = canUseTerminal && canOperateCurrentBot;
+  const chatDisabledReason = chatReadOnly
+    ? "主机已关闭聊天，当前无法发送消息"
+    : canOperateCurrentBot
+      ? ""
+      : "你无权限使用此智能体聊天";
   const terminalDisabledReason = !canUseTerminal
     ? "你无权限使用终端"
     : canUseCurrentBotTerminal
@@ -896,6 +901,7 @@ export function App() {
               userAvatarName={userAvatarName}
               isVisible={instanceKey === chatInstanceKey}
               readOnly={chatReadOnly || !canOperateCurrentBot}
+              disabledReason={chatDisabledReason}
               allowTrace={allowTrace}
               isImmersive={instanceKey === chatInstanceKey ? isChatImmersive : false}
               onToggleImmersive={instanceKey === chatInstanceKey
@@ -1062,6 +1068,7 @@ export function App() {
             canWriteFiles={canWriteCurrentBotFiles}
             canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
             chatReadOnly={chatReadOnly || !canOperateCurrentBot}
+            chatDisabledReason={chatDisabledReason}
             botCanOperate={canOperateCurrentBot}
             terminalDisabledReason={terminalDisabledReason}
             allowTrace={allowTrace}
@@ -1097,6 +1104,7 @@ export function App() {
                       userAvatarName={userAvatarName}
                       isVisible={instanceKey === chatInstanceKey && desktopChatPaneVisible}
                       readOnly={chatReadOnly || !canOperateCurrentBot}
+                      disabledReason={chatDisabledReason}
                       allowTrace={allowTrace}
                       embedded
                       onRequestDesktopPreview={requestPreview}

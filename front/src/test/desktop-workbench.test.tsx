@@ -239,6 +239,90 @@ test("desktop assistant bot with admin ops opens assistant ops from the activity
   expect(await screen.findByTestId("desktop-file-tree-scroll")).toBeInTheDocument();
 });
 
+test("file tree applies git status color and font weight to names", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getGitTreeStatus").mockResolvedValue({
+    repoFound: true,
+    workingDir: "C:\\workspace",
+    repoPath: "C:\\workspace",
+    items: {
+      "README.md": "modified",
+      "package.json": "added",
+      "docs": "ignored",
+    },
+  });
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const modifiedButton = await screen.findByRole("button", { name: "打开 README.md" });
+  const addedButton = await screen.findByRole("button", { name: "打开 package.json" });
+  const ignoredButton = await screen.findByRole("button", { name: "展开 docs" });
+
+  expect(within(modifiedButton).getByText("README.md")).toHaveClass("text-yellow-400", "font-semibold");
+  expect(within(addedButton).getByText("package.json")).toHaveClass("text-emerald-500", "font-semibold");
+  expect(within(ignoredButton).getByText("docs")).toHaveClass("text-[var(--muted)]", "font-semibold");
+});
+
+test("debug pane tolerates missing launch schema fields", () => {
+  const profile = {
+    specVersion: 1,
+    providerId: "custom",
+    providerLabel: "Custom Debug",
+    configName: "custom",
+    target: {},
+    capabilities: {},
+    launchSchema: {} as DebugProfile["launchSchema"],
+    launchDefaults: {},
+    program: "",
+    cwd: "",
+    miDebuggerPath: "",
+    prepareCommand: "",
+    stopAtEntry: true,
+    setupCommands: [],
+    remoteHost: "",
+    remoteUser: "",
+    remoteDir: "",
+    remotePort: 0,
+  } satisfies DebugProfile;
+
+  expect(() => render(
+    <DebugPane
+      profile={profile}
+      state={{
+        phase: "idle",
+        message: "",
+        breakpoints: [],
+        frames: [],
+        scopes: [],
+        variables: {},
+        currentFrameId: "",
+      }}
+      prepareLogs={[]}
+      launchForm={{}}
+      onLaunchFormChange={() => {}}
+      onLaunch={() => {}}
+      onContinue={() => {}}
+      onPause={() => {}}
+      onNext={() => {}}
+      onStepIn={() => {}}
+      onStepOut={() => {}}
+      onStop={() => {}}
+      onSelectFrame={() => {}}
+      onRequestVariables={() => {}}
+    />,
+  )).not.toThrow();
+  expect(screen.getByTestId("debug-pane")).toHaveTextContent("Custom Debug");
+});
+
 test("desktop search inputs show a focus-within ring around icon and input", async () => {
   const user = userEvent.setup();
 

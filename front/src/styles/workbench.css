@@ -63,9 +63,9 @@
 }
 
 .desktop-workbench-root[data-has-focus="true"] .desktop-workbench-pane:not([data-focused="true"]) {
-  opacity: 0.18;
+  opacity: 0.48;
   pointer-events: none;
-  filter: saturate(0.72);
+  filter: saturate(0.9);
 }
 
 .desktop-workbench-pane[data-focused="true"] {

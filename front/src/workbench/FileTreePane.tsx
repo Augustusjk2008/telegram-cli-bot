@@ -139,7 +139,7 @@ function resolveGitDecoration(
 
 function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
   if (gitDecoration === "ignored") {
-    return "text-[var(--muted)]";
+    return "text-[var(--muted)] font-semibold";
   }
   if (gitDecoration === "added") {
     return "text-emerald-500 font-semibold";
@@ -1400,12 +1400,11 @@ export function FileTreePane({
             className={clsx(
               itemButtonClassName,
               dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
-              itemToneClass,
             )}
           >
             <span className="flex w-full min-w-0 items-center gap-2">
               <TreeNodeIcon kind={iconKind} />
-              <span className="truncate">{dirLabel}</span>
+              <span className={clsx("truncate", itemToneClass)}>{dirLabel}</span>
             </span>
           </button>
         ) : (
@@ -1424,11 +1423,11 @@ export function FileTreePane({
                 onOpenFile(entry.path);
               }
             }}
-            className={clsx(itemButtonClassName, itemToneClass)}
+            className={itemButtonClassName}
           >
             <span className="flex w-full min-w-0 items-center gap-2">
               <TreeNodeIcon kind={iconKind} />
-              <span className="truncate">{entry.name}</span>
+              <span className={clsx("truncate", itemToneClass)}>{entry.name}</span>
             </span>
           </button>
         )}

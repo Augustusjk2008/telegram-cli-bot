@@ -12,6 +12,7 @@ test("app has no horizontal overflow on mobile", async ({ page }) => {
 
   const actionBar = page.getByTestId("chat-action-bar");
   await expect(actionBar).toBeVisible();
+  await expect(page.getByTestId("chat-scroll-content")).not.toHaveClass(/max-w-5xl/);
   const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const innerWidth = await page.evaluate(() => window.innerWidth);
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth);

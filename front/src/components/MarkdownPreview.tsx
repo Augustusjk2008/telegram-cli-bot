@@ -5,6 +5,7 @@ import rehypeKatex from "rehype-katex";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 
 type Props = {
@@ -183,6 +184,7 @@ function MarkdownPre({
   isChat: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const copyFeedbackTimerRef = useRef<number | null>(null);
   const childNodes = Children.toArray(children);
   const firstChild = childNodes[0];
@@ -212,11 +214,17 @@ function MarkdownPre({
 
   const copyButtonLabel = copied ? "已复制代码块" : "复制代码块";
   const handleCopyCode = async () => {
-    if (copied || !navigator.clipboard?.writeText) {
+    if (copied) {
       return;
     }
 
-    await navigator.clipboard.writeText(codeText);
+    const ok = await copyText(codeText);
+    if (!ok) {
+      setCopyFailed(true);
+      return;
+    }
+
+    setCopyFailed(false);
     setCopied(true);
     if (copyFeedbackTimerRef.current !== null) {
       window.clearTimeout(copyFeedbackTimerRef.current);
@@ -243,6 +251,11 @@ function MarkdownPre({
       >
         {copied ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
+      {copyFailed ? (
+        <div className="absolute right-2 top-10 z-10 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+          复制失败，请检查剪贴板权限
+        </div>
+      ) : null}
       <pre className="min-w-0 overflow-x-auto">
         <code className="block bg-transparent px-4 py-3 pr-12 font-mono text-[13px] leading-6 text-[var(--code-text)]">
           {codeText}

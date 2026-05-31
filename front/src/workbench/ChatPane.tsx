@@ -8,6 +8,8 @@ type Props = {
   userAvatarName?: string;
   client: WebBotClient;
   readOnly?: boolean;
+  readOnlyReason?: string;
+  disabledReason?: string;
   allowTrace?: boolean;
   visible?: boolean;
   focused?: boolean;
@@ -23,6 +25,8 @@ export function ChatPane({
   userAvatarName,
   client,
   readOnly = false,
+  readOnlyReason,
+  disabledReason,
   allowTrace = true,
   visible = true,
   focused = false,
@@ -38,6 +42,8 @@ export function ChatPane({
       userAvatarName={userAvatarName}
       client={client}
       readOnly={readOnly}
+      readOnlyReason={readOnlyReason}
+      disabledReason={disabledReason}
       allowTrace={allowTrace}
       isVisible={visible}
       embedded

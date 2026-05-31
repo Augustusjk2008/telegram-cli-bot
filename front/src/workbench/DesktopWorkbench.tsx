@@ -109,6 +109,8 @@ type Props = {
   canWriteFiles?: boolean;
   canOpenSystemFolder?: boolean;
   chatReadOnly?: boolean;
+  chatReadOnlyReason?: string;
+  chatDisabledReason?: string;
   botCanOperate?: boolean;
   terminalDisabledReason?: string;
   allowTrace?: boolean;
@@ -150,6 +152,8 @@ export function DesktopWorkbench({
   canWriteFiles = true,
   canOpenSystemFolder = false,
   chatReadOnly = false,
+  chatReadOnlyReason,
+  chatDisabledReason,
   botCanOperate = true,
   terminalDisabledReason = "",
   allowTrace = true,
@@ -1221,6 +1225,8 @@ export function DesktopWorkbench({
                   userAvatarName={userAvatarName}
                   client={client}
                   readOnly={chatReadOnly}
+                  readOnlyReason={chatReadOnlyReason}
+                  disabledReason={chatDisabledReason}
                   allowTrace={allowTrace}
                   visible={showChatPane}
                   focused={focusedPane === "chat"}

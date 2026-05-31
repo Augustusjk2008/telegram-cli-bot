@@ -122,6 +122,22 @@ describe("RealWebBotClient", () => {
     expect(status.agents[0].timeoutSeconds).toBe(180);
   });
 
+  test("getDebugProfile normalizes snake case launch schema fields", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      provider_id: "custom",
+      provider_label: "Custom Debug",
+      config_name: "custom",
+      launch_schema: {},
+    }));
+
+    const client = new RealWebBotClient();
+    const profile = await client.getDebugProfile("main");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/bots/main/debug/profile", expect.objectContaining({ cache: "no-store" }));
+    expect(profile?.providerId).toBe("custom");
+    expect(profile?.launchSchema.fields).toEqual([]);
+  });
+
   
   
   test("sendMessage includes cluster mention payload", async () => {

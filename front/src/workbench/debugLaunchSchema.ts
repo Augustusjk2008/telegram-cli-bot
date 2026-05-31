@@ -28,8 +28,9 @@ export function fieldsForProfile(profile: DebugProfile | null): DebugLaunchField
   if (!profile) {
     return [];
   }
-  if (profile.launchSchema.fields.length > 0) {
-    return profile.launchSchema.fields;
+  const fields = Array.isArray(profile.launchSchema?.fields) ? profile.launchSchema.fields : [];
+  if (fields.length > 0) {
+    return fields;
   }
   if (profile.providerId !== "cpp-gdb") {
     return [];

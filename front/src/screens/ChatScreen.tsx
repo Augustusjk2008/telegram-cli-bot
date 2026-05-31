@@ -47,6 +47,7 @@ import {
 } from "../utils/assistantProposalPatchEvents";
 import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
+import { copyText } from "../utils/clipboard";
 import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
@@ -65,6 +66,8 @@ type Props = {
   botAvatarName?: string;
   userAvatarName?: string;
   readOnly?: boolean;
+  readOnlyReason?: string;
+  disabledReason?: string;
   allowTrace?: boolean;
   isVisible?: boolean;
   isImmersive?: boolean;
@@ -816,6 +819,7 @@ type ChatMessageRowProps = {
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: (messageClientStateKey: string) => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
+  wideMessages: boolean;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -834,6 +838,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onLoadTrace,
   onToggleTracePanel,
   onCopyFinalAnswer,
+  wideMessages,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
 
@@ -873,7 +878,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
       className={messageAlign === "right" ? "flex justify-end" : "flex justify-start"}
       {...resolveMotionProps(delightMotion.messagePop, reduceMotion)}
     >
-      <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
+      <div className={wideMessages ? "min-w-0 w-full" : "min-w-0 max-w-[96%] sm:max-w-[90%]"}>
         <ChatMessageMeta
           name={messageName}
           createdAt={chatMessageDisplayTime(item)}
@@ -1007,6 +1012,7 @@ const ChatMessageList = memo(function ChatMessageList({
   executingPlanMessageId,
   planExecuteError,
   handleExecutePlan,
+  wideMessages,
 }: {
   rows: ChatMessageRowModel[];
   assistantName: string;
@@ -1023,6 +1029,7 @@ const ChatMessageList = memo(function ChatMessageList({
   executingPlanMessageId: string;
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
+  wideMessages: boolean;
 }) {
   return rows.map((row) => (
     <div key={row.item.id} className="space-y-1">
@@ -1042,10 +1049,11 @@ const ChatMessageList = memo(function ChatMessageList({
         onLoadTrace={loadMessageTrace}
         onToggleTracePanel={handleToggleTracePanel}
         onCopyFinalAnswer={handleCopyFinalAnswer}
+        wideMessages={wideMessages}
       />
       {row.planDraft ? (
         <div className="flex justify-start">
-          <div className="min-w-0 max-w-[96%] sm:max-w-[90%]">
+          <div className={wideMessages ? "min-w-0 w-full" : "min-w-0 max-w-[96%] sm:max-w-[90%]"}>
             <PlanDraftCard
               content={row.planDraft}
               executing={executingPlanMessageId === row.item.id}
@@ -1066,6 +1074,8 @@ export function ChatScreen({
   botAvatarName,
   userAvatarName,
   readOnly = false,
+  readOnlyReason,
+  disabledReason,
   allowTrace = true,
   isVisible = true,
   isImmersive = false,
@@ -2024,13 +2034,12 @@ export function ChatScreen({
   }, []);
 
   const handleCopyFinalAnswer = useCallback(async (text: string) => {
-    const clipboard = globalThis.navigator?.clipboard;
-    if (!clipboard?.writeText) {
-      setError("当前环境不支持剪贴板复制");
-      return false;
-    }
     try {
-      await clipboard.writeText(text);
+      const ok = await copyText(text);
+      if (!ok) {
+        setError("复制最终回答失败，请检查浏览器剪贴板权限");
+        return false;
+      }
       return true;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "复制最终回答失败");
@@ -2827,6 +2836,9 @@ export function ChatScreen({
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
   const chatMutationsDisabled = readOnly || activeClusterChildReadOnly;
+  const chatDisabledReason = activeClusterChildReadOnly
+    ? "集群子智能体只读，请切回主智能体发送消息"
+    : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = chatMutationsDisabled || !isStreaming || actionLoading === "kill";
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
@@ -2842,6 +2854,9 @@ export function ChatScreen({
   const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
     ? [selectedModel, ...modelOptions]
     : modelOptions;
+  const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
+  const composerPlaceholder = chatDisabledReason
+    || (clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"));
   const deletedAttachmentKeysByMessage = useMemo(() => {
     const next: Record<string, Record<string, boolean>> = {};
     for (const [key, value] of Object.entries(deletedAttachmentKeys)) {
@@ -2971,6 +2986,11 @@ export function ChatScreen({
           ) : null}
         </section>
       ) : null}
+      {chatDisabledReason ? (
+        <section className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 shadow-[var(--shadow-soft)]">
+          {chatDisabledReason}
+        </section>
+      ) : null}
       <section
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
@@ -2980,7 +3000,7 @@ export function ChatScreen({
         onKeyDown={handleScrollKeyDown}
         className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-4 pb-24 pt-4" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-4"}
       >
-        <div ref={scrollContentRef} className="mx-auto w-full max-w-5xl space-y-4">
+        <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">加载中...</div>
           ) : null}
@@ -3021,6 +3041,7 @@ export function ChatScreen({
             executingPlanMessageId={executingPlanMessageId}
             planExecuteError={planExecuteError}
             handleExecutePlan={handleExecutePlan}
+            wideMessages={!embedded}
           />
           {clusterTaskStatus ? (
             <ClusterTaskPanel
@@ -3064,7 +3085,7 @@ export function ChatScreen({
       ) : null}
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         {chatMutationsDisabled ? (
-          <p className="px-4 pt-3 text-xs text-[var(--muted)]">只读模式</p>
+          <p className="px-4 pt-3 text-xs font-medium text-amber-700">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
           <div className="mx-3 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-[var(--shadow-soft)]">
@@ -3086,7 +3107,7 @@ export function ChatScreen({
           disabled={chatMutationsDisabled || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
-          placeholder={clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")}
+          placeholder={composerPlaceholder}
           globalPromptPresets={botOverview?.globalPromptPresets || []}
           botPromptPresets={botOverview?.promptPresets || []}
           canManagePromptPresets={canManagePromptPresets}

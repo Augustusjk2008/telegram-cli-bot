@@ -108,6 +108,7 @@ import type {
   DebugBreakpoint,
   DebugCapabilityMap,
   DebugFrame,
+  DebugLaunchField,
   DebugLaunchSchema,
   DebugProfile,
   DebugScope,
@@ -3170,6 +3171,17 @@ function mapDebugState(raw: Record<string, unknown>): DebugState {
   };
 }
 
+function mapDebugLaunchSchema(raw: unknown): DebugLaunchSchema {
+  if (!raw || typeof raw !== "object") {
+    return { fields: [] };
+  }
+  const schema = raw as Record<string, unknown>;
+  return {
+    ...schema,
+    fields: Array.isArray(schema.fields) ? schema.fields as DebugLaunchField[] : [],
+  } as DebugLaunchSchema;
+}
+
 function parseSseBlock(block: string): StreamEvent | null {
   const lines = block.split("\n");
   let eventType = "message";
@@ -4237,9 +4249,7 @@ export class RealWebBotClient implements WebBotClient {
     const rawSourceMaps = data.sourceMaps || data.source_maps;
     const target = data.target && typeof data.target === "object" ? data.target as Record<string, unknown> : {};
     const prepare = data.prepare && typeof data.prepare === "object" ? data.prepare as Record<string, unknown> : {};
-    const launchSchema = data.launchSchema && typeof data.launchSchema === "object"
-      ? data.launchSchema as DebugLaunchSchema
-      : { fields: [] };
+    const launchSchema = mapDebugLaunchSchema(data.launchSchema || data.launch_schema);
     const capabilities = data.capabilities && typeof data.capabilities === "object"
       ? data.capabilities as DebugCapabilityMap
       : {};
